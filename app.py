@@ -13,6 +13,17 @@ from nba_api.stats.static import players
 from nba_api.stats.endpoints import playergamelog, scoreboardv2
 
 # ─────────────────────────────────────────────
+# Session state init
+# ─────────────────────────────────────────────
+
+if "logs" not in st.session_state:
+    st.session_state.logs = None
+if "ai_analysis" not in st.session_state:
+    st.session_state.ai_analysis = None
+if "ai_error" not in st.session_state:
+    st.session_state.ai_error = None
+
+# ─────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────
 
@@ -330,15 +341,17 @@ if player_id is None:
 st.markdown("## Player Analysis")
 st.subheader(f"Player: {full_name}")
 
-if not fetch and not scan_slate:
+if not fetch and st.session_state.logs is None and not scan_slate:
     st.info("Enter inputs, then click **Fetch logs**.")
 
+# ── FETCH LOGS ───────────────────────────────
 if fetch:
-    logs = None
+    st.session_state.ai_analysis = None  # clear old analysis on new fetch
+    st.session_state.ai_error = None
 
     try:
         with st.spinner("Fetching player game logs..."):
-            logs = fetch_with_retries(
+            st.session_state.logs = fetch_with_retries(
                 lambda: get_last_n_games(player_id=player_id, season=season, n=n_games)
             )
     except Exception as e:
@@ -348,8 +361,9 @@ if fetch:
             st.stop()
         else:
             st.warning("Live fetch failed. Enter last 10 points manually below.")
+            st.session_state.logs = None
 
-    if logs is None:
+    if st.session_state.logs is None and manual_mode:
         manual_points = []
         st.markdown("### Manual Last 10 Points Entry")
         cols = st.columns(5)
@@ -357,7 +371,7 @@ if fetch:
             col = cols[i % 5]
             val = col.number_input(f"Game {i+1}", min_value=0.0, step=1.0, key=f"manual_pts_{i}")
             manual_points.append(val)
-        logs = pd.DataFrame({
+        st.session_state.logs = pd.DataFrame({
             "GAME_DATE": [None] * 10,
             "MATCHUP": [None] * 10,
             "MIN": [None] * 10,
@@ -366,6 +380,10 @@ if fetch:
             "FTA": [None] * 10,
             "FG3A": [None] * 10,
         })
+
+# ── RENDER ANALYSIS (persists across reruns) ─
+if st.session_state.logs is not None:
+    logs = st.session_state.logs
 
     baseline = hit_rate(logs, line=line, side=side)
 
@@ -383,11 +401,9 @@ if fetch:
     pts_flag = trend_flag(logs["PTS"])
 
     col1, col2 = st.columns([1.2, 1])
-
     with col1:
         st.markdown(f"### Game Log (Last {n_games})")
         st.dataframe(logs.reset_index(drop=True), use_container_width=True)
-
     with col2:
         st.markdown("### Key Metrics")
         st.metric("Baseline hit rate", f"{baseline:.0%}")
@@ -466,7 +482,6 @@ if fetch:
         if not api_key:
             st.error("❌ No GROQ_API_KEY found. Add it to your Streamlit secrets.")
         else:
-            st.success(f"✅ API key loaded (starts with: {api_key[:8]}...)")
             if st.button("Generate AI Analysis"):
                 with st.spinner("Analyzing this prop..."):
                     try:
@@ -491,11 +506,17 @@ if fetch:
                             matchup_sel=matchup_sel,
                             script_sel=script_sel,
                         )
-                        analysis = generate_ai_analysis(prompt)
-                        st.markdown(analysis)
+                        st.session_state.ai_analysis = generate_ai_analysis(prompt)
+                        st.session_state.ai_error = None
                     except Exception as e:
-                        st.error(f"AI analysis failed: {repr(e)}")
-                        st.exception(e)
+                        st.session_state.ai_error = repr(e)
+                        st.session_state.ai_analysis = None
+
+            # Always render stored analysis if available
+            if st.session_state.ai_analysis:
+                st.markdown(st.session_state.ai_analysis)
+            elif st.session_state.ai_error:
+                st.error(f"AI analysis failed: {st.session_state.ai_error}")
 
     # ── FINAL VERDICT ─────────────────────────────────────────────────────────
     st.divider()
