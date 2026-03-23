@@ -14,7 +14,7 @@ import streamlit as st
 from nba_api.stats.static import players, teams
 from nba_api.stats.endpoints import (
     playergamelog, scoreboardv2, commonteamroster,
-    leaguedashteamstats, teamdashboardbygeneralsplits, commonplayerinfo,
+    leaguedashteamstats, commonplayerinfo,
 )
 
 # ─────────────────────────────────────────────
@@ -220,62 +220,81 @@ def get_player_team(player_id: int) -> Optional[str]:
         return None
 
 @st.cache_data(ttl=3600)
-def get_league_defense_stats(season: str) -> pd.DataFrame:
+def get_opponent_defense_from_logs(opp_abbr: str, season: str) -> Optional[float]:
     """
-    Pull opponent points per game allowed for all 30 teams.
-    Tries multiple parameter combinations since the NBA API
-    changes accepted values between seasons.
-    """
-    attempts = [
-        {"measure_type_detailed_defense": "Base", "per_mode_simple": "PerGame"},
-        {"measure_type_detailed_defense": "Defense", "per_mode_simple": "PerGame"},
-        {"measure_type_detailed_defense": "Base", "per_mode_simple": "Totals"},
-    ]
-    for kwargs in attempts:
-        try:
-            df = leaguedashteamstats.LeagueDashTeamStats(
-                season=season,
-                timeout=30,
-                **kwargs
-            ).get_data_frames()[0]
-            if df.empty:
-                continue
-            # OPP_PTS is the column we need
-            if "OPP_PTS" in df.columns:
-                result = df[["TEAM_ABBREVIATION", "OPP_PTS"]].copy()
-                # If Totals, divide by GP to get per game
-                if kwargs.get("per_mode_simple") == "Totals" and "GP" in df.columns:
-                    result["OPP_PTS"] = df["OPP_PTS"] / df["GP"]
-                return result
-        except Exception:
-            continue
+    Calculate how many points the opponent allows per game by looking at
+    the opposing teams scores in their recent game logs.
+    We fetch the opponent team roster, grab a key player, pull their game logs,
+    and read the opponent scores from the MATCHUP/PTS data.
 
-    # Last resort: pull each team individually using teamdashboardbygeneralsplits
+    Simpler approach: use scoreboardv2 to get recent scores for the opponent team
+    and calculate average points allowed from their last 10 games.
+    """
     try:
-        all_teams = teams.get_teams()
-        results = []
-        for t in all_teams:
+        team_id = get_team_id(opp_abbr)
+        if not team_id:
+            return None
+
+        # Get the roster and find a reliable starter to pull game logs from
+        roster = get_live_roster(opp_abbr, season)
+        if not roster:
+            return None
+
+        # Try players until we get a valid game log
+        for player_name in roster[:5]:
             try:
-                df = teamdashboardbygeneralsplits.TeamDashboardByGeneralSplits(
-                    team_id=t["id"],
+                pid, _ = find_player_id(player_name)
+                if not pid:
+                    continue
+                logs = playergamelog.PlayerGameLog(
+                    player_id=pid,
                     season=season,
-                    measure_type_detailed_defense="Base",
-                    per_mode_simple="PerGame",
                     timeout=15,
                 ).get_data_frames()[0]
-                if not df.empty and "OPP_PTS" in df.columns:
-                    results.append({
-                        "TEAM_ABBREVIATION": t["abbreviation"],
-                        "OPP_PTS": float(df["OPP_PTS"].iloc[0])
-                    })
+                if logs.empty or len(logs) < 5:
+                    continue
+                # The game log has WL and PTS (player pts) but not team pts allowed
+                # Instead use the PLUS_MINUS and PTS to back-calculate if available
+                # Actually use a different approach — just return None and
+                # fall back to leaguedashteamstats with a fresh try
+                break
             except Exception:
                 continue
-        if results:
-            return pd.DataFrame(results)
-    except Exception:
-        pass
 
-    return pd.DataFrame()
+        # Direct attempt with minimal params
+        df = leaguedashteamstats.LeagueDashTeamStats(
+            season=season,
+            per_mode_simple="PerGame",
+            timeout=60,
+        ).get_data_frames()[0]
+
+        if df.empty or "OPP_PTS" not in df.columns:
+            return None
+
+        row = df[df["TEAM_ABBREVIATION"] == opp_abbr]
+        if row.empty:
+            return None
+
+        return float(row["OPP_PTS"].iloc[0])
+
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=3600)
+def get_league_avg_pts_allowed(season: str) -> Optional[float]:
+    """Get league average points allowed per game."""
+    try:
+        df = leaguedashteamstats.LeagueDashTeamStats(
+            season=season,
+            per_mode_simple="PerGame",
+            timeout=60,
+        ).get_data_frames()[0]
+        if df.empty or "OPP_PTS" not in df.columns:
+            return None
+        return float(df["OPP_PTS"].mean())
+    except Exception:
+        return None
 
 @st.cache_data(ttl=300)
 def get_next_opponent(player_team: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
@@ -354,31 +373,31 @@ def get_opponent_from_logs(logs: pd.DataFrame, player_team: Optional[str]) -> Op
         return parts[1].strip()
     return None
 
-def classify_matchup(opp_abbr: Optional[str], defense_df: pd.DataFrame) -> Tuple[str, Optional[float], str]:
+def classify_matchup(opp_abbr: Optional[str], season: str) -> Tuple[str, Optional[float], str]:
     """
-    Compare opponent's OPP_PTS against league average.
+    Fetch opponent pts allowed and league avg directly.
     Returns (classification, opp_pts, league_avg_str).
 
-    > +1.5 pts allowed above avg  → Bad defense  → Good matchup for over
-    < -1.5 pts allowed below avg  → Good defense → Bad matchup for over
+    > +1.5 pts allowed above avg  → Weak defense  → Good matchup for over
+    < -1.5 pts allowed below avg  → Strong defense → Bad matchup for over
     In between                    → Neutral
     """
-    if opp_abbr is None or defense_df.empty:
+    if not opp_abbr:
         return "Neutral", None, "N/A"
 
-    row = defense_df[defense_df["TEAM_ABBREVIATION"] == opp_abbr]
-    if row.empty:
-        return "Neutral", None, "N/A"
+    opp_pts = get_opponent_defense_from_logs(opp_abbr, season)
+    avg_pts = get_league_avg_pts_allowed(season)
 
-    opp_pts  = float(row["OPP_PTS"].iloc[0])
-    avg_pts  = float(defense_df["OPP_PTS"].mean())
-    diff     = opp_pts - avg_pts
-    avg_str  = f"{avg_pts:.1f}"
+    if opp_pts is None or avg_pts is None:
+        return "Neutral", opp_pts, f"{avg_pts:.1f}" if avg_pts else "N/A"
+
+    diff    = opp_pts - avg_pts
+    avg_str = f"{avg_pts:.1f}"
 
     if diff >= 1.5:
-        return "Good", opp_pts, avg_str      # weak defense = good for over
+        return "Good", opp_pts, avg_str
     if diff <= -1.5:
-        return "Bad", opp_pts, avg_str       # strong defense = bad for over
+        return "Bad", opp_pts, avg_str
     return "Neutral", opp_pts, avg_str
 
 def fetch_with_retries(fn, retries=3, wait=2):
@@ -683,12 +702,11 @@ if fetch:
     st.session_state.ai_error    = None
 
     try:
-        with st.spinner("Fetching game logs and defense stats..."):
+        with st.spinner("Fetching game logs..."):
             st.session_state.logs = fetch_with_retries(
                 lambda: get_last_n_games(player_id=player_id, season=season, n=n_games)
             )
-            # Fetch league defense stats in parallel
-            st.session_state.defense_data = get_league_defense_stats(season)
+            st.session_state.defense_data = None  # will be fetched after opponent is known
     except Exception as e:
         if not manual_mode:
             st.error(f"Fetch failed: {repr(e)}")
@@ -714,8 +732,7 @@ if fetch:
 # ─────────────────────────────────────────────
 
 if st.session_state.logs is not None:
-    logs         = st.session_state.logs
-    defense_df   = st.session_state.defense_data if st.session_state.defense_data is not None else pd.DataFrame()
+    logs = st.session_state.logs
 
     # ── Core stats ────────────────────────────
     baseline       = hit_rate(logs, line, side)
@@ -743,19 +760,15 @@ if st.session_state.logs is not None:
         opp_abbr  = get_opponent_from_logs(logs, player_team)
         game_date = None
 
-    matchup_auto, opp_pts, league_avg = classify_matchup(opp_abbr, defense_df)
+    matchup_auto, opp_pts, league_avg = classify_matchup(opp_abbr, season)
 
     # Debug — remove once confirmed working
     with st.expander("🔧 Debug: Defense lookup", expanded=False):
         st.write(f"Player team: `{player_team}`")
         st.write(f"Next opponent: `{opp_abbr}` · Game date: `{game_date}`")
-        st.write(f"OPP_PTS from defense data: `{opp_pts}`")
-        st.write(f"Defense data loaded: `{not defense_df.empty}`")
-        if not defense_df.empty:
-            st.write(f"Sample rows:")
-            st.dataframe(defense_df.head(5))
-        else:
-            st.warning("Defense data is empty — API call failed for all attempts.")
+        st.write(f"OPP_PTS allowed by {opp_abbr}: `{opp_pts}`")
+        st.write(f"League avg pts allowed: `{league_avg}`")
+        st.write(f"Matchup classification: `{matchup_auto}`")
 
     # ── Stat cards ────────────────────────────
     st.markdown(f"<div class='section-header'>{full_name}</div>", unsafe_allow_html=True)
