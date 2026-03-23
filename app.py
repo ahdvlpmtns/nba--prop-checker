@@ -220,7 +220,7 @@ def get_player_team(player_id: int) -> Optional[str]:
     except Exception:
         return None
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=300, show_spinner=False)
 def get_next_opponent(player_team):
     """
     Find the next UPCOMING (not yet finished) game for a team.
@@ -685,6 +685,9 @@ st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
 with st.sidebar:
     st.markdown("<div class='section-header'>Settings</div>", unsafe_allow_html=True)
     manual_mode = st.checkbox("Manual input fallback")
+    if st.button("🔄 Clear Cache"):
+        st.cache_data.clear()
+        st.success("Cache cleared!")
     st.markdown("<div style='margin-top:2rem; font-family:DM Mono; font-size:0.65rem; color:#334155; line-height:1.6;'>For educational purposes only. Not financial or betting advice.</div>", unsafe_allow_html=True)
 
 enable_ai = True
