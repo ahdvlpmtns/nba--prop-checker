@@ -236,9 +236,18 @@ Write a 3–4 paragraph prop breakdown. Include:
 Be direct. Use real numbers. Avoid filler phrases like "it's worth noting" or "it's important to consider." Write like a sharp bettor, not a TV analyst."""
 
 
+def get_api_key() -> str:
+    """Retrieve the Anthropic API key from Streamlit secrets or environment."""
+    try:
+        return st.secrets["ANTHROPIC_API_KEY"]
+    except Exception:
+        return os.environ.get("ANTHROPIC_API_KEY", "")
+
+
 def generate_ai_analysis(prompt: str) -> str:
     """Call the Anthropic API and return the analysis text."""
-    client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
+    api_key = get_api_key()
+    client = anthropic.Anthropic(api_key=api_key)
 
     message = client.messages.create(
         model="claude-sonnet-4-20250514",
@@ -494,7 +503,7 @@ if fetch:
         st.divider()
         st.markdown("## 🤖 AI-Powered Breakdown")
 
-        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        api_key = get_api_key()
         if not api_key:
             st.warning(
                 "No `ANTHROPIC_API_KEY` found in your environment. "
@@ -592,5 +601,3 @@ st.caption(
     "This tool provides statistical analysis for educational purposes only. "
     "It does not guarantee outcomes and should not be considered financial or betting advice."
 )
-
-
