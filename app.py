@@ -1026,14 +1026,15 @@ if st.session_state.logs is not None:
     </div>
     """, unsafe_allow_html=True)
 
-    st.markdown(f"""<div class='model-note'>
-    Raw hit rate: {baseline:.0%} &nbsp;·&nbsp;
-    Weighted (recency): {weighted_base:.0%} &nbsp;·&nbsp;
-    After context: {adjusted:.0%} &nbsp;·&nbsp;
-    Sample: {n_games} games &nbsp;·&nbsp;
-    Matchup: {matchup_sel} (vs {opp_abbr or "unknown"}) &nbsp;·&nbsp;
-    Venue: {tonight_venue or "Unknown"} ({venue_adj})
-    </div>""", unsafe_allow_html=True)
+    with st.expander("🔢  Model details"):
+        st.markdown(f"""<div class='model-note'>
+        Raw hit rate: {baseline:.0%} &nbsp;·&nbsp;
+        Weighted (recency): {weighted_base:.0%} &nbsp;·&nbsp;
+        After context: {adjusted:.0%} &nbsp;·&nbsp;
+        Sample: {n_games} games &nbsp;·&nbsp;
+        Matchup: {matchup_sel} (vs {opp_abbr or "unknown"}) &nbsp;·&nbsp;
+        Venue: {tonight_venue or "Unknown"} ({venue_adj})
+        </div>""", unsafe_allow_html=True)
 
     # ── AI Analysis ───────────────────────────
     st.markdown("<div class='section-header'>AI Breakdown</div>", unsafe_allow_html=True)
