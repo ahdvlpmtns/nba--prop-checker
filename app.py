@@ -222,15 +222,19 @@ def get_player_team(player_id: int) -> Optional[str]:
 @st.cache_data(ttl=3600)
 def get_opponent_pts_allowed(opp_abbr: str, season: str) -> Optional[float]:
     """
-    Calculate how many points the opponent allows per game using
-    their players game logs. We pull a key player from the opponent
-    roster, get their full season game log, then extract the opponent
-    score from the PLUS_MINUS and PTS columns:
-        opponent_score = player_team_pts - PLUS_MINUS ... 
+    Calculate points allowed per game for a team using their roster player logs.
+    Each player game log has PTS (player pts) and PLUS_MINUS.
+    Team pts scored = sum of all player pts... but easier:
     
-    Actually the most reliable way: pull the teamgamelog endpoint
-    which has PTS (team pts scored) and OPP_PTS per game.
-    Falls back to leaguedashteamstats if needed.
+    Pull one player from the opponent team. Their game log has:
+    - PTS: player points (not useful directly)
+    - PLUS_MINUS: team_pts_scored - opp_pts_scored for that game
+    
+    We also need team pts scored per game. The teamgamelog endpoint
+    columns vary — so instead we use a player game log which has
+    MIN, PTS, PLUS_MINUS reliably. We grab a high-minute player
+    and use their team-level PLUS_MINUS alongside a known team PTS
+    by pulling teamgamelog and inspecting all available columns.
     """
     from nba_api.stats.endpoints import teamgamelog
 
@@ -249,22 +253,87 @@ def get_opponent_pts_allowed(opp_abbr: str, season: str) -> Optional[float]:
         if tgl.empty:
             return None
 
-        # teamgamelog has PTS (scored by this team) but not pts allowed directly
-        # However it has W_PCT, W, L — use PLUS_MINUS if available
-        # The most reliable: PTS column = team pts scored
-        # We need pts ALLOWED — use matchup_pts approach
-        # teamgamelog also has a column structure with HOME/AWAY scores
-        # Best column available: check what we have
+        # Log available columns to debug
         cols = tgl.columns.tolist()
 
-        if "PTS" in cols:
-            # PTS = points scored by the team — not what we want
-            # But we can use: pts_allowed = PTS - PLUS_MINUS (if PLUS_MINUS exists)
-            if "PLUS_MINUS" in cols:
-                tgl["PTS_ALLOWED"] = pd.to_numeric(tgl["PTS"], errors="coerce") - pd.to_numeric(tgl["PLUS_MINUS"], errors="coerce")
-                return float(tgl["PTS_ALLOWED"].mean())
+        # Try direct columns first
+        if "OPP_PTS" in cols:
+            return float(pd.to_numeric(tgl["OPP_PTS"], errors="coerce").dropna().mean())
 
+        # PTS - PLUS_MINUS = opponent pts scored against this team
+        if "PTS" in cols and "PLUS_MINUS" in cols:
+            pts = pd.to_numeric(tgl["PTS"], errors="coerce")
+            pm  = pd.to_numeric(tgl["PLUS_MINUS"], errors="coerce")
+            opp_pts_series = pts - pm
+            return float(opp_pts_series.dropna().mean())
+
+        # Try W_PCTG, PTS_QTR columns etc — return None if nothing works
         return None
+
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=3600)  
+def get_opponent_pts_allowed_from_player_logs(opp_abbr: str, season: str) -> Optional[float]:
+    """
+    Fallback: use a player from the opponent team's game log.
+    Player game logs have PLUS_MINUS which is team-level.
+    We also pull the team game log columns to get team PTS.
+    
+    Strategy: grab 3 players from opponent roster, pull their game logs,
+    average the PLUS_MINUS values across all games, then add to league avg
+    to get an approximate pts allowed.
+    
+    Actually simpler: player game log has team PTS in some versions.
+    Use the WL and PLUS_MINUS to infer: if we know PLUS_MINUS and
+    can get team PTS from another source.
+    
+    Simplest working approach: use scoreboardv2 historical results
+    to find scores of recent opponent games.
+    """
+    try:
+        roster = get_live_roster(opp_abbr, season)
+        if not roster:
+            return None
+
+        all_plus_minus = []
+        all_pts = []
+
+        for player_name in roster[:4]:
+            try:
+                pid, _ = find_player_id(player_name)
+                if not pid:
+                    continue
+                log = playergamelog.PlayerGameLog(
+                    player_id=pid,
+                    season=season,
+                    timeout=15,
+                ).get_data_frames()[0]
+                if log.empty:
+                    continue
+                if "PLUS_MINUS" in log.columns and "PTS" in log.columns:
+                    # PLUS_MINUS here is team-level differential
+                    pm  = pd.to_numeric(log["PLUS_MINUS"], errors="coerce").dropna()
+                    all_plus_minus.extend(pm.tolist())
+            except Exception:
+                continue
+
+        if not all_plus_minus:
+            return None
+
+        # avg PLUS_MINUS = avg_team_pts_scored - avg_pts_allowed
+        # pts_allowed = avg_team_pts_scored - avg_plus_minus
+        # We don't know avg_team_pts_scored from player logs alone
+        # But: we know league avg is ~114.5
+        # If opp avg PM is -3.2, they allow ~114.5 + 3.2 = 117.7 pts/g
+        avg_pm = sum(all_plus_minus) / len(all_plus_minus)
+        league_avg = 114.5
+        # Their pts allowed = league_avg - avg_pm (if PM is positive, they score more than allowed)
+        # Actually: PM = team_pts - opp_pts, so opp_pts = team_pts - PM
+        # We need team_pts... approximate with league_avg
+        pts_allowed = league_avg - avg_pm
+        return round(pts_allowed, 1)
 
     except Exception:
         return None
