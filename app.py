@@ -1,14 +1,20 @@
+import os
 import re
 import time
 from datetime import datetime
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
+import anthropic
 import pandas as pd
 import streamlit as st
 
 from nba_api.stats.static import players
 from nba_api.stats.endpoints import playergamelog, scoreboardv2
+
+# ─────────────────────────────────────────────
+# Helpers
+# ─────────────────────────────────────────────
 
 def normalize_name(s: str) -> str:
     return re.sub(r"\s+", " ", s.strip().lower())
@@ -17,20 +23,12 @@ def normalize_name(s: str) -> str:
 def find_player_id(player_name: str) -> Tuple[Optional[int], Optional[str]]:
     name = normalize_name(player_name)
     all_players = players.get_players()
-
-    # Exact match first
     for p in all_players:
         if normalize_name(p["full_name"]) == name:
             return p["id"], p["full_name"]
-
-    # Contains match fallback
     candidates = [p for p in all_players if name in normalize_name(p["full_name"])]
     if len(candidates) == 1:
         return candidates[0]["id"], candidates[0]["full_name"]
-
-    if len(candidates) > 1:
-        return None, None
-
     return None, None
 
 
@@ -39,7 +37,7 @@ def search_candidates(player_name: str):
     all_players = players.get_players()
     return [p for p in all_players if name in normalize_name(p["full_name"])]
 
-@st.cache_data(ttl=600)  # cache for 10 minutes
+
 @st.cache_data(ttl=600)
 def get_last_n_games(player_id: int, season: str, n: int = 10) -> pd.DataFrame:
     df = playergamelog.PlayerGameLog(
@@ -62,10 +60,7 @@ def hit_rate(df: pd.DataFrame, line: float, side: str) -> float:
     pts = pd.to_numeric(df["PTS"], errors="coerce").dropna()
     if len(pts) == 0:
         return 0.0
-    if side == "Over":
-        hits = (pts > line).sum()
-    else:
-        hits = (pts < line).sum()
+    hits = (pts > line).sum() if side == "Over" else (pts < line).sum()
     return hits / len(pts)
 
 
@@ -82,17 +77,14 @@ def trend_flag(series: pd.Series, lookback: int = 3) -> str:
         return "Down"
     return "Flat"
 
+
 def suggest_bucket(value: float, strong_cut: float, risk_cut: float) -> str:
-    """
-    Returns "Strong", "Okay", or "Risk" based on thresholds.
-    strong_cut: value at/above this is Strong
-    risk_cut: value below this is Risk
-    """
     if value >= strong_cut:
         return "Strong"
     if value < risk_cut:
         return "Risk"
     return "Okay"
+
 
 def fetch_with_retries(fn, retries=3, wait=2):
     last_err = None
@@ -104,49 +96,28 @@ def fetch_with_retries(fn, retries=3, wait=2):
             time.sleep(wait * (i + 1))
     raise last_err
 
+
 @st.cache_data(ttl=600)
 def get_todays_teams() -> list:
     today_str = datetime.today().strftime("%m/%d/%Y")
-
-    sb = scoreboardv2.ScoreboardV2(
-        game_date=today_str,
-        league_id="00",
-        day_offset=0,
-        timeout=20,
-    )
-
+    sb = scoreboardv2.ScoreboardV2(game_date=today_str, league_id="00", day_offset=0, timeout=20)
     games = sb.get_data_frames()[0]
-
     if games.empty:
         return []
-
-    teams = sorted(
+    return sorted(
         set(games["HOME_TEAM_ABBREVIATION"].tolist()) |
         set(games["VISITOR_TEAM_ABBREVIATION"].tolist())
     )
-    return teams
 
 
 @st.cache_data(ttl=600)
 def get_todays_matchup_for_player(player_team_abbr: str) -> dict:
     today_str = datetime.today().strftime("%m/%d/%Y")
-
-    sb = scoreboardv2.ScoreboardV2(
-        game_date=today_str,
-        league_id="00",
-        day_offset=0,
-        timeout=120,
-    )
-
-    games = sb.get_data_frames()[0]  # GameHeader table
+    sb = scoreboardv2.ScoreboardV2(game_date=today_str, league_id="00", day_offset=0, timeout=120)
+    games = sb.get_data_frames()[0]
 
     if games.empty:
-        return {
-            "has_game_today": False,
-            "opponent": None,
-            "matchup": None,
-            "home_away": None,
-        }
+        return {"has_game_today": False, "opponent": None, "matchup": None, "home_away": None}
 
     row = games[
         (games["HOME_TEAM_ABBREVIATION"] == player_team_abbr) |
@@ -154,53 +125,17 @@ def get_todays_matchup_for_player(player_team_abbr: str) -> dict:
     ]
 
     if row.empty:
-        return {
-            "has_game_today": False,
-            "opponent": None,
-            "matchup": None,
-            "home_away": None,
-        }
+        return {"has_game_today": False, "opponent": None, "matchup": None, "home_away": None}
 
     row = row.iloc[0]
-
     home = row["HOME_TEAM_ABBREVIATION"]
     away = row["VISITOR_TEAM_ABBREVIATION"]
 
     if player_team_abbr == home:
-        opponent = away
-        home_away = "Home"
-        matchup = f"{home} vs. {away}"
+        return {"has_game_today": True, "opponent": away, "matchup": f"{home} vs. {away}", "home_away": "Home"}
     else:
-        opponent = home
-        home_away = "Away"
-        matchup = f"{player_team_abbr} @ {opponent}"
+        return {"has_game_today": True, "opponent": home, "matchup": f"{player_team_abbr} @ {home}", "home_away": "Away"}
 
-    return {
-        "has_game_today": True,
-        "opponent": opponent,
-        "matchup": matchup,
-        "home_away": home_away,
-    }
-
-    row = row.iloc[0]
-    matchup = row["MATCHUP"]
-
-    if "vs." in matchup:
-        opp = matchup.split("vs.")[-1].strip()
-        home_away = "Home"
-    elif "@" in matchup:
-        opp = matchup.split("@")[-1].strip()
-        home_away = "Away"
-    else:
-        opp = None
-        home_away = None
-
-    return {
-        "has_game_today": True,
-        "opponent": opp,
-        "matchup": matchup,
-        "home_away": home_away,
-    }
 
 @dataclass
 class Adjustments:
@@ -223,21 +158,99 @@ def label_from_prob(p: float) -> str:
     return "RED"
 
 
-st.set_page_config(page_title="NBA Points Prop Checker", layout="wide")
-st.title("NBA Points Prop Checker")
-st.caption("Version 1.0 — Player prop analysis tool")
-st.caption("Analyze NBA points props using recent game logs, hit rate, and context adjustments.")
+# ─────────────────────────────────────────────
+# AI Analysis
+# ─────────────────────────────────────────────
 
-st.markdown("## Inputs")
+def build_analysis_prompt(
+    full_name: str,
+    line: float,
+    side: str,
+    n_games: int,
+    logs: pd.DataFrame,
+    baseline: float,
+    adjusted: float,
+    confidence_tier: str,
+    avg_pts: float,
+    avg_min: float,
+    avg_fga: float,
+    min_flag: str,
+    fga_flag: str,
+    pts_flag: str,
+    minutes_sel: str,
+    role_sel: str,
+    shots_sel: str,
+    matchup_sel: str,
+    script_sel: str,
+) -> str:
+    game_rows = []
+    for _, row in logs.iterrows():
+        date = str(row["GAME_DATE"])[:10] if row["GAME_DATE"] is not None else "N/A"
+        matchup = row["MATCHUP"] or "N/A"
+        pts = row["PTS"]
+        mins = row["MIN"]
+        fga = row["FGA"]
+        hit = "✓" if pd.notna(pts) and float(pts) > line else "✗"
+        game_rows.append(f"  {date} | {matchup} | {pts} pts | {mins} min | {fga} FGA | {hit}")
 
-player_query = st.text_input("Search player", value="Fox")
-line = st.number_input("Points line", min_value=0.0, value=24.5, step=0.5)
-side = st.selectbox("Higher / Lower", ["Over", "Under"])
-n_games = st.selectbox("Sample size", [5, 10, 15], index=1)
-season = st.text_input("Season", value="2025-26")
-fetch = st.button("Fetch logs")
+    game_log_str = "\n".join(game_rows)
 
-player_name = player_query
+    return f"""You are a sharp NBA prop analyst. Your job is to write a clear, confident, data-driven breakdown of a player points prop.
+
+Player: {full_name}
+Prop Line: {line} points ({side})
+Sample: Last {n_games} games
+Season: 2025-26
+
+=== GAME LOG ===
+{game_log_str}
+
+=== KEY STATS ===
+- Avg PTS (last {n_games}): {avg_pts:.1f}
+- Avg MIN (last {n_games}): {avg_min:.1f}
+- Avg FGA (last {n_games}): {avg_fga:.1f}
+- Baseline hit rate vs {line}: {baseline:.0%}
+- Adjusted hit rate: {adjusted:.0%}
+
+=== TRENDS ===
+- Minutes trend: {min_flag}
+- FGA trend: {fga_flag}
+- Points trend: {pts_flag}
+
+=== CONTEXT ===
+- Minutes outlook: {minutes_sel}
+- Role/usage: {role_sel}
+- Shot volume: {shots_sel}
+- Matchup/pace: {matchup_sel}
+- Game script: {script_sel}
+
+=== MODEL OUTPUT ===
+- Confidence tier: {confidence_tier}
+
+Write a 3–4 paragraph prop breakdown. Include:
+1. A lead sentence with the prop and your lean.
+2. What the recent game log shows — call out specific patterns, streaks, or outliers.
+3. How the context factors (matchup, role, minutes) affect this prop tonight.
+4. A closing verdict with your confidence level.
+
+Be direct. Use real numbers. Avoid filler phrases like "it's worth noting" or "it's important to consider." Write like a sharp bettor, not a TV analyst."""
+
+
+def generate_ai_analysis(prompt: str) -> str:
+    """Call the Anthropic API and return the analysis text."""
+    client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
+
+    message = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=1024,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return message.content[0].text
+
+
+# ─────────────────────────────────────────────
+# Slate Scanner
+# ─────────────────────────────────────────────
 
 NBA_TEAMS = [
     "ATL","BOS","BKN","CHA","CHI","CLE","DAL","DEN","DET","GSW",
@@ -258,6 +271,7 @@ TEAM_ROSTERS = {
     "MIL": ["Giannis Antetokounmpo", "Damian Lillard", "Khris Middleton"],
 }
 
+
 @st.cache_data(ttl=300)
 def scan_team_players(team_abbr: str, season: str) -> pd.DataFrame:
     roster = TEAM_ROSTERS.get(team_abbr, [])
@@ -268,8 +282,6 @@ def scan_team_players(team_abbr: str, season: str) -> pd.DataFrame:
             player_id, full_name = find_player_id(player_name)
             if not player_id:
                 continue
-
-            # no retries here on purpose
             logs = get_last_n_games(player_id=player_id, season=season, n=10)
         except Exception:
             continue
@@ -297,15 +309,40 @@ def scan_team_players(team_abbr: str, season: str) -> pd.DataFrame:
         ascending=False
     ).reset_index(drop=True)
 
+
+# ─────────────────────────────────────────────
+# UI
+# ─────────────────────────────────────────────
+
+st.set_page_config(page_title="NBA Points Prop Checker", layout="wide")
+st.title("NBA Points Prop Checker")
+st.caption("Version 2.0 — Player prop analysis tool with AI-powered breakdown")
+st.caption("Analyze NBA points props using recent game logs, hit rate, and context adjustments.")
+
+st.markdown("## Inputs")
+
+player_query = st.text_input("Search player", value="Fox")
+line = st.number_input("Points line", min_value=0.0, value=24.5, step=0.5)
+side = st.selectbox("Higher / Lower", ["Over", "Under"])
+n_games = st.selectbox("Sample size", [5, 10, 15], index=1)
+season = st.text_input("Season", value="2025-26")
+fetch = st.button("Fetch logs")
+
 with st.sidebar:
     st.markdown("## Advanced Tools")
     manual_mode = st.checkbox("Use manual last 10 input if fetch fails")
     scan_slate = st.checkbox("Enable slate scanner")
-
+    st.markdown("---")
+    st.markdown("## AI Analysis")
+    enable_ai = st.checkbox("Enable AI-powered breakdown", value=True)
+    st.caption(
+        "Uses Claude to write a natural language prop analysis. "
+        "Requires `ANTHROPIC_API_KEY` to be set in your environment."
+    )
 
 st.divider()
 
-candidate_players = search_candidates(player_name)
+candidate_players = search_candidates(player_query)
 
 if len(candidate_players) == 0:
     st.error("No player found. Try a different spelling.")
@@ -313,7 +350,6 @@ if len(candidate_players) == 0:
 
 player_options = [p["full_name"] for p in candidate_players]
 selected_player = st.selectbox("Select player", player_options)
-
 player_id, full_name = find_player_id(selected_player)
 
 if player_id is None:
@@ -334,32 +370,22 @@ if fetch:
             logs = fetch_with_retries(
                 lambda: get_last_n_games(player_id=player_id, season=season, n=n_games)
             )
-      
     except Exception as e:
         if not manual_mode:
             st.error(f"Fetch failed: {repr(e)}")
             st.exception(e)
             st.stop()
-
         else:
             st.warning("Live fetch failed. Enter last 10 points manually below.")
 
     if logs is None:
         manual_points = []
         st.markdown("### Manual Last 10 Points Entry")
-
         cols = st.columns(5)
-
         for i in range(10):
             col = cols[i % 5]
-            val = col.number_input(
-                f"Game {i+1}",
-                min_value=0.0,
-                step=1.0,
-                key=f"manual_pts_{i}"
-            )
+            val = col.number_input(f"Game {i+1}", min_value=0.0, step=1.0, key=f"manual_pts_{i}")
             manual_points.append(val)
-
         logs = pd.DataFrame({
             "GAME_DATE": [None] * 10,
             "MATCHUP": [None] * 10,
@@ -373,15 +399,12 @@ if fetch:
 if fetch:
     baseline = hit_rate(logs, line=line, side=side)
 
-    # Simple averages (last N games) for auto-suggestions
     avg_min = pd.to_numeric(logs["MIN"], errors="coerce").dropna().mean()
     avg_fga = pd.to_numeric(logs["FGA"], errors="coerce").dropna().mean()
     avg_fta = pd.to_numeric(logs["FTA"], errors="coerce").dropna().mean()
 
-    # Auto-suggest buckets
     minutes_suggest = suggest_bucket(avg_min, strong_cut=32, risk_cut=26)
     shots_suggest = "High" if avg_fga >= 15 else ("Low" if avg_fga < 10 else "Medium")
-
     role_proxy = avg_fga + (0.5 * avg_fta)
     role_suggest = suggest_bucket(role_proxy, strong_cut=18, risk_cut=12)
 
@@ -395,7 +418,6 @@ if fetch:
         st.markdown(f"### Game Log (Last {n_games})")
         st.dataframe(logs.reset_index(drop=True), use_container_width=True)
 
-        st.markdown("### Baseline")
     with col2:
         st.markdown("### Key Metrics")
         st.metric("Baseline hit rate", f"{baseline:.0%}")
@@ -408,41 +430,27 @@ if fetch:
 
     st.divider()
 
-    st.markdown("## Context Adjuster (simple + / −)")
+    st.markdown("## Context Adjuster")
     st.caption("You still choose context, but the app calculates adjusted %.")
 
     adj_map_minutes = {"Strong": 0.05, "Okay": 0.00, "Risk": -0.07}
-    adj_map_role = {"Strong": 0.04, "Okay": 0.00, "Risk": -0.05}
-    adj_map_shots = {"High": 0.03, "Medium": 0.00, "Low": -0.05}
+    adj_map_role    = {"Strong": 0.04, "Okay": 0.00, "Risk": -0.05}
+    adj_map_shots   = {"High": 0.03, "Medium": 0.00, "Low": -0.05}
     adj_map_matchup = {"Good": 0.03, "Neutral": 0.00, "Bad": -0.04}
-    adj_map_script = {"Competitive": 0.02, "Neutral": 0.00, "Blowout risk": -0.04}
+    adj_map_script  = {"Competitive": 0.02, "Neutral": 0.00, "Blowout risk": -0.04}
 
     c1, c2, c3, c4, c5 = st.columns(5)
-
     with c1:
-        minutes_sel = st.selectbox(
-            "Minutes",
-            ["Okay", "Strong", "Risk"],
-            index=["Okay", "Strong", "Risk"].index(minutes_suggest)
-        )
-
+        minutes_sel = st.selectbox("Minutes", ["Okay", "Strong", "Risk"],
+                                   index=["Okay", "Strong", "Risk"].index(minutes_suggest))
     with c2:
-        role_sel = st.selectbox(
-            "Role",
-            ["Okay", "Strong", "Risk"],
-            index=["Okay", "Strong", "Risk"].index(role_suggest)
-        )
-
+        role_sel = st.selectbox("Role", ["Okay", "Strong", "Risk"],
+                                index=["Okay", "Strong", "Risk"].index(role_suggest))
     with c3:
-        shots_sel = st.selectbox(
-            "Shots",
-            ["Medium", "High", "Low"],
-            index=["Medium", "High", "Low"].index(shots_suggest)
-        )
-
+        shots_sel = st.selectbox("Shots", ["Medium", "High", "Low"],
+                                 index=["Medium", "High", "Low"].index(shots_suggest))
     with c4:
         matchup_sel = st.selectbox("Matchup/Pace", ["Neutral", "Good", "Bad"])
-
     with c5:
         script_sel = st.selectbox("Game script", ["Neutral", "Competitive", "Blowout risk"])
 
@@ -459,13 +467,7 @@ if fetch:
 
     sample_avg_pts = pd.to_numeric(logs["PTS"], errors="coerce").dropna().mean()
     line_diff = sample_avg_pts - line
-
-    if sample_avg_pts > line:
-        model_lean = "OVER"
-    elif sample_avg_pts < line:
-        model_lean = "UNDER"
-    else:
-        model_lean = "EVEN"
+    model_lean = "OVER" if sample_avg_pts > line else ("UNDER" if sample_avg_pts < line else "EVEN")
 
     if adjusted >= 0.65 and line_diff >= 2:
         confidence_tier = "Strong Over"
@@ -478,46 +480,76 @@ if fetch:
     else:
         confidence_tier = "Pass"
 
-    if confidence_tier == "Strong Over":
-        confidence_badge = "🟢 Strong Over"
-    elif confidence_tier == "Lean Over":
-        confidence_badge = "🟡 Lean Over"
-    elif confidence_tier == "Lean Under":
-        confidence_badge = "🟠 Lean Under"
-    elif confidence_tier == "Strong Under":
-        confidence_badge = "🔴 Strong Under"
-    else:
-        confidence_badge = "⚪ Pass"
+    badge_map = {
+        "Strong Over":  "🟢 Strong Over",
+        "Lean Over":    "🟡 Lean Over",
+        "Lean Under":   "🟠 Lean Under",
+        "Strong Under": "🔴 Strong Under",
+        "Pass":         "⚪ Pass",
+    }
+    confidence_badge = badge_map[confidence_tier]
 
+    # ── AI ANALYSIS ──────────────────────────────────────────────────────────
+    if enable_ai:
+        st.divider()
+        st.markdown("## 🤖 AI-Powered Breakdown")
 
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if not api_key:
+            st.warning(
+                "No `ANTHROPIC_API_KEY` found in your environment. "
+                "Set it to enable AI analysis.\n\n"
+                "```\nexport ANTHROPIC_API_KEY=sk-ant-...\n```"
+            )
+        else:
+            if st.button("Generate AI Analysis"):
+                with st.spinner("Claude is analyzing this prop..."):
+                    try:
+                        prompt = build_analysis_prompt(
+                            full_name=full_name,
+                            line=line,
+                            side=side,
+                            n_games=n_games,
+                            logs=logs,
+                            baseline=baseline,
+                            adjusted=adjusted,
+                            confidence_tier=confidence_tier,
+                            avg_pts=sample_avg_pts,
+                            avg_min=avg_min,
+                            avg_fga=avg_fga,
+                            min_flag=min_flag,
+                            fga_flag=fga_flag,
+                            pts_flag=pts_flag,
+                            minutes_sel=minutes_sel,
+                            role_sel=role_sel,
+                            shots_sel=shots_sel,
+                            matchup_sel=matchup_sel,
+                            script_sel=script_sel,
+                        )
+                        analysis = generate_ai_analysis(prompt)
+                        st.markdown(analysis)
+                    except Exception as e:
+                        st.error(f"AI analysis failed: {repr(e)}")
+
+    # ── FINAL VERDICT ─────────────────────────────────────────────────────────
+    st.divider()
     st.markdown("## Final Verdict")
-    st.markdown(
-        f"""
-### {full_name} — Points Prop
-## {confidence_badge}
-"""
-    )
+    st.markdown(f"### {full_name} — Points Prop\n## {confidence_badge}")
 
     v1, v2, v3 = st.columns(3)
-
     with v1:
         st.metric("Line", f"{line:.1f}")
-
     with v2:
         st.metric(f"Recent Avg (Last {n_games})", f"{sample_avg_pts:.1f}")
-
     with v3:
         st.metric("Hit Rate", f"{baseline:.0%}")
 
     with st.expander("Show detailed analysis"):
         d1, d2, d3 = st.columns(3)
-
         with d1:
             st.metric("Model Lean", model_lean)
-
         with d2:
             st.metric("Confidence Tier", confidence_tier)
-
         with d3:
             st.metric("Edge vs Line", f"{line_diff:+.1f}")
 
@@ -531,15 +563,12 @@ if fetch:
 
     st.divider()
     st.markdown("### Export")
-
     csv = out.to_csv(index=False).encode("utf-8")
+    st.download_button("Download report CSV", data=csv, file_name="prop_report.csv", mime="text/csv")
 
-    st.download_button(
-        "Download report CSV",
-        data=csv,
-        file_name="prop_report.csv",
-        mime="text/csv"
-    )
+# ─────────────────────────────────────────────
+# Slate Scanner
+# ─────────────────────────────────────────────
 
 st.markdown("---")
 st.markdown("## Advanced Tools")
@@ -548,13 +577,11 @@ st.subheader("Slate Scanner")
 if scan_slate:
     selected_team = st.selectbox("Choose a team to scan", NBA_TEAMS)
     st.write(f"Selected team: **{selected_team}**")
-
     run_team_scan = st.button("Run team scan")
 
     if run_team_scan:
         st.write(f"Running scan for **{selected_team}**...")
         df_team_scan = scan_team_players(selected_team, season)
-
         if df_team_scan.empty:
             st.warning("No players returned. This usually means the API timed out for all scanned players.")
         else:
@@ -565,4 +592,5 @@ st.caption(
     "This tool provides statistical analysis for educational purposes only. "
     "It does not guarantee outcomes and should not be considered financial or betting advice."
 )
+
 
