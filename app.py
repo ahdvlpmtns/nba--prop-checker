@@ -222,16 +222,28 @@ def get_player_team(player_id: int) -> Optional[str]:
 
 @st.cache_data(ttl=300)
 def get_next_opponent(player_team: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Find the next UPCOMING (not yet finished) game for a team.
+    - Uses Eastern Time since NBA schedules are ET-based
+    - Looks up to 7 days ahead
+    - Skips games with 'Final' in GAME_STATUS_TEXT (already completed)
+    """
     if not player_team:
         return None, None
 
     from datetime import timedelta
-    base_date = datetime.today()
+    try:
+        import pytz
+        et = pytz.timezone("America/New_York")
+        base_date = datetime.now(et)
+    except Exception:
+        base_date = datetime.today()
 
-    for day_offset in [0, 1, 2]:
+    for day_offset in range(8):  # look up to 7 days ahead
         try:
             check_date = base_date + timedelta(days=day_offset)
             check_date_str = check_date.strftime("%m/%d/%Y")
+
             sb = scoreboardv2.ScoreboardV2(
                 game_date=check_date_str,
                 league_id="00",
@@ -242,6 +254,7 @@ def get_next_opponent(player_team: Optional[str]) -> Tuple[Optional[str], Option
             if games.empty:
                 continue
 
+            # Filter to this team's game
             row = games[
                 (games["HOME_TEAM_ABBREVIATION"] == player_team) |
                 (games["VISITOR_TEAM_ABBREVIATION"] == player_team)
@@ -250,23 +263,21 @@ def get_next_opponent(player_team: Optional[str]) -> Tuple[Optional[str], Option
                 continue
 
             row = row.iloc[0]
+
+            # Skip games that are already final
+            status = str(row.get("GAME_STATUS_TEXT", "")).strip()
+            if "Final" in status or "final" in status:
+                continue
+
             home = row["HOME_TEAM_ABBREVIATION"]
             away = row["VISITOR_TEAM_ABBREVIATION"]
-
-            game_date = None
-            for col in ["GAME_DATE_EST", "GAME_DATE", "GAME_STATUS_TEXT"]:
-                if col in row.index and row[col]:
-                    val = str(row[col])[:10]
-                    if val and val != "nan":
-                        game_date = check_date.strftime("%b %d, %Y")
-                        break
-            if not game_date:
-                game_date = check_date.strftime("%b %d, %Y")
+            game_date = check_date.strftime("%b %d, %Y")
 
             if player_team == home:
                 return away, game_date
             else:
                 return home, game_date
+
         except Exception:
             continue
 
@@ -841,18 +852,27 @@ if st.session_state.logs is not None:
 
     # ── Home/Away splits ──────────────────────
     if splits["home_games"] > 0 or splits["away_games"] > 0:
-        # Detect tonight venue
+        # Detect tonight venue — skip completed (Final) games
         tonight_venue = None
         if player_team and opp_abbr:
             try:
                 from datetime import timedelta
-                for day_offset in [0, 1, 2]:
-                    check_date = (datetime.today() + timedelta(days=day_offset)).strftime("%m/%d/%Y")
+                try:
+                    import pytz
+                    et = pytz.timezone("America/New_York")
+                    base_dt = datetime.now(et)
+                except Exception:
+                    base_dt = datetime.today()
+                for day_offset in range(8):
+                    check_date = (base_dt + timedelta(days=day_offset)).strftime("%m/%d/%Y")
                     sb_check = scoreboardv2.ScoreboardV2(game_date=check_date, league_id="00", day_offset=0, timeout=10)
                     g = sb_check.get_data_frames()[0]
                     if not g.empty:
                         r = g[(g["HOME_TEAM_ABBREVIATION"] == player_team) | (g["VISITOR_TEAM_ABBREVIATION"] == player_team)]
                         if not r.empty:
+                            status = str(r.iloc[0].get("GAME_STATUS_TEXT", "")).strip()
+                            if "Final" in status or "final" in status:
+                                continue  # game already done, keep looking
                             tonight_venue = "Home" if r.iloc[0]["HOME_TEAM_ABBREVIATION"] == player_team else "Away"
                             break
             except Exception:
