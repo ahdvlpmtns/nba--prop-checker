@@ -236,9 +236,53 @@ def get_league_defense_stats(season: str) -> pd.DataFrame:
     except Exception:
         return pd.DataFrame()
 
+@st.cache_data(ttl=300)
+def get_next_opponent(player_team: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Look up the next scheduled game for a team using scoreboardv2.
+    Checks today first, then tomorrow (day_offset=1) as a fallback.
+    Returns (opponent_abbreviation, game_date_string).
+    """
+    if not player_team:
+        return None, None
+
+    for day_offset in [0, 1, 2]:
+        try:
+            sb = scoreboardv2.ScoreboardV2(
+                game_date=datetime.today().strftime("%m/%d/%Y"),
+                league_id="00",
+                day_offset=day_offset,
+                timeout=20,
+            )
+            games = sb.get_data_frames()[0]
+            if games.empty:
+                continue
+
+            row = games[
+                (games["HOME_TEAM_ABBREVIATION"] == player_team) |
+                (games["VISITOR_TEAM_ABBREVIATION"] == player_team)
+            ]
+            if row.empty:
+                continue
+
+            row = row.iloc[0]
+            home = row["HOME_TEAM_ABBREVIATION"]
+            away = row["VISITOR_TEAM_ABBREVIATION"]
+            game_date = str(row.get("GAME_DATE_EST", ""))[:10]
+
+            if player_team == home:
+                return away, game_date
+            else:
+                return home, game_date
+        except Exception:
+            continue
+
+    return None, None
+
+
 def get_opponent_from_logs(logs: pd.DataFrame, player_team: Optional[str]) -> Optional[str]:
     """
-    Extract the most recent opponent abbreviation from the game log MATCHUP column.
+    Fallback: extract most recent opponent from game log if schedule lookup fails.
     MATCHUP format is either 'TEM vs. OPP' or 'TEM @ OPP'.
     """
     if logs is None or logs.empty:
@@ -666,9 +710,15 @@ if st.session_state.logs is not None:
     fga_flag = trend_flag(logs["FGA"], n_games)
     pts_flag = trend_flag(logs["PTS"], n_games)
 
-    # ── Auto-detect opponent + defense rating ─
-    player_team = get_player_team(player_id)
-    opp_abbr    = get_opponent_from_logs(logs, player_team)
+    # ── Auto-detect NEXT opponent + defense rating ─
+    player_team        = get_player_team(player_id)
+    opp_abbr, game_date = get_next_opponent(player_team)
+
+    # Fall back to most recent game log opponent if no upcoming game found
+    if not opp_abbr:
+        opp_abbr  = get_opponent_from_logs(logs, player_team)
+        game_date = None
+
     matchup_auto, opp_pts, league_avg = classify_matchup(opp_abbr, defense_df)
 
     # ── Stat cards ────────────────────────────
@@ -702,10 +752,12 @@ if st.session_state.logs is not None:
     if opp_abbr and opp_pts:
         badge_css = matchup_auto.lower()
         badge_label = {"Good": "✅ Weak defense", "Bad": "🔴 Strong defense", "Neutral": "⚪ Average defense"}[matchup_auto]
+        date_str = f" · {game_date}" if game_date else ""
+        schedule_label = f"Next game vs {opp_abbr}{date_str}" if game_date is not None else f"Most recent opp: {opp_abbr}"
         st.markdown(f"""
         <div class='defense-card'>
             <div>
-                <div class='stat-label'>Opponent Defense — {opp_abbr}</div>
+                <div class='stat-label'>{schedule_label}</div>
                 <div style='font-size:1.1rem; font-weight:700; color:#f1f5f9; margin-top:4px;'>
                     {opp_pts:.1f} pts allowed/game
                     <span style='font-family:DM Mono; font-size:0.72rem; color:#475569; margin-left:8px;'>
