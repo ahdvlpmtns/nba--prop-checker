@@ -223,18 +223,23 @@ def get_player_team(player_id: int) -> Optional[str]:
 def get_league_defense_stats(season: str) -> pd.DataFrame:
     """
     Pull opponent points allowed per game for all 30 teams.
-    Returns a DataFrame with TEAM_ABBREVIATION and OPP_PTS columns.
+    Tries Defense measure type first, falls back to Base (OPP_PTS not always
+    available on Defense measure — Base has OPP_PTS as standard).
     """
-    try:
-        df = leaguedashteamstats.LeagueDashTeamStats(
-            season=season,
-            measure_type_detailed_defense="Defense",
-            per_mode_simple="PerGame",
-            timeout=30,
-        ).get_data_frames()[0]
-        return df[["TEAM_ABBREVIATION", "OPP_PTS"]].copy()
-    except Exception:
-        return pd.DataFrame()
+    # Try Base measure which reliably has OPP_PTS
+    for measure in ["Base", "Defense"]:
+        try:
+            df = leaguedashteamstats.LeagueDashTeamStats(
+                season=season,
+                measure_type_detailed_defense=measure,
+                per_mode_simple="PerGame",
+                timeout=30,
+            ).get_data_frames()[0]
+            if "OPP_PTS" in df.columns and not df.empty:
+                return df[["TEAM_ABBREVIATION", "OPP_PTS"]].copy()
+        except Exception:
+            continue
+    return pd.DataFrame()
 
 @st.cache_data(ttl=300)
 def get_next_opponent(player_team: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
@@ -246,12 +251,17 @@ def get_next_opponent(player_team: Optional[str]) -> Tuple[Optional[str], Option
     if not player_team:
         return None, None
 
+    from datetime import timedelta
+    base_date = datetime.today()
+
     for day_offset in [0, 1, 2]:
         try:
+            check_date = base_date + timedelta(days=day_offset)
+            check_date_str = check_date.strftime("%m/%d/%Y")
             sb = scoreboardv2.ScoreboardV2(
-                game_date=datetime.today().strftime("%m/%d/%Y"),
+                game_date=check_date_str,
                 league_id="00",
-                day_offset=day_offset,
+                day_offset=0,
                 timeout=20,
             )
             games = sb.get_data_frames()[0]
@@ -268,7 +278,17 @@ def get_next_opponent(player_team: Optional[str]) -> Tuple[Optional[str], Option
             row = row.iloc[0]
             home = row["HOME_TEAM_ABBREVIATION"]
             away = row["VISITOR_TEAM_ABBREVIATION"]
-            game_date = str(row.get("GAME_DATE_EST", ""))[:10]
+
+            # Try multiple possible date column names
+            game_date = None
+            for col in ["GAME_DATE_EST", "GAME_DATE", "GAME_STATUS_TEXT"]:
+                if col in row.index and row[col]:
+                    val = str(row[col])[:10]
+                    if val and val != "nan":
+                        game_date = check_date.strftime("%b %d, %Y")
+                        break
+            if not game_date:
+                game_date = check_date.strftime("%b %d, %Y")
 
             if player_team == home:
                 return away, game_date
