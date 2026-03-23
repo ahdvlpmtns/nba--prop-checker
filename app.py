@@ -756,7 +756,7 @@ if st.session_state.logs is not None:
             "Matchup 🤖",
             matchup_options,
             index=matchup_options.index(matchup_auto),
-            help=f"Auto-detected: {opp_abbr or 'unknown'} allows {opp_pts:.1f if opp_pts else 'N/A'} pts/game"
+            help=f"Auto-detected: {opp_abbr or 'unknown'} allows {f'{opp_pts:.1f}' if opp_pts else 'N/A'} pts/game"
         )
     with c5:
         script_sel = st.selectbox("Script", ["Neutral","Competitive","Blowout risk"])
