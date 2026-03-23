@@ -7,6 +7,7 @@ from typing import Optional, Tuple
 
 from groq import Groq
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 
 from nba_api.stats.static import players
@@ -154,6 +155,80 @@ def label_from_prob(p: float) -> str:
     if p >= 0.58:
         return "YELLOW"
     return "RED"
+
+
+# ─────────────────────────────────────────────
+# Chart
+# ─────────────────────────────────────────────
+
+def build_points_chart(logs: pd.DataFrame, full_name: str, line: float, avg_pts: float) -> go.Figure:
+    df = logs.copy()
+    df["PTS"] = pd.to_numeric(df["PTS"], errors="coerce")
+    df = df.dropna(subset=["PTS"])
+    df = df.sort_values("GAME_DATE", ascending=True)
+
+    labels = df["MATCHUP"].fillna(df["GAME_DATE"].astype(str).str[:10])
+    pts = df["PTS"].tolist()
+    colors = ["#22c55e" if p > line else "#ef4444" for p in pts]
+
+    fig = go.Figure()
+
+    # Points line
+    fig.add_trace(go.Scatter(
+        x=list(range(len(pts))),
+        y=pts,
+        mode="lines+markers",
+        name="Points",
+        line=dict(color="#60a5fa", width=2.5),
+        marker=dict(color=colors, size=10, line=dict(color="white", width=1.5)),
+        hovertemplate=[
+            f"<b>{labels.iloc[i]}</b><br>Points: {pts[i]}<br>{'✅ Over' if pts[i] > line else '❌ Under'}<extra></extra>"
+            for i in range(len(pts))
+        ],
+    ))
+
+    # Prop line
+    fig.add_hline(
+        y=line,
+        line_dash="dash",
+        line_color="#f59e0b",
+        line_width=2,
+        annotation_text=f"Line: {line}",
+        annotation_position="top right",
+        annotation_font_color="#f59e0b",
+    )
+
+    # Average line
+    fig.add_hline(
+        y=avg_pts,
+        line_dash="dot",
+        line_color="#a78bfa",
+        line_width=1.5,
+        annotation_text=f"Avg: {avg_pts:.1f}",
+        annotation_position="bottom right",
+        annotation_font_color="#a78bfa",
+    )
+
+    fig.update_layout(
+        title=dict(text=f"{full_name} — Last {len(pts)} Games", font=dict(size=16)),
+        xaxis=dict(
+            tickmode="array",
+            tickvals=list(range(len(pts))),
+            ticktext=[labels.iloc[i] for i in range(len(pts))],
+            tickangle=-35,
+            showgrid=False,
+        ),
+        yaxis=dict(title="Points", showgrid=True, gridcolor="rgba(255,255,255,0.08)"),
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="white"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        hovermode="x unified",
+        margin=dict(l=40, r=40, t=60, b=80),
+        height=380,
+    )
+
+    return fig
 
 
 # ─────────────────────────────────────────────
@@ -346,7 +421,7 @@ if not fetch and st.session_state.logs is None and not scan_slate:
 
 # ── FETCH LOGS ───────────────────────────────
 if fetch:
-    st.session_state.ai_analysis = None  # clear old analysis on new fetch
+    st.session_state.ai_analysis = None
     st.session_state.ai_error = None
 
     try:
@@ -381,7 +456,7 @@ if fetch:
             "FG3A": [None] * 10,
         })
 
-# ── RENDER ANALYSIS (persists across reruns) ─
+# ── RENDER ANALYSIS ──────────────────────────
 if st.session_state.logs is not None:
     logs = st.session_state.logs
 
@@ -390,6 +465,7 @@ if st.session_state.logs is not None:
     avg_min = pd.to_numeric(logs["MIN"], errors="coerce").dropna().mean()
     avg_fga = pd.to_numeric(logs["FGA"], errors="coerce").dropna().mean()
     avg_fta = pd.to_numeric(logs["FTA"], errors="coerce").dropna().mean()
+    sample_avg_pts = pd.to_numeric(logs["PTS"], errors="coerce").dropna().mean()
 
     minutes_suggest = suggest_bucket(avg_min, strong_cut=32, risk_cut=26)
     shots_suggest = "High" if avg_fga >= 15 else ("Low" if avg_fga < 10 else "Medium")
@@ -400,9 +476,14 @@ if st.session_state.logs is not None:
     fga_flag = trend_flag(logs["FGA"])
     pts_flag = trend_flag(logs["PTS"])
 
+    # ── CHART ────────────────────────────────
+    st.markdown(f"### Points — Last {n_games} Games")
+    fig = build_points_chart(logs, full_name, line, sample_avg_pts)
+    st.plotly_chart(fig, use_container_width=True)
+
     col1, col2 = st.columns([1.2, 1])
     with col1:
-        st.markdown(f"### Game Log (Last {n_games})")
+        st.markdown(f"### Game Log")
         st.dataframe(logs.reset_index(drop=True), use_container_width=True)
     with col2:
         st.markdown("### Key Metrics")
@@ -448,7 +529,6 @@ if st.session_state.logs is not None:
     adjusted = max(0.0, min(1.0, baseline + adjs.total))
     label = label_from_prob(adjusted)
 
-    sample_avg_pts = pd.to_numeric(logs["PTS"], errors="coerce").dropna().mean()
     line_diff = sample_avg_pts - line
     model_lean = "OVER" if sample_avg_pts > line else ("UNDER" if sample_avg_pts < line else "EVEN")
 
@@ -472,7 +552,7 @@ if st.session_state.logs is not None:
     }
     confidence_badge = badge_map[confidence_tier]
 
-    # ── AI ANALYSIS ──────────────────────────────────────────────────────────
+    # ── AI ANALYSIS ──────────────────────────
     if enable_ai:
         st.divider()
         st.markdown("## 🤖 AI-Powered Breakdown")
@@ -512,13 +592,12 @@ if st.session_state.logs is not None:
                         st.session_state.ai_error = repr(e)
                         st.session_state.ai_analysis = None
 
-            # Always render stored analysis if available
             if st.session_state.ai_analysis:
                 st.markdown(st.session_state.ai_analysis)
             elif st.session_state.ai_error:
                 st.error(f"AI analysis failed: {st.session_state.ai_error}")
 
-    # ── FINAL VERDICT ─────────────────────────────────────────────────────────
+    # ── FINAL VERDICT ────────────────────────
     st.divider()
     st.markdown("## Final Verdict")
     st.markdown(f"### {full_name} — Points Prop\n## {confidence_badge}")
