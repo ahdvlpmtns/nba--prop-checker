@@ -3,3 +3,4 @@ pandas
 nba_api
 requests
 groq
+plotly
