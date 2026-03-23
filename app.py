@@ -917,17 +917,9 @@ if st.session_state.logs is not None:
     else:
         st.caption("Next opponent not found — matchup set to Neutral.")
 
-    c1, c2, c3, c4, c5 = st.columns(5)
-    with c1:
-        minutes_sel = st.selectbox("Minutes", ["Okay","Strong","Risk"],
-                                   index=["Okay","Strong","Risk"].index(minutes_suggest))
-    with c2:
-        role_sel = st.selectbox("Role", ["Okay","Strong","Risk"],
-                                index=["Okay","Strong","Risk"].index(role_suggest))
-    with c3:
-        shots_sel = st.selectbox("Shots", ["Medium","High","Low"],
-                                 index=["Medium","High","Low"].index(shots_suggest))
-    with c4:
+    # Primary controls — always visible
+    pc1, pc2 = st.columns(2)
+    with pc1:
         matchup_options = ["Neutral","Good","Bad"]
         matchup_sel = st.selectbox(
             "Matchup 🤖",
@@ -935,8 +927,21 @@ if st.session_state.logs is not None:
             index=matchup_options.index(matchup_auto),
             help=f"Auto-detected: {opp_abbr or 'unknown'} allows {f'{opp_pts:.1f}' if opp_pts else 'N/A'} pts/game"
         )
-    with c5:
-        script_sel = st.selectbox("Script", ["Neutral","Competitive","Blowout risk"])
+    with pc2:
+        script_sel = st.selectbox("Game Script", ["Neutral","Competitive","Blowout risk"])
+
+    # Advanced overrides — collapsed by default
+    with st.expander("⚙️  Advanced overrides"):
+        ac1, ac2, ac3 = st.columns(3)
+        with ac1:
+            minutes_sel = st.selectbox("Minutes", ["Okay","Strong","Risk"],
+                                       index=["Okay","Strong","Risk"].index(minutes_suggest))
+        with ac2:
+            role_sel = st.selectbox("Role", ["Okay","Strong","Risk"],
+                                    index=["Okay","Strong","Risk"].index(role_suggest))
+        with ac3:
+            shots_sel = st.selectbox("Shots", ["Medium","High","Low"],
+                                     index=["Medium","High","Low"].index(shots_suggest))
 
     context = {
         "minutes": minutes_sel,
