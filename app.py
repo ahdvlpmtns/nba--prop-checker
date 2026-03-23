@@ -323,6 +323,108 @@ def season_str_to_season(season_str: str) -> str:
     """Return season string as-is for nba_api e.g. '2025-26'."""
     return season_str.strip()
 
+# ── H2H vs opponent ───────────────────────────
+
+@st.cache_data(ttl=3600)
+def get_h2h_logs(player_id: int, opp_abbr: str, season: str) -> pd.DataFrame:
+    """
+    Fetch full season logs and filter for games vs opp_abbr.
+    Returns DataFrame with same columns as nba_get_game_logs.
+    Looks at current + prior season for enough sample.
+    """
+    empty = pd.DataFrame(columns=["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A"])
+    if not opp_abbr:
+        return empty
+
+    try:
+        from nba_api.library.http import NBAStatsHTTP
+        NBAStatsHTTP.nba_response.headers = {
+            "Host": "stats.nba.com",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "x-nba-stats-origin": "stats",
+            "x-nba-stats-token": "true",
+            "Referer": "https://www.nba.com/",
+            "Origin": "https://www.nba.com",
+            "Connection": "keep-alive",
+        }
+    except Exception:
+        pass
+
+    all_rows = []
+    # Check current + 2 prior seasons for enough H2H games
+    try:
+        start_year = int(season.split("-")[0])
+    except Exception:
+        start_year = 2025
+
+    for yr in [start_year, start_year - 1, start_year - 2]:
+        try:
+            season_str = f"{yr}-{str(yr+1)[-2:]}"
+            df = playergamelog.PlayerGameLog(
+                player_id=player_id, season=season_str, timeout=45,
+            ).get_data_frames()[0]
+            df["GAME_DATE"] = pd.to_datetime(df["GAME_DATE"])
+            for c in ["MATCHUP","MIN","PTS","FGA","FTA","FG3A"]:
+                if c not in df.columns:
+                    df[c] = None
+            # Filter to games vs this opponent
+            mask = df["MATCHUP"].astype(str).str.contains(opp_abbr, na=False)
+            all_rows.append(df[mask][["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A"]])
+        except Exception:
+            time.sleep(2)
+            continue
+
+    if not all_rows:
+        return empty
+
+    combined = pd.concat(all_rows).sort_values("GAME_DATE", ascending=False).reset_index(drop=True)
+    return combined
+
+
+def h2h_signal(h2h_df: pd.DataFrame, line: float, side: str) -> Tuple[str, Optional[float], int]:
+    """
+    Returns (signal, avg_pts, games_count).
+    signal: 'Strong', 'Okay', or 'Risk'
+    """
+    if h2h_df is None or h2h_df.empty:
+        return "Neutral", None, 0
+
+    pts = pd.to_numeric(h2h_df["PTS"], errors="coerce").dropna()
+    if len(pts) < 2:
+        return "Neutral", None, len(pts)
+
+    avg = float(pts.mean())
+    hit = float((pts >= line).sum() / len(pts)) if side == "Over" else float((pts <= line).sum() / len(pts))
+
+    if hit >= 0.65 and avg > line:
+        return "Strong", avg, len(pts)
+    if hit <= 0.35 or avg < line - 3:
+        return "Risk", avg, len(pts)
+    return "Neutral", avg, len(pts)
+
+
+# ── Back-to-back detection ────────────────────
+
+def detect_b2b(logs: pd.DataFrame, game_date: Optional[str]) -> str:
+    """
+    Returns 'B2B' if tonight's game is the day after a logged game, else 'Normal'.
+    Uses game_date (next game date string) + logs to check.
+    """
+    if game_date is None or logs is None or logs.empty:
+        return "Normal"
+
+    try:
+        tonight = pd.to_datetime(game_date)
+        log_dates = pd.to_datetime(logs["GAME_DATE"], errors="coerce").dropna()
+        # Check if any logged game was yesterday
+        yesterday = tonight - pd.Timedelta(days=1)
+        if any(abs((d - yesterday).days) == 0 for d in log_dates):
+            return "B2B"
+        return "Normal"
+    except Exception:
+        return "Normal"
+
 def season_str_to_int(season_str: str) -> int:
     """Convert '2025-26' -> 2025 for ESPN year param."""
     try:
@@ -561,6 +663,10 @@ def apply_adjustments(weighted: float, context: dict) -> float:
         "matchup":  {"Good":   1.08, "Neutral": 1.00, "Bad": 0.91},
         "script":   {"Competitive": 1.03, "Neutral": 1.00, "Blowout risk": 0.93},
         "venue":    {"Boost": 1.06, "Neutral": 1.00, "Penalty": 0.92},
+        # H2H: how does player historically perform vs this specific opponent
+        "h2h":      {"Strong": 1.07, "Neutral": 1.00, "Risk": 0.91},
+        # B2B: second night of back-to-back is a meaningful fatigue penalty
+        "b2b":      {"Normal": 1.00, "B2B": 0.91},
     }
     margin = weighted - 0.5
     for key, val in context.items():
@@ -688,6 +794,8 @@ CONTEXT:
 - Matchup: {matchup_sel} (auto-detected from real defense stats){defense_note}
 - Game script: {script_sel}
 - Venue split adjustment: {venue_adj or "Neutral"} (based on home/away hit rate differential)
+- H2H vs {opp_abbr}: {h2h_sig} signal — {h2h_count} games, avg {f"{h2h_avg:.1f}" if h2h_avg else "N/A"} pts
+- Schedule: {b2b_status}{"  — FATIGUE RISK, second night of back-to-back" if b2b_status == "B2B" else ""}
 
 MODEL OUTPUT: {tier}
 
@@ -874,7 +982,10 @@ if st.session_state.logs is not None:
 
     matchup_auto, opp_pts, league_avg = classify_matchup_espn(opp_abbr)
 
-
+    # ── H2H + B2B ────────────────────────────
+    h2h_df     = get_h2h_logs(player_id, opp_abbr, season_str_clean) if opp_abbr else pd.DataFrame()
+    h2h_sig, h2h_avg, h2h_count = h2h_signal(h2h_df, line, side)
+    b2b_status = detect_b2b(logs, game_date)
 
     # ── Stat cards ────────────────────────────
     st.markdown(f"<div class='section-header'>{full_name}</div>", unsafe_allow_html=True)
@@ -948,6 +1059,65 @@ if st.session_state.logs is not None:
         {flag_pill("PTS", pts_flag)}
     </div>""", unsafe_allow_html=True)
     st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
+
+    # ── H2H + B2B cards ──────────────────────
+    st.markdown("<div class='section-header'>H2H & Schedule</div>", unsafe_allow_html=True)
+    hb1, hb2 = st.columns(2)
+
+    with hb1:
+        if h2h_count >= 2:
+            sig_color = {"Strong": "#22c55e", "Neutral": "#94a3b8", "Risk": "#ef4444"}.get(h2h_sig, "#94a3b8")
+            sig_bg    = {"Strong": "#052e16", "Neutral": "#0f172a",  "Risk": "#1c0505"}.get(h2h_sig, "#0f172a")
+            sig_border= {"Strong": "#166534", "Neutral": "#1e293b",  "Risk": "#991b1b"}.get(h2h_sig, "#1e293b")
+            st.markdown(f"""
+            <div class='stat-card' style='border-color:{sig_border}; background:linear-gradient(135deg,{sig_bg} 0%,#111827 100%);'>
+                <div class='stat-label'>vs {opp_abbr} (L{h2h_count} H2H)</div>
+                <div style='display:flex; align-items:baseline; gap:12px; margin-top:4px;'>
+                    <div class='stat-value' style='color:{sig_color};'>{h2h_avg:.1f}</div>
+                    <div style='font-family:DM Mono; font-size:0.72rem; color:#475569;'>avg pts</div>
+                </div>
+                <div style='font-family:DM Mono; font-size:0.72rem; color:{sig_color}; margin-top:4px;'>
+                    {h2h_sig} H2H signal · line is {line}
+                </div>
+            </div>""", unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div class='stat-card'>
+                <div class='stat-label'>vs {opp_abbr or "opponent"} H2H</div>
+                <div style='color:#475569; font-size:0.85rem; margin-top:8px;'>
+                    {"Not enough H2H data (need 2+ games)" if opp_abbr else "Opponent not detected"}
+                </div>
+            </div>""", unsafe_allow_html=True)
+
+    with hb2:
+        if b2b_status == "B2B":
+            st.markdown(f"""
+            <div class='stat-card' style='border-color:#991b1b; background:linear-gradient(135deg,#1c0505 0%,#111827 100%);'>
+                <div class='stat-label'>Schedule</div>
+                <div style='display:flex; align-items:center; gap:10px; margin-top:6px;'>
+                    <div style='font-size:1.5rem;'>😴</div>
+                    <div>
+                        <div style='font-size:1rem; font-weight:800; color:#ef4444;'>Back-to-Back</div>
+                        <div style='font-family:DM Mono; font-size:0.7rem; color:#ef4444; margin-top:2px;'>
+                            Fatigue penalty applied to verdict
+                        </div>
+                    </div>
+                </div>
+            </div>""", unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div class='stat-card' style='border-color:#166534; background:linear-gradient(135deg,#052e16 0%,#111827 100%);'>
+                <div class='stat-label'>Schedule</div>
+                <div style='display:flex; align-items:center; gap:10px; margin-top:6px;'>
+                    <div style='font-size:1.5rem;'>✅</div>
+                    <div>
+                        <div style='font-size:1rem; font-weight:800; color:#22c55e;'>Normal Rest</div>
+                        <div style='font-family:DM Mono; font-size:0.7rem; color:#475569; margin-top:2px;'>
+                            No fatigue adjustment
+                        </div>
+                    </div>
+                </div>
+            </div>""", unsafe_allow_html=True)
 
     # ── Home/Away splits ──────────────────────
     if splits.get("home_games", 0) > 0 or splits.get("away_games", 0) > 0:
@@ -1076,6 +1246,8 @@ if st.session_state.logs is not None:
         "matchup": matchup_sel,
         "script":  script_sel,
         "venue":   venue_adj,
+        "h2h":     h2h_sig,
+        "b2b":     b2b_status,
     }
 
     adjusted  = apply_adjustments(weighted_base, context)
@@ -1132,7 +1304,9 @@ if st.session_state.logs is not None:
         After context: {adjusted:.0%} &nbsp;·&nbsp;
         Sample: {n_games} games &nbsp;·&nbsp;
         Matchup: {matchup_sel} (vs {opp_abbr or "unknown"}) &nbsp;·&nbsp;
-        Venue: {tonight_venue or "Unknown"} ({venue_adj})
+        Venue: {tonight_venue or "Unknown"} ({venue_adj}) &nbsp;·&nbsp;
+        H2H: {h2h_sig} ({h2h_count} games, avg {f"{h2h_avg:.1f}" if h2h_avg else "N/A"} pts) &nbsp;·&nbsp;
+        Schedule: {b2b_status}
         </div>""", unsafe_allow_html=True)
 
     # ── AI Analysis ───────────────────────────
