@@ -10,11 +10,206 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from nba_api.stats.static import players
-from nba_api.stats.endpoints import playergamelog, scoreboardv2
+from nba_api.stats.static import players, teams
+from nba_api.stats.endpoints import playergamelog, scoreboardv2, commonteamroster
 
 # ─────────────────────────────────────────────
-# Session state init
+# Page config — must be first
+# ─────────────────────────────────────────────
+
+st.set_page_config(
+    page_title="PropLens — NBA Prop Checker",
+    page_icon="🏀",
+    layout="wide",
+)
+
+# ─────────────────────────────────────────────
+# Custom CSS
+# ─────────────────────────────────────────────
+
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@400;500&display=swap');
+
+/* Base */
+html, body, [class*="css"] {
+    font-family: 'Syne', sans-serif;
+    background-color: #080c14;
+    color: #e2e8f0;
+}
+
+/* Hide default Streamlit chrome */
+#MainMenu, footer, header { visibility: hidden; }
+.block-container { padding-top: 2rem; padding-bottom: 3rem; max-width: 1200px; }
+
+/* Custom header */
+.proplens-header {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 0.25rem;
+}
+.proplens-logo {
+    font-size: 2.6rem;
+    font-weight: 800;
+    letter-spacing: -2px;
+    background: linear-gradient(135deg, #f97316 0%, #fb923c 50%, #fdba74 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    line-height: 1;
+}
+.proplens-sub {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.72rem;
+    color: #64748b;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    margin-top: 2px;
+}
+
+/* Stat cards */
+.stat-card {
+    background: linear-gradient(135deg, #0f172a 0%, #111827 100%);
+    border: 1px solid #1e293b;
+    border-radius: 14px;
+    padding: 1.1rem 1.3rem;
+    margin-bottom: 0.75rem;
+}
+.stat-label {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.65rem;
+    color: #475569;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    margin-bottom: 4px;
+}
+.stat-value {
+    font-size: 1.8rem;
+    font-weight: 800;
+    color: #f1f5f9;
+    letter-spacing: -1px;
+    line-height: 1.1;
+}
+.stat-value.orange { color: #f97316; }
+.stat-value.green  { color: #22c55e; }
+.stat-value.red    { color: #ef4444; }
+.stat-value.yellow { color: #eab308; }
+
+/* Verdict banner */
+.verdict-banner {
+    border-radius: 16px;
+    padding: 1.5rem 2rem;
+    margin: 1.5rem 0;
+    border: 1px solid #1e293b;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 1rem;
+}
+.verdict-banner.green  { background: linear-gradient(135deg, #052e16 0%, #0f2a1a 100%); border-color: #166534; }
+.verdict-banner.yellow { background: linear-gradient(135deg, #1c1a05 0%, #2a260f 100%); border-color: #854d0e; }
+.verdict-banner.orange { background: linear-gradient(135deg, #1c1005 0%, #2a1a0f 100%); border-color: #9a3412; }
+.verdict-banner.red    { background: linear-gradient(135deg, #1c0505 0%, #2a0f0f 100%); border-color: #991b1b; }
+.verdict-banner.gray   { background: linear-gradient(135deg, #0f172a 0%, #111827 100%); border-color: #1e293b; }
+
+.verdict-label {
+    font-size: 0.65rem;
+    font-family: 'DM Mono', monospace;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: #64748b;
+    margin-bottom: 4px;
+}
+.verdict-tier {
+    font-size: 2rem;
+    font-weight: 800;
+    letter-spacing: -1px;
+}
+.verdict-tier.green  { color: #22c55e; }
+.verdict-tier.yellow { color: #eab308; }
+.verdict-tier.orange { color: #f97316; }
+.verdict-tier.red    { color: #ef4444; }
+.verdict-tier.gray   { color: #64748b; }
+
+/* Section headers */
+.section-header {
+    font-size: 0.65rem;
+    font-family: 'DM Mono', monospace;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: #f97316;
+    margin: 1.75rem 0 0.75rem 0;
+    padding-bottom: 6px;
+    border-bottom: 1px solid #1e293b;
+}
+
+/* AI analysis box */
+.ai-box {
+    background: linear-gradient(135deg, #0a0f1e 0%, #0d1525 100%);
+    border: 1px solid #1e3a5f;
+    border-radius: 14px;
+    padding: 1.5rem;
+    margin-top: 1rem;
+    font-size: 0.95rem;
+    line-height: 1.75;
+    color: #cbd5e1;
+}
+
+/* Flag pills */
+.flag-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 0.5rem; }
+.flag-pill {
+    font-family: 'DM Mono', monospace;
+    font-size: 0.7rem;
+    padding: 4px 10px;
+    border-radius: 999px;
+    letter-spacing: 0.05em;
+}
+.flag-pill.up     { background: #052e16; color: #22c55e; border: 1px solid #166534; }
+.flag-pill.down   { background: #1c0505; color: #ef4444; border: 1px solid #991b1b; }
+.flag-pill.flat   { background: #0f172a; color: #94a3b8; border: 1px solid #1e293b; }
+.flag-pill.nodata { background: #0f172a; color: #475569; border: 1px solid #1e293b; }
+
+/* Input styling */
+.stTextInput input, .stNumberInput input, .stSelectbox select {
+    background: #0f172a !important;
+    border: 1px solid #1e293b !important;
+    border-radius: 8px !important;
+    color: #e2e8f0 !important;
+    font-family: 'Syne', sans-serif !important;
+}
+
+/* Button */
+.stButton > button {
+    background: linear-gradient(135deg, #ea580c, #f97316) !important;
+    color: white !important;
+    border: none !important;
+    border-radius: 8px !important;
+    font-family: 'Syne', sans-serif !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.03em !important;
+    padding: 0.5rem 1.5rem !important;
+    transition: opacity 0.2s !important;
+}
+.stButton > button:hover { opacity: 0.85 !important; }
+
+/* Divider */
+hr { border-color: #1e293b !important; }
+
+/* Dataframe */
+.stDataFrame { border-radius: 10px; overflow: hidden; }
+
+/* Sidebar */
+section[data-testid="stSidebar"] {
+    background: #0a0f1e !important;
+    border-right: 1px solid #1e293b !important;
+}
+section[data-testid="stSidebar"] .block-container { padding-top: 1.5rem; }
+</style>
+""", unsafe_allow_html=True)
+
+# ─────────────────────────────────────────────
+# Session state
 # ─────────────────────────────────────────────
 
 if "logs" not in st.session_state:
@@ -53,19 +248,40 @@ def search_candidates(player_name: str):
 @st.cache_data(ttl=600)
 def get_last_n_games(player_id: int, season: str, n: int = 10) -> pd.DataFrame:
     df = playergamelog.PlayerGameLog(
-        player_id=player_id,
-        season=season,
-        timeout=15,
+        player_id=player_id, season=season, timeout=15,
     ).get_data_frames()[0]
-
     df["GAME_DATE"] = pd.to_datetime(df["GAME_DATE"])
     df = df.sort_values("GAME_DATE", ascending=False).head(n).copy()
-
     for c in ["MATCHUP", "MIN", "PTS", "FGA", "FTA", "FG3A"]:
         if c not in df.columns:
             df[c] = None
-
     return df[["GAME_DATE", "MATCHUP", "MIN", "PTS", "FGA", "FTA", "FG3A"]]
+
+
+@st.cache_data(ttl=3600)
+def get_team_id(abbr: str) -> Optional[int]:
+    all_teams = teams.get_teams()
+    for t in all_teams:
+        if t["abbreviation"] == abbr:
+            return t["id"]
+    return None
+
+
+@st.cache_data(ttl=3600)
+def get_live_roster(team_abbr: str, season: str) -> list:
+    """Fetch live roster from NBA API for any team."""
+    team_id = get_team_id(team_abbr)
+    if not team_id:
+        return []
+    try:
+        roster_df = commonteamroster.CommonTeamRoster(
+            team_id=team_id,
+            season=season,
+            timeout=20,
+        ).get_data_frames()[0]
+        return roster_df["PLAYER"].tolist()
+    except Exception:
+        return []
 
 
 def hit_rate(df: pd.DataFrame, line: float, side: str) -> float:
@@ -79,15 +295,15 @@ def hit_rate(df: pd.DataFrame, line: float, side: str) -> float:
 def trend_flag(series: pd.Series, lookback: int = 3) -> str:
     s = pd.to_numeric(series, errors="coerce").dropna()
     if len(s) < lookback + 2:
-        return "Not enough data"
+        return "nodata"
     recent = s.iloc[:lookback].mean()
     prior = s.iloc[lookback:].mean()
     diff = recent - prior
     if diff >= 2:
-        return "Up"
+        return "up"
     if diff <= -2:
-        return "Down"
-    return "Flat"
+        return "down"
+    return "flat"
 
 
 def suggest_bucket(value: float, strong_cut: float, risk_cut: float) -> str:
@@ -107,33 +323,6 @@ def fetch_with_retries(fn, retries=3, wait=2):
             last_err = e
             time.sleep(wait * (i + 1))
     raise last_err
-
-
-@st.cache_data(ttl=600)
-def get_todays_matchup_for_player(player_team_abbr: str) -> dict:
-    today_str = datetime.today().strftime("%m/%d/%Y")
-    sb = scoreboardv2.ScoreboardV2(game_date=today_str, league_id="00", day_offset=0, timeout=120)
-    games = sb.get_data_frames()[0]
-
-    if games.empty:
-        return {"has_game_today": False, "opponent": None, "matchup": None, "home_away": None}
-
-    row = games[
-        (games["HOME_TEAM_ABBREVIATION"] == player_team_abbr) |
-        (games["VISITOR_TEAM_ABBREVIATION"] == player_team_abbr)
-    ]
-
-    if row.empty:
-        return {"has_game_today": False, "opponent": None, "matchup": None, "home_away": None}
-
-    row = row.iloc[0]
-    home = row["HOME_TEAM_ABBREVIATION"]
-    away = row["VISITOR_TEAM_ABBREVIATION"]
-
-    if player_team_abbr == home:
-        return {"has_game_today": True, "opponent": away, "matchup": f"{home} vs. {away}", "home_away": "Home"}
-    else:
-        return {"has_game_today": True, "opponent": home, "matchup": f"{player_team_abbr} @ {home}", "home_away": "Away"}
 
 
 @dataclass
@@ -157,6 +346,12 @@ def label_from_prob(p: float) -> str:
     return "RED"
 
 
+def flag_pill(label: str, flag: str) -> str:
+    icon = {"up": "↑", "down": "↓", "flat": "→", "nodata": "—"}.get(flag, "—")
+    css = {"up": "up", "down": "down", "flat": "flat", "nodata": "nodata"}.get(flag, "nodata")
+    return f'<span class="flag-pill {css}">{label} {icon}</span>'
+
+
 # ─────────────────────────────────────────────
 # Chart
 # ─────────────────────────────────────────────
@@ -173,6 +368,10 @@ def build_points_chart(logs: pd.DataFrame, full_name: str, line: float, avg_pts:
 
     fig = go.Figure()
 
+    # Shaded over/under zones
+    fig.add_hrect(y0=line, y1=max(pts) + 5, fillcolor="rgba(34,197,94,0.04)", line_width=0)
+    fig.add_hrect(y0=0, y1=line, fillcolor="rgba(239,68,68,0.04)", line_width=0)
+
     # Points line
     fig.add_trace(go.Scatter(
         x=list(range(len(pts))),
@@ -180,52 +379,53 @@ def build_points_chart(logs: pd.DataFrame, full_name: str, line: float, avg_pts:
         mode="lines+markers",
         name="Points",
         line=dict(color="#60a5fa", width=2.5),
-        marker=dict(color=colors, size=10, line=dict(color="white", width=1.5)),
+        marker=dict(color=colors, size=11, line=dict(color="#080c14", width=2)),
         hovertemplate=[
-            f"<b>{labels.iloc[i]}</b><br>Points: {pts[i]}<br>{'✅ Over' if pts[i] > line else '❌ Under'}<extra></extra>"
+            f"<b>{labels.iloc[i]}</b><br>Points: <b>{pts[i]}</b><br>{'✅ Over' if pts[i] > line else '❌ Under'}<extra></extra>"
             for i in range(len(pts))
         ],
     ))
 
     # Prop line
     fig.add_hline(
-        y=line,
-        line_dash="dash",
-        line_color="#f59e0b",
-        line_width=2,
-        annotation_text=f"Line: {line}",
-        annotation_position="top right",
-        annotation_font_color="#f59e0b",
+        y=line, line_dash="dash", line_color="#f97316", line_width=2,
+        annotation_text=f"  Line {line}", annotation_position="top left",
+        annotation_font=dict(color="#f97316", size=11, family="DM Mono"),
     )
 
     # Average line
     fig.add_hline(
-        y=avg_pts,
-        line_dash="dot",
-        line_color="#a78bfa",
-        line_width=1.5,
-        annotation_text=f"Avg: {avg_pts:.1f}",
-        annotation_position="bottom right",
-        annotation_font_color="#a78bfa",
+        y=avg_pts, line_dash="dot", line_color="#a78bfa", line_width=1.5,
+        annotation_text=f"  Avg {avg_pts:.1f}", annotation_position="bottom left",
+        annotation_font=dict(color="#a78bfa", size=11, family="DM Mono"),
     )
 
     fig.update_layout(
-        title=dict(text=f"{full_name} — Last {len(pts)} Games", font=dict(size=16)),
+        title=None,
         xaxis=dict(
             tickmode="array",
             tickvals=list(range(len(pts))),
             ticktext=[labels.iloc[i] for i in range(len(pts))],
-            tickangle=-35,
+            tickangle=-30,
             showgrid=False,
+            tickfont=dict(family="DM Mono", size=10, color="#475569"),
+            linecolor="#1e293b",
         ),
-        yaxis=dict(title="Points", showgrid=True, gridcolor="rgba(255,255,255,0.08)"),
-        plot_bgcolor="rgba(0,0,0,0)",
-        paper_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="white"),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        yaxis=dict(
+            title="PTS",
+            showgrid=True,
+            gridcolor="rgba(30,41,59,0.8)",
+            tickfont=dict(family="DM Mono", size=10, color="#475569"),
+            titlefont=dict(family="DM Mono", size=10, color="#475569"),
+        ),
+        plot_bgcolor="#080c14",
+        paper_bgcolor="#080c14",
+        font=dict(color="#e2e8f0", family="Syne"),
         hovermode="x unified",
-        margin=dict(l=40, r=40, t=60, b=80),
-        height=380,
+        hoverlabel=dict(bgcolor="#0f172a", bordercolor="#1e293b", font=dict(family="Syne")),
+        margin=dict(l=50, r=30, t=20, b=80),
+        height=340,
+        showlegend=False,
     )
 
     return fig
@@ -259,49 +459,24 @@ def build_analysis_prompt(
         hit = "✓" if pd.notna(pts) and float(pts) > line else "✗"
         game_rows.append(f"  {date} | {matchup} | {pts} pts | {mins} min | {fga} FGA | {hit}")
 
-    game_log_str = "\n".join(game_rows)
+    return f"""You are a sharp NBA prop analyst. Write a clear, confident, data-driven breakdown.
 
-    return f"""You are a sharp NBA prop analyst. Write a clear, confident, data-driven breakdown of this points prop.
+Player: {full_name} | Line: {line} pts ({side}) | Last {n_games} games
 
-Player: {full_name}
-Prop Line: {line} points ({side})
-Sample: Last {n_games} games
+GAME LOG:
+{chr(10).join(game_rows)}
 
-=== GAME LOG ===
-{game_log_str}
+STATS: Avg PTS {avg_pts:.1f} | Avg MIN {avg_min:.1f} | Avg FGA {avg_fga:.1f}
+Hit rate: {baseline:.0%} baseline → {adjusted:.0%} adjusted
+Trends: MIN {min_flag} | FGA {fga_flag} | PTS {pts_flag}
+Context: Minutes={minutes_sel} | Role={role_sel} | Shots={shots_sel} | Matchup={matchup_sel} | Script={script_sel}
+Model output: {confidence_tier}
 
-=== KEY STATS ===
-- Avg PTS: {avg_pts:.1f}
-- Avg MIN: {avg_min:.1f}
-- Avg FGA: {avg_fga:.1f}
-- Baseline hit rate vs {line}: {baseline:.0%}
-- Adjusted hit rate: {adjusted:.0%}
-
-=== TRENDS ===
-- Minutes trend: {min_flag}
-- FGA trend: {fga_flag}
-- Points trend: {pts_flag}
-
-=== CONTEXT ===
-- Minutes outlook: {minutes_sel}
-- Role/usage: {role_sel}
-- Shot volume: {shots_sel}
-- Matchup/pace: {matchup_sel}
-- Game script: {script_sel}
-- Confidence tier: {confidence_tier}
-
-Write a 3-4 paragraph prop breakdown:
-1. Lead with the prop and your lean.
-2. What the recent game log shows — patterns, streaks, outliers.
-3. How context factors affect this prop tonight.
-4. Closing verdict with confidence level.
-
-Be direct. Use real numbers. Write like a sharp bettor, not a TV analyst."""
+Write 3-4 paragraphs: (1) lead with prop and lean, (2) what the game log shows, (3) how context affects it tonight, (4) closing verdict. Be direct, use real numbers, write like a sharp bettor."""
 
 
 def generate_ai_analysis(prompt: str) -> str:
-    api_key = get_api_key()
-    client = Groq(api_key=api_key)
+    client = Groq(api_key=get_api_key())
     chat_completion = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         max_tokens=1024,
@@ -320,26 +495,15 @@ NBA_TEAMS = [
     "OKC","ORL","PHI","PHX","POR","SAC","SAS","TOR","UTA","WAS"
 ]
 
-TEAM_ROSTERS = {
-    "NYK": ["Jalen Brunson", "Josh Hart", "Miles McBride"],
-    "SAC": ["De'Aaron Fox", "Domantas Sabonis", "Keegan Murray"],
-    "HOU": ["Jalen Green", "Alperen Sengun", "Fred VanVleet"],
-    "SAS": ["Victor Wembanyama", "Devin Vassell", "Keldon Johnson"],
-    "LAL": ["LeBron James", "Anthony Davis", "Austin Reaves"],
-    "BOS": ["Jayson Tatum", "Jaylen Brown", "Derrick White"],
-    "PHX": ["Kevin Durant", "Devin Booker", "Bradley Beal"],
-    "DAL": ["Luka Doncic", "Kyrie Irving", "PJ Washington"],
-    "DEN": ["Nikola Jokic", "Jamal Murray", "Michael Porter Jr."],
-    "MIL": ["Giannis Antetokounmpo", "Damian Lillard", "Khris Middleton"],
-}
-
 
 @st.cache_data(ttl=300)
 def scan_team_players(team_abbr: str, season: str) -> pd.DataFrame:
-    roster = TEAM_ROSTERS.get(team_abbr, [])
-    results = []
+    roster = get_live_roster(team_abbr, season)
+    if not roster:
+        return pd.DataFrame()
 
-    for player_name in roster[:3]:
+    results = []
+    for player_name in roster[:8]:  # scan top 8 players
         try:
             player_id, full_name = find_player_id(player_name)
             if not player_id:
@@ -366,38 +530,60 @@ def scan_team_players(team_abbr: str, season: str) -> pd.DataFrame:
     if not results:
         return pd.DataFrame()
 
-    return pd.DataFrame(results).sort_values(
-        by=["Avg PTS (L10)", "Avg MIN (L10)", "Avg FGA (L10)"],
-        ascending=False
-    ).reset_index(drop=True)
+    return pd.DataFrame(results).sort_values("Avg PTS (L10)", ascending=False).reset_index(drop=True)
 
 
 # ─────────────────────────────────────────────
-# UI
+# Header
 # ─────────────────────────────────────────────
 
-st.set_page_config(page_title="NBA Points Prop Checker", layout="wide")
-st.title("NBA Points Prop Checker")
-st.caption("Version 2.0 — AI-powered prop analysis")
+st.markdown("""
+<div class="proplens-header">
+    <div>
+        <div class="proplens-logo">PropLens</div>
+        <div class="proplens-sub">NBA Points Prop Analyzer</div>
+    </div>
+</div>
+""", unsafe_allow_html=True)
 
-st.markdown("## Inputs")
+st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
 
-player_query = st.text_input("Search player", value="Fox")
-line = st.number_input("Points line", min_value=0.0, value=24.5, step=0.5)
-side = st.selectbox("Higher / Lower", ["Over", "Under"])
-n_games = st.selectbox("Sample size", [5, 10, 15], index=1)
-season = st.text_input("Season", value="2025-26")
-fetch = st.button("Fetch logs")
+# ─────────────────────────────────────────────
+# Sidebar
+# ─────────────────────────────────────────────
 
 with st.sidebar:
-    st.markdown("## Advanced Tools")
-    manual_mode = st.checkbox("Use manual last 10 input if fetch fails")
-    scan_slate = st.checkbox("Enable slate scanner")
-    st.markdown("---")
-    st.markdown("## AI Analysis")
-    enable_ai = st.checkbox("Enable AI-powered breakdown", value=True)
+    st.markdown("<div class='section-header'>Settings</div>", unsafe_allow_html=True)
+    manual_mode = st.checkbox("Manual input fallback")
+    scan_slate = st.checkbox("Slate scanner")
+    enable_ai = st.checkbox("AI breakdown", value=True)
+    st.markdown("<div class='section-header'>Season</div>", unsafe_allow_html=True)
+    season = st.text_input("", value="2025-26", label_visibility="collapsed")
+    st.markdown("<div style='margin-top:2rem; font-family:DM Mono; font-size:0.65rem; color:#334155; line-height:1.6;'>For educational purposes only. Not financial or betting advice.</div>", unsafe_allow_html=True)
 
-st.divider()
+# ─────────────────────────────────────────────
+# Inputs
+# ─────────────────────────────────────────────
+
+st.markdown("<div class='section-header'>Player & Prop</div>", unsafe_allow_html=True)
+
+col_a, col_b, col_c, col_d = st.columns([2, 1, 1, 1])
+with col_a:
+    player_query = st.text_input("Player", value="Fox", placeholder="Search player...")
+with col_b:
+    line = st.number_input("Points Line", min_value=0.0, value=24.5, step=0.5)
+with col_c:
+    side = st.selectbox("Over / Under", ["Over", "Under"])
+with col_d:
+    n_games = st.selectbox("Sample", [5, 10, 15], index=1)
+
+fetch = st.button("🔍  Analyze Prop", use_container_width=False)
+
+st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
+
+# ─────────────────────────────────────────────
+# Player selection
+# ─────────────────────────────────────────────
 
 candidate_players = search_candidates(player_query)
 
@@ -406,96 +592,115 @@ if len(candidate_players) == 0:
     st.stop()
 
 player_options = [p["full_name"] for p in candidate_players]
-selected_player = st.selectbox("Select player", player_options)
+selected_player = st.selectbox("Select player", player_options, label_visibility="collapsed" if len(player_options) == 1 else "visible")
 player_id, full_name = find_player_id(selected_player)
 
 if player_id is None:
-    st.error("Could not resolve the selected player.")
+    st.error("Could not resolve player.")
     st.stop()
 
-st.markdown("## Player Analysis")
-st.subheader(f"Player: {full_name}")
-
 if not fetch and st.session_state.logs is None and not scan_slate:
-    st.info("Enter inputs, then click **Fetch logs**.")
+    st.markdown("<div style='color:#475569; font-family:DM Mono; font-size:0.8rem; margin-top:1rem;'>↑ Enter a player and line, then click Analyze Prop.</div>", unsafe_allow_html=True)
 
-# ── FETCH LOGS ───────────────────────────────
+# ─────────────────────────────────────────────
+# Fetch
+# ─────────────────────────────────────────────
+
 if fetch:
     st.session_state.ai_analysis = None
     st.session_state.ai_error = None
 
     try:
-        with st.spinner("Fetching player game logs..."):
+        with st.spinner("Fetching game logs..."):
             st.session_state.logs = fetch_with_retries(
                 lambda: get_last_n_games(player_id=player_id, season=season, n=n_games)
             )
     except Exception as e:
         if not manual_mode:
             st.error(f"Fetch failed: {repr(e)}")
-            st.exception(e)
             st.stop()
         else:
-            st.warning("Live fetch failed. Enter last 10 points manually below.")
+            st.warning("Live fetch failed. Enter points manually.")
             st.session_state.logs = None
 
     if st.session_state.logs is None and manual_mode:
         manual_points = []
-        st.markdown("### Manual Last 10 Points Entry")
+        st.markdown("<div class='section-header'>Manual Entry</div>", unsafe_allow_html=True)
         cols = st.columns(5)
         for i in range(10):
-            col = cols[i % 5]
-            val = col.number_input(f"Game {i+1}", min_value=0.0, step=1.0, key=f"manual_pts_{i}")
+            val = cols[i % 5].number_input(f"G{i+1}", min_value=0.0, step=1.0, key=f"mp_{i}")
             manual_points.append(val)
         st.session_state.logs = pd.DataFrame({
-            "GAME_DATE": [None] * 10,
-            "MATCHUP": [None] * 10,
-            "MIN": [None] * 10,
-            "PTS": manual_points,
-            "FGA": [None] * 10,
-            "FTA": [None] * 10,
-            "FG3A": [None] * 10,
+            "GAME_DATE": [None]*10, "MATCHUP": [None]*10, "MIN": [None]*10,
+            "PTS": manual_points, "FGA": [None]*10, "FTA": [None]*10, "FG3A": [None]*10,
         })
 
-# ── RENDER ANALYSIS ──────────────────────────
+# ─────────────────────────────────────────────
+# Main analysis
+# ─────────────────────────────────────────────
+
 if st.session_state.logs is not None:
     logs = st.session_state.logs
 
     baseline = hit_rate(logs, line=line, side=side)
-
-    avg_min = pd.to_numeric(logs["MIN"], errors="coerce").dropna().mean()
-    avg_fga = pd.to_numeric(logs["FGA"], errors="coerce").dropna().mean()
-    avg_fta = pd.to_numeric(logs["FTA"], errors="coerce").dropna().mean()
+    avg_min  = pd.to_numeric(logs["MIN"], errors="coerce").dropna().mean()
+    avg_fga  = pd.to_numeric(logs["FGA"], errors="coerce").dropna().mean()
+    avg_fta  = pd.to_numeric(logs["FTA"], errors="coerce").dropna().mean()
     sample_avg_pts = pd.to_numeric(logs["PTS"], errors="coerce").dropna().mean()
 
-    minutes_suggest = suggest_bucket(avg_min, strong_cut=32, risk_cut=26)
-    shots_suggest = "High" if avg_fga >= 15 else ("Low" if avg_fga < 10 else "Medium")
-    role_proxy = avg_fga + (0.5 * avg_fta)
-    role_suggest = suggest_bucket(role_proxy, strong_cut=18, risk_cut=12)
+    minutes_suggest = suggest_bucket(avg_min, 32, 26)
+    shots_suggest   = "High" if avg_fga >= 15 else ("Low" if avg_fga < 10 else "Medium")
+    role_suggest    = suggest_bucket(avg_fga + 0.5 * avg_fta, 18, 12)
 
     min_flag = trend_flag(logs["MIN"])
     fga_flag = trend_flag(logs["FGA"])
     pts_flag = trend_flag(logs["PTS"])
 
-    # ── CHART ────────────────────────────────
-    st.markdown(f"### Points — Last {n_games} Games")
+    # ── Player name + quick stats ─────────────
+    st.markdown(f"<div class='section-header'>{full_name}</div>", unsafe_allow_html=True)
+
+    m1, m2, m3, m4 = st.columns(4)
+    with m1:
+        st.markdown(f"""<div class='stat-card'>
+            <div class='stat-label'>Avg PTS (L{n_games})</div>
+            <div class='stat-value orange'>{sample_avg_pts:.1f}</div>
+        </div>""", unsafe_allow_html=True)
+    with m2:
+        st.markdown(f"""<div class='stat-card'>
+            <div class='stat-label'>Hit Rate</div>
+            <div class='stat-value {"green" if baseline >= 0.6 else "red"}'>{baseline:.0%}</div>
+        </div>""", unsafe_allow_html=True)
+    with m3:
+        st.markdown(f"""<div class='stat-card'>
+            <div class='stat-label'>Avg MIN (L{n_games})</div>
+            <div class='stat-value'>{avg_min:.1f}</div>
+        </div>""", unsafe_allow_html=True)
+    with m4:
+        st.markdown(f"""<div class='stat-card'>
+            <div class='stat-label'>Avg FGA (L{n_games})</div>
+            <div class='stat-value'>{avg_fga:.1f}</div>
+        </div>""", unsafe_allow_html=True)
+
+    # Trend flags
+    flags_html = f"""<div class='flag-row'>
+        {flag_pill("MIN", min_flag)}
+        {flag_pill("FGA", fga_flag)}
+        {flag_pill("PTS", pts_flag)}
+    </div>"""
+    st.markdown(flags_html, unsafe_allow_html=True)
+    st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
+
+    # ── Chart ─────────────────────────────────
+    st.markdown("<div class='section-header'>Points Chart</div>", unsafe_allow_html=True)
     fig = build_points_chart(logs, full_name, line, sample_avg_pts)
     st.plotly_chart(fig, use_container_width=True)
 
-    col1, col2 = st.columns([1.2, 1])
-    with col1:
-        st.markdown(f"### Game Log")
+    # ── Game log ──────────────────────────────
+    with st.expander("📋  Game Log"):
         st.dataframe(logs.reset_index(drop=True), use_container_width=True)
-    with col2:
-        st.markdown("### Key Metrics")
-        st.metric("Baseline hit rate", f"{baseline:.0%}")
-        st.caption(f"Baseline = hits vs the line using the selected last {n_games} games.")
-        st.markdown("### Quick Flags")
-        st.write(f"Minutes trend: **{min_flag}**")
-        st.write(f"Shot volume (FGA) trend: **{fga_flag}**")
-        st.write(f"Points trend: **{pts_flag}**")
 
-    st.divider()
-    st.markdown("## Context Adjuster")
+    # ── Context adjuster ──────────────────────
+    st.markdown("<div class='section-header'>Context</div>", unsafe_allow_html=True)
 
     adj_map_minutes = {"Strong": 0.05, "Okay": 0.00, "Risk": -0.07}
     adj_map_role    = {"Strong": 0.04, "Okay": 0.00, "Risk": -0.05}
@@ -505,18 +710,18 @@ if st.session_state.logs is not None:
 
     c1, c2, c3, c4, c5 = st.columns(5)
     with c1:
-        minutes_sel = st.selectbox("Minutes", ["Okay", "Strong", "Risk"],
-                                   index=["Okay", "Strong", "Risk"].index(minutes_suggest))
+        minutes_sel = st.selectbox("Minutes", ["Okay","Strong","Risk"],
+                                   index=["Okay","Strong","Risk"].index(minutes_suggest))
     with c2:
-        role_sel = st.selectbox("Role", ["Okay", "Strong", "Risk"],
-                                index=["Okay", "Strong", "Risk"].index(role_suggest))
+        role_sel = st.selectbox("Role", ["Okay","Strong","Risk"],
+                                index=["Okay","Strong","Risk"].index(role_suggest))
     with c3:
-        shots_sel = st.selectbox("Shots", ["Medium", "High", "Low"],
-                                 index=["Medium", "High", "Low"].index(shots_suggest))
+        shots_sel = st.selectbox("Shots", ["Medium","High","Low"],
+                                 index=["Medium","High","Low"].index(shots_suggest))
     with c4:
-        matchup_sel = st.selectbox("Matchup/Pace", ["Neutral", "Good", "Bad"])
+        matchup_sel = st.selectbox("Matchup", ["Neutral","Good","Bad"])
     with c5:
-        script_sel = st.selectbox("Game script", ["Neutral", "Competitive", "Blowout risk"])
+        script_sel = st.selectbox("Script", ["Neutral","Competitive","Blowout risk"])
 
     adjs = Adjustments(
         minutes=adj_map_minutes[minutes_sel],
@@ -526,9 +731,7 @@ if st.session_state.logs is not None:
         script=adj_map_script[script_sel],
     )
 
-    adjusted = max(0.0, min(1.0, baseline + adjs.total))
-    label = label_from_prob(adjusted)
-
+    adjusted  = max(0.0, min(1.0, baseline + adjs.total))
     line_diff = sample_avg_pts - line
     model_lean = "OVER" if sample_avg_pts > line else ("UNDER" if sample_avg_pts < line else "EVEN")
 
@@ -543,48 +746,60 @@ if st.session_state.logs is not None:
     else:
         confidence_tier = "Pass"
 
-    badge_map = {
-        "Strong Over":  "🟢 Strong Over",
-        "Lean Over":    "🟡 Lean Over",
-        "Lean Under":   "🟠 Lean Under",
-        "Strong Under": "🔴 Strong Under",
-        "Pass":         "⚪ Pass",
+    tier_css = {
+        "Strong Over": "green", "Lean Over": "yellow",
+        "Lean Under": "orange", "Strong Under": "red", "Pass": "gray"
     }
-    confidence_badge = badge_map[confidence_tier]
+    tier_emoji = {
+        "Strong Over": "🟢", "Lean Over": "🟡",
+        "Lean Under": "🟠", "Strong Under": "🔴", "Pass": "⚪"
+    }
+    css = tier_css[confidence_tier]
 
-    # ── AI ANALYSIS ──────────────────────────
+    # ── Verdict banner ────────────────────────
+    st.markdown("<div class='section-header'>Verdict</div>", unsafe_allow_html=True)
+    st.markdown(f"""
+    <div class='verdict-banner {css}'>
+        <div>
+            <div class='verdict-label'>{full_name} · {line} pts · {side}</div>
+            <div class='verdict-tier {css}'>{tier_emoji[confidence_tier]} {confidence_tier}</div>
+        </div>
+        <div style='display:flex; gap:2rem; flex-wrap:wrap;'>
+            <div>
+                <div class='verdict-label'>Adjusted Hit Rate</div>
+                <div style='font-size:1.4rem; font-weight:800; color:#f1f5f9;'>{adjusted:.0%}</div>
+            </div>
+            <div>
+                <div class='verdict-label'>Edge vs Line</div>
+                <div style='font-size:1.4rem; font-weight:800; color:{"#22c55e" if line_diff > 0 else "#ef4444"};'>{line_diff:+.1f}</div>
+            </div>
+            <div>
+                <div class='verdict-label'>Model Lean</div>
+                <div style='font-size:1.4rem; font-weight:800; color:#f1f5f9;'>{model_lean}</div>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── AI Analysis ───────────────────────────
     if enable_ai:
-        st.divider()
-        st.markdown("## 🤖 AI-Powered Breakdown")
+        st.markdown("<div class='section-header'>AI Breakdown</div>", unsafe_allow_html=True)
 
         api_key = get_api_key()
-
         if not api_key:
-            st.error("❌ No GROQ_API_KEY found. Add it to your Streamlit secrets.")
+            st.error("❌ No GROQ_API_KEY found in Streamlit secrets.")
         else:
-            if st.button("Generate AI Analysis"):
-                with st.spinner("Analyzing this prop..."):
+            if st.button("⚡  Generate AI Analysis"):
+                with st.spinner("Analyzing..."):
                     try:
                         prompt = build_analysis_prompt(
-                            full_name=full_name,
-                            line=line,
-                            side=side,
-                            n_games=n_games,
-                            logs=logs,
-                            baseline=baseline,
-                            adjusted=adjusted,
-                            confidence_tier=confidence_tier,
-                            avg_pts=sample_avg_pts,
-                            avg_min=avg_min,
-                            avg_fga=avg_fga,
-                            min_flag=min_flag,
-                            fga_flag=fga_flag,
-                            pts_flag=pts_flag,
-                            minutes_sel=minutes_sel,
-                            role_sel=role_sel,
-                            shots_sel=shots_sel,
-                            matchup_sel=matchup_sel,
-                            script_sel=script_sel,
+                            full_name=full_name, line=line, side=side, n_games=n_games,
+                            logs=logs, baseline=baseline, adjusted=adjusted,
+                            confidence_tier=confidence_tier, avg_pts=sample_avg_pts,
+                            avg_min=avg_min, avg_fga=avg_fga,
+                            min_flag=min_flag, fga_flag=fga_flag, pts_flag=pts_flag,
+                            minutes_sel=minutes_sel, role_sel=role_sel, shots_sel=shots_sel,
+                            matchup_sel=matchup_sel, script_sel=script_sel,
                         )
                         st.session_state.ai_analysis = generate_ai_analysis(prompt)
                         st.session_state.ai_error = None
@@ -593,68 +808,35 @@ if st.session_state.logs is not None:
                         st.session_state.ai_analysis = None
 
             if st.session_state.ai_analysis:
-                st.markdown(st.session_state.ai_analysis)
+                st.markdown(f"<div class='ai-box'>{st.session_state.ai_analysis}</div>", unsafe_allow_html=True)
             elif st.session_state.ai_error:
                 st.error(f"AI analysis failed: {st.session_state.ai_error}")
 
-    # ── FINAL VERDICT ────────────────────────
-    st.divider()
-    st.markdown("## Final Verdict")
-    st.markdown(f"### {full_name} — Points Prop\n## {confidence_badge}")
-
-    v1, v2, v3 = st.columns(3)
-    with v1:
-        st.metric("Line", f"{line:.1f}")
-    with v2:
-        st.metric(f"Recent Avg (Last {n_games})", f"{sample_avg_pts:.1f}")
-    with v3:
-        st.metric("Hit Rate", f"{baseline:.0%}")
-
-    with st.expander("Show detailed analysis"):
-        d1, d2, d3 = st.columns(3)
-        with d1:
-            st.metric("Model Lean", model_lean)
-        with d2:
-            st.metric("Confidence Tier", confidence_tier)
-        with d3:
-            st.metric("Edge vs Line", f"{line_diff:+.1f}")
-
+    # ── Export ────────────────────────────────
+    st.markdown("<div class='section-header'>Export</div>", unsafe_allow_html=True)
     out = logs.copy()
     out.insert(0, "PLAYER", full_name)
     out.insert(1, "LINE", line)
     out.insert(2, "SIDE", side)
     out.insert(3, "BASELINE_HIT_RATE", baseline)
     out.insert(4, "ADJUSTED_HIT_RATE", adjusted)
-    out.insert(5, "LABEL", label)
-
-    st.divider()
-    st.markdown("### Export")
+    out.insert(5, "LABEL", label_from_prob(adjusted))
     csv = out.to_csv(index=False).encode("utf-8")
-    st.download_button("Download report CSV", data=csv, file_name="prop_report.csv", mime="text/csv")
+    st.download_button("⬇  Download CSV", data=csv, file_name="prop_report.csv", mime="text/csv")
 
 # ─────────────────────────────────────────────
 # Slate Scanner
 # ─────────────────────────────────────────────
 
-st.markdown("---")
-st.markdown("## Advanced Tools")
-st.subheader("Slate Scanner")
-
 if scan_slate:
-    selected_team = st.selectbox("Choose a team to scan", NBA_TEAMS)
-    st.write(f"Selected team: **{selected_team}**")
-    run_team_scan = st.button("Run team scan")
+    st.markdown("<div class='section-header'>Slate Scanner</div>", unsafe_allow_html=True)
+    selected_team = st.selectbox("Team", NBA_TEAMS)
 
-    if run_team_scan:
-        st.write(f"Running scan for **{selected_team}**...")
-        df_team_scan = scan_team_players(selected_team, season)
-        if df_team_scan.empty:
-            st.warning("No players returned. API may have timed out.")
+    if st.button("🔎  Scan Roster"):
+        with st.spinner(f"Loading {selected_team} roster and stats..."):
+            df_scan = scan_team_players(selected_team, season)
+
+        if df_scan.empty:
+            st.warning("No data returned. Try again or check the season string.")
         else:
-            st.dataframe(df_team_scan, use_container_width=True)
-
-st.markdown("---")
-st.caption(
-    "This tool provides statistical analysis for educational purposes only. "
-    "It does not guarantee outcomes and should not be considered financial or betting advice."
-)
+            st.dataframe(df_scan, use_container_width=True)
