@@ -360,6 +360,10 @@ def find_player(player_name: str) -> Tuple[Optional[str], Optional[str], Optiona
 # ── nba_api: player lookup + game logs ───────────────────────────
 
 def normalize_name(s: str) -> str:
+    import unicodedata
+    # Strip accents so "Doncic" matches "Dončić", "Jokic" matches "Jokić" etc.
+    s = unicodedata.normalize("NFD", s)
+    s = "".join(c for c in s if unicodedata.category(c) != "Mn")
     return re.sub(r"\s+", " ", s.strip().lower())
 
 @st.cache_data(ttl=86400)
