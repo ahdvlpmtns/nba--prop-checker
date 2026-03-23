@@ -1676,23 +1676,154 @@ if st.session_state.logs is not None:
     </div>
     """, unsafe_allow_html=True)
 
-    with st.expander("🔢  Model details"):
-        st.markdown(f"""<div class='model-note'>
-        <strong style='color:#94a3b8;'>How the verdict was calculated:</strong><br>
-        Started with a recency-weighted hit rate of <strong style='color:#e2e8f0;'>{weighted_base:.0%}</strong>,
-        then applied 8 context multipliers to reach an adjusted probability of
-        <strong style='color:#e2e8f0;'>{adjusted:.0%}</strong>.
-        The edge vs the line is <strong style='color:#e2e8f0;'>{sample_avg_pts - line:+.1f} pts</strong>.<br><br>
-        Raw hit rate: {baseline:.0%} &nbsp;·&nbsp;
-        Weighted (recency): {weighted_base:.0%} &nbsp;·&nbsp;
-        After context: {adjusted:.0%} &nbsp;·&nbsp;
-        Sample: {n_games} games<br>
-        Matchup: {matchup_sel} (vs {opp_abbr or "unknown"}) &nbsp;·&nbsp;
-        Venue: {tonight_venue or "Unknown"} ({venue_adj})<br>
-        H2H: {h2h_sig} ({h2h_count} games, avg {f"{h2h_avg:.1f}" if h2h_avg else "N/A"} pts) &nbsp;·&nbsp;
-        Schedule: {b2b_status}<br>
-        Form: {form_sig} ({f"{form_diff:+.1f}" if form_diff else "N/A"} vs season avg {f"{season_avg:.1f}" if season_avg else "N/A"})
-        </div>""", unsafe_allow_html=True)
+    with st.expander("🔬  Logic Debugger — step-by-step verdict breakdown"):
+        # ── Step-by-step multiplier trace ─────────────────────────────
+        multipliers_map = {
+            "minutes":  {"Strong": 1.08, "Okay": 1.00, "Risk": 0.88},
+            "role":     {"Strong": 1.06, "Okay": 1.00, "Risk": 0.92},
+            "shots":    {"High":   1.05, "Medium": 1.00, "Low": 0.90},
+            "matchup":  {"Good":   1.08, "Neutral": 1.00, "Bad": 0.91},
+            "script":   {"Competitive": 1.03, "Neutral": 1.00, "Blowout risk": 0.93},
+            "venue":    {"Boost": 1.06, "Neutral": 1.00, "Penalty": 0.92},
+            "h2h":      {"Strong": 1.07, "Neutral": 1.00, "Risk": 0.91},
+            "b2b":      {"Normal": 1.00, "B2B": 0.91},
+            "form":     {"Boost": 1.07, "Neutral": 1.00, "Penalty": 0.92},
+        }
+        signal_labels = {
+            "minutes": "Minutes load",
+            "role":    "Role/usage",
+            "shots":   "Shot volume",
+            "matchup": "Opponent defense",
+            "script":  "Game script",
+            "venue":   "Home/Away split",
+            "h2h":     "H2H vs opponent",
+            "b2b":     "Back-to-back rest",
+            "form":    "Recent form vs season",
+        }
+
+        # Simulate the computation step by step
+        running = weighted_base
+        margin  = weighted_base - 0.5
+        steps   = []
+        for key, val in context.items():
+            mult   = multipliers_map[key][val]
+            before = max(0.0, min(1.0, 0.5 + margin))
+            margin *= mult
+            after  = max(0.0, min(1.0, 0.5 + margin))
+            delta  = after - before
+            steps.append((key, val, mult, before, after, delta))
+
+        # Consistency override check
+        edge_is_tight = abs(line_diff) < 5.0
+        low_cons = consistency < 0.35 and edge_is_tight
+        cons_override = low_cons and tier in ["Lean Over", "Lean Under"]
+
+        # Render debug table
+        st.markdown(f"""
+        <div style='font-family:DM Mono; font-size:0.72rem; color:#94a3b8; line-height:1.8;'>
+
+        <div style='color:#f97316; font-size:0.65rem; letter-spacing:0.15em; text-transform:uppercase;
+                    border-bottom:1px solid #1a2333; padding-bottom:4px; margin-bottom:10px;'>
+            INPUT
+        </div>
+        <table style='width:100%; border-collapse:collapse;'>
+            <tr>
+                <td style='padding:3px 8px 3px 0; color:#475569;'>Player</td>
+                <td style='color:#e2e8f0;'>{full_name}</td>
+                <td style='padding:3px 8px; color:#475569;'>Line</td>
+                <td style='color:#e2e8f0;'>{line} pts {side}</td>
+            </tr>
+            <tr>
+                <td style='padding:3px 8px 3px 0; color:#475569;'>Sample</td>
+                <td style='color:#e2e8f0;'>L{n_games} · avg {sample_avg_pts:.1f} pts</td>
+                <td style='padding:3px 8px; color:#475569;'>Edge vs line</td>
+                <td style='color:{"#22c55e" if line_diff > 0 else "#ef4444"};'>{line_diff:+.1f} pts</td>
+            </tr>
+            <tr>
+                <td style='padding:3px 8px 3px 0; color:#475569;'>Raw hit rate</td>
+                <td style='color:#e2e8f0;'>{baseline:.1%}</td>
+                <td style='padding:3px 8px; color:#475569;'>Weighted hit rate</td>
+                <td style='color:#e2e8f0;'>{weighted_base:.1%} ← starting point</td>
+            </tr>
+            <tr>
+                <td style='padding:3px 8px 3px 0; color:#475569;'>Consistency</td>
+                <td style='color:{"#22c55e" if consistency>=0.5 else "#eab308" if consistency>=0.35 else "#ef4444"};'>
+                    {consistency:.1%} {"⚠️ low but edge={line_diff:+.1f} > 5pts — override skipped" if not edge_is_tight and consistency < 0.35 else ""}
+                </td>
+                <td style='padding:3px 8px; color:#475569;'>Season avg</td>
+                <td style='color:#e2e8f0;'>{f"{season_avg:.1f} pts" if season_avg else "N/A"}</td>
+            </tr>
+        </table>
+
+        <div style='color:#f97316; font-size:0.65rem; letter-spacing:0.15em; text-transform:uppercase;
+                    border-bottom:1px solid #1a2333; padding-bottom:4px; margin:14px 0 10px 0;'>
+            MULTIPLIER TRACE
+        </div>
+        <table style='width:100%; border-collapse:collapse;'>
+            <tr style='color:#475569; font-size:0.63rem; border-bottom:1px solid #1a2333;'>
+                <td style='padding:3px 0;'>SIGNAL</td>
+                <td>VALUE</td>
+                <td>MULTIPLIER</td>
+                <td>BEFORE</td>
+                <td>AFTER</td>
+                <td>IMPACT</td>
+            </tr>
+        """, unsafe_allow_html=True)
+
+        rows_html = ""
+        for key, val, mult, before, after, delta in steps:
+            impact_color = "#22c55e" if delta > 0.005 else "#ef4444" if delta < -0.005 else "#475569"
+            mult_display = f"{mult:.2f}x" if mult != 1.0 else "1.00x (neutral)"
+            mult_color   = "#22c55e" if mult > 1.0 else "#ef4444" if mult < 1.0 else "#475569"
+            rows_html += f"""
+            <tr style='border-bottom:1px solid #111827;'>
+                <td style='padding:4px 0; color:#94a3b8;'>{signal_labels.get(key, key)}</td>
+                <td style='color:#e2e8f0; font-weight:600;'>{val}</td>
+                <td style='color:{mult_color};'>{mult_display}</td>
+                <td style='color:#64748b;'>{before:.1%}</td>
+                <td style='color:#e2e8f0;'>{after:.1%}</td>
+                <td style='color:{impact_color};'>{delta:+.1%}</td>
+            </tr>"""
+
+        st.markdown(rows_html + "</table>", unsafe_allow_html=True)
+
+        # Final decision
+        edge_tight_note = f"Edge {line_diff:+.1f} {'< 5 → override active' if edge_is_tight else '≥ 5 → override skipped'}"
+        cons_note = f"Consistency {consistency:.0%} {'< 35%' if consistency < 0.35 else '≥ 35%'} · {edge_tight_note}"
+
+        st.markdown(f"""
+        <div style='color:#f97316; font-size:0.65rem; letter-spacing:0.15em; text-transform:uppercase;
+                    border-bottom:1px solid #1a2333; padding-bottom:4px; margin:14px 0 10px 0;'>
+            FINAL DECISION
+        </div>
+        <table style='width:100%; border-collapse:collapse; font-family:DM Mono; font-size:0.72rem;'>
+            <tr>
+                <td style='padding:3px 8px 3px 0; color:#475569;'>Adjusted probability</td>
+                <td style='color:#e2e8f0; font-weight:700;'>{adjusted:.1%}</td>
+                <td style='padding:3px 8px; color:#475569;'>Threshold for Strong Over</td>
+                <td style='color:#94a3b8;'>≥ 64% AND edge ≥ +1.5</td>
+            </tr>
+            <tr>
+                <td style='padding:3px 8px 3px 0; color:#475569;'>Edge vs line</td>
+                <td style='color:{"#22c55e" if line_diff>=1.5 else "#ef4444"};'>{line_diff:+.1f} pts {"✓" if abs(line_diff)>=1.5 else "✗ too small"}</td>
+                <td style='padding:3px 8px; color:#475569;'>Threshold for Lean Over</td>
+                <td style='color:#94a3b8;'>≥ 55% AND edge > 0</td>
+            </tr>
+            <tr>
+                <td style='padding:3px 8px 3px 0; color:#475569;'>Consistency check</td>
+                <td colspan='3' style='color:{"#ef4444" if low_cons else "#475569"};'>{cons_note}</td>
+            </tr>
+            <tr style='border-top:1px solid #1a2333; margin-top:4px;'>
+                <td style='padding:6px 8px 3px 0; color:#475569;'>Final tier</td>
+                <td colspan='3' style='font-size:0.9rem; font-weight:800;
+                    color:{"#22c55e" if "Strong Over" in tier else "#eab308" if "Lean Over" in tier else "#f97316" if "Lean Under" in tier else "#ef4444" if "Strong Under" in tier else "#64748b"};'>
+                    {tier_emoji[tier]} {tier}
+                    {"  ← consistency override applied" if low_cons else ""}
+                </td>
+            </tr>
+        </table>
+        </div>
+        """, unsafe_allow_html=True)
 
     # ── AI Analysis ───────────────────────────
     st.markdown("<div class='section-header'>AI Breakdown</div>", unsafe_allow_html=True)
