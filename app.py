@@ -821,6 +821,28 @@ if st.session_state.logs is not None:
         st.write(f"League avg pts allowed: `{league_avg}`")
         st.write(f"Matchup classification: `{matchup_auto}`")
 
+        # Extra: test player log PLUS_MINUS directly
+        if opp_abbr:
+            st.write("--- Testing player log fallback ---")
+            try:
+                roster = get_live_roster(opp_abbr, season)
+                st.write(f"Roster found: `{roster[:3]}`")
+                if roster:
+                    pid, pname = find_player_id(roster[0])
+                    st.write(f"Testing player: `{pname}` (id: `{pid}`)")
+                    if pid:
+                        log = playergamelog.PlayerGameLog(
+                            player_id=pid, season=season, timeout=15,
+                        ).get_data_frames()[0]
+                        st.write(f"Log rows: `{len(log)}` | Columns: `{log.columns.tolist()}`")
+                        if not log.empty and "PLUS_MINUS" in log.columns:
+                            pm = pd.to_numeric(log["PLUS_MINUS"], errors="coerce").dropna()
+                            st.write(f"PLUS_MINUS values (first 5): `{pm.head().tolist()}`")
+                            st.write(f"Avg PLUS_MINUS: `{pm.mean():.2f}`")
+                            st.write(f"Estimated pts allowed: `{114.5 - pm.mean():.1f}`")
+            except Exception as e:
+                st.write(f"Error in fallback test: `{repr(e)}`")
+
     # ── Stat cards ────────────────────────────
     st.markdown(f"<div class='section-header'>{full_name}</div>", unsafe_allow_html=True)
 
