@@ -753,7 +753,33 @@ if st.session_state.logs is not None:
 
     # ── Context ───────────────────────────────
     st.markdown("<div class='section-header'>Context</div>", unsafe_allow_html=True)
-    st.caption("Matchup is auto-filled from real opponent defense stats. Override any field manually.")
+
+    # Show next opponent clearly
+    if opp_abbr:
+        date_display = f" · {game_date}" if game_date else ""
+        badge_css = matchup_auto.lower()
+        badge_text = {"Good": "Weak defense", "Bad": "Strong defense", "Neutral": "Average defense"}[matchup_auto]
+        st.markdown(f"""
+        <div style='background:#0f172a; border:1px solid #1e293b; border-radius:10px;
+                    padding:0.75rem 1.2rem; margin-bottom:1rem; display:flex;
+                    align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.5rem;'>
+            <div>
+                <div style='font-family:DM Mono; font-size:0.65rem; color:#475569;
+                            letter-spacing:0.12em; text-transform:uppercase; margin-bottom:4px;'>
+                    Next Game
+                </div>
+                <div style='font-size:1.2rem; font-weight:800; color:#f1f5f9; letter-spacing:-0.5px;'>
+                    vs <span style='color:#f97316;'>{opp_abbr}</span>
+                    <span style='font-family:DM Mono; font-size:0.75rem; color:#475569; font-weight:400; margin-left:8px;'>
+                        {date_display.strip(" ·")}
+                    </span>
+                </div>
+            </div>
+            <span class='defense-badge {badge_css}'>{badge_text} · {f"{opp_pts:.1f}" if opp_pts else "N/A"} pts/g allowed</span>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.caption("Next opponent not found — matchup set to Neutral.")
 
     c1, c2, c3, c4, c5 = st.columns(5)
     with c1:
