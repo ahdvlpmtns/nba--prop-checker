@@ -548,8 +548,7 @@ st.markdown("""
 
 st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
 
-# Mobile sidebar hint
-st.info("📱 On mobile? Tap the **>** arrow in the top-left corner to open Settings, AI toggle & Slate Scanner.")
+
 
 # ─────────────────────────────────────────────
 # Sidebar
@@ -558,11 +557,17 @@ st.info("📱 On mobile? Tap the **>** arrow in the top-left corner to open Sett
 with st.sidebar:
     st.markdown("<div class='section-header'>Settings</div>", unsafe_allow_html=True)
     manual_mode = st.checkbox("Manual input fallback")
-    scan_slate = st.checkbox("Slate scanner")
-    enable_ai = st.checkbox("AI breakdown", value=True)
-    st.markdown("<div class='section-header'>Season</div>", unsafe_allow_html=True)
-    season = st.text_input("", value="2025-26", label_visibility="collapsed")
     st.markdown("<div style='margin-top:2rem; font-family:DM Mono; font-size:0.65rem; color:#334155; line-height:1.6;'>For educational purposes only. Not financial or betting advice.</div>", unsafe_allow_html=True)
+
+# ── Inline controls (visible on mobile) ──────
+st.markdown("<div class='section-header'>Options</div>", unsafe_allow_html=True)
+oc1, oc2, oc3 = st.columns(3)
+with oc1:
+    season = st.text_input("Season", value="2025-26")
+with oc2:
+    enable_ai = st.checkbox("AI breakdown", value=True)
+with oc3:
+    scan_slate = st.checkbox("Slate scanner")
 
 # ─────────────────────────────────────────────
 # Inputs
