@@ -160,6 +160,9 @@ def bdl_headers() -> dict:
     if not key:
         st.error("❌ BALLDONTLIE_API_KEY not found in Streamlit secrets. Add it at balldontlie.io (free).")
         st.stop()
+    # BDL v1 requires Bearer prefix
+    if not key.startswith("Bearer "):
+        key = f"Bearer {key}"
     return {"Authorization": key}
 
 def bdl_get(endpoint: str, params: dict = None, retries: int = 3) -> dict:
