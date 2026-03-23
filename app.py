@@ -389,27 +389,67 @@ def espn_get_next_game(team_abbr: str) -> Tuple[Optional[str], Optional[str], Op
 
 @st.cache_data(ttl=3600)
 def espn_get_opp_pts_allowed(opp_abbr: str) -> Optional[float]:
-    """Get opponent pts allowed per game from ESPN team statistics."""
+    """
+    Get opponent pts allowed per game.
+    ESPN team stats returns categories list — we search all of them
+    for any stat named pointspergame / avgpointsallowed / opppts.
+    """
     try:
-        # Find team ID from ESPN teams list
+        # Step 1: find ESPN team ID from the teams endpoint
         data = espn_get(f"{ESPN_SITE}/teams")
         team_id = None
-        for t in data.get("sports", [{}])[0].get("leagues", [{}])[0].get("teams", []):
-            team = t.get("team", {})
-            if team.get("abbreviation", "") == opp_abbr:
-                team_id = team.get("id")
+        # ESPN returns sports[0].leagues[0].teams[] or just teams[]
+        teams_list = (
+            data.get("sports", [{}])[0].get("leagues", [{}])[0].get("teams", [])
+            or data.get("teams", [])
+        )
+        for t in teams_list:
+            team = t.get("team", t)  # sometimes nested, sometimes flat
+            abbr = team.get("abbreviation", "")
+            if abbr == opp_abbr:
+                team_id = str(team.get("id", ""))
                 break
+
         if not team_id:
             return None
 
-        # Get team statistics
+        # Step 2: fetch team statistics
         stats_data = espn_get(f"{ESPN_SITE}/teams/{team_id}/statistics")
-        splits = stats_data.get("splits", {}).get("categories", [])
-        for cat in splits:
-            if cat.get("name", "").lower() in ("defensive", "defense", "general"):
-                for stat in cat.get("stats", []):
-                    if stat.get("name", "").lower() in ("pointspergame", "pts", "points"):
-                        return round(float(stat.get("value", 0)), 1)
+
+        # ESPN stats structure varies — try multiple paths
+        categories = (
+            stats_data.get("splits", {}).get("categories", [])
+            or stats_data.get("stats", {}).get("categories", [])
+            or stats_data.get("categories", [])
+        )
+
+        target_stat_names = {
+            "pointspergame", "avgpoints", "avgpointsallowed",
+            "oppointspergame", "pts", "points", "pointsallowed",
+            "opppts", "ptspergame"
+        }
+
+        # Search all categories for pts-related stats
+        for cat in categories:
+            for stat in cat.get("stats", []):
+                name = stat.get("name", "").lower().replace(" ", "").replace("_", "")
+                if name in target_stat_names:
+                    val = stat.get("value", 0)
+                    if val and float(val) > 50:  # sanity check: pts/game > 50
+                        return round(float(val), 1)
+
+        # Fallback: try the team season stats endpoint directly
+        season_data = espn_get(
+            f"https://sports.core.api.espn.com/v2/sports/basketball/leagues/nba/seasons/2025/types/2/teams/{team_id}/statistics"
+        )
+        for split in season_data.get("splits", {}).get("categories", []):
+            for stat in split.get("stats", []):
+                name = stat.get("name", "").lower()
+                if "point" in name and "allowed" in name:
+                    return round(float(stat.get("value", 0)), 1)
+                if name in ("oppointspergame", "avgpointsallowed"):
+                    return round(float(stat.get("value", 0)), 1)
+
         return None
     except Exception:
         return None
@@ -868,20 +908,35 @@ if st.session_state.logs is not None:
         </div>""", unsafe_allow_html=True)
 
     # ── Defense card ──────────────────────────
-    if opp_abbr and opp_pts:
+    if opp_abbr:
         badge_css   = matchup_auto.lower()
         badge_label = {"Good": "✅ Weak defense", "Bad": "🔴 Strong defense", "Neutral": "⚪ Average defense"}[matchup_auto]
         date_str    = f" · {game_date}" if game_date else ""
         label       = f"Next game vs {opp_abbr}{date_str}" if game_date else f"Most recent opp: {opp_abbr}"
+
+        # Venue badge
+        if tonight_venue:
+            venue_color  = "#22c55e" if tonight_venue == "Home" else "#60a5fa"
+            venue_badge  = (
+                f"<span style='font-family:DM Mono; font-size:0.68rem; font-weight:600; "
+                f"background:{venue_color}22; color:{venue_color}; border:1px solid {venue_color}55; "
+                f"padding:2px 10px; border-radius:999px; margin-left:10px;'>"
+                f"{'🏠 Home' if tonight_venue == 'Home' else '✈️ Away'}</span>"
+            )
+        else:
+            venue_badge = ""
+
+        pts_line = (
+            f"{opp_pts:.1f} pts allowed/game"
+            f"<span style='font-family:DM Mono; font-size:0.72rem; color:#475569; margin-left:8px;'>league avg {league_avg}</span>"
+        ) if opp_pts else "<span style='font-family:DM Mono; font-size:0.8rem; color:#475569;'>Defense data unavailable</span>"
+
         st.markdown(f"""
         <div class='defense-card'>
             <div>
-                <div class='stat-label'>{label}</div>
+                <div class='stat-label'>{label}{venue_badge}</div>
                 <div style='font-size:1.1rem; font-weight:700; color:#f1f5f9; margin-top:4px;'>
-                    {opp_pts:.1f} pts allowed/game
-                    <span style='font-family:DM Mono; font-size:0.72rem; color:#475569; margin-left:8px;'>
-                        league avg {league_avg}
-                    </span>
+                    {pts_line}
                 </div>
             </div>
             <span class='defense-badge {badge_css}'>{badge_label}</span>
@@ -957,22 +1012,36 @@ if st.session_state.logs is not None:
     st.markdown("<div class='section-header'>Context</div>", unsafe_allow_html=True)
 
     if opp_abbr:
-        badge_css   = matchup_auto.lower()
-        badge_text  = {"Good": "Weak defense", "Bad": "Strong defense", "Neutral": "Average defense"}[matchup_auto]
-        opp_pts_str = f"{opp_pts:.1f}" if opp_pts else "N/A"
+        badge_css    = matchup_auto.lower()
+        badge_text   = {"Good": "Weak defense", "Bad": "Strong defense", "Neutral": "Average defense"}[matchup_auto]
+        opp_pts_str  = f"{opp_pts:.1f}" if opp_pts else "N/A"
         date_display = game_date if game_date else ""
+
+        # Venue pill
+        if tonight_venue:
+            vc = "#22c55e" if tonight_venue == "Home" else "#60a5fa"
+            venue_pill = (
+                f"<span style='font-family:DM Mono; font-size:0.68rem; font-weight:600; "
+                f"background:{vc}22; color:{vc}; border:1px solid {vc}55; "
+                f"padding:2px 10px; border-radius:999px; margin-left:10px;'>"
+                f"{'🏠 Home' if tonight_venue == 'Home' else '✈️ Away'}</span>"
+            )
+        else:
+            venue_pill = ""
+
         st.markdown(
-            "<div style='background:#0f172a; border:1px solid #1e293b; border-radius:10px; "
-            "padding:0.75rem 1.2rem; margin-bottom:1rem; display:flex; "
-            "align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.5rem;'>"
-            "<div>"
-            "<div style='font-family:DM Mono; font-size:0.65rem; color:#475569; letter-spacing:0.12em; text-transform:uppercase; margin-bottom:4px;'>Next Game</div>"
-            "<div style='font-size:1.2rem; font-weight:800; color:#f1f5f9; letter-spacing:-0.5px;'>"
+            f"<div style='background:#0f172a; border:1px solid #1e293b; border-radius:10px; "
+            f"padding:0.75rem 1.2rem; margin-bottom:1rem; display:flex; "
+            f"align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.5rem;'>"
+            f"<div>"
+            f"<div style='font-family:DM Mono; font-size:0.65rem; color:#475569; letter-spacing:0.12em; text-transform:uppercase; margin-bottom:4px;'>Next Game</div>"
+            f"<div style='font-size:1.2rem; font-weight:800; color:#f1f5f9; letter-spacing:-0.5px;'>"
             f"vs <span style='color:#f97316;'>{opp_abbr}</span>"
-            f"<span style='font-family:DM Mono; font-size:0.75rem; color:#475569; font-weight:400; margin-left:8px;'>{date_display}</span></div>"
-            "</div>"
+            f"<span style='font-family:DM Mono; font-size:0.75rem; color:#475569; font-weight:400; margin-left:8px;'>{date_display}</span>"
+            f"{venue_pill}</div>"
+            f"</div>"
             f"<span class='defense-badge {badge_css}'>{badge_text} · {opp_pts_str} pts/g allowed</span>"
-            "</div>",
+            f"</div>",
             unsafe_allow_html=True
         )
         st.caption("Matchup quality auto-filled from opponent's defensive rating. Override manually if needed.")
