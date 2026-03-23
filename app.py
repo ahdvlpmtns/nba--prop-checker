@@ -153,7 +153,7 @@ if "ai_error" not in st.session_state:
 if "defense_data" not in st.session_state:
     st.session_state.defense_data = None
 if "tracker" not in st.session_state:
-    st.session_state.tracker = []  # list of prop result dicts
+    st.session_state.tracker = []
 
 # ─────────────────────────────────────────────
 # NBA API helpers
@@ -212,7 +212,6 @@ def get_live_roster(team_abbr: str, season: str) -> list:
 
 @st.cache_data(ttl=600)
 def get_player_team(player_id: int) -> Optional[str]:
-    """Get the current team abbreviation for a player."""
     try:
         info = commonplayerinfo.CommonPlayerInfo(
             player_id=player_id, timeout=15,
@@ -221,126 +220,8 @@ def get_player_team(player_id: int) -> Optional[str]:
     except Exception:
         return None
 
-@st.cache_data(ttl=3600)
-def get_opponent_pts_allowed(opp_abbr: str, season: str) -> Optional[float]:
-    """
-    Calculate points allowed per game for a team using their roster player logs.
-    Each player game log has PTS (player pts) and PLUS_MINUS.
-    Team pts scored = sum of all player pts... but easier:
-    
-    Pull one player from the opponent team. Their game log has:
-    - PTS: player points (not useful directly)
-    - PLUS_MINUS: team_pts_scored - opp_pts_scored for that game
-    
-    We also need team pts scored per game. The teamgamelog endpoint
-    columns vary — so instead we use a player game log which has
-    MIN, PTS, PLUS_MINUS reliably. We grab a high-minute player
-    and use their team-level PLUS_MINUS alongside a known team PTS
-    by pulling teamgamelog and inspecting all available columns.
-    """
-    from nba_api.stats.endpoints import teamgamelog
-
-    try:
-        team_id = get_team_id(opp_abbr)
-        if not team_id:
-            return None
-
-        tgl = teamgamelog.TeamGameLog(
-            team_id=team_id,
-            season=season,
-            season_type_all_star="Regular Season",
-            timeout=20,
-        ).get_data_frames()[0]
-
-        if tgl.empty:
-            return None
-
-        # Log available columns to debug
-        cols = tgl.columns.tolist()
-
-        # Try direct columns first
-        if "OPP_PTS" in cols:
-            return float(pd.to_numeric(tgl["OPP_PTS"], errors="coerce").dropna().mean())
-
-        # PTS - PLUS_MINUS = opponent pts scored against this team
-        if "PTS" in cols and "PLUS_MINUS" in cols:
-            pts = pd.to_numeric(tgl["PTS"], errors="coerce")
-            pm  = pd.to_numeric(tgl["PLUS_MINUS"], errors="coerce")
-            opp_pts_series = pts - pm
-            return float(opp_pts_series.dropna().mean())
-
-        # Try W_PCTG, PTS_QTR columns etc — return None if nothing works
-        return None
-
-    except Exception:
-        return None
-
-
-@st.cache_data(ttl=3600)
-def get_opponent_pts_allowed_from_player_logs(opp_abbr: str, season: str) -> Optional[float]:
-    """
-    Estimate pts allowed by opponent using PLUS_MINUS from player game logs.
-    Tries all roster players until it finds one with a valid game log.
-    PLUS_MINUS = team_pts - opp_pts per game (team level stat in player logs).
-    pts_allowed ≈ league_avg - avg_plus_minus
-    """
-    try:
-        roster = get_live_roster(opp_abbr, season)
-        if not roster:
-            return None
-
-        all_plus_minus = []
-
-        # Try ALL roster players — keep going until we have enough data
-        for player_name in roster:
-            try:
-                pid, _ = find_player_id(player_name)
-                if not pid:
-                    continue
-                log = playergamelog.PlayerGameLog(
-                    player_id=pid,
-                    season=season,
-                    timeout=15,
-                ).get_data_frames()[0]
-                if log.empty or "PLUS_MINUS" not in log.columns:
-                    continue
-                pm = pd.to_numeric(log["PLUS_MINUS"], errors="coerce").dropna()
-                if len(pm) < 5:
-                    continue
-                all_plus_minus.extend(pm.tolist())
-                # Once we have 20+ game entries, that's enough
-                if len(all_plus_minus) >= 20:
-                    break
-            except Exception:
-                continue
-
-        if not all_plus_minus:
-            return None
-
-        avg_pm = sum(all_plus_minus) / len(all_plus_minus)
-        # pts_allowed = league_avg - avg_PLUS_MINUS
-        pts_allowed = 114.5 - avg_pm
-        return round(pts_allowed, 1)
-
-    except Exception:
-        return None
-
-
-def get_league_avg_pts_allowed(season: str) -> float:
-    """
-    League average points allowed — hardcoded as a reasonable baseline
-    since the league-wide endpoint is unreliable on Streamlit Cloud.
-    Updated per season. 2024-25 and 2025-26 avg is ~114-115 pts/game.
-    """
-    return 114.5
-
 @st.cache_data(ttl=300)
 def get_next_opponent(player_team: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
-    """
-    Look up the next scheduled game for a team using scoreboardv2.
-    Checks today first, then tomorrow (day_offset=1) as a fallback.
-    Returns (opponent_abbreviation, game_date_string).
-    """
     if not player_team:
         return None, None
 
@@ -372,7 +253,6 @@ def get_next_opponent(player_team: Optional[str]) -> Tuple[Optional[str], Option
             home = row["HOME_TEAM_ABBREVIATION"]
             away = row["VISITOR_TEAM_ABBREVIATION"]
 
-            # Try multiple possible date column names
             game_date = None
             for col in ["GAME_DATE_EST", "GAME_DATE", "GAME_STATUS_TEXT"]:
                 if col in row.index and row[col]:
@@ -394,10 +274,6 @@ def get_next_opponent(player_team: Optional[str]) -> Tuple[Optional[str], Option
 
 
 def get_opponent_from_logs(logs: pd.DataFrame, player_team: Optional[str]) -> Optional[str]:
-    """
-    Fallback: extract most recent opponent from game log if schedule lookup fails.
-    MATCHUP format is either 'TEM vs. OPP' or 'TEM @ OPP'.
-    """
     if logs is None or logs.empty:
         return None
     latest = logs.iloc[0]["MATCHUP"]
@@ -412,10 +288,6 @@ def get_opponent_from_logs(logs: pd.DataFrame, player_team: Optional[str]) -> Op
     return None
 
 def classify_matchup(opp_abbr: Optional[str], season: str) -> Tuple[str, Optional[float], str]:
-    """
-    Estimate pts allowed by opponent using PLUS_MINUS from their player game logs.
-    pts_allowed = 114.5 - avg_PLUS_MINUS (inlined to avoid caching issues).
-    """
     if not opp_abbr:
         return "Neutral", None, "N/A"
 
@@ -423,7 +295,6 @@ def classify_matchup(opp_abbr: Optional[str], season: str) -> Tuple[str, Optiona
     avg_str = f"{avg_pts:.1f}"
     opp_pts = None
 
-    # Try all roster players until we accumulate enough PLUS_MINUS data
     try:
         roster = get_live_roster(opp_abbr, season)
         all_pm = []
@@ -503,11 +374,6 @@ def consistency_score(df: pd.DataFrame, line: float) -> float:
     return float(within_3 / len(pts))
 
 def home_away_split(df: pd.DataFrame, line: float, side: str, player_team: Optional[str]) -> dict:
-    """
-    Split hit rate into home vs away games using MATCHUP column.
-    MATCHUP format: 'TEM vs. OPP' = home, 'TEM @ OPP' = away.
-    Returns dict with home_rate, away_rate, home_games, away_games, home_avg, away_avg.
-    """
     result = {
         "home_rate": None, "away_rate": None,
         "home_games": 0, "away_games": 0,
@@ -544,6 +410,36 @@ def home_away_split(df: pd.DataFrame, line: float, side: str, player_team: Optio
     return result
 
 
+def venue_adjustment(splits: dict, tonight_venue: Optional[str], side: str) -> str:
+    """
+    Derive a venue adjustment signal from home/away splits.
+    Returns: 'Boost', 'Neutral', or 'Penalty'
+    - Boost:   tonight's venue has a hit rate >= 10pp higher than the other venue
+    - Penalty: tonight's venue has a hit rate >= 10pp lower than the other venue
+    - Neutral: small difference, missing data, or venue unknown
+    """
+    if not tonight_venue:
+        return "Neutral"
+
+    home_rate = splits.get("home_rate")
+    away_rate = splits.get("away_rate")
+
+    # Need both rates to compare
+    if home_rate is None or away_rate is None:
+        return "Neutral"
+
+    if tonight_venue == "Home":
+        diff = home_rate - away_rate
+    else:
+        diff = away_rate - home_rate
+
+    if diff >= 0.10:
+        return "Boost"
+    if diff <= -0.10:
+        return "Penalty"
+    return "Neutral"
+
+
 def trend_flag(series: pd.Series, n: int) -> str:
     s = pd.to_numeric(series, errors="coerce").dropna()
     lookback = max(2, n // 3)
@@ -569,7 +465,7 @@ def suggest_bucket(value: float, strong_cut: float, risk_cut: float) -> str:
 def apply_adjustments(weighted: float, context: dict) -> float:
     """
     Multiplicative adjustments on the margin from 50%.
-    Respects bounded [0,1] nature of probabilities.
+    Now includes venue split signal derived from home/away hit rates.
     """
     multipliers = {
         "minutes":  {"Strong": 1.08, "Okay": 1.00, "Risk": 0.88},
@@ -577,6 +473,8 @@ def apply_adjustments(weighted: float, context: dict) -> float:
         "shots":    {"High":   1.05, "Medium": 1.00, "Low": 0.90},
         "matchup":  {"Good":   1.08, "Neutral": 1.00, "Bad": 0.91},
         "script":   {"Competitive": 1.03, "Neutral": 1.00, "Blowout risk": 0.93},
+        # Venue split: does tonight's location historically help or hurt this prop?
+        "venue":    {"Boost": 1.06, "Neutral": 1.00, "Penalty": 0.92},
     }
     margin = weighted - 0.5
     for key, val in context.items():
@@ -669,7 +567,7 @@ def build_analysis_prompt(
     min_flag, fga_flag, pts_flag,
     minutes_sel, role_sel, shots_sel, matchup_sel, script_sel,
     opp_abbr, opp_pts, league_avg,
-    splits=None, tonight_venue=None,
+    splits=None, tonight_venue=None, venue_adj=None,
 ) -> str:
     game_rows = []
     for _, row in logs.iterrows():
@@ -693,6 +591,7 @@ def build_analysis_prompt(
     home_avg   = sp.get("home_avg", "N/A")
     away_avg   = sp.get("away_avg", "N/A")
     venue      = tonight_venue or "Unknown"
+    venue_note = f" ({venue_adj} applied)" if venue_adj and venue_adj != "Neutral" else ""
 
     return f"""You are a sharp NBA prop analyst. Write a clear, data-driven breakdown.
 
@@ -707,17 +606,18 @@ STATS:
 - Adjusted rate: {adjusted:.0%} | Consistency: {consistency:.0%}
 - Home hit rate: {home_rate} ({home_games} games, avg {home_avg} pts)
 - Away hit rate: {away_rate} ({away_games} games, avg {away_avg} pts)
-- Tonight venue: {venue}
+- Tonight venue: {venue}{venue_note}
 - Trends: MIN {min_flag} | FGA {fga_flag} | PTS {pts_flag}
 
 CONTEXT:
 - Minutes: {minutes_sel} | Role: {role_sel} | Shots: {shots_sel}
 - Matchup: {matchup_sel} (auto-detected from real defense stats){defense_note}
 - Game script: {script_sel}
+- Venue split adjustment: {venue_adj or "Neutral"} (based on home/away hit rate differential)
 
 MODEL OUTPUT: {tier}
 
-Write 3-4 paragraphs: (1) lead with the prop and lean, (2) what the game log shows, (3) how the opponent defense and context affect it tonight, (4) closing verdict. Be direct, use real numbers, write like a sharp bettor."""
+Write 3-4 paragraphs: (1) lead with the prop and lean, (2) what the game log shows, (3) how the opponent defense, venue split, and context affect it tonight, (4) closing verdict. Be direct, use real numbers, write like a sharp bettor."""
 
 def generate_ai_analysis(prompt: str) -> str:
     client = Groq(api_key=get_api_key())
@@ -762,7 +662,6 @@ scan_slate = False
 
 st.markdown("<div class='section-header'>Player & Prop</div>", unsafe_allow_html=True)
 
-# Build full player list once for the searchable dropdown
 @st.cache_data(ttl=86400)
 def get_all_player_names():
     all_players = players.get_players()
@@ -821,7 +720,7 @@ if fetch:
             st.session_state.logs = fetch_with_retries(
                 lambda: get_last_n_games(player_id=player_id, season=season, n=n_games)
             )
-            st.session_state.defense_data = None  # will be fetched after opponent is known
+            st.session_state.defense_data = None
     except Exception as e:
         if not manual_mode:
             st.error(f"Fetch failed: {repr(e)}")
@@ -862,7 +761,7 @@ if st.session_state.logs is not None:
     shots_suggest   = "High" if avg_fga >= 15 else ("Low" if avg_fga < 10 else "Medium")
     role_suggest    = suggest_bucket(avg_fga + 0.5 * avg_fta, 18, 12)
 
-    tonight_venue = None  # set after player_team is resolved
+    tonight_venue = None
 
     min_flag = trend_flag(logs["MIN"], n_games)
     fga_flag = trend_flag(logs["FGA"], n_games)
@@ -872,10 +771,9 @@ if st.session_state.logs is not None:
     player_team         = get_player_team(player_id)
     opp_abbr, game_date = get_next_opponent(player_team)
 
-    # Home/away splits — needs player_team to detect home vs away from MATCHUP
+    # Home/away splits
     splits = home_away_split(logs, line, side, player_team)
 
-    # Fall back to most recent game log opponent if no upcoming game found
     if not opp_abbr:
         opp_abbr  = get_opponent_from_logs(logs, player_team)
         game_date = None
@@ -943,11 +841,9 @@ if st.session_state.logs is not None:
 
     # ── Home/Away splits ──────────────────────
     if splits["home_games"] > 0 or splits["away_games"] > 0:
-        # Detect if tonight is home or away
+        # Detect tonight venue
         tonight_venue = None
         if player_team and opp_abbr:
-            tonight_venue = "Home" if splits.get("home_games", 0) > 0 else None
-            # Re-derive from next game: if player_team is home team they play at home
             try:
                 from datetime import timedelta
                 for day_offset in [0, 1, 2]:
@@ -1019,7 +915,6 @@ if st.session_state.logs is not None:
     # ── Context ───────────────────────────────
     st.markdown("<div class='section-header'>Context</div>", unsafe_allow_html=True)
 
-    # Show next opponent clearly
     if opp_abbr:
         date_display = game_date if game_date else ""
         badge_css = matchup_auto.lower()
@@ -1045,7 +940,6 @@ if st.session_state.logs is not None:
     else:
         st.caption("Next opponent not found — matchup set to Neutral.")
 
-    # Primary controls — always visible
     pc1, pc2 = st.columns(2)
     with pc1:
         matchup_options = ["Neutral","Good","Bad"]
@@ -1058,7 +952,6 @@ if st.session_state.logs is not None:
     with pc2:
         script_sel = st.selectbox("Game Script", ["Neutral","Competitive","Blowout risk"])
 
-    # Advanced overrides — collapsed by default
     with st.expander("⚙️  Advanced overrides"):
         ac1, ac2, ac3 = st.columns(3)
         with ac1:
@@ -1071,12 +964,16 @@ if st.session_state.logs is not None:
             shots_sel = st.selectbox("Shots", ["Medium","High","Low"],
                                      index=["Medium","High","Low"].index(shots_suggest))
 
+    # ── Compute venue adjustment BEFORE apply_adjustments ──
+    venue_adj = venue_adjustment(splits, tonight_venue, side)
+
     context = {
         "minutes": minutes_sel,
         "role":    role_sel,
         "shots":   shots_sel,
         "matchup": matchup_sel,
         "script":  script_sel,
+        "venue":   venue_adj,   # ← NOW wired in
     }
 
     adjusted   = apply_adjustments(weighted_base, context)
@@ -1090,11 +987,27 @@ if st.session_state.logs is not None:
 
     # ── Verdict banner ────────────────────────
     st.markdown("<div class='section-header'>Verdict</div>", unsafe_allow_html=True)
+
+    # Build venue adj label for banner
+    venue_adj_labels = {
+        "Boost":   ("▲ Venue Boost", "#22c55e"),
+        "Penalty": ("▼ Venue Penalty", "#ef4444"),
+        "Neutral": ("● Venue Neutral", "#475569"),
+    }
+    venue_label_text, venue_label_color = venue_adj_labels.get(venue_adj, ("● Venue Neutral", "#475569"))
+    venue_badge_html = (
+        f"<span style='font-family:DM Mono; font-size:0.7rem; color:{venue_label_color}; "
+        f"background:{venue_label_color}18; border:1px solid {venue_label_color}44; "
+        f"padding:3px 10px; border-radius:999px;'>{venue_label_text}</span>"
+        if venue_adj != "Neutral" else ""
+    )
+
     st.markdown(f"""
     <div class='verdict-banner {css}'>
         <div>
             <div class='verdict-label'>{full_name} · {line} pts · {side}</div>
             <div class='verdict-tier {css}'>{tier_emoji[tier]} {tier}</div>
+            <div style='margin-top:6px;'>{venue_badge_html}</div>
         </div>
         <div style='display:flex; gap:2rem; flex-wrap:wrap;'>
             <div>
@@ -1118,7 +1031,8 @@ if st.session_state.logs is not None:
     Weighted (recency): {weighted_base:.0%} &nbsp;·&nbsp;
     After context: {adjusted:.0%} &nbsp;·&nbsp;
     Sample: {n_games} games &nbsp;·&nbsp;
-    Matchup: {matchup_sel} (vs {opp_abbr or "unknown"})
+    Matchup: {matchup_sel} (vs {opp_abbr or "unknown"}) &nbsp;·&nbsp;
+    Venue: {tonight_venue or "Unknown"} ({venue_adj})
     </div>""", unsafe_allow_html=True)
 
     # ── AI Analysis ───────────────────────────
@@ -1152,7 +1066,7 @@ if st.session_state.logs is not None:
                             minutes_sel=minutes_sel, role_sel=role_sel, shots_sel=shots_sel,
                             matchup_sel=matchup_sel, script_sel=script_sel,
                             opp_abbr=opp_abbr, opp_pts=opp_pts, league_avg=league_avg,
-                            splits=splits, tonight_venue=tonight_venue,
+                            splits=splits, tonight_venue=tonight_venue, venue_adj=venue_adj,
                         )
                         st.session_state.ai_analysis = generate_ai_analysis(prompt)
                         st.session_state.ai_error = None
@@ -1165,17 +1079,19 @@ if st.session_state.logs is not None:
     ex1, ex2 = st.columns([1, 1])
     with ex1:
         out = logs.copy()
-        out.insert(0, "PLAYER",            full_name)
-        out.insert(1, "LINE",              line)
-        out.insert(2, "SIDE",              side)
-        out.insert(3, "OPPONENT",          opp_abbr or "")
-        out.insert(4, "OPP_PTS_ALLOWED",   opp_pts or "")
-        out.insert(5, "MATCHUP_QUALITY",   matchup_sel)
-        out.insert(6, "RAW_HIT_RATE",      baseline)
-        out.insert(7, "WEIGHTED_HIT_RATE", weighted_base)
-        out.insert(8, "ADJUSTED_RATE",     adjusted)
-        out.insert(9, "CONSISTENCY",       consistency)
-        out.insert(10,"TIER",              tier)
+        out.insert(0,  "PLAYER",            full_name)
+        out.insert(1,  "LINE",              line)
+        out.insert(2,  "SIDE",              side)
+        out.insert(3,  "OPPONENT",          opp_abbr or "")
+        out.insert(4,  "OPP_PTS_ALLOWED",   opp_pts or "")
+        out.insert(5,  "MATCHUP_QUALITY",   matchup_sel)
+        out.insert(6,  "VENUE",             tonight_venue or "")
+        out.insert(7,  "VENUE_ADJ",         venue_adj)
+        out.insert(8,  "RAW_HIT_RATE",      baseline)
+        out.insert(9,  "WEIGHTED_HIT_RATE", weighted_base)
+        out.insert(10, "ADJUSTED_RATE",     adjusted)
+        out.insert(11, "CONSISTENCY",       consistency)
+        out.insert(12, "TIER",              tier)
         csv = out.to_csv(index=False).encode("utf-8")
         st.download_button("⬇  Download CSV", data=csv, file_name="prop_report.csv", mime="text/csv")
     with ex2:
@@ -1185,13 +1101,13 @@ if st.session_state.logs is not None:
                 "Line":        f"{line} {side}",
                 "Opponent":    opp_abbr or "—",
                 "Matchup":     matchup_sel,
+                "Venue":       f"{tonight_venue or '?'} ({venue_adj})",
                 "Avg PTS":     round(sample_avg_pts, 1),
                 "Hit Rate":    f"{weighted_base:.0%}",
                 "Adjusted":    f"{adjusted:.0%}",
                 "Consistency": f"{consistency:.0%}",
                 "Verdict":     tier,
             }
-            # Avoid duplicates — replace if same player+line already tracked
             existing = [i for i, e in enumerate(st.session_state.tracker)
                         if e["Player"] == full_name and e["Line"] == f"{line} {side}"]
             if existing:
@@ -1220,7 +1136,6 @@ if not st.session_state.tracker:
     </div>
     """, unsafe_allow_html=True)
 else:
-    # Render each tracked prop as a styled card with remove button
     tier_css   = {"Strong Over":"green","Lean Over":"yellow","Lean Under":"orange","Strong Under":"red","Pass":"gray"}
     tier_emoji = {"Strong Over":"🟢","Lean Over":"🟡","Lean Under":"🟠","Strong Under":"🔴","Pass":"⚪"}
 
@@ -1244,6 +1159,10 @@ else:
                     <div>
                         <div class='verdict-label'>Verdict</div>
                         <div class='verdict-tier {css}' style='font-size:1rem;'>{emoji} {t}</div>
+                    </div>
+                    <div>
+                        <div class='verdict-label'>Venue</div>
+                        <div style='font-size:1rem; font-weight:700; color:#f1f5f9;'>{entry.get("Venue", "—")}</div>
                     </div>
                     <div>
                         <div class='verdict-label'>Avg PTS</div>
