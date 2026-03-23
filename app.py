@@ -880,6 +880,35 @@ if st.session_state.logs is not None:
 
     matchup_auto, opp_pts, league_avg = classify_matchup_espn(opp_abbr)
 
+    # Temporary debug — shows ESPN stats response structure
+    if opp_abbr and not opp_pts:
+        with st.expander("🛠️ Defense debug"):
+            try:
+                d1 = espn_get(f"{ESPN_SITE}/teams")
+                teams_list = (
+                    d1.get("sports", [{}])[0].get("leagues", [{}])[0].get("teams", [])
+                    or d1.get("teams", [])
+                )
+                team_id = None
+                for t in teams_list:
+                    team = t.get("team", t)
+                    if team.get("abbreviation") == opp_abbr:
+                        team_id = str(team.get("id",""))
+                        break
+                st.write(f"Team ID for {opp_abbr}:", team_id)
+                if team_id:
+                    d2 = espn_get(f"{ESPN_SITE}/teams/{team_id}/statistics")
+                    st.write("Top keys:", list(d2.keys()))
+                    splits = d2.get("splits", {})
+                    st.write("Splits keys:", list(splits.keys()) if splits else "none")
+                    cats = splits.get("categories", []) if splits else []
+                    st.write(f"Categories ({len(cats)}):")
+                    for cat in cats[:5]:
+                        st.write(f"  [{cat.get('name')}]", 
+                                 [(s.get('name'), s.get('value')) for s in cat.get('stats',[])[:8]])
+            except Exception as e:
+                st.write("Error:", str(e))
+
     # ── Stat cards ────────────────────────────
     st.markdown(f"<div class='section-header'>{full_name}</div>", unsafe_allow_html=True)
 
