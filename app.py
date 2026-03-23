@@ -156,6 +156,9 @@ def bdl_headers() -> dict:
         key = st.secrets["BALLDONTLIE_API_KEY"]
     except Exception:
         key = os.environ.get("BALLDONTLIE_API_KEY", "")
+    if not key:
+        st.error("❌ BALLDONTLIE_API_KEY not found in Streamlit secrets. Add it at balldontlie.io (free).")
+        st.stop()
     return {"Authorization": key}
 
 def bdl_get(endpoint: str, params: dict = None, retries: int = 3) -> dict:
