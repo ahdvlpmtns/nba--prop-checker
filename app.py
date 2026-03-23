@@ -689,6 +689,15 @@ if st.session_state.logs is not None:
 
     matchup_auto, opp_pts, league_avg = classify_matchup(opp_abbr, defense_df)
 
+    # Debug — remove once confirmed working
+    with st.expander("🔧 Debug: Defense lookup", expanded=False):
+        st.write(f"Player team: `{player_team}`")
+        st.write(f"Next opponent: `{opp_abbr}` · Game date: `{game_date}`")
+        st.write(f"OPP_PTS from defense data: `{opp_pts}`")
+        st.write(f"Defense data loaded: `{not defense_df.empty}`")
+        if not defense_df.empty:
+            st.write(f"Teams in defense data: `{sorted(defense_df['TEAM_ABBREVIATION'].tolist())}`")
+
     # ── Stat cards ────────────────────────────
     st.markdown(f"<div class='section-header'>{full_name}</div>", unsafe_allow_html=True)
 
