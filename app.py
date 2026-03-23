@@ -1774,7 +1774,7 @@ if st.session_state.logs is not None:
             <tr style='color:#475569; font-size:0.63rem; border-bottom:1px solid #1a2333;'>
                 <td style='padding:3px 0;'>SIGNAL</td>
                 <td>VALUE</td>
-                <td>MULTIPLIER</td>
+                <td>ADJUSTMENT</td>
                 <td>BEFORE</td>
                 <td>AFTER</td>
                 <td>IMPACT</td>
@@ -1782,7 +1782,7 @@ if st.session_state.logs is not None:
         """, unsafe_allow_html=True)
 
         rows_html = ""
-        for key, val, mult, before, after, delta in steps:
+        for key, val, adj, before, after, delta in steps:
             impact_color = "#22c55e" if delta > 0.005 else "#ef4444" if delta < -0.005 else "#475569"
             mult_display = (f"+{adj:.0%}" if adj > 0 else f"{adj:.0%}" if adj < 0 else "no change")
             mult_color   = "#22c55e" if adj > 0 else "#ef4444" if adj < 0 else "#475569"
@@ -1799,8 +1799,15 @@ if st.session_state.logs is not None:
         st.markdown(rows_html + "</table>", unsafe_allow_html=True)
 
         # Final decision
-        edge_tight_note = f"Edge {line_diff:+.1f} {'< 5 → override active' if edge_is_tight else '≥ 5 → override skipped'}"
-        cons_note = f"Consistency {consistency:.0%} {'< 35%' if consistency < 0.35 else '≥ 35%'} · {edge_tight_note}"
+        # Consistency override only matters when tier is Strong Over/Under
+        override_relevant = tier in ["Strong Over", "Strong Under", "Lean Over", "Lean Under"]
+        if consistency < 0.35 and edge_is_tight and override_relevant:
+            edge_tight_note = f"Edge {line_diff:+.1f} {'< 5 → downgrade applied' if edge_is_tight else '≥ 5 → skipped'}"
+            cons_note = f"Consistency {consistency:.0%} < 35% · {edge_tight_note}"
+        elif not edge_is_tight and consistency < 0.35:
+            cons_note = f"Consistency {consistency:.0%} < 35% but edge {line_diff:+.1f} ≥ 5 → override skipped (player dominates line)"
+        else:
+            cons_note = f"Consistency {consistency:.0%} · No override needed"
 
         st.markdown(f"""
         <div style='color:#f97316; font-size:0.65rem; letter-spacing:0.15em; text-transform:uppercase;
