@@ -173,60 +173,66 @@ def espn_get(url: str, params: dict = None, retries: int = 3) -> dict:
 def normalize_name(s: str) -> str:
     return re.sub(r"\s+", " ", s.strip().lower())
 
-# ── Player search ─────────────────────────────
+# ── Player search — load all rosters from ESPN teams ──────────────
 
-@st.cache_data(ttl=86400)
-def espn_search_players(query: str) -> List[dict]:
-    """Search ESPN for NBA players by name. Returns list of {id, full_name, team_abbr}."""
-    try:
-        data = espn_get(f"{ESPN_SITE}/athletes", params={"search": query, "limit": 10})
-        results = []
-        for item in data.get("items", []):
-            pid  = item.get("id")
-            name = item.get("displayName") or item.get("fullName") or ""
-            team = ""
-            try:
-                team_ref = item.get("team", {})
-                team = team_ref.get("abbreviation", "")
-            except Exception:
-                pass
-            if pid and name:
-                results.append({"id": pid, "full_name": name, "team_abbr": team})
-        return results
-    except Exception:
-        return []
+# All 30 NBA team IDs on ESPN (stable, never changes)
+NBA_TEAM_IDS = [
+    1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,
+    16,17,18,19,20,21,22,23,24,25,26,27,28,29,30
+]
 
 @st.cache_data(ttl=3600)
-def espn_get_player_info(player_id: str) -> dict:
-    """Get player info including current team."""
-    try:
-        data = espn_get(f"{ESPN_SITE}/athletes/{player_id}")
-        athlete = data.get("athlete", data)
-        team_abbr = ""
+def espn_get_all_players() -> List[dict]:
+    """
+    Load all active NBA players by fetching each team roster from ESPN.
+    Returns list of {id, full_name, team_abbr}.
+    ESPN team roster endpoint is fast and always works.
+    """
+    all_players = []
+    for team_id in NBA_TEAM_IDS:
         try:
-            team_abbr = athlete.get("team", {}).get("abbreviation", "")
+            url  = f"{ESPN_SITE}/teams/{team_id}/roster"
+            data = espn_get(url)
+            team_abbr = data.get("team", {}).get("abbreviation", "")
+            for athlete in data.get("athletes", []):
+                for item in (athlete.get("items") or [athlete]):
+                    pid  = str(item.get("id", ""))
+                    name = item.get("displayName") or item.get("fullName") or ""
+                    if pid and name:
+                        all_players.append({
+                            "id":         pid,
+                            "full_name":  name,
+                            "team_abbr":  team_abbr,
+                        })
         except Exception:
-            pass
-        return {
-            "id":         str(athlete.get("id", player_id)),
-            "full_name":  athlete.get("displayName", ""),
-            "team_abbr":  team_abbr,
-        }
-    except Exception:
-        return {}
+            continue
+    return all_players
+
+def espn_search_players(query: str) -> List[dict]:
+    """Search loaded player list by name query."""
+    query_norm = normalize_name(query)
+    all_players = espn_get_all_players()
+    matches = [
+        p for p in all_players
+        if query_norm in normalize_name(p["full_name"])
+    ]
+    return sorted(matches, key=lambda x: x["full_name"].split()[-1])
 
 def find_player(player_name: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """Returns (espn_player_id, full_name, team_abbreviation)."""
-    results = espn_search_players(player_name)
-    if not results:
-        return None, None, None
-    # exact match first
     name_norm = normalize_name(player_name)
-    for r in results:
-        if normalize_name(r["full_name"]) == name_norm:
-            return r["id"], r["full_name"], r["team_abbr"]
-    # return best partial match
-    return results[0]["id"], results[0]["full_name"], results[0]["team_abbr"]
+    all_players = espn_get_all_players()
+    # exact match first
+    for p in all_players:
+        if normalize_name(p["full_name"]) == name_norm:
+            return p["id"], p["full_name"], p["team_abbr"]
+    # partial match
+    candidates = [p for p in all_players if name_norm in normalize_name(p["full_name"])]
+    if len(candidates) == 1:
+        return candidates[0]["id"], candidates[0]["full_name"], candidates[0]["team_abbr"]
+    if candidates:
+        return candidates[0]["id"], candidates[0]["full_name"], candidates[0]["team_abbr"]
+    return None, None, None
 
 # ── Game logs ─────────────────────────────────
 
