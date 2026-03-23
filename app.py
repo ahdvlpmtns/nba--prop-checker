@@ -5,7 +5,7 @@ from datetime import datetime
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
-import anthropic
+from groq import Groq
 import pandas as pd
 import streamlit as st
 
@@ -237,24 +237,24 @@ Be direct. Use real numbers. Avoid filler phrases like "it's worth noting" or "i
 
 
 def get_api_key() -> str:
-    """Retrieve the Anthropic API key from Streamlit secrets or environment."""
+    """Retrieve the Groq API key from Streamlit secrets or environment."""
     try:
-        return st.secrets["ANTHROPIC_API_KEY"]
+        return st.secrets["GROQ_API_KEY"]
     except Exception:
-        return os.environ.get("ANTHROPIC_API_KEY", "")
+        return os.environ.get("GROQ_API_KEY", "")
 
 
 def generate_ai_analysis(prompt: str) -> str:
-    """Call the Anthropic API and return the analysis text."""
+    """Call the Groq API and return the analysis text."""
     api_key = get_api_key()
-    client = anthropic.Anthropic(api_key=api_key)
+    client = Groq(api_key=api_key)
 
-    message = client.messages.create(
-        model="claude-sonnet-4-20250514",
+    chat_completion = client.chat.completions.create(
+        model="llama-3.3-70b-versatile",
         max_tokens=1024,
         messages=[{"role": "user", "content": prompt}],
     )
-    return message.content[0].text
+    return chat_completion.choices[0].message.content
 
 
 # ─────────────────────────────────────────────
