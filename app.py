@@ -899,12 +899,14 @@ if st.session_state.logs is not None:
                 if team_id:
                     d2 = espn_get(f"{ESPN_SITE}/teams/{team_id}/statistics")
                     st.write("Top keys:", list(d2.keys()))
-                    splits = d2.get("splits", {})
-                    st.write("Splits keys:", list(splits.keys()) if splits else "none")
-                    cats = splits.get("categories", []) if splits else []
+                    results = d2.get("results", {})
+                    st.write("Results keys:", list(results.keys()) if results else "none")
+                    stats = results.get("stats", {})
+                    st.write("Stats keys:", list(stats.keys()) if stats else "none")
+                    cats = stats.get("categories", []) if stats else []
                     st.write(f"Categories ({len(cats)}):")
                     for cat in cats[:5]:
-                        st.write(f"  [{cat.get('name')}]", 
+                        st.write(f"  [{cat.get('name')}]",
                                  [(s.get('name'), s.get('value')) for s in cat.get('stats',[])[:8]])
             except Exception as e:
                 st.write("Error:", str(e))
