@@ -616,9 +616,28 @@ with oc3:
 
 st.markdown("<div class='section-header'>Player & Prop</div>", unsafe_allow_html=True)
 
+# Build full player list once for the searchable dropdown
+@st.cache_data(ttl=86400)
+def get_all_player_names():
+    all_players = players.get_players()
+    # Only active players, sorted alphabetically
+    active = sorted(
+        [p["full_name"] for p in all_players if p.get("is_active", True)],
+        key=lambda x: x.split()[-1]  # sort by last name
+    )
+    return active
+
+all_player_names = get_all_player_names()
+
 col_a, col_b, col_c, col_d = st.columns([2, 1, 1, 1])
 with col_a:
-    player_query = st.text_input("Player", value="Fox", placeholder="Search player...")
+    selected_player = st.selectbox(
+        "Player",
+        options=all_player_names,
+        index=all_player_names.index("De'Aaron Fox") if "De'Aaron Fox" in all_player_names else 0,
+        placeholder="Type to search...",
+        help="Start typing a player's name to filter the list"
+    )
 with col_b:
     line = st.number_input("Points Line", min_value=0.0, value=24.5, step=0.5)
 with col_c:
@@ -626,29 +645,17 @@ with col_c:
 with col_d:
     n_games = st.selectbox("Sample", [5, 10, 15], index=1)
 
-fetch = st.button("🔍  Analyze Prop")
-st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
-
-# ─────────────────────────────────────────────
-# Player selection
-# ─────────────────────────────────────────────
-
-candidate_players = search_candidates(player_query)
-if len(candidate_players) == 0:
-    st.error("No player found. Try a different spelling.")
-    st.stop()
-
-player_options  = [p["full_name"] for p in candidate_players]
-selected_player = st.selectbox("Select player", player_options,
-                               label_visibility="collapsed" if len(player_options) == 1 else "visible")
 player_id, full_name = find_player_id(selected_player)
 
 if player_id is None:
-    st.error("Could not resolve player.")
+    st.error("Could not resolve player. Try a different spelling.")
     st.stop()
 
+fetch = st.button("🔍  Analyze Prop")
+st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
+
 if not fetch and st.session_state.logs is None and not scan_slate:
-    st.markdown("<div style='color:#475569; font-family:DM Mono; font-size:0.8rem; margin-top:1rem;'>↑ Enter a player and line, then click Analyze Prop.</div>", unsafe_allow_html=True)
+    st.markdown("<div style='color:#475569; font-family:DM Mono; font-size:0.8rem; margin-top:1rem;'>↑ Select a player, set the line, then click Analyze Prop.</div>", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
 # Fetch logs + defense data
