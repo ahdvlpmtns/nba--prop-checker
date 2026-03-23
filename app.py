@@ -146,12 +146,15 @@ for key, default in [
 
 # ─────────────────────────────────────────────
 # ─────────────────────────────────────────────
-# ESPN public API layer — no key required
+# Data layer — ESPN (schedule) + nba_api (game logs)
+# ESPN for schedule: fast, reliable, no key needed
+# nba_api for game logs: direct player stats, well-structured
 # ─────────────────────────────────────────────
 
-ESPN_SITE  = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba"
-ESPN_CORE  = "https://sports.core.api.espn.com/v2/sports/basketball/leagues/nba"
-ESPN_WEB   = "https://site.web.api.espn.com/apis/common/v3/sports/basketball/nba"
+from nba_api.stats.static import players as nba_players
+from nba_api.stats.endpoints import playergamelog, commonplayerinfo
+
+ESPN_SITE = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba"
 
 ESPN_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -234,101 +237,94 @@ def find_player(player_name: str) -> Tuple[Optional[str], Optional[str], Optiona
         return candidates[0]["id"], candidates[0]["full_name"], candidates[0]["team_abbr"]
     return None, None, None
 
-# ── Game logs ─────────────────────────────────
+# ── nba_api: player lookup + game logs ───────────────────────────
+
+def normalize_name(s: str) -> str:
+    return re.sub(r"\s+", " ", s.strip().lower())
+
+@st.cache_data(ttl=86400)
+def nba_find_player(player_name: str) -> Tuple[Optional[int], Optional[str]]:
+    """Find player ID from nba_api static list."""
+    name = normalize_name(player_name)
+    all_p = nba_players.get_players()
+    for p in all_p:
+        if normalize_name(p["full_name"]) == name:
+            return p["id"], p["full_name"]
+    candidates = [p for p in all_p if name in normalize_name(p["full_name"])]
+    if candidates:
+        return candidates[0]["id"], candidates[0]["full_name"]
+    return None, None
 
 @st.cache_data(ttl=600)
-def espn_get_game_logs(player_id: str, season: int, n: int = 10) -> pd.DataFrame:
+def nba_get_game_logs(player_id: int, season: str, n: int = 10) -> pd.DataFrame:
     """
-    Scrape ESPN player gamelog page using pd.read_html — the most reliable method.
-    URL: https://www.espn.com/nba/player/gamelog/_/id/{id}/year/{season+1}
+    Fetch last N game logs using nba_api playergamelog.
+    Uses browser-like headers to avoid timeouts on Streamlit Cloud.
+    season: e.g. "2025-26"
     """
     empty = pd.DataFrame(columns=["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A"])
     try:
-        # ESPN uses the END year of the season (2025-26 -> year=2026)
-        year = season + 1
-        url  = f"https://www.espn.com/nba/player/gamelog/_/id/{player_id}/year/{year}"
-        hdrs = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                          "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        from nba_api.library.http import NBAStatsHTTP
+        NBAStatsHTTP.nba_response.headers = {
+            "Host": "stats.nba.com",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
             "Accept-Language": "en-US,en;q=0.9",
+            "x-nba-stats-origin": "stats",
+            "x-nba-stats-token": "true",
+            "Referer": "https://www.nba.com/",
+            "Origin": "https://www.nba.com",
+            "Connection": "keep-alive",
         }
-        resp = requests.get(url, headers=hdrs, timeout=15)
-        resp.raise_for_status()
+    except Exception:
+        pass
 
-        tables = pd.read_html(resp.text)
-        if not tables:
-            return empty
+    for attempt in range(4):
+        try:
+            df = playergamelog.PlayerGameLog(
+                player_id=player_id, season=season, timeout=45,
+            ).get_data_frames()[0]
+            df["GAME_DATE"] = pd.to_datetime(df["GAME_DATE"])
+            df = df.sort_values("GAME_DATE", ascending=False).head(n).copy()
+            for c in ["MATCHUP","MIN","PTS","FGA","FTA","FG3A"]:
+                if c not in df.columns:
+                    df[c] = None
+            return df[["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A"]]
+        except Exception as e:
+            if attempt < 3:
+                time.sleep(3 * (attempt + 1))
+            else:
+                raise
+    return empty
 
-        # Find the table that has a DATE column and PTS column
-        log_df = None
-        for t in tables:
-            cols = [str(c).upper() for c in t.columns]
-            if any("DATE" in c for c in cols) and any("PTS" in c or "PT" in c for c in cols):
-                log_df = t
-                break
+@st.cache_data(ttl=600)
+def nba_get_player_team(player_id: int) -> Optional[str]:
+    """Get player current team abbreviation."""
+    try:
+        from nba_api.library.http import NBAStatsHTTP
+        NBAStatsHTTP.nba_response.headers = {
+            "Host": "stats.nba.com",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "x-nba-stats-origin": "stats",
+            "x-nba-stats-token": "true",
+            "Referer": "https://www.nba.com/",
+            "Origin": "https://www.nba.com",
+        }
+    except Exception:
+        pass
+    try:
+        info = commonplayerinfo.CommonPlayerInfo(player_id=player_id, timeout=45).get_data_frames()[0]
+        return info["TEAM_ABBREVIATION"].iloc[0] if not info.empty else None
+    except Exception:
+        return None
 
-        if log_df is None:
-            # fallback — use largest table
-            log_df = max(tables, key=len)
-
-        # Normalize column names
-        log_df.columns = [str(c).upper().strip() for c in log_df.columns]
-
-        # Drop rows that are section headers (e.g. "SEPTEMBER", "Regular Season")
-        # These usually have DATE == DATE or NaN in stat columns
-        if "DATE" in log_df.columns:
-            log_df = log_df[log_df["DATE"].notna()]
-            log_df = log_df[log_df["DATE"] != "DATE"]
-            log_df = log_df[~log_df["DATE"].astype(str).str.upper().isin([
-                "DATE","JANUARY","FEBRUARY","MARCH","APRIL","MAY","JUNE",
-                "JULY","AUGUST","SEPTEMBER","OCTOBER","NOVEMBER","DECEMBER",
-                "REGULAR SEASON","PLAYOFFS","PRESEASON"
-            ])]
-
-        # Map columns to our standard names
-        col_map = {}
-        for c in log_df.columns:
-            cu = c.upper()
-            if "DATE" in cu:          col_map[c] = "GAME_DATE"
-            elif cu in ("OPP","OPPONENT","MATCHUP","VS"): col_map[c] = "MATCHUP"
-            elif cu in ("MIN","MINUTES","MINS"):          col_map[c] = "MIN"
-            elif cu in ("PTS","POINTS","PT"):             col_map[c] = "PTS"
-            elif cu in ("FGA","FG ATTEMPTED"):            col_map[c] = "FGA"
-            elif cu in ("FTA","FT ATTEMPTED"):            col_map[c] = "FTA"
-            elif cu in ("3PA","3P ATTEMPTED","FG3A"):     col_map[c] = "FG3A"
-
-        log_df = log_df.rename(columns=col_map)
-
-        # Ensure required columns exist
-        for col in ["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A"]:
-            if col not in log_df.columns:
-                log_df[col] = None
-
-        # Parse dates
-        log_df["GAME_DATE"] = pd.to_datetime(
-            log_df["GAME_DATE"].astype(str).str.replace(r"[A-Z][a-z]+,\s*", "", regex=True),
-            errors="coerce", infer_datetime_format=True
-        )
-        log_df = log_df.dropna(subset=["GAME_DATE"])
-
-        # Convert stats to numeric
-        for col in ["MIN","PTS","FGA","FTA","FG3A"]:
-            log_df[col] = pd.to_numeric(
-                log_df[col].astype(str).str.replace("--","-1").str.extract(r"([\d.]+)")[0],
-                errors="coerce"
-            ).fillna(0)
-
-        log_df = log_df.sort_values("GAME_DATE", ascending=False).head(n).reset_index(drop=True)
-        return log_df[["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A"]]
-
-    except Exception as e:
-        espn_get_game_logs._last_error = str(e)
-        return empty
-
-espn_get_game_logs._last_error = ""
+def season_str_to_season(season_str: str) -> str:
+    """Return season string as-is for nba_api e.g. '2025-26'."""
+    return season_str.strip()
 
 def season_str_to_int(season_str: str) -> int:
-    """Convert '2025-26' -> 2025, '2024-25' -> 2024."""
+    """Convert '2025-26' -> 2025 for ESPN year param."""
     try:
         return int(season_str.split("-")[0])
     except Exception:
@@ -733,6 +729,7 @@ with col_e:
     season_str = st.text_input("Season", value="2025-26")
 
 season_int = season_str_to_int(season_str)
+season_str_clean = season_str_to_season(season_str)
 
 # Player selected directly from the searchable selectbox
 selected_player = player_query if player_query else None
@@ -743,10 +740,15 @@ if not selected_player:
 if not selected_player:
     st.stop()
 
-player_id, full_name, player_team = find_player(selected_player)
+# Look up player: nba_api for ID/logs, ESPN roster for team
+nba_id, full_name = nba_find_player(selected_player)
+# ESPN player lookup for team abbr (already loaded in roster)
+espn_player = next((p for p in espn_get_all_players() if normalize_name(p["full_name"]) == normalize_name(selected_player)), None)
+player_team = espn_player["team_abbr"] if espn_player else None
+player_id   = nba_id
 
 if player_id is None:
-    st.error("Could not resolve player. Try a different spelling.")
+    st.error(f"Could not find '{selected_player}' in NBA database. Try exact spelling.")
     st.stop()
 
 fetch = st.button("🔍  Analyze Prop")
@@ -764,8 +766,8 @@ if fetch:
     st.session_state.ai_error    = None
     try:
         with st.spinner("Fetching game logs..."):
-            st.session_state.logs = espn_get_game_logs(
-                player_id=player_id, season=season_int, n=n_games
+            st.session_state.logs = nba_get_game_logs(
+                player_id=player_id, season=season_str_clean, n=n_games
             )
     except Exception as e:
         if not manual_mode:
@@ -796,8 +798,8 @@ if st.session_state.logs is not None:
 
     if logs.empty:
         with st.expander("🛠️ ESPN debug — raw response"):
-            raw = getattr(espn_get_game_logs, "_last_raw", {})
-            err = getattr(espn_get_game_logs, "_last_error", "")
+            err = getattr(nba_get_game_logs, "_last_error", "unknown error")
+            raw = {}
             st.write("Top-level keys:", list(raw.keys()) if raw else "empty")
             st.write("Error:", err or "none")
             if raw:
