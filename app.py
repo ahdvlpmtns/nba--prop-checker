@@ -983,7 +983,7 @@ if st.session_state.logs is not None:
     st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
 
     # ── Home/Away splits ──────────────────────
-    if splits["home_games"] > 0 or splits["away_games"] > 0:
+    if splits.get("home_games", 0) > 0 or splits.get("away_games", 0) > 0:
         st.markdown("<div class='section-header'>Home / Away Splits</div>", unsafe_allow_html=True)
         venue_color = "#22c55e" if tonight_venue == "Home" else "#60a5fa"
         venue_note_html = (
@@ -994,8 +994,8 @@ if st.session_state.logs is not None:
 
         ha1, ha2 = st.columns(2)
         with ha1:
-            if splits["home_games"] >= 2:
-                hr_pct   = splits["home_rate"]
+            if splits.get("home_games", 0) >= 2:
+                hr_pct   = splits.get("home_rate", 0)
                 hr_color = "#22c55e" if hr_pct >= 0.6 else ("#eab308" if hr_pct >= 0.5 else "#ef4444")
                 st.markdown(f"""
                 <div class='stat-card' style='border-color:{"#166534" if tonight_venue=="Home" else "#1e293b"};'>
@@ -1005,15 +1005,15 @@ if st.session_state.logs is not None:
                         <div style='font-family:DM Mono; font-size:0.72rem; color:#475569;'>hit rate</div>
                     </div>
                     <div style='font-family:DM Mono; font-size:0.72rem; color:#475569; margin-top:4px;'>
-                        {splits["home_avg"]} avg pts · {splits["home_games"]} games
+                        {splits.get("home_avg", "N/A")} avg pts · {splits.get("home_games", 0)} games
                     </div>
                 </div>""", unsafe_allow_html=True)
             else:
                 st.markdown("<div class='stat-card'><div class='stat-label'>Home</div><div style='color:#475569; font-size:0.8rem; margin-top:4px;'>Not enough data</div></div>", unsafe_allow_html=True)
 
         with ha2:
-            if splits["away_games"] >= 2:
-                ar_pct   = splits["away_rate"]
+            if splits.get("away_games", 0) >= 2:
+                ar_pct   = splits.get("away_rate", 0)
                 ar_color = "#22c55e" if ar_pct >= 0.6 else ("#eab308" if ar_pct >= 0.5 else "#ef4444")
                 st.markdown(f"""
                 <div class='stat-card' style='border-color:{"#166534" if tonight_venue=="Away" else "#1e293b"};'>
@@ -1023,7 +1023,7 @@ if st.session_state.logs is not None:
                         <div style='font-family:DM Mono; font-size:0.72rem; color:#475569;'>hit rate</div>
                     </div>
                     <div style='font-family:DM Mono; font-size:0.72rem; color:#475569; margin-top:4px;'>
-                        {splits["away_avg"]} avg pts · {splits["away_games"]} games
+                        {splits.get("away_avg", "N/A")} avg pts · {splits.get("away_games", 0)} games
                     </div>
                 </div>""", unsafe_allow_html=True)
             else:
