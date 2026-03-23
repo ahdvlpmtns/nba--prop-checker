@@ -502,6 +502,48 @@ def consistency_score(df: pd.DataFrame, line: float) -> float:
     within_3 = (abs(pts - line) <= 3).sum()
     return float(within_3 / len(pts))
 
+def home_away_split(df: pd.DataFrame, line: float, side: str, player_team: Optional[str]) -> dict:
+    """
+    Split hit rate into home vs away games using MATCHUP column.
+    MATCHUP format: 'TEM vs. OPP' = home, 'TEM @ OPP' = away.
+    Returns dict with home_rate, away_rate, home_games, away_games, home_avg, away_avg.
+    """
+    result = {
+        "home_rate": None, "away_rate": None,
+        "home_games": 0, "away_games": 0,
+        "home_avg": None, "away_avg": None,
+    }
+    if df is None or df.empty or "MATCHUP" not in df.columns:
+        return result
+
+    df = df.copy()
+    df["PTS_NUM"] = pd.to_numeric(df["PTS"], errors="coerce")
+
+    def is_home(matchup):
+        if not matchup:
+            return None
+        return "vs." in str(matchup)
+
+    df["IS_HOME"] = df["MATCHUP"].apply(is_home)
+
+    home_df = df[df["IS_HOME"] == True].dropna(subset=["PTS_NUM"])
+    away_df = df[df["IS_HOME"] == False].dropna(subset=["PTS_NUM"])
+
+    if len(home_df) >= 2:
+        home_hits = (home_df["PTS_NUM"] >= line).sum() if side == "Over" else (home_df["PTS_NUM"] <= line).sum()
+        result["home_rate"]  = round(float(home_hits / len(home_df)), 2)
+        result["home_games"] = len(home_df)
+        result["home_avg"]   = round(float(home_df["PTS_NUM"].mean()), 1)
+
+    if len(away_df) >= 2:
+        away_hits = (away_df["PTS_NUM"] >= line).sum() if side == "Over" else (away_df["PTS_NUM"] <= line).sum()
+        result["away_rate"]  = round(float(away_hits / len(away_df)), 2)
+        result["away_games"] = len(away_df)
+        result["away_avg"]   = round(float(away_df["PTS_NUM"].mean()), 1)
+
+    return result
+
+
 def trend_flag(series: pd.Series, n: int) -> str:
     s = pd.to_numeric(series, errors="coerce").dropna()
     lookback = max(2, n // 3)
@@ -627,6 +669,7 @@ def build_analysis_prompt(
     min_flag, fga_flag, pts_flag,
     minutes_sel, role_sel, shots_sel, matchup_sel, script_sel,
     opp_abbr, opp_pts, league_avg,
+    splits=None, tonight_venue=None,
 ) -> str:
     game_rows = []
     for _, row in logs.iterrows():
@@ -642,6 +685,15 @@ def build_analysis_prompt(
     if opp_abbr and opp_pts:
         defense_note = f"\nOpponent ({opp_abbr}) allows {opp_pts:.1f} pts/game (league avg: {league_avg})"
 
+    sp = splits or {}
+    home_rate  = f"{sp.get('home_rate', 0):.0%}" if sp.get("home_rate") is not None else "N/A"
+    away_rate  = f"{sp.get('away_rate', 0):.0%}" if sp.get("away_rate") is not None else "N/A"
+    home_games = sp.get("home_games", 0)
+    away_games = sp.get("away_games", 0)
+    home_avg   = sp.get("home_avg", "N/A")
+    away_avg   = sp.get("away_avg", "N/A")
+    venue      = tonight_venue or "Unknown"
+
     return f"""You are a sharp NBA prop analyst. Write a clear, data-driven breakdown.
 
 Player: {full_name} | Line: {line} pts ({side}) | Last {n_games} games
@@ -653,6 +705,9 @@ STATS:
 - Avg PTS: {avg_pts:.1f} | Avg MIN: {avg_min:.1f} | Avg FGA: {avg_fga:.1f}
 - Raw hit rate: {baseline:.0%} | Weighted hit rate: {weighted_base:.0%}
 - Adjusted rate: {adjusted:.0%} | Consistency: {consistency:.0%}
+- Home hit rate: {home_rate} ({home_games} games, avg {home_avg} pts)
+- Away hit rate: {away_rate} ({away_games} games, avg {away_avg} pts)
+- Tonight venue: {venue}
 - Trends: MIN {min_flag} | FGA {fga_flag} | PTS {pts_flag}
 
 CONTEXT:
@@ -807,6 +862,10 @@ if st.session_state.logs is not None:
     shots_suggest   = "High" if avg_fga >= 15 else ("Low" if avg_fga < 10 else "Medium")
     role_suggest    = suggest_bucket(avg_fga + 0.5 * avg_fta, 18, 12)
 
+    # Home/away splits (uses full game log, not just last N)
+    splits = home_away_split(logs, line, side, player_team)
+    tonight_venue = None  # will be set in splits block below
+
     min_flag = trend_flag(logs["MIN"], n_games)
     fga_flag = trend_flag(logs["FGA"], n_games)
     pts_flag = trend_flag(logs["PTS"], n_games)
@@ -880,6 +939,73 @@ if st.session_state.logs is not None:
     </div>"""
     st.markdown(flags_html, unsafe_allow_html=True)
     st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
+
+    # ── Home/Away splits ──────────────────────
+    if splits["home_games"] > 0 or splits["away_games"] > 0:
+        # Detect if tonight is home or away
+        tonight_venue = None
+        if player_team and opp_abbr:
+            tonight_venue = "Home" if splits.get("home_games", 0) > 0 else None
+            # Re-derive from next game: if player_team is home team they play at home
+            try:
+                from datetime import timedelta
+                for day_offset in [0, 1, 2]:
+                    check_date = (datetime.today() + timedelta(days=day_offset)).strftime("%m/%d/%Y")
+                    sb_check = scoreboardv2.ScoreboardV2(game_date=check_date, league_id="00", day_offset=0, timeout=10)
+                    g = sb_check.get_data_frames()[0]
+                    if not g.empty:
+                        r = g[(g["HOME_TEAM_ABBREVIATION"] == player_team) | (g["VISITOR_TEAM_ABBREVIATION"] == player_team)]
+                        if not r.empty:
+                            tonight_venue = "Home" if r.iloc[0]["HOME_TEAM_ABBREVIATION"] == player_team else "Away"
+                            break
+            except Exception:
+                pass
+
+        st.markdown("<div class='section-header'>Home / Away Splits</div>", unsafe_allow_html=True)
+
+        venue_note = ""
+        if tonight_venue:
+            venue_color = "#22c55e" if tonight_venue == "Home" else "#60a5fa"
+            venue_note = f"<span style='background:{venue_color}22; color:{venue_color}; font-family:DM Mono; font-size:0.7rem; padding:3px 10px; border-radius:999px; border:1px solid {venue_color}44; margin-left:8px;'>Tonight: {tonight_venue}</span>"
+
+        ha1, ha2 = st.columns(2)
+        with ha1:
+            if splits["home_games"] >= 2:
+                hr_pct = splits["home_rate"]
+                hr_color = "#22c55e" if hr_pct >= 0.6 else ("#eab308" if hr_pct >= 0.5 else "#ef4444")
+                st.markdown(f"""
+                <div class='stat-card' style='border-color: {"#166534" if tonight_venue == "Home" else "#1e293b"};'>
+                    <div class='stat-label'>Home {venue_note if tonight_venue == "Home" else ""}</div>
+                    <div style='display:flex; align-items:baseline; gap:12px; margin-top:4px;'>
+                        <div class='stat-value' style='color:{hr_color};'>{hr_pct:.0%}</div>
+                        <div style='font-family:DM Mono; font-size:0.72rem; color:#475569;'>hit rate</div>
+                    </div>
+                    <div style='font-family:DM Mono; font-size:0.72rem; color:#475569; margin-top:4px;'>
+                        {splits["home_avg"]} avg pts · {splits["home_games"]} games
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.markdown("<div class='stat-card'><div class='stat-label'>Home</div><div style='color:#475569; font-size:0.8rem; margin-top:4px;'>Not enough data</div></div>", unsafe_allow_html=True)
+
+        with ha2:
+            if splits["away_games"] >= 2:
+                ar_pct = splits["away_rate"]
+                ar_color = "#22c55e" if ar_pct >= 0.6 else ("#eab308" if ar_pct >= 0.5 else "#ef4444")
+                st.markdown(f"""
+                <div class='stat-card' style='border-color: {"#166534" if tonight_venue == "Away" else "#1e293b"};'>
+                    <div class='stat-label'>Away {venue_note if tonight_venue == "Away" else ""}</div>
+                    <div style='display:flex; align-items:baseline; gap:12px; margin-top:4px;'>
+                        <div class='stat-value' style='color:{ar_color};'>{ar_pct:.0%}</div>
+                        <div style='font-family:DM Mono; font-size:0.72rem; color:#475569;'>hit rate</div>
+                    </div>
+                    <div style='font-family:DM Mono; font-size:0.72rem; color:#475569; margin-top:4px;'>
+                        {splits["away_avg"]} avg pts · {splits["away_games"]} games
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.markdown("<div class='stat-card'><div class='stat-label'>Away</div><div style='color:#475569; font-size:0.8rem; margin-top:4px;'>Not enough data</div></div>", unsafe_allow_html=True)
 
     # ── Chart ─────────────────────────────────
     st.markdown("<div class='section-header'>Points Chart</div>", unsafe_allow_html=True)
@@ -1025,6 +1151,7 @@ if st.session_state.logs is not None:
                             minutes_sel=minutes_sel, role_sel=role_sel, shots_sel=shots_sel,
                             matchup_sel=matchup_sel, script_sel=script_sel,
                             opp_abbr=opp_abbr, opp_pts=opp_pts, league_avg=league_avg,
+                            splits=splits, tonight_venue=tonight_venue,
                         )
                         st.session_state.ai_analysis = generate_ai_analysis(prompt)
                         st.session_state.ai_error = None
