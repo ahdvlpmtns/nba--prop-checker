@@ -390,66 +390,60 @@ def espn_get_next_game(team_abbr: str) -> Tuple[Optional[str], Optional[str], Op
 @st.cache_data(ttl=3600)
 def espn_get_opp_pts_allowed(opp_abbr: str) -> Optional[float]:
     """
-    Get opponent pts allowed per game.
-    ESPN team stats returns categories list — we search all of them
-    for any stat named pointspergame / avgpointsallowed / opppts.
+    Calculate pts allowed per game by averaging opponent scores
+    from the team's last 15 completed games via ESPN scoreboard.
+    ESPN's team stats endpoint doesn't include pts allowed directly.
     """
     try:
-        # Step 1: find ESPN team ID from the teams endpoint
-        data = espn_get(f"{ESPN_SITE}/teams")
-        team_id = None
-        # ESPN returns sports[0].leagues[0].teams[] or just teams[]
-        teams_list = (
-            data.get("sports", [{}])[0].get("leagues", [{}])[0].get("teams", [])
-            or data.get("teams", [])
-        )
-        for t in teams_list:
-            team = t.get("team", t)  # sometimes nested, sometimes flat
-            abbr = team.get("abbreviation", "")
-            if abbr == opp_abbr:
-                team_id = str(team.get("id", ""))
+        import pytz
+        et    = pytz.timezone("America/New_York")
+        today = datetime.now(et).date()
+    except Exception:
+        today = datetime.today().date()
+
+    try:
+        pts_allowed_list = []
+        # Look back up to 30 days to find 15 completed games
+        for offset in range(1, 35):
+            if len(pts_allowed_list) >= 15:
                 break
+            check    = today - timedelta(days=offset)
+            date_str = check.strftime("%Y%m%d")
+            try:
+                data   = espn_get(f"{ESPN_SITE}/scoreboard", params={"dates": date_str})
+                events = data.get("events", [])
+                for ev in events:
+                    comp        = ev.get("competitions", [{}])[0]
+                    competitors = comp.get("competitors", [])
+                    # Find this team
+                    team_comp = next(
+                        (c for c in competitors
+                         if c.get("team", {}).get("abbreviation", "") == opp_abbr),
+                        None
+                    )
+                    if not team_comp:
+                        continue
+                    # Only completed games
+                    status = ev.get("status", {}).get("type", {}).get("name", "")
+                    if "final" not in status.lower() and "complete" not in status.lower():
+                        continue
+                    # Opponent score = the other team's score
+                    opp_comp = next(
+                        (c for c in competitors
+                         if c.get("team", {}).get("abbreviation", "") != opp_abbr),
+                        None
+                    )
+                    if opp_comp:
+                        score = opp_comp.get("score", "")
+                        try:
+                            pts_allowed_list.append(float(score))
+                        except Exception:
+                            continue
+            except Exception:
+                continue
 
-        if not team_id:
-            return None
-
-        # Step 2: fetch team statistics
-        stats_data = espn_get(f"{ESPN_SITE}/teams/{team_id}/statistics")
-
-        # ESPN stats structure varies — try multiple paths
-        categories = (
-            stats_data.get("splits", {}).get("categories", [])
-            or stats_data.get("stats", {}).get("categories", [])
-            or stats_data.get("categories", [])
-        )
-
-        target_stat_names = {
-            "pointspergame", "avgpoints", "avgpointsallowed",
-            "oppointspergame", "pts", "points", "pointsallowed",
-            "opppts", "ptspergame"
-        }
-
-        # Search all categories for pts-related stats
-        for cat in categories:
-            for stat in cat.get("stats", []):
-                name = stat.get("name", "").lower().replace(" ", "").replace("_", "")
-                if name in target_stat_names:
-                    val = stat.get("value", 0)
-                    if val and float(val) > 50:  # sanity check: pts/game > 50
-                        return round(float(val), 1)
-
-        # Fallback: try the team season stats endpoint directly
-        season_data = espn_get(
-            f"https://sports.core.api.espn.com/v2/sports/basketball/leagues/nba/seasons/2025/types/2/teams/{team_id}/statistics"
-        )
-        for split in season_data.get("splits", {}).get("categories", []):
-            for stat in split.get("stats", []):
-                name = stat.get("name", "").lower()
-                if "point" in name and "allowed" in name:
-                    return round(float(stat.get("value", 0)), 1)
-                if name in ("oppointspergame", "avgpointsallowed"):
-                    return round(float(stat.get("value", 0)), 1)
-
+        if len(pts_allowed_list) >= 5:
+            return round(sum(pts_allowed_list) / len(pts_allowed_list), 1)
         return None
     except Exception:
         return None
@@ -880,36 +874,7 @@ if st.session_state.logs is not None:
 
     matchup_auto, opp_pts, league_avg = classify_matchup_espn(opp_abbr)
 
-    # Temporary debug — shows ESPN stats response structure
-    if opp_abbr and not opp_pts:
-        with st.expander("🛠️ Defense debug"):
-            try:
-                d1 = espn_get(f"{ESPN_SITE}/teams")
-                teams_list = (
-                    d1.get("sports", [{}])[0].get("leagues", [{}])[0].get("teams", [])
-                    or d1.get("teams", [])
-                )
-                team_id = None
-                for t in teams_list:
-                    team = t.get("team", t)
-                    if team.get("abbreviation") == opp_abbr:
-                        team_id = str(team.get("id",""))
-                        break
-                st.write(f"Team ID for {opp_abbr}:", team_id)
-                if team_id:
-                    d2 = espn_get(f"{ESPN_SITE}/teams/{team_id}/statistics")
-                    st.write("Top keys:", list(d2.keys()))
-                    results = d2.get("results", {})
-                    st.write("Results keys:", list(results.keys()) if results else "none")
-                    stats = results.get("stats", {})
-                    st.write("Stats keys:", list(stats.keys()) if stats else "none")
-                    cats = stats.get("categories", []) if stats else []
-                    st.write(f"Categories ({len(cats)}):")
-                    for cat in cats[:5]:
-                        st.write(f"  [{cat.get('name')}]",
-                                 [(s.get('name'), s.get('value')) for s in cat.get('stats',[])[:8]])
-            except Exception as e:
-                st.write("Error:", str(e))
+
 
     # ── Stat cards ────────────────────────────
     st.markdown(f"<div class='section-header'>{full_name}</div>", unsafe_allow_html=True)
