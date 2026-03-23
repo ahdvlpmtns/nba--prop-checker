@@ -675,23 +675,12 @@ with st.sidebar:
 
 st.markdown("<div class='section-header'>Player & Prop</div>", unsafe_allow_html=True)
 
-# Load player list from BallDontLie
-try:
-    all_bdl_players = bdl_get_all_players()
-    all_player_names = sorted(
-        [f"{p['first_name']} {p['last_name']}" for p in all_bdl_players],
-        key=lambda x: x.split()[-1]
-    )
-except Exception:
-    all_player_names = []
-
 col_a, col_b, col_c, col_d, col_e = st.columns([2.5, 1, 1, 1, 0.8])
 with col_a:
-    selected_player = st.selectbox(
+    player_query = st.text_input(
         "Player",
-        options=[None] + all_player_names,
-        index=0,
-        format_func=lambda x: "🔍  Type to search for a player..." if x is None else x,
+        placeholder="🔍  Type a player name (e.g. LeBron James)...",
+        help="Type at least 3 characters to search"
     )
 with col_b:
     line = st.number_input("Points Line", min_value=0.0, value=24.5, step=0.5)
@@ -704,8 +693,39 @@ with col_e:
 
 season_int = season_str_to_int(season_str)
 
+# Live search: show matching players as a selectbox once user types 3+ chars
+selected_player = None
+if player_query and len(player_query.strip()) >= 3:
+    query_norm = normalize_name(player_query)
+    try:
+        all_bdl_players = bdl_get_all_players()
+        matches = [
+            f"{p['first_name']} {p['last_name']}"
+            for p in all_bdl_players
+            if query_norm in normalize_name(f"{p['first_name']} {p['last_name']}")
+        ]
+        matches = sorted(matches, key=lambda x: x.split()[-1])
+    except Exception as e:
+        matches = []
+        st.warning(f"Could not load player list: {e}")
+
+    if not matches:
+        st.warning("No players found matching that name.")
+        st.stop()
+    elif len(matches) == 1:
+        selected_player = matches[0]
+        st.markdown(f"<div style='font-family:DM Mono; font-size:0.75rem; color:#22c55e; margin-top:-0.5rem;'>✓ {selected_player}</div>", unsafe_allow_html=True)
+    else:
+        selected_player = st.selectbox(
+            "Select player",
+            options=matches,
+            help="Multiple matches found — select the right one"
+        )
+else:
+    st.markdown("<div style='color:#475569; font-family:DM Mono; font-size:0.8rem; margin-top:0.5rem;'>Type a player name above to get started.</div>", unsafe_allow_html=True)
+    st.stop()
+
 if not selected_player:
-    st.markdown("<div style='color:#475569; font-family:DM Mono; font-size:0.8rem; margin-top:1rem;'>Search for a player above to get started.</div>", unsafe_allow_html=True)
     st.stop()
 
 player_id, full_name, player_team = find_player(selected_player)
