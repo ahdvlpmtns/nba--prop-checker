@@ -832,6 +832,13 @@ def weighted_hit_rate(df: pd.DataFrame, line: float, side: str) -> float:
     return weighted_hits / total_weight
 
 def consistency_score(df: pd.DataFrame, line: float) -> float:
+    """
+    % of games where pts landed within 3 of the line.
+    NOTE: this measures clustering around the line, not reliability.
+    A player averaging 38 on a 24.5 line will score near 0% here
+    not because they're volatile, but because they always blow past it.
+    Use line_diff alongside this to interpret correctly.
+    """
     pts = pd.to_numeric(df["PTS"], errors="coerce").dropna()
     if len(pts) == 0:
         return 0.5
@@ -916,7 +923,15 @@ def apply_adjustments(weighted: float, context: dict) -> float:
     return max(0.0, min(1.0, 0.5 + margin))
 
 def get_confidence_tier(adjusted: float, line_diff: float, consistency: float) -> str:
-    low_consistency = consistency < 0.35
+    """
+    Assign confidence tier based on adjusted hit rate + edge vs line.
+
+    Consistency override logic:
+    - Only fires when edge is SMALL (abs < 5 pts).
+    - When edge is large (e.g. +14 pts), low consistency just means the player
+      consistently scores FAR above the line — which is a positive signal, not
+      a risk. So we skip the downgrade in those cases.
+    """
     if adjusted >= 0.64 and line_diff >= 1.5:
         tier = "Strong Over"
     elif adjusted >= 0.55 and line_diff > 0:
@@ -927,9 +942,16 @@ def get_confidence_tier(adjusted: float, line_diff: float, consistency: float) -
         tier = "Lean Under"
     else:
         tier = "Pass"
+
+    # Only apply consistency downgrade when edge is tight (within 5 pts of line)
+    # Large edges with low consistency = player consistently blows past the line
+    edge_is_tight = abs(line_diff) < 5.0
+    low_consistency = consistency < 0.35 and edge_is_tight
+
     if low_consistency:
         if tier == "Strong Over":   tier = "Lean Over"
         elif tier == "Strong Under": tier = "Lean Under"
+
     return tier
 
 def flag_pill(label: str, flag: str) -> str:
@@ -1315,7 +1337,12 @@ if st.session_state.logs is not None:
         </div>""", unsafe_allow_html=True)
     with m3:
         cons_color = "green" if consistency >= 0.5 else ("yellow" if consistency >= 0.35 else "red")
-        cons_label = "Consistent" if consistency >= 0.5 else ("Variable" if consistency >= 0.35 else "Volatile")
+        # If edge is large, low consistency just means player blows past line — not volatile
+        if abs(sample_avg_pts - line) >= 5.0 and consistency < 0.35:
+            cons_label = "Dominates line"
+            cons_color = "green"
+        else:
+            cons_label = "Consistent" if consistency >= 0.5 else ("Variable" if consistency >= 0.35 else "Volatile")
         st.markdown(f"""<div class='stat-card'>
             <div class='stat-label'>Consistency Score
                 <span class='tip' title='% of games where points landed within 3 of the line — high = predictable'>?</span>
