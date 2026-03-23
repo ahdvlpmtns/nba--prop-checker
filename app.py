@@ -821,40 +821,6 @@ if st.session_state.logs is not None:
 
     matchup_auto, opp_pts, league_avg = classify_matchup(opp_abbr, season)
 
-    # Debug — remove once confirmed working
-    with st.expander("🔧 Debug: Defense lookup", expanded=False):
-        st.write(f"Player team: `{player_team}`")
-        st.write(f"Next opponent: `{opp_abbr}` · Game date: `{game_date}`")
-        st.write(f"OPP_PTS allowed by {opp_abbr}: `{opp_pts}`")
-        st.write(f"League avg pts allowed: `{league_avg}`")
-        st.write(f"Matchup classification: `{matchup_auto}`")
-
-        # Extra: test player log PLUS_MINUS directly
-        if opp_abbr:
-            st.write("--- Testing player log fallback ---")
-            try:
-                roster = get_live_roster(opp_abbr, season)
-                st.write(f"Roster ({len(roster)} players): `{roster}`")
-                found_pid = None
-                for pname_try in roster:
-                    pid_try, pname_found = find_player_id(pname_try)
-                    if pid_try:
-                        found_pid = pid_try
-                        st.write(f"First resolvable player: `{pname_found}` (id: `{pid_try}`)")
-                        log = playergamelog.PlayerGameLog(
-                            player_id=pid_try, season=season, timeout=15,
-                        ).get_data_frames()[0]
-                        st.write(f"Log rows: `{len(log)}` | Columns: `{log.columns.tolist()}`")
-                        if not log.empty and "PLUS_MINUS" in log.columns:
-                            pm = pd.to_numeric(log["PLUS_MINUS"], errors="coerce").dropna()
-                            st.write(f"Avg PLUS_MINUS: `{pm.mean():.2f}`")
-                            st.write(f"Estimated pts allowed: `{114.5 - pm.mean():.1f}`")
-                        break
-                if not found_pid:
-                    st.write("No resolvable players found in roster")
-            except Exception as e:
-                st.write(f"Error: `{repr(e)}`")
-
     # ── Stat cards ────────────────────────────
     st.markdown(f"<div class='section-header'>{full_name}</div>", unsafe_allow_html=True)
 
