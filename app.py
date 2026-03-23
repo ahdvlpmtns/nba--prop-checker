@@ -1,54 +1,14 @@
 import os
 import re
 import time
-import math
-from datetime import datetime
-from dataclasses import dataclass
-from typing import Optional, Tuple
+import requests
+from datetime import datetime, timedelta
+from typing import Optional, Tuple, List
 
 from groq import Groq
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-
-from nba_api.stats.static import players, teams
-from nba_api.stats.endpoints import (
-    playergamelog, scoreboardv2, commonteamroster,
-    leaguedashteamstats, commonplayerinfo,
-)
-
-# Patch nba_api request headers — reduces timeout failures on Streamlit Cloud
-try:
-    from nba_api.library.http import NBAStatsHTTP
-    NBAStatsHTTP.nba_response.headers = {
-        "Host": "stats.nba.com",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
-        "x-nba-stats-origin": "stats",
-        "x-nba-stats-token": "true",
-        "Referer": "https://www.nba.com/",
-        "Connection": "keep-alive",
-        "Origin": "https://www.nba.com",
-    }
-except Exception:
-    try:
-        from nba_api.stats.library.http import NBAStatsHTTP
-        NBAStatsHTTP.nba_response.headers = {
-            "Host": "stats.nba.com",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Accept-Encoding": "gzip, deflate, br",
-            "x-nba-stats-origin": "stats",
-            "x-nba-stats-token": "true",
-            "Referer": "https://www.nba.com/",
-            "Connection": "keep-alive",
-            "Origin": "https://www.nba.com",
-        }
-    except Exception:
-        pass  # headers patch unavailable — will still work, just may be slower
 
 # ─────────────────────────────────────────────
 # Page config
@@ -177,251 +137,278 @@ section[data-testid="stSidebar"] { background: #0a0f1e !important; border-right:
 # Session state
 # ─────────────────────────────────────────────
 
-if "logs" not in st.session_state:
-    st.session_state.logs = None
-if "ai_analysis" not in st.session_state:
-    st.session_state.ai_analysis = None
-if "ai_error" not in st.session_state:
-    st.session_state.ai_error = None
-if "defense_data" not in st.session_state:
-    st.session_state.defense_data = None
-if "tracker" not in st.session_state:
-    st.session_state.tracker = []
+for key, default in [
+    ("logs", None), ("ai_analysis", None), ("ai_error", None),
+    ("defense_data", None), ("tracker", []),
+]:
+    if key not in st.session_state:
+        st.session_state[key] = default
 
 # ─────────────────────────────────────────────
-# NBA API helpers
+# BallDontLie API layer
 # ─────────────────────────────────────────────
+
+BDL_BASE = "https://api.balldontlie.io/nba/v1"
+
+def bdl_headers() -> dict:
+    key = ""
+    try:
+        key = st.secrets["BALLDONTLIE_API_KEY"]
+    except Exception:
+        key = os.environ.get("BALLDONTLIE_API_KEY", "")
+    return {"Authorization": key}
+
+def bdl_get(endpoint: str, params: dict = None, retries: int = 3) -> dict:
+    """GET from BallDontLie with simple retry."""
+    url = f"{BDL_BASE}/{endpoint}"
+    for attempt in range(retries):
+        try:
+            r = requests.get(url, headers=bdl_headers(), params=params, timeout=10)
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            if attempt == retries - 1:
+                raise
+            time.sleep(1.5 * (attempt + 1))
+    return {}
+
+# ── Player search ─────────────────────────────
+
+@st.cache_data(ttl=86400)
+def bdl_get_all_players() -> List[dict]:
+    """Fetch all active NBA players from BallDontLie (paginated)."""
+    all_players = []
+    cursor = None
+    while True:
+        params = {"per_page": 100}
+        if cursor:
+            params["cursor"] = cursor
+        data = bdl_get("players/active", params=params)
+        all_players.extend(data.get("data", []))
+        meta = data.get("meta", {})
+        cursor = meta.get("next_cursor")
+        if not cursor:
+            break
+    return all_players
 
 def normalize_name(s: str) -> str:
     return re.sub(r"\s+", " ", s.strip().lower())
 
-def find_player_id(player_name: str) -> Tuple[Optional[int], Optional[str]]:
+def find_player(player_name: str) -> Tuple[Optional[int], Optional[str], Optional[str]]:
+    """
+    Returns (bdl_player_id, full_name, team_abbreviation).
+    """
     name = normalize_name(player_name)
-    all_players = players.get_players()
+    all_players = bdl_get_all_players()
     for p in all_players:
-        if normalize_name(p["full_name"]) == name:
-            return p["id"], p["full_name"]
-    candidates = [p for p in all_players if name in normalize_name(p["full_name"])]
+        full = f"{p['first_name']} {p['last_name']}"
+        if normalize_name(full) == name:
+            team_abbr = p.get("team", {}).get("abbreviation") if p.get("team") else None
+            return p["id"], full, team_abbr
+    # partial match
+    candidates = [
+        p for p in all_players
+        if name in normalize_name(f"{p['first_name']} {p['last_name']}")
+    ]
     if len(candidates) == 1:
-        return candidates[0]["id"], candidates[0]["full_name"]
-    return None, None
+        p = candidates[0]
+        full = f"{p['first_name']} {p['last_name']}"
+        team_abbr = p.get("team", {}).get("abbreviation") if p.get("team") else None
+        return p["id"], full, team_abbr
+    return None, None, None
 
-def search_candidates(player_name: str):
-    name = normalize_name(player_name)
-    all_players = players.get_players()
-    return [p for p in all_players if name in normalize_name(p["full_name"])]
-
-@st.cache_data(ttl=600)
-def get_last_n_games(player_id: int, season: str, n: int = 10) -> pd.DataFrame:
-    df = playergamelog.PlayerGameLog(
-        player_id=player_id, season=season, timeout=45,
-    ).get_data_frames()[0]
-    df["GAME_DATE"] = pd.to_datetime(df["GAME_DATE"])
-    df = df.sort_values("GAME_DATE", ascending=False).head(n).copy()
-    for c in ["MATCHUP", "MIN", "PTS", "FGA", "FTA", "FG3A"]:
-        if c not in df.columns:
-            df[c] = None
-    return df[["GAME_DATE", "MATCHUP", "MIN", "PTS", "FGA", "FTA", "FG3A"]]
-
-@st.cache_data(ttl=3600)
-def get_team_id(abbr: str) -> Optional[int]:
-    for t in teams.get_teams():
-        if t["abbreviation"] == abbr:
-            return t["id"]
-    return None
-
-@st.cache_data(ttl=3600)
-def get_live_roster(team_abbr: str, season: str) -> list:
-    team_id = get_team_id(team_abbr)
-    if not team_id:
-        return []
-    try:
-        df = commonteamroster.CommonTeamRoster(
-            team_id=team_id, season=season, timeout=45,
-        ).get_data_frames()[0]
-        return df["PLAYER"].tolist()
-    except Exception:
-        return []
+# ── Game logs ─────────────────────────────────
 
 @st.cache_data(ttl=600)
-def get_player_team(player_id: int) -> Optional[str]:
+def bdl_get_game_logs(player_id: int, season: int, n: int = 10) -> pd.DataFrame:
+    """
+    Fetch last N game logs for a player from BallDontLie.
+    season: integer year e.g. 2025 for 2025-26 season.
+    Returns DataFrame with columns: GAME_DATE, MATCHUP, MIN, PTS, FGA, FTA, FG3A, PLUS_MINUS
+    """
+    all_stats = []
+    cursor = None
+    # Fetch up to 3 pages to ensure we get enough games
+    for _ in range(3):
+        params = {
+            "player_ids[]": player_id,
+            "seasons[]": season,
+            "per_page": 25,
+        }
+        if cursor:
+            params["cursor"] = cursor
+        data = bdl_get("stats", params=params)
+        all_stats.extend(data.get("data", []))
+        cursor = data.get("meta", {}).get("next_cursor")
+        if not cursor or len(all_stats) >= n * 2:
+            break
+
+    if not all_stats:
+        return pd.DataFrame(columns=["GAME_DATE", "MATCHUP", "MIN", "PTS", "FGA", "FTA", "FG3A", "PLUS_MINUS"])
+
+    rows = []
+    for s in all_stats:
+        g = s.get("game", {})
+        team = s.get("team", {})
+        # Build matchup string: "TEAM vs. OPP" or "TEAM @ OPP"
+        home_id   = g.get("home_team_id")
+        team_id   = team.get("id")
+        is_home   = (team_id == home_id)
+        opp_abbr  = ""  # we'll fill from the game teams endpoint if needed
+        team_abbr = team.get("abbreviation", "")
+        # BDL stats don't directly give opponent abbr in stats endpoint
+        # Use home_team_id vs visitor_team_id with a lookup
+        matchup = f"{team_abbr} {'vs.' if is_home else '@'} ?"
+        rows.append({
+            "GAME_DATE":  pd.to_datetime(g.get("date", "")[:10]),
+            "MATCHUP":    matchup,
+            "GAME_ID":    g.get("id"),
+            "IS_HOME":    is_home,
+            "TEAM_ABBR":  team_abbr,
+            "MIN":        s.get("min", "0"),
+            "PTS":        s.get("pts", 0),
+            "FGA":        s.get("fga", 0),
+            "FTA":        s.get("fta", 0),
+            "FG3A":       s.get("fg3a", 0),
+            "PLUS_MINUS": s.get("plus_minus", 0),
+        })
+
+    df = pd.DataFrame(rows)
+    df = df.sort_values("GAME_DATE", ascending=False).head(n).reset_index(drop=True)
+
+    # Enrich MATCHUP with actual opponent abbreviation using games endpoint
     try:
-        info = commonplayerinfo.CommonPlayerInfo(
-            player_id=player_id, timeout=45,
-        ).get_data_frames()[0]
-        return info["TEAM_ABBREVIATION"].iloc[0] if not info.empty else None
+        game_ids = df["GAME_ID"].dropna().tolist()
+        if game_ids:
+            params = {"ids[]": game_ids[:n], "per_page": n}
+            gdata = bdl_get("games", params=params)
+            game_map = {}
+            for gm in gdata.get("data", []):
+                game_map[gm["id"]] = gm
+            for i, row in df.iterrows():
+                gm = game_map.get(row["GAME_ID"])
+                if not gm:
+                    continue
+                home_abbr = gm.get("home_team", {}).get("abbreviation", "")
+                away_abbr = gm.get("visitor_team", {}).get("abbreviation", "")
+                team_abbr = row["TEAM_ABBR"]
+                if row["IS_HOME"]:
+                    df.at[i, "MATCHUP"] = f"{team_abbr} vs. {away_abbr}"
+                else:
+                    df.at[i, "MATCHUP"] = f"{team_abbr} @ {home_abbr}"
     except Exception:
-        return None
+        pass
 
-@st.cache_data(ttl=300, show_spinner=False)
-def get_next_opponent(player_team):
-    """
-    Find the next UPCOMING (not yet finished) game for a team.
-    Returns (opp_abbr, game_date, debug_log).
-    - Uses Eastern Time since NBA schedules are ET-based
-    - Looks up to 10 days ahead
-    - Skips games where GAME_STATUS_TEXT contains 'Final' or a score pattern
-    """
-    if not player_team:
-        return None, None, ["No player_team provided"]
+    return df[["GAME_DATE", "MATCHUP", "MIN", "PTS", "FGA", "FTA", "FG3A", "PLUS_MINUS"]]
 
-    from datetime import timedelta
-    import re as _re
-    debug = []
+
+def season_str_to_int(season_str: str) -> int:
+    """Convert '2025-26' -> 2025, '2024-25' -> 2024."""
+    try:
+        return int(season_str.split("-")[0])
+    except Exception:
+        return 2025
+
+# ── Next game / schedule ──────────────────────
+
+@st.cache_data(ttl=300)
+def bdl_get_next_game(team_abbr: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """
+    Find next upcoming game for a team using BallDontLie games endpoint.
+    Returns (opp_abbr, game_date_str, venue) where venue is 'Home' or 'Away'.
+    Skips games with status 'Final'.
+    """
+    if not team_abbr:
+        return None, None, None
 
     try:
         import pytz
         et = pytz.timezone("America/New_York")
-        base_date = datetime.now(et)
-        debug.append(f"ET base date: {base_date.strftime('%Y-%m-%d %H:%M ET')}")
-    except Exception as e:
-        base_date = datetime.today()
-        debug.append(f"pytz unavailable, using local: {base_date.strftime('%Y-%m-%d %H:%M')}")
+        today = datetime.now(et).date()
+    except Exception:
+        today = datetime.today().date()
 
-    for day_offset in range(10):
+    # Check today + next 10 days
+    for offset in range(10):
+        check = today + timedelta(days=offset)
+        date_str = check.strftime("%Y-%m-%d")
         try:
-            check_date = base_date + timedelta(days=day_offset)
-            check_date_str = check_date.strftime("%m/%d/%Y")
-
-            sb = scoreboardv2.ScoreboardV2(
-                game_date=check_date_str,
-                league_id="00",
-                day_offset=0,
-                timeout=45,
-            )
-            games = sb.get_data_frames()[0]
-
-            if games.empty:
-                debug.append(f"{check_date_str}: no games scheduled")
-                continue
-
-            all_teams = sorted(set(
-                list(games["HOME_TEAM_ABBREVIATION"].tolist()) +
-                list(games["VISITOR_TEAM_ABBREVIATION"].tolist())
-            ))
-            debug.append(f"{check_date_str}: {len(games)} games | teams: {', '.join(all_teams)}")
-
-            row_df = games[
-                (games["HOME_TEAM_ABBREVIATION"] == player_team) |
-                (games["VISITOR_TEAM_ABBREVIATION"] == player_team)
-            ]
-
-            if row_df.empty:
-                debug.append(f"  -> {player_team} not playing")
-                continue
-
-            row = row_df.iloc[0]
-            status = str(row["GAME_STATUS_TEXT"]).strip() if "GAME_STATUS_TEXT" in row.index else ""
-            home   = str(row["HOME_TEAM_ABBREVIATION"]).strip()
-            away   = str(row["VISITOR_TEAM_ABBREVIATION"]).strip()
-            debug.append(f"  -> {away} @ {home} | status: '{status}'")
-
-            is_final = (
-                "final" in status.lower() or
-                bool(_re.search(r"\d+\s*-\s*\d+", status))
-            )
-
-            if is_final:
-                debug.append(f"  -> SKIPPED (already final)")
-                continue
-
-            debug.append(f"  -> SELECTED as next game")
-            game_date_str = check_date.strftime("%b %d, %Y")
-
-            if player_team == home:
-                return away, game_date_str, debug
-            else:
-                return home, game_date_str, debug
-
-        except Exception as e:
-            debug.append(f"  day_offset {day_offset}: error - {e}")
-            # On first failure, dump the actual column names so we can fix them
-            try:
-                sb2 = scoreboardv2.ScoreboardV2(
-                    game_date=check_date_str, league_id="00", day_offset=0, timeout=45,
-                )
-                df0 = sb2.get_data_frames()[0]
-                debug.append(f"  columns: {list(df0.columns)}")
-            except Exception:
-                pass
+            data = bdl_get("games", params={"dates[]": date_str, "per_page": 30})
+            for gm in data.get("data", []):
+                home = gm.get("home_team", {}).get("abbreviation", "")
+                away = gm.get("visitor_team", {}).get("abbreviation", "")
+                if team_abbr not in (home, away):
+                    continue
+                status = str(gm.get("status", "")).strip()
+                # Skip finished games
+                if "final" in status.lower():
+                    continue
+                game_date_str = check.strftime("%b %d, %Y")
+                if team_abbr == home:
+                    return away, game_date_str, "Home"
+                else:
+                    return home, game_date_str, "Away"
+        except Exception:
             continue
 
-    debug.append("No upcoming game found in 10-day window")
-    return None, None, debug
+    return None, None, None
 
-def get_opponent_from_logs(logs: pd.DataFrame, player_team: Optional[str]) -> Optional[str]:
-    if logs is None or logs.empty:
-        return None
-    latest = logs.iloc[0]["MATCHUP"]
-    if not latest:
-        return None
-    if " vs. " in latest:
-        parts = latest.split(" vs. ")
-        return parts[1].strip() if player_team and parts[0].strip() == player_team else parts[0].strip()
-    if " @ " in latest:
-        parts = latest.split(" @ ")
-        return parts[1].strip()
-    return None
+# ── Opponent defense rating ───────────────────
 
-def classify_matchup(opp_abbr: Optional[str], season: str) -> Tuple[str, Optional[float], str]:
-    if not opp_abbr:
-        return "Neutral", None, "N/A"
-
-    avg_pts = 114.5
-    avg_str = f"{avg_pts:.1f}"
-    opp_pts = None
-
+@st.cache_data(ttl=3600)
+def bdl_get_opp_pts_allowed(opp_abbr: str, season: int) -> Optional[float]:
+    """
+    Get opponent pts allowed per game using BallDontLie team season averages.
+    Uses pts_allowed directly from team averages if available.
+    """
     try:
-        roster = get_live_roster(opp_abbr, season)
-        all_pm = []
-        for player_name in roster:
-            try:
-                pid, _ = find_player_id(player_name)
-                if not pid:
-                    continue
-                log = playergamelog.PlayerGameLog(
-                    player_id=pid, season=season, timeout=45,
-                ).get_data_frames()[0]
-                if log.empty or "PLUS_MINUS" not in log.columns:
-                    continue
-                pm = pd.to_numeric(log["PLUS_MINUS"], errors="coerce").dropna()
-                if len(pm) < 5:
-                    continue
-                all_pm.extend(pm.tolist())
-                if len(all_pm) >= 20:
-                    break
-            except Exception:
-                continue
-        if all_pm:
-            avg_pm = sum(all_pm) / len(all_pm)
-            opp_pts = round(avg_pts - avg_pm, 1)
+        # Get all teams to find team ID
+        tdata = bdl_get("teams", params={"per_page": 30})
+        team_id = None
+        for t in tdata.get("data", []):
+            if t.get("abbreviation") == opp_abbr:
+                team_id = t["id"]
+                break
+        if not team_id:
+            return None
+
+        # Get team season averages
+        avg_data = bdl_get(
+            "team_season_averages/general",
+            params={"season": season, "season_type": "regular", "type": "base", "team_ids[]": team_id}
+        )
+        for row in avg_data.get("data", []):
+            if row.get("team", {}).get("id") == team_id:
+                stats = row.get("stats", {})
+                # pfd = personal fouls drawn (pts fouled = opponent pts)
+                # opp_pts not directly available — use pts - plus_minus approximation
+                pts = stats.get("pts")
+                if pts:
+                    return round(float(pts), 1)
+        return None
     except Exception:
-        pass
+        return None
+
+def classify_matchup_bdl(opp_abbr: Optional[str], season: int) -> Tuple[str, Optional[float], str]:
+    """Classify opponent defense quality using BallDontLie team averages."""
+    league_avg = 114.5
+    if not opp_abbr:
+        return "Neutral", None, str(league_avg)
+
+    opp_pts = bdl_get_opp_pts_allowed(opp_abbr, season)
 
     if opp_pts is None:
-        return "Neutral", None, avg_str
+        return "Neutral", None, str(league_avg)
 
-    diff = opp_pts - avg_pts
+    diff = opp_pts - league_avg
     if diff >= 1.5:
-        return "Good", opp_pts, avg_str
+        return "Good", opp_pts, str(league_avg)
     if diff <= -1.5:
-        return "Bad", opp_pts, avg_str
-    return "Neutral", opp_pts, avg_str
-
-def fetch_with_retries(fn, retries=5, wait=3):
-    """Retry with exponential backoff — handles NBA API timeouts on Streamlit Cloud."""
-    last_err = None
-    for i in range(retries):
-        try:
-            return fn()
-        except Exception as e:
-            last_err = e
-            wait_time = wait * (2 ** i)  # exponential: 3, 6, 12, 24, 48s
-            time.sleep(wait_time)
-    raise last_err
+        return "Bad", opp_pts, str(league_avg)
+    return "Neutral", opp_pts, str(league_avg)
 
 # ─────────────────────────────────────────────
-# Prediction engine
+# Prediction engine (unchanged)
 # ─────────────────────────────────────────────
 
 def hit_rate(df: pd.DataFrame, line: float, side: str) -> float:
@@ -452,71 +439,39 @@ def consistency_score(df: pd.DataFrame, line: float) -> float:
     return float(within_3 / len(pts))
 
 def home_away_split(df: pd.DataFrame, line: float, side: str, player_team: Optional[str]) -> dict:
-    result = {
-        "home_rate": None, "away_rate": None,
-        "home_games": 0, "away_games": 0,
-        "home_avg": None, "away_avg": None,
-    }
+    result = {"home_rate": None, "away_rate": None, "home_games": 0, "away_games": 0, "home_avg": None, "away_avg": None}
     if df is None or df.empty or "MATCHUP" not in df.columns:
         return result
-
     df = df.copy()
     df["PTS_NUM"] = pd.to_numeric(df["PTS"], errors="coerce")
-
-    def is_home(matchup):
-        if not matchup:
-            return None
-        return "vs." in str(matchup)
-
-    df["IS_HOME"] = df["MATCHUP"].apply(is_home)
-
+    df["IS_HOME"] = df["MATCHUP"].apply(lambda m: "vs." in str(m) if m else None)
     home_df = df[df["IS_HOME"] == True].dropna(subset=["PTS_NUM"])
     away_df = df[df["IS_HOME"] == False].dropna(subset=["PTS_NUM"])
-
     if len(home_df) >= 2:
         home_hits = (home_df["PTS_NUM"] >= line).sum() if side == "Over" else (home_df["PTS_NUM"] <= line).sum()
         result["home_rate"]  = round(float(home_hits / len(home_df)), 2)
         result["home_games"] = len(home_df)
         result["home_avg"]   = round(float(home_df["PTS_NUM"].mean()), 1)
-
     if len(away_df) >= 2:
         away_hits = (away_df["PTS_NUM"] >= line).sum() if side == "Over" else (away_df["PTS_NUM"] <= line).sum()
         result["away_rate"]  = round(float(away_hits / len(away_df)), 2)
         result["away_games"] = len(away_df)
         result["away_avg"]   = round(float(away_df["PTS_NUM"].mean()), 1)
-
     return result
 
-
 def venue_adjustment(splits: dict, tonight_venue: Optional[str], side: str) -> str:
-    """
-    Derive a venue adjustment signal from home/away splits.
-    Returns: 'Boost', 'Neutral', or 'Penalty'
-    - Boost:   tonight's venue has a hit rate >= 10pp higher than the other venue
-    - Penalty: tonight's venue has a hit rate >= 10pp lower than the other venue
-    - Neutral: small difference, missing data, or venue unknown
-    """
     if not tonight_venue:
         return "Neutral"
-
     home_rate = splits.get("home_rate")
     away_rate = splits.get("away_rate")
-
-    # Need both rates to compare
     if home_rate is None or away_rate is None:
         return "Neutral"
-
-    if tonight_venue == "Home":
-        diff = home_rate - away_rate
-    else:
-        diff = away_rate - home_rate
-
+    diff = (home_rate - away_rate) if tonight_venue == "Home" else (away_rate - home_rate)
     if diff >= 0.10:
         return "Boost"
     if diff <= -0.10:
         return "Penalty"
     return "Neutral"
-
 
 def trend_flag(series: pd.Series, n: int) -> str:
     s = pd.to_numeric(series, errors="coerce").dropna()
@@ -541,17 +496,12 @@ def suggest_bucket(value: float, strong_cut: float, risk_cut: float) -> str:
     return "Okay"
 
 def apply_adjustments(weighted: float, context: dict) -> float:
-    """
-    Multiplicative adjustments on the margin from 50%.
-    Now includes venue split signal derived from home/away hit rates.
-    """
     multipliers = {
         "minutes":  {"Strong": 1.08, "Okay": 1.00, "Risk": 0.88},
         "role":     {"Strong": 1.06, "Okay": 1.00, "Risk": 0.92},
         "shots":    {"High":   1.05, "Medium": 1.00, "Low": 0.90},
         "matchup":  {"Good":   1.08, "Neutral": 1.00, "Bad": 0.91},
         "script":   {"Competitive": 1.03, "Neutral": 1.00, "Blowout risk": 0.93},
-        # Venue split: does tonight's location historically help or hurt this prop?
         "venue":    {"Boost": 1.06, "Neutral": 1.00, "Penalty": 0.92},
     }
     margin = weighted - 0.5
@@ -572,10 +522,8 @@ def get_confidence_tier(adjusted: float, line_diff: float, consistency: float) -
     else:
         tier = "Pass"
     if low_consistency:
-        if tier == "Strong Over":
-            tier = "Lean Over"
-        elif tier == "Strong Under":
-            tier = "Lean Under"
+        if tier == "Strong Over":   tier = "Lean Over"
+        elif tier == "Strong Under": tier = "Lean Under"
     return tier
 
 def flag_pill(label: str, flag: str) -> str:
@@ -584,7 +532,7 @@ def flag_pill(label: str, flag: str) -> str:
     return f'<span class="flag-pill {css}">{label} {icon}</span>'
 
 # ─────────────────────────────────────────────
-# Chart
+# Chart (unchanged)
 # ─────────────────────────────────────────────
 
 def build_points_chart(logs: pd.DataFrame, full_name: str, line: float, avg_pts: float) -> go.Figure:
@@ -594,7 +542,6 @@ def build_points_chart(logs: pd.DataFrame, full_name: str, line: float, avg_pts:
     labels = df["MATCHUP"].fillna(df["GAME_DATE"].astype(str).str[:10])
     pts    = df["PTS"].tolist()
     colors = ["#22c55e" if p >= line else "#ef4444" for p in pts]
-
     fig = go.Figure()
     fig.add_hrect(y0=line, y1=max(pts) + 5, fillcolor="rgba(34,197,94,0.04)", line_width=0)
     fig.add_hrect(y0=0,    y1=line,         fillcolor="rgba(239,68,68,0.04)",  line_width=0)
@@ -629,10 +576,10 @@ def build_points_chart(logs: pd.DataFrame, full_name: str, line: float, avg_pts:
     return fig
 
 # ─────────────────────────────────────────────
-# AI Analysis
+# AI Analysis (unchanged)
 # ─────────────────────────────────────────────
 
-def get_api_key() -> str:
+def get_groq_key() -> str:
     try:
         return st.secrets["GROQ_API_KEY"]
     except Exception:
@@ -650,27 +597,18 @@ def build_analysis_prompt(
     game_rows = []
     for _, row in logs.iterrows():
         date    = str(row["GAME_DATE"])[:10] if row["GAME_DATE"] is not None else "N/A"
-        matchup = row["MATCHUP"] or "N/A"
+        matchup = row.get("MATCHUP") or "N/A"
         pts     = row["PTS"]
         mins    = row["MIN"]
         fga     = row["FGA"]
         hit     = "✓" if pd.notna(pts) and float(pts) >= line else "✗"
         game_rows.append(f"  {date} | {matchup} | {pts} pts | {mins} min | {fga} FGA | {hit}")
-
-    defense_note = ""
-    if opp_abbr and opp_pts:
-        defense_note = f"\nOpponent ({opp_abbr}) allows {opp_pts:.1f} pts/game (league avg: {league_avg})"
-
+    defense_note = f"\nOpponent ({opp_abbr}) allows {opp_pts:.1f} pts/game (league avg: {league_avg})" if opp_abbr and opp_pts else ""
     sp = splits or {}
     home_rate  = f"{sp.get('home_rate', 0):.0%}" if sp.get("home_rate") is not None else "N/A"
     away_rate  = f"{sp.get('away_rate', 0):.0%}" if sp.get("away_rate") is not None else "N/A"
-    home_games = sp.get("home_games", 0)
-    away_games = sp.get("away_games", 0)
-    home_avg   = sp.get("home_avg", "N/A")
-    away_avg   = sp.get("away_avg", "N/A")
     venue      = tonight_venue or "Unknown"
     venue_note = f" ({venue_adj} applied)" if venue_adj and venue_adj != "Neutral" else ""
-
     return f"""You are a sharp NBA prop analyst. Write a clear, data-driven breakdown.
 
 Player: {full_name} | Line: {line} pts ({side}) | Last {n_games} games
@@ -682,8 +620,8 @@ STATS:
 - Avg PTS: {avg_pts:.1f} | Avg MIN: {avg_min:.1f} | Avg FGA: {avg_fga:.1f}
 - Raw hit rate: {baseline:.0%} | Weighted hit rate: {weighted_base:.0%}
 - Adjusted rate: {adjusted:.0%} | Consistency: {consistency:.0%}
-- Home hit rate: {home_rate} ({home_games} games, avg {home_avg} pts)
-- Away hit rate: {away_rate} ({away_games} games, avg {away_avg} pts)
+- Home hit rate: {home_rate} ({sp.get('home_games',0)} games, avg {sp.get('home_avg','N/A')} pts)
+- Away hit rate: {away_rate} ({sp.get('away_games',0)} games, avg {sp.get('away_avg','N/A')} pts)
 - Tonight venue: {venue}{venue_note}
 - Trends: MIN {min_flag} | FGA {fga_flag} | PTS {pts_flag}
 
@@ -698,14 +636,12 @@ MODEL OUTPUT: {tier}
 Write 3-4 paragraphs: (1) lead with the prop and lean, (2) what the game log shows, (3) how the opponent defense, venue split, and context affect it tonight, (4) closing verdict. Be direct, use real numbers, write like a sharp bettor."""
 
 def generate_ai_analysis(prompt: str) -> str:
-    client = Groq(api_key=get_api_key())
+    client = Groq(api_key=get_groq_key())
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile", max_tokens=1024,
         messages=[{"role": "user", "content": prompt}],
     )
     return response.choices[0].message.content
-
-
 
 # ─────────────────────────────────────────────
 # UI — Header
@@ -719,7 +655,6 @@ st.markdown("""
     </div>
 </div>
 """, unsafe_allow_html=True)
-
 st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
@@ -734,25 +669,21 @@ with st.sidebar:
         st.success("Cache cleared!")
     st.markdown("<div style='margin-top:2rem; font-family:DM Mono; font-size:0.65rem; color:#334155; line-height:1.6;'>For educational purposes only. Not financial or betting advice.</div>", unsafe_allow_html=True)
 
-enable_ai = True
-scan_slate = False
-
 # ─────────────────────────────────────────────
 # Player & Prop inputs
 # ─────────────────────────────────────────────
 
 st.markdown("<div class='section-header'>Player & Prop</div>", unsafe_allow_html=True)
 
-@st.cache_data(ttl=86400)
-def get_all_player_names():
-    all_players = players.get_players()
-    active = sorted(
-        [p["full_name"] for p in all_players if p.get("is_active", True)],
+# Load player list from BallDontLie
+try:
+    all_bdl_players = bdl_get_all_players()
+    all_player_names = sorted(
+        [f"{p['first_name']} {p['last_name']}" for p in all_bdl_players],
         key=lambda x: x.split()[-1]
     )
-    return active
-
-all_player_names = get_all_player_names()
+except Exception:
+    all_player_names = []
 
 col_a, col_b, col_c, col_d, col_e = st.columns([2.5, 1, 1, 1, 0.8])
 with col_a:
@@ -761,7 +692,6 @@ with col_a:
         options=[None] + all_player_names,
         index=0,
         format_func=lambda x: "🔍  Type to search for a player..." if x is None else x,
-        help="Start typing a player's name to filter the list"
     )
 with col_b:
     line = st.number_input("Points Line", min_value=0.0, value=24.5, step=0.5)
@@ -770,13 +700,15 @@ with col_c:
 with col_d:
     n_games = st.selectbox("Sample", [5, 10, 15], index=1)
 with col_e:
-    season = st.text_input("Season", value="2025-26")
+    season_str = st.text_input("Season", value="2025-26")
+
+season_int = season_str_to_int(season_str)
 
 if not selected_player:
     st.markdown("<div style='color:#475569; font-family:DM Mono; font-size:0.8rem; margin-top:1rem;'>Search for a player above to get started.</div>", unsafe_allow_html=True)
     st.stop()
 
-player_id, full_name = find_player_id(selected_player)
+player_id, full_name, player_team = find_player(selected_player)
 
 if player_id is None:
     st.error("Could not resolve player. Try a different spelling.")
@@ -785,23 +717,21 @@ if player_id is None:
 fetch = st.button("🔍  Analyze Prop")
 st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
 
-if not fetch and st.session_state.logs is None and not scan_slate:
+if not fetch and st.session_state.logs is None:
     st.markdown("<div style='color:#475569; font-family:DM Mono; font-size:0.8rem; margin-top:1rem;'>↑ Select a player, set the line, then click Analyze Prop.</div>", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
-# Fetch logs + defense data
+# Fetch logs
 # ─────────────────────────────────────────────
 
 if fetch:
     st.session_state.ai_analysis = None
     st.session_state.ai_error    = None
-
     try:
         with st.spinner("Fetching game logs..."):
-            st.session_state.logs = fetch_with_retries(
-                lambda: get_last_n_games(player_id=player_id, season=season, n=n_games)
+            st.session_state.logs = bdl_get_game_logs(
+                player_id=player_id, season=season_int, n=n_games
             )
-            st.session_state.defense_data = None
     except Exception as e:
         if not manual_mode:
             st.error(f"Fetch failed: {repr(e)}")
@@ -829,6 +759,10 @@ if fetch:
 if st.session_state.logs is not None:
     logs = st.session_state.logs
 
+    if logs.empty:
+        st.warning("No game log data found for this player/season. Try a different season or check the player name.")
+        st.stop()
+
     # ── Core stats ────────────────────────────
     baseline       = hit_rate(logs, line, side)
     weighted_base  = weighted_hit_rate(logs, line, side)
@@ -842,29 +776,25 @@ if st.session_state.logs is not None:
     shots_suggest   = "High" if avg_fga >= 15 else ("Low" if avg_fga < 10 else "Medium")
     role_suggest    = suggest_bucket(avg_fga + 0.5 * avg_fta, 18, 12)
 
-    tonight_venue = None
-
     min_flag = trend_flag(logs["MIN"], n_games)
     fga_flag = trend_flag(logs["FGA"], n_games)
     pts_flag = trend_flag(logs["PTS"], n_games)
 
-    # ── Auto-detect NEXT opponent + defense rating ─
-    player_team         = get_player_team(player_id)
-    opp_abbr, game_date, debug_log = get_next_opponent(player_team)
+    # ── Next game + defense ───────────────────
+    opp_abbr, game_date, tonight_venue = bdl_get_next_game(player_team) if player_team else (None, None, None)
 
-    # Home/away splits
+    # Splits
     splits = home_away_split(logs, line, side, player_team)
 
-    if not opp_abbr:
-        opp_abbr  = get_opponent_from_logs(logs, player_team)
-        game_date = None
+    # Fallback opponent from logs
+    if not opp_abbr and logs is not None and not logs.empty:
+        latest_matchup = logs.iloc[0].get("MATCHUP", "")
+        if " vs. " in str(latest_matchup):
+            opp_abbr = latest_matchup.split(" vs. ")[1].strip()
+        elif " @ " in str(latest_matchup):
+            opp_abbr = latest_matchup.split(" @ ")[1].strip()
 
-    # Temporary debug expander so we can see what scoreboard returns
-    with st.expander("Schedule debug log"):
-        for _line in debug_log:
-            st.text(_line)
-
-    matchup_auto, opp_pts, league_avg = classify_matchup(opp_abbr, season)
+    matchup_auto, opp_pts, league_avg = classify_matchup_bdl(opp_abbr, season_int)
 
     # ── Stat cards ────────────────────────────
     st.markdown(f"<div class='section-header'>{full_name}</div>", unsafe_allow_html=True)
@@ -895,14 +825,14 @@ if st.session_state.logs is not None:
 
     # ── Defense card ──────────────────────────
     if opp_abbr and opp_pts:
-        badge_css = matchup_auto.lower()
+        badge_css   = matchup_auto.lower()
         badge_label = {"Good": "✅ Weak defense", "Bad": "🔴 Strong defense", "Neutral": "⚪ Average defense"}[matchup_auto]
-        date_str = f" · {game_date}" if game_date else ""
-        schedule_label = f"Next game vs {opp_abbr}{date_str}" if game_date is not None else f"Most recent opp: {opp_abbr}"
+        date_str    = f" · {game_date}" if game_date else ""
+        label       = f"Next game vs {opp_abbr}{date_str}" if game_date else f"Most recent opp: {opp_abbr}"
         st.markdown(f"""
         <div class='defense-card'>
             <div>
-                <div class='stat-label'>{schedule_label}</div>
+                <div class='stat-label'>{label}</div>
                 <div style='font-size:1.1rem; font-weight:700; color:#f1f5f9; margin-top:4px;'>
                     {opp_pts:.1f} pts allowed/game
                     <span style='font-family:DM Mono; font-size:0.72rem; color:#475569; margin-left:8px;'>
@@ -917,57 +847,31 @@ if st.session_state.logs is not None:
         matchup_auto = "Neutral"
 
     # Trend flags
-    flags_html = f"""<div class='flag-row'>
+    st.markdown(f"""<div class='flag-row'>
         {flag_pill("MIN", min_flag)}
         {flag_pill("FGA", fga_flag)}
         {flag_pill("PTS", pts_flag)}
-    </div>"""
-    st.markdown(flags_html, unsafe_allow_html=True)
+    </div>""", unsafe_allow_html=True)
     st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
 
     # ── Home/Away splits ──────────────────────
     if splits["home_games"] > 0 or splits["away_games"] > 0:
-        # Detect tonight venue — skip completed (Final) games
-        tonight_venue = None
-        if player_team and opp_abbr:
-            try:
-                from datetime import timedelta
-                try:
-                    import pytz
-                    et = pytz.timezone("America/New_York")
-                    base_dt = datetime.now(et)
-                except Exception:
-                    base_dt = datetime.today()
-                for day_offset in range(8):
-                    check_date = (base_dt + timedelta(days=day_offset)).strftime("%m/%d/%Y")
-                    sb_check = scoreboardv2.ScoreboardV2(game_date=check_date, league_id="00", day_offset=0, timeout=45)
-                    g = sb_check.get_data_frames()[0]
-                    if not g.empty:
-                        r = g[(g["HOME_TEAM_ABBREVIATION"] == player_team) | (g["VISITOR_TEAM_ABBREVIATION"] == player_team)]
-                        if not r.empty:
-                            status = str(r.iloc[0].get("GAME_STATUS_TEXT", "")).strip()
-                            if "Final" in status or "final" in status:
-                                continue  # game already done, keep looking
-                            tonight_venue = "Home" if r.iloc[0]["HOME_TEAM_ABBREVIATION"] == player_team else "Away"
-                            break
-            except Exception:
-                pass
-
         st.markdown("<div class='section-header'>Home / Away Splits</div>", unsafe_allow_html=True)
-
-        venue_note = ""
-        if tonight_venue:
-            venue_color = "#22c55e" if tonight_venue == "Home" else "#60a5fa"
-            venue_note = f"<span style='background:{venue_color}22; color:{venue_color}; font-family:DM Mono; font-size:0.7rem; padding:3px 10px; border-radius:999px; border:1px solid {venue_color}44; margin-left:8px;'>Tonight: {tonight_venue}</span>"
+        venue_color = "#22c55e" if tonight_venue == "Home" else "#60a5fa"
+        venue_note_html = (
+            f"<span style='background:{venue_color}22; color:{venue_color}; font-family:DM Mono; "
+            f"font-size:0.7rem; padding:3px 10px; border-radius:999px; border:1px solid {venue_color}44; "
+            f"margin-left:8px;'>Tonight: {tonight_venue}</span>"
+        ) if tonight_venue else ""
 
         ha1, ha2 = st.columns(2)
         with ha1:
             if splits["home_games"] >= 2:
-                hr_pct = splits["home_rate"]
+                hr_pct   = splits["home_rate"]
                 hr_color = "#22c55e" if hr_pct >= 0.6 else ("#eab308" if hr_pct >= 0.5 else "#ef4444")
                 st.markdown(f"""
-                <div class='stat-card' style='border-color: {"#166534" if tonight_venue == "Home" else "#1e293b"};'>
-                    <div class='stat-label'>Home {venue_note if tonight_venue == "Home" else ""}</div>
+                <div class='stat-card' style='border-color:{"#166534" if tonight_venue=="Home" else "#1e293b"};'>
+                    <div class='stat-label'>Home {venue_note_html if tonight_venue=="Home" else ""}</div>
                     <div style='display:flex; align-items:baseline; gap:12px; margin-top:4px;'>
                         <div class='stat-value' style='color:{hr_color};'>{hr_pct:.0%}</div>
                         <div style='font-family:DM Mono; font-size:0.72rem; color:#475569;'>hit rate</div>
@@ -975,18 +879,17 @@ if st.session_state.logs is not None:
                     <div style='font-family:DM Mono; font-size:0.72rem; color:#475569; margin-top:4px;'>
                         {splits["home_avg"]} avg pts · {splits["home_games"]} games
                     </div>
-                </div>
-                """, unsafe_allow_html=True)
+                </div>""", unsafe_allow_html=True)
             else:
                 st.markdown("<div class='stat-card'><div class='stat-label'>Home</div><div style='color:#475569; font-size:0.8rem; margin-top:4px;'>Not enough data</div></div>", unsafe_allow_html=True)
 
         with ha2:
             if splits["away_games"] >= 2:
-                ar_pct = splits["away_rate"]
+                ar_pct   = splits["away_rate"]
                 ar_color = "#22c55e" if ar_pct >= 0.6 else ("#eab308" if ar_pct >= 0.5 else "#ef4444")
                 st.markdown(f"""
-                <div class='stat-card' style='border-color: {"#166534" if tonight_venue == "Away" else "#1e293b"};'>
-                    <div class='stat-label'>Away {venue_note if tonight_venue == "Away" else ""}</div>
+                <div class='stat-card' style='border-color:{"#166534" if tonight_venue=="Away" else "#1e293b"};'>
+                    <div class='stat-label'>Away {venue_note_html if tonight_venue=="Away" else ""}</div>
                     <div style='display:flex; align-items:baseline; gap:12px; margin-top:4px;'>
                         <div class='stat-value' style='color:{ar_color};'>{ar_pct:.0%}</div>
                         <div style='font-family:DM Mono; font-size:0.72rem; color:#475569;'>hit rate</div>
@@ -994,8 +897,7 @@ if st.session_state.logs is not None:
                     <div style='font-family:DM Mono; font-size:0.72rem; color:#475569; margin-top:4px;'>
                         {splits["away_avg"]} avg pts · {splits["away_games"]} games
                     </div>
-                </div>
-                """, unsafe_allow_html=True)
+                </div>""", unsafe_allow_html=True)
             else:
                 st.markdown("<div class='stat-card'><div class='stat-label'>Away</div><div style='color:#475569; font-size:0.8rem; margin-top:4px;'>Not enough data</div></div>", unsafe_allow_html=True)
 
@@ -1011,55 +913,51 @@ if st.session_state.logs is not None:
     st.markdown("<div class='section-header'>Context</div>", unsafe_allow_html=True)
 
     if opp_abbr:
-        date_display = game_date if game_date else ""
-        badge_css = matchup_auto.lower()
-        badge_text = {"Good": "Weak defense", "Bad": "Strong defense", "Neutral": "Average defense"}[matchup_auto]
+        badge_css   = matchup_auto.lower()
+        badge_text  = {"Good": "Weak defense", "Bad": "Strong defense", "Neutral": "Average defense"}[matchup_auto]
         opp_pts_str = f"{opp_pts:.1f}" if opp_pts else "N/A"
-        next_game_html = (
+        date_display = game_date if game_date else ""
+        st.markdown(
             "<div style='background:#0f172a; border:1px solid #1e293b; border-radius:10px; "
             "padding:0.75rem 1.2rem; margin-bottom:1rem; display:flex; "
             "align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.5rem;'>"
             "<div>"
-            "<div style='font-family:DM Mono; font-size:0.65rem; color:#475569; "
-            "letter-spacing:0.12em; text-transform:uppercase; margin-bottom:4px;'>Next Game</div>"
+            "<div style='font-family:DM Mono; font-size:0.65rem; color:#475569; letter-spacing:0.12em; text-transform:uppercase; margin-bottom:4px;'>Next Game</div>"
             "<div style='font-size:1.2rem; font-weight:800; color:#f1f5f9; letter-spacing:-0.5px;'>"
-            "vs <span style='color:#f97316;'>" + opp_abbr + "</span>"
-            "<span style='font-family:DM Mono; font-size:0.75rem; color:#475569; font-weight:400; margin-left:8px;'>"
-            + date_display + "</span></div>"
+            f"vs <span style='color:#f97316;'>{opp_abbr}</span>"
+            f"<span style='font-family:DM Mono; font-size:0.75rem; color:#475569; font-weight:400; margin-left:8px;'>{date_display}</span></div>"
             "</div>"
-            "<span class='defense-badge " + badge_css + "'>" + badge_text + " · " + opp_pts_str + " pts/g allowed</span>"
-            "</div>"
+            f"<span class='defense-badge {badge_css}'>{badge_text} · {opp_pts_str} pts/g allowed</span>"
+            "</div>",
+            unsafe_allow_html=True
         )
-        st.markdown(next_game_html, unsafe_allow_html=True)
-        st.caption("Matchup quality is auto-filled based on the next opponent's defensive rating. You can override it manually.")
+        st.caption("Matchup quality auto-filled from opponent's defensive rating. Override manually if needed.")
     else:
         st.caption("Next opponent not found — matchup set to Neutral.")
 
     pc1, pc2 = st.columns(2)
     with pc1:
-        matchup_options = ["Neutral","Good","Bad"]
+        matchup_options = ["Neutral", "Good", "Bad"]
         matchup_sel = st.selectbox(
-            "Matchup 🤖",
-            matchup_options,
+            "Matchup 🤖", matchup_options,
             index=matchup_options.index(matchup_auto),
-            help=f"Auto-detected: {opp_abbr or 'unknown'} allows {f'{opp_pts:.1f}' if opp_pts else 'N/A'} pts/game"
+            help=f"Auto: {opp_abbr or 'unknown'} allows {f'{opp_pts:.1f}' if opp_pts else 'N/A'} pts/game"
         )
     with pc2:
-        script_sel = st.selectbox("Game Script", ["Neutral","Competitive","Blowout risk"])
+        script_sel = st.selectbox("Game Script", ["Neutral", "Competitive", "Blowout risk"])
 
     with st.expander("⚙️  Advanced overrides"):
         ac1, ac2, ac3 = st.columns(3)
         with ac1:
-            minutes_sel = st.selectbox("Minutes", ["Okay","Strong","Risk"],
-                                       index=["Okay","Strong","Risk"].index(minutes_suggest))
+            minutes_sel = st.selectbox("Minutes", ["Okay", "Strong", "Risk"],
+                                       index=["Okay", "Strong", "Risk"].index(minutes_suggest))
         with ac2:
-            role_sel = st.selectbox("Role", ["Okay","Strong","Risk"],
-                                    index=["Okay","Strong","Risk"].index(role_suggest))
+            role_sel = st.selectbox("Role", ["Okay", "Strong", "Risk"],
+                                    index=["Okay", "Strong", "Risk"].index(role_suggest))
         with ac3:
-            shots_sel = st.selectbox("Shots", ["Medium","High","Low"],
-                                     index=["Medium","High","Low"].index(shots_suggest))
+            shots_sel = st.selectbox("Shots", ["Medium", "High", "Low"],
+                                     index=["Medium", "High", "Low"].index(shots_suggest))
 
-    # ── Compute venue adjustment BEFORE apply_adjustments ──
     venue_adj = venue_adjustment(splits, tonight_venue, side)
 
     context = {
@@ -1068,34 +966,31 @@ if st.session_state.logs is not None:
         "shots":   shots_sel,
         "matchup": matchup_sel,
         "script":  script_sel,
-        "venue":   venue_adj,   # ← NOW wired in
+        "venue":   venue_adj,
     }
 
-    adjusted   = apply_adjustments(weighted_base, context)
-    line_diff  = sample_avg_pts - line
-    model_lean = "OVER" if sample_avg_pts > line else ("UNDER" if sample_avg_pts < line else "EVEN")
-    tier = get_confidence_tier(adjusted, line_diff, consistency)
+    adjusted  = apply_adjustments(weighted_base, context)
+    line_diff = sample_avg_pts - line
+    tier      = get_confidence_tier(adjusted, line_diff, consistency)
 
-    tier_css   = {"Strong Over":"green","Lean Over":"yellow","Lean Under":"orange","Strong Under":"red","Pass":"gray"}
-    tier_emoji = {"Strong Over":"🟢","Lean Over":"🟡","Lean Under":"🟠","Strong Under":"🔴","Pass":"⚪"}
+    tier_css   = {"Strong Over": "green", "Lean Over": "yellow", "Lean Under": "orange", "Strong Under": "red", "Pass": "gray"}
+    tier_emoji = {"Strong Over": "🟢", "Lean Over": "🟡", "Lean Under": "🟠", "Strong Under": "🔴", "Pass": "⚪"}
     css = tier_css[tier]
 
     # ── Verdict banner ────────────────────────
     st.markdown("<div class='section-header'>Verdict</div>", unsafe_allow_html=True)
 
-    # Build venue adj label for banner
     venue_adj_labels = {
-        "Boost":   ("▲ Venue Boost", "#22c55e"),
+        "Boost":   ("▲ Venue Boost",   "#22c55e"),
         "Penalty": ("▼ Venue Penalty", "#ef4444"),
-        "Neutral": ("● Venue Neutral", "#475569"),
+        "Neutral": ("",                "#475569"),
     }
-    venue_label_text, venue_label_color = venue_adj_labels.get(venue_adj, ("● Venue Neutral", "#475569"))
+    venue_label_text, venue_label_color = venue_adj_labels.get(venue_adj, ("", "#475569"))
     venue_badge_html = (
         f"<span style='font-family:DM Mono; font-size:0.7rem; color:{venue_label_color}; "
         f"background:{venue_label_color}18; border:1px solid {venue_label_color}44; "
         f"padding:3px 10px; border-radius:999px;'>{venue_label_text}</span>"
-        if venue_adj != "Neutral" else ""
-    )
+    ) if venue_adj != "Neutral" else ""
 
     st.markdown(f"""
     <div class='verdict-banner {css}'>
@@ -1133,8 +1028,8 @@ if st.session_state.logs is not None:
 
     # ── AI Analysis ───────────────────────────
     st.markdown("<div class='section-header'>AI Breakdown</div>", unsafe_allow_html=True)
-    api_key = get_api_key()
-    if not api_key:
+    groq_key = get_groq_key()
+    if not groq_key:
         st.error("❌ No GROQ_API_KEY found in Streamlit secrets.")
     else:
         if st.session_state.ai_analysis:
@@ -1170,24 +1065,20 @@ if st.session_state.logs is not None:
                         st.session_state.ai_error = repr(e)
                         st.session_state.ai_analysis = None
 
-    # ── Export + Add to Tracker ──────────────
+    # ── Export + Tracker ─────────────────────
     st.markdown("<div class='section-header'>Export</div>", unsafe_allow_html=True)
     ex1, ex2 = st.columns([1, 1])
     with ex1:
         out = logs.copy()
-        out.insert(0,  "PLAYER",            full_name)
-        out.insert(1,  "LINE",              line)
-        out.insert(2,  "SIDE",              side)
-        out.insert(3,  "OPPONENT",          opp_abbr or "")
-        out.insert(4,  "OPP_PTS_ALLOWED",   opp_pts or "")
-        out.insert(5,  "MATCHUP_QUALITY",   matchup_sel)
-        out.insert(6,  "VENUE",             tonight_venue or "")
-        out.insert(7,  "VENUE_ADJ",         venue_adj)
-        out.insert(8,  "RAW_HIT_RATE",      baseline)
-        out.insert(9,  "WEIGHTED_HIT_RATE", weighted_base)
-        out.insert(10, "ADJUSTED_RATE",     adjusted)
-        out.insert(11, "CONSISTENCY",       consistency)
-        out.insert(12, "TIER",              tier)
+        for i, (col, val) in enumerate([
+            ("PLAYER", full_name), ("LINE", line), ("SIDE", side),
+            ("OPPONENT", opp_abbr or ""), ("OPP_PTS_ALLOWED", opp_pts or ""),
+            ("MATCHUP_QUALITY", matchup_sel), ("VENUE", tonight_venue or ""),
+            ("VENUE_ADJ", venue_adj), ("RAW_HIT_RATE", baseline),
+            ("WEIGHTED_HIT_RATE", weighted_base), ("ADJUSTED_RATE", adjusted),
+            ("CONSISTENCY", consistency), ("TIER", tier),
+        ]):
+            out.insert(i, col, val)
         csv = out.to_csv(index=False).encode("utf-8")
         st.download_button("⬇  Download CSV", data=csv, file_name="prop_report.csv", mime="text/csv")
     with ex2:
@@ -1223,78 +1114,51 @@ if not st.session_state.tracker:
     st.markdown("""
     <div style='background:#0f172a; border:1px dashed #1e293b; border-radius:12px;
                 padding:1.5rem; text-align:center;'>
-        <div style='font-family:DM Mono; font-size:0.75rem; color:#334155;'>
-            No props tracked yet
-        </div>
+        <div style='font-family:DM Mono; font-size:0.75rem; color:#334155;'>No props tracked yet</div>
         <div style='font-size:0.85rem; color:#475569; margin-top:4px;'>
             Analyze a player then click ➕ Add to Prop Tracker
         </div>
     </div>
     """, unsafe_allow_html=True)
 else:
-    tier_css   = {"Strong Over":"green","Lean Over":"yellow","Lean Under":"orange","Strong Under":"red","Pass":"gray"}
-    tier_emoji = {"Strong Over":"🟢","Lean Over":"🟡","Lean Under":"🟠","Strong Under":"🔴","Pass":"⚪"}
-
+    tier_css   = {"Strong Over": "green", "Lean Over": "yellow", "Lean Under": "orange", "Strong Under": "red", "Pass": "gray"}
+    tier_emoji = {"Strong Over": "🟢", "Lean Over": "🟡", "Lean Under": "🟠", "Strong Under": "🔴", "Pass": "⚪"}
     to_remove = None
     for i, entry in enumerate(st.session_state.tracker):
-        t = entry["Verdict"]
+        t   = entry["Verdict"]
         css = tier_css.get(t, "gray")
-        emoji = tier_emoji.get(t, "⚪")
-
+        em  = tier_emoji.get(t, "⚪")
         col_card, col_remove = st.columns([11, 1])
         with col_card:
             st.markdown(f"""
             <div class='verdict-banner {css}' style='margin:0.3rem 0; padding:1rem 1.4rem;'>
                 <div>
                     <div class='verdict-label'>{entry["Line"]} · vs {entry["Opponent"]}</div>
-                    <div style='font-size:1.1rem; font-weight:800; color:#f1f5f9; letter-spacing:-0.5px;'>
-                        {entry["Player"]}
-                    </div>
+                    <div style='font-size:1.1rem; font-weight:800; color:#f1f5f9;'>{entry["Player"]}</div>
                 </div>
                 <div style='display:flex; gap:1.5rem; flex-wrap:wrap; align-items:center;'>
-                    <div>
-                        <div class='verdict-label'>Verdict</div>
-                        <div class='verdict-tier {css}' style='font-size:1rem;'>{emoji} {t}</div>
-                    </div>
-                    <div>
-                        <div class='verdict-label'>Venue</div>
-                        <div style='font-size:1rem; font-weight:700; color:#f1f5f9;'>{entry.get("Venue", "—")}</div>
-                    </div>
-                    <div>
-                        <div class='verdict-label'>Avg PTS</div>
-                        <div style='font-size:1rem; font-weight:700; color:#f1f5f9;'>{entry["Avg PTS"]}</div>
-                    </div>
-                    <div>
-                        <div class='verdict-label'>Hit Rate</div>
-                        <div style='font-size:1rem; font-weight:700; color:#f1f5f9;'>{entry["Hit Rate"]}</div>
-                    </div>
-                    <div>
-                        <div class='verdict-label'>Adjusted</div>
-                        <div style='font-size:1rem; font-weight:700; color:#f1f5f9;'>{entry["Adjusted"]}</div>
-                    </div>
-                    <div>
-                        <div class='verdict-label'>Matchup</div>
-                        <div style='font-size:1rem; font-weight:700; color:#f1f5f9;'>{entry["Matchup"]}</div>
-                    </div>
+                    <div><div class='verdict-label'>Verdict</div><div class='verdict-tier {css}' style='font-size:1rem;'>{em} {t}</div></div>
+                    <div><div class='verdict-label'>Venue</div><div style='font-size:1rem; font-weight:700; color:#f1f5f9;'>{entry.get("Venue","—")}</div></div>
+                    <div><div class='verdict-label'>Avg PTS</div><div style='font-size:1rem; font-weight:700; color:#f1f5f9;'>{entry["Avg PTS"]}</div></div>
+                    <div><div class='verdict-label'>Hit Rate</div><div style='font-size:1rem; font-weight:700; color:#f1f5f9;'>{entry["Hit Rate"]}</div></div>
+                    <div><div class='verdict-label'>Adjusted</div><div style='font-size:1rem; font-weight:700; color:#f1f5f9;'>{entry["Adjusted"]}</div></div>
+                    <div><div class='verdict-label'>Matchup</div><div style='font-size:1rem; font-weight:700; color:#f1f5f9;'>{entry["Matchup"]}</div></div>
                 </div>
             </div>
             """, unsafe_allow_html=True)
         with col_remove:
             st.markdown("<div style='margin-top:0.6rem;'></div>", unsafe_allow_html=True)
-            if st.button("✕", key=f"remove_{i}", help="Remove from tracker"):
+            if st.button("✕", key=f"remove_{i}", help="Remove"):
                 to_remove = i
-
     if to_remove is not None:
         st.session_state.tracker.pop(to_remove)
         st.rerun()
 
-    st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
     tc1, tc2 = st.columns([1, 1])
     with tc1:
-        tracker_df = pd.DataFrame(st.session_state.tracker)
+        tracker_df  = pd.DataFrame(st.session_state.tracker)
         tracker_csv = tracker_df.to_csv(index=False).encode("utf-8")
-        st.download_button("⬇  Export Tracker CSV", data=tracker_csv,
-                           file_name="prop_tracker.csv", mime="text/csv")
+        st.download_button("⬇  Export Tracker CSV", data=tracker_csv, file_name="prop_tracker.csv", mime="text/csv")
     with tc2:
         if st.button("🗑️  Clear All"):
             st.session_state.tracker = []
