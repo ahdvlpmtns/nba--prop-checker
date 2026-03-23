@@ -152,6 +152,8 @@ if "ai_error" not in st.session_state:
     st.session_state.ai_error = None
 if "defense_data" not in st.session_state:
     st.session_state.defense_data = None
+if "tracker" not in st.session_state:
+    st.session_state.tracker = []  # list of prop result dicts
 
 # ─────────────────────────────────────────────
 # NBA API helpers
@@ -1030,23 +1032,129 @@ if st.session_state.logs is not None:
                         st.session_state.ai_error = repr(e)
                         st.session_state.ai_analysis = None
 
-    # ── Export ────────────────────────────────
+    # ── Export + Add to Tracker ──────────────
     st.markdown("<div class='section-header'>Export</div>", unsafe_allow_html=True)
-    out = logs.copy()
-    out.insert(0, "PLAYER",            full_name)
-    out.insert(1, "LINE",              line)
-    out.insert(2, "SIDE",              side)
-    out.insert(3, "OPPONENT",          opp_abbr or "")
-    out.insert(4, "OPP_PTS_ALLOWED",   opp_pts or "")
-    out.insert(5, "MATCHUP_QUALITY",   matchup_sel)
-    out.insert(6, "RAW_HIT_RATE",      baseline)
-    out.insert(7, "WEIGHTED_HIT_RATE", weighted_base)
-    out.insert(8, "ADJUSTED_RATE",     adjusted)
-    out.insert(9, "CONSISTENCY",       consistency)
-    out.insert(10,"TIER",              tier)
-    csv = out.to_csv(index=False).encode("utf-8")
-    st.download_button("⬇  Download CSV", data=csv, file_name="prop_report.csv", mime="text/csv")
+    ex1, ex2 = st.columns([1, 1])
+    with ex1:
+        out = logs.copy()
+        out.insert(0, "PLAYER",            full_name)
+        out.insert(1, "LINE",              line)
+        out.insert(2, "SIDE",              side)
+        out.insert(3, "OPPONENT",          opp_abbr or "")
+        out.insert(4, "OPP_PTS_ALLOWED",   opp_pts or "")
+        out.insert(5, "MATCHUP_QUALITY",   matchup_sel)
+        out.insert(6, "RAW_HIT_RATE",      baseline)
+        out.insert(7, "WEIGHTED_HIT_RATE", weighted_base)
+        out.insert(8, "ADJUSTED_RATE",     adjusted)
+        out.insert(9, "CONSISTENCY",       consistency)
+        out.insert(10,"TIER",              tier)
+        csv = out.to_csv(index=False).encode("utf-8")
+        st.download_button("⬇  Download CSV", data=csv, file_name="prop_report.csv", mime="text/csv")
+    with ex2:
+        if st.button("➕  Add to Prop Tracker"):
+            entry = {
+                "Player":      full_name,
+                "Line":        f"{line} {side}",
+                "Opponent":    opp_abbr or "—",
+                "Matchup":     matchup_sel,
+                "Avg PTS":     round(sample_avg_pts, 1),
+                "Hit Rate":    f"{weighted_base:.0%}",
+                "Adjusted":    f"{adjusted:.0%}",
+                "Consistency": f"{consistency:.0%}",
+                "Verdict":     tier,
+            }
+            # Avoid duplicates — replace if same player+line already tracked
+            existing = [i for i, e in enumerate(st.session_state.tracker)
+                        if e["Player"] == full_name and e["Line"] == f"{line} {side}"]
+            if existing:
+                st.session_state.tracker[existing[0]] = entry
+                st.success(f"Updated {full_name} in tracker.")
+            else:
+                st.session_state.tracker.append(entry)
+                st.success(f"Added {full_name} to tracker!")
 
+# ─────────────────────────────────────────────
+# Prop Tracker
+# ─────────────────────────────────────────────
 
+st.markdown("<div class='section-header'>Prop Tracker</div>", unsafe_allow_html=True)
+
+if not st.session_state.tracker:
+    st.markdown("""
+    <div style='background:#0f172a; border:1px dashed #1e293b; border-radius:12px;
+                padding:1.5rem; text-align:center;'>
+        <div style='font-family:DM Mono; font-size:0.75rem; color:#334155;'>
+            No props tracked yet
+        </div>
+        <div style='font-size:0.85rem; color:#475569; margin-top:4px;'>
+            Analyze a player then click ➕ Add to Prop Tracker
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+else:
+    # Render each tracked prop as a styled card with remove button
+    tier_css   = {"Strong Over":"green","Lean Over":"yellow","Lean Under":"orange","Strong Under":"red","Pass":"gray"}
+    tier_emoji = {"Strong Over":"🟢","Lean Over":"🟡","Lean Under":"🟠","Strong Under":"🔴","Pass":"⚪"}
+
+    to_remove = None
+    for i, entry in enumerate(st.session_state.tracker):
+        t = entry["Verdict"]
+        css = tier_css.get(t, "gray")
+        emoji = tier_emoji.get(t, "⚪")
+
+        col_card, col_remove = st.columns([11, 1])
+        with col_card:
+            st.markdown(f"""
+            <div class='verdict-banner {css}' style='margin:0.3rem 0; padding:1rem 1.4rem;'>
+                <div>
+                    <div class='verdict-label'>{entry["Line"]} · vs {entry["Opponent"]}</div>
+                    <div style='font-size:1.1rem; font-weight:800; color:#f1f5f9; letter-spacing:-0.5px;'>
+                        {entry["Player"]}
+                    </div>
+                </div>
+                <div style='display:flex; gap:1.5rem; flex-wrap:wrap; align-items:center;'>
+                    <div>
+                        <div class='verdict-label'>Verdict</div>
+                        <div class='verdict-tier {css}' style='font-size:1rem;'>{emoji} {t}</div>
+                    </div>
+                    <div>
+                        <div class='verdict-label'>Avg PTS</div>
+                        <div style='font-size:1rem; font-weight:700; color:#f1f5f9;'>{entry["Avg PTS"]}</div>
+                    </div>
+                    <div>
+                        <div class='verdict-label'>Hit Rate</div>
+                        <div style='font-size:1rem; font-weight:700; color:#f1f5f9;'>{entry["Hit Rate"]}</div>
+                    </div>
+                    <div>
+                        <div class='verdict-label'>Adjusted</div>
+                        <div style='font-size:1rem; font-weight:700; color:#f1f5f9;'>{entry["Adjusted"]}</div>
+                    </div>
+                    <div>
+                        <div class='verdict-label'>Matchup</div>
+                        <div style='font-size:1rem; font-weight:700; color:#f1f5f9;'>{entry["Matchup"]}</div>
+                    </div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+        with col_remove:
+            st.markdown("<div style='margin-top:0.6rem;'></div>", unsafe_allow_html=True)
+            if st.button("✕", key=f"remove_{i}", help="Remove from tracker"):
+                to_remove = i
+
+    if to_remove is not None:
+        st.session_state.tracker.pop(to_remove)
+        st.rerun()
+
+    st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
+    tc1, tc2 = st.columns([1, 1])
+    with tc1:
+        tracker_df = pd.DataFrame(st.session_state.tracker)
+        tracker_csv = tracker_df.to_csv(index=False).encode("utf-8")
+        st.download_button("⬇  Export Tracker CSV", data=tracker_csv,
+                           file_name="prop_tracker.csv", mime="text/csv")
+    with tc2:
+        if st.button("🗑️  Clear All"):
+            st.session_state.tracker = []
+            st.rerun()
 
 st.markdown("<div style='margin-top:3rem; font-family:DM Mono; font-size:0.65rem; color:#334155; text-align:center;'>PropLens — For educational purposes only. Not financial or betting advice.</div>", unsafe_allow_html=True)
