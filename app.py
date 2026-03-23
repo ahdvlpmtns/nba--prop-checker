@@ -536,42 +536,7 @@ def generate_ai_analysis(prompt: str) -> str:
     )
     return response.choices[0].message.content
 
-# ─────────────────────────────────────────────
-# Slate Scanner
-# ─────────────────────────────────────────────
 
-NBA_TEAMS = [
-    "ATL","BOS","BKN","CHA","CHI","CLE","DAL","DEN","DET","GSW",
-    "HOU","IND","LAC","LAL","MEM","MIA","MIL","MIN","NOP","NYK",
-    "OKC","ORL","PHI","PHX","POR","SAC","SAS","TOR","UTA","WAS"
-]
-
-@st.cache_data(ttl=300)
-def scan_team_players(team_abbr: str, season: str) -> pd.DataFrame:
-    roster  = get_live_roster(team_abbr, season)
-    results = []
-    for player_name in roster[:8]:
-        try:
-            pid, full_name = find_player_id(player_name)
-            if not pid:
-                continue
-            logs = get_last_n_games(player_id=pid, season=season, n=10)
-        except Exception:
-            continue
-        if logs is None or logs.empty:
-            continue
-        avg_pts = pd.to_numeric(logs["PTS"], errors="coerce").dropna().mean()
-        avg_min = pd.to_numeric(logs["MIN"], errors="coerce").dropna().mean()
-        avg_fga = pd.to_numeric(logs["FGA"], errors="coerce").dropna().mean()
-        results.append({
-            "Player": full_name, "Team": team_abbr,
-            "Avg PTS (L10)": round(avg_pts, 1) if pd.notna(avg_pts) else None,
-            "Avg MIN (L10)": round(avg_min, 1) if pd.notna(avg_min) else None,
-            "Avg FGA (L10)": round(avg_fga, 1) if pd.notna(avg_fga) else None,
-        })
-    if not results:
-        return pd.DataFrame()
-    return pd.DataFrame(results).sort_values("Avg PTS (L10)", ascending=False).reset_index(drop=True)
 
 # ─────────────────────────────────────────────
 # UI — Header
@@ -597,18 +562,8 @@ with st.sidebar:
     manual_mode = st.checkbox("Manual input fallback")
     st.markdown("<div style='margin-top:2rem; font-family:DM Mono; font-size:0.65rem; color:#334155; line-height:1.6;'>For educational purposes only. Not financial or betting advice.</div>", unsafe_allow_html=True)
 
-# ─────────────────────────────────────────────
-# Inline options
-# ─────────────────────────────────────────────
-
-st.markdown("<div class='section-header'>Options</div>", unsafe_allow_html=True)
-oc1, oc2, oc3 = st.columns(3)
-with oc1:
-    season = st.text_input("Season", value="2025-26")
-with oc2:
-    enable_ai = st.checkbox("AI breakdown", value=True)
-with oc3:
-    scan_slate = st.checkbox("Slate scanner")
+enable_ai = True
+scan_slate = False
 
 # ─────────────────────────────────────────────
 # Player & Prop inputs
@@ -620,16 +575,15 @@ st.markdown("<div class='section-header'>Player & Prop</div>", unsafe_allow_html
 @st.cache_data(ttl=86400)
 def get_all_player_names():
     all_players = players.get_players()
-    # Only active players, sorted alphabetically
     active = sorted(
         [p["full_name"] for p in all_players if p.get("is_active", True)],
-        key=lambda x: x.split()[-1]  # sort by last name
+        key=lambda x: x.split()[-1]
     )
     return active
 
 all_player_names = get_all_player_names()
 
-col_a, col_b, col_c, col_d = st.columns([2, 1, 1, 1])
+col_a, col_b, col_c, col_d, col_e = st.columns([2.5, 1, 1, 1, 0.8])
 with col_a:
     selected_player = st.selectbox(
         "Player",
@@ -644,6 +598,8 @@ with col_c:
     side = st.selectbox("Over / Under", ["Over", "Under"])
 with col_d:
     n_games = st.selectbox("Sample", [5, 10, 15], index=1)
+with col_e:
+    season = st.text_input("Season", value="2025-26")
 
 player_id, full_name = find_player_id(selected_player)
 
@@ -870,36 +826,43 @@ if st.session_state.logs is not None:
     Matchup: {matchup_sel} (vs {opp_abbr or "unknown"})
     </div>""", unsafe_allow_html=True)
 
-    # ── AI Analysis ───────────────────────────
-    if enable_ai:
-        st.markdown("<div class='section-header'>AI Breakdown</div>", unsafe_allow_html=True)
-        api_key = get_api_key()
-        if not api_key:
-            st.error("❌ No GROQ_API_KEY found in Streamlit secrets.")
-        else:
-            if st.button("⚡  Generate AI Analysis"):
-                with st.spinner("Analyzing..."):
-                    try:
-                        prompt = build_analysis_prompt(
-                            full_name=full_name, line=line, side=side, n_games=n_games,
-                            logs=logs, baseline=baseline, weighted_base=weighted_base,
-                            adjusted=adjusted, tier=tier, avg_pts=sample_avg_pts,
-                            avg_min=avg_min, avg_fga=avg_fga, consistency=consistency,
-                            min_flag=min_flag, fga_flag=fga_flag, pts_flag=pts_flag,
-                            minutes_sel=minutes_sel, role_sel=role_sel, shots_sel=shots_sel,
-                            matchup_sel=matchup_sel, script_sel=script_sel,
-                            opp_abbr=opp_abbr, opp_pts=opp_pts, league_avg=league_avg,
-                        )
-                        st.session_state.ai_analysis = generate_ai_analysis(prompt)
-                        st.session_state.ai_error    = None
-                    except Exception as e:
-                        st.session_state.ai_error    = repr(e)
-                        st.session_state.ai_analysis = None
+    # ── AI Analysis (auto-generates on fetch) ─
+    st.markdown("<div class='section-header'>AI Breakdown</div>", unsafe_allow_html=True)
+    api_key = get_api_key()
+    if not api_key:
+        st.error("❌ No GROQ_API_KEY found in Streamlit secrets.")
+    else:
+        # Auto-generate on fresh fetch, show stored result on re-render
+        if fetch and not st.session_state.ai_analysis:
+            with st.spinner("Generating AI breakdown..."):
+                try:
+                    prompt = build_analysis_prompt(
+                        full_name=full_name, line=line, side=side, n_games=n_games,
+                        logs=logs, baseline=baseline, weighted_base=weighted_base,
+                        adjusted=adjusted, tier=tier, avg_pts=sample_avg_pts,
+                        avg_min=avg_min, avg_fga=avg_fga, consistency=consistency,
+                        min_flag=min_flag, fga_flag=fga_flag, pts_flag=pts_flag,
+                        minutes_sel=minutes_sel, role_sel=role_sel, shots_sel=shots_sel,
+                        matchup_sel=matchup_sel, script_sel=script_sel,
+                        opp_abbr=opp_abbr, opp_pts=opp_pts, league_avg=league_avg,
+                    )
+                    st.session_state.ai_analysis = generate_ai_analysis(prompt)
+                    st.session_state.ai_error    = None
+                except Exception as e:
+                    st.session_state.ai_error    = repr(e)
+                    st.session_state.ai_analysis = None
 
-            if st.session_state.ai_analysis:
-                st.markdown(f"<div class='ai-box'>{st.session_state.ai_analysis}</div>", unsafe_allow_html=True)
-            elif st.session_state.ai_error:
-                st.error(f"AI analysis failed: {st.session_state.ai_error}")
+        if st.session_state.ai_analysis:
+            st.markdown(f"<div class='ai-box'>{st.session_state.ai_analysis}</div>", unsafe_allow_html=True)
+            if st.button("⚡  Regenerate"):
+                st.session_state.ai_analysis = None
+                st.rerun()
+        elif st.session_state.ai_error:
+            st.error(f"AI analysis failed: {st.session_state.ai_error}")
+            if st.button("⚡  Retry AI Analysis"):
+                st.session_state.ai_analysis = None
+                st.session_state.ai_error = None
+                st.rerun()
 
     # ── Export ────────────────────────────────
     st.markdown("<div class='section-header'>Export</div>", unsafe_allow_html=True)
@@ -918,19 +881,6 @@ if st.session_state.logs is not None:
     csv = out.to_csv(index=False).encode("utf-8")
     st.download_button("⬇  Download CSV", data=csv, file_name="prop_report.csv", mime="text/csv")
 
-# ─────────────────────────────────────────────
-# Slate Scanner
-# ─────────────────────────────────────────────
 
-if scan_slate:
-    st.markdown("<div class='section-header'>Slate Scanner</div>", unsafe_allow_html=True)
-    selected_team = st.selectbox("Team", NBA_TEAMS)
-    if st.button("🔎  Scan Roster"):
-        with st.spinner(f"Loading {selected_team} roster and stats..."):
-            df_scan = scan_team_players(selected_team, season)
-        if df_scan.empty:
-            st.warning("No data returned. Try again or check the season string.")
-        else:
-            st.dataframe(df_scan, use_container_width=True)
 
 st.markdown("<div style='margin-top:3rem; font-family:DM Mono; font-size:0.65rem; color:#334155; text-align:center;'>PropLens — For educational purposes only. Not financial or betting advice.</div>", unsafe_allow_html=True)
