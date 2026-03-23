@@ -17,20 +17,38 @@ from nba_api.stats.endpoints import (
     leaguedashteamstats, commonplayerinfo,
 )
 
-# Patch nba_api to use browser-like headers — reduces timeout failures on Streamlit Cloud
-from nba_api.library.http import NBAStatsHTTP
-NBAStatsHTTP.nba_response.headers = {
-    "Host": "stats.nba.com",
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "x-nba-stats-origin": "stats",
-    "x-nba-stats-token": "true",
-    "Referer": "https://www.nba.com/",
-    "Connection": "keep-alive",
-    "Origin": "https://www.nba.com",
-}
+# Patch nba_api request headers — reduces timeout failures on Streamlit Cloud
+try:
+    from nba_api.library.http import NBAStatsHTTP
+    NBAStatsHTTP.nba_response.headers = {
+        "Host": "stats.nba.com",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "x-nba-stats-origin": "stats",
+        "x-nba-stats-token": "true",
+        "Referer": "https://www.nba.com/",
+        "Connection": "keep-alive",
+        "Origin": "https://www.nba.com",
+    }
+except Exception:
+    try:
+        from nba_api.stats.library.http import NBAStatsHTTP
+        NBAStatsHTTP.nba_response.headers = {
+            "Host": "stats.nba.com",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+            "x-nba-stats-origin": "stats",
+            "x-nba-stats-token": "true",
+            "Referer": "https://www.nba.com/",
+            "Connection": "keep-alive",
+            "Origin": "https://www.nba.com",
+        }
+    except Exception:
+        pass  # headers patch unavailable — will still work, just may be slower
 
 # ─────────────────────────────────────────────
 # Page config
