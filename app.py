@@ -274,23 +274,13 @@ def get_opponent_pts_allowed(opp_abbr: str, season: str) -> Optional[float]:
         return None
 
 
-@st.cache_data(ttl=3600)  
+@st.cache_data(ttl=3600)
 def get_opponent_pts_allowed_from_player_logs(opp_abbr: str, season: str) -> Optional[float]:
     """
-    Fallback: use a player from the opponent team's game log.
-    Player game logs have PLUS_MINUS which is team-level.
-    We also pull the team game log columns to get team PTS.
-    
-    Strategy: grab 3 players from opponent roster, pull their game logs,
-    average the PLUS_MINUS values across all games, then add to league avg
-    to get an approximate pts allowed.
-    
-    Actually simpler: player game log has team PTS in some versions.
-    Use the WL and PLUS_MINUS to infer: if we know PLUS_MINUS and
-    can get team PTS from another source.
-    
-    Simplest working approach: use scoreboardv2 historical results
-    to find scores of recent opponent games.
+    Estimate pts allowed by opponent using PLUS_MINUS from player game logs.
+    Tries all roster players until it finds one with a valid game log.
+    PLUS_MINUS = team_pts - opp_pts per game (team level stat in player logs).
+    pts_allowed ≈ league_avg - avg_plus_minus
     """
     try:
         roster = get_live_roster(opp_abbr, season)
@@ -298,9 +288,9 @@ def get_opponent_pts_allowed_from_player_logs(opp_abbr: str, season: str) -> Opt
             return None
 
         all_plus_minus = []
-        all_pts = []
 
-        for player_name in roster[:4]:
+        # Try ALL roster players — keep going until we have enough data
+        for player_name in roster:
             try:
                 pid, _ = find_player_id(player_name)
                 if not pid:
@@ -310,29 +300,24 @@ def get_opponent_pts_allowed_from_player_logs(opp_abbr: str, season: str) -> Opt
                     season=season,
                     timeout=15,
                 ).get_data_frames()[0]
-                if log.empty:
+                if log.empty or "PLUS_MINUS" not in log.columns:
                     continue
-                if "PLUS_MINUS" in log.columns and "PTS" in log.columns:
-                    # PLUS_MINUS here is team-level differential
-                    pm  = pd.to_numeric(log["PLUS_MINUS"], errors="coerce").dropna()
-                    all_plus_minus.extend(pm.tolist())
+                pm = pd.to_numeric(log["PLUS_MINUS"], errors="coerce").dropna()
+                if len(pm) < 5:
+                    continue
+                all_plus_minus.extend(pm.tolist())
+                # Once we have 20+ game entries, that's enough
+                if len(all_plus_minus) >= 20:
+                    break
             except Exception:
                 continue
 
         if not all_plus_minus:
             return None
 
-        # avg PLUS_MINUS = avg_team_pts_scored - avg_pts_allowed
-        # pts_allowed = avg_team_pts_scored - avg_plus_minus
-        # We don't know avg_team_pts_scored from player logs alone
-        # But: we know league avg is ~114.5
-        # If opp avg PM is -3.2, they allow ~114.5 + 3.2 = 117.7 pts/g
         avg_pm = sum(all_plus_minus) / len(all_plus_minus)
-        league_avg = 114.5
-        # Their pts allowed = league_avg - avg_pm (if PM is positive, they score more than allowed)
-        # Actually: PM = team_pts - opp_pts, so opp_pts = team_pts - PM
-        # We need team_pts... approximate with league_avg
-        pts_allowed = league_avg - avg_pm
+        # pts_allowed = league_avg - avg_PLUS_MINUS
+        pts_allowed = 114.5 - avg_pm
         return round(pts_allowed, 1)
 
     except Exception:
@@ -826,22 +811,26 @@ if st.session_state.logs is not None:
             st.write("--- Testing player log fallback ---")
             try:
                 roster = get_live_roster(opp_abbr, season)
-                st.write(f"Roster found: `{roster[:3]}`")
-                if roster:
-                    pid, pname = find_player_id(roster[0])
-                    st.write(f"Testing player: `{pname}` (id: `{pid}`)")
-                    if pid:
+                st.write(f"Roster ({len(roster)} players): `{roster}`")
+                found_pid = None
+                for pname_try in roster:
+                    pid_try, pname_found = find_player_id(pname_try)
+                    if pid_try:
+                        found_pid = pid_try
+                        st.write(f"First resolvable player: `{pname_found}` (id: `{pid_try}`)")
                         log = playergamelog.PlayerGameLog(
-                            player_id=pid, season=season, timeout=15,
+                            player_id=pid_try, season=season, timeout=15,
                         ).get_data_frames()[0]
                         st.write(f"Log rows: `{len(log)}` | Columns: `{log.columns.tolist()}`")
                         if not log.empty and "PLUS_MINUS" in log.columns:
                             pm = pd.to_numeric(log["PLUS_MINUS"], errors="coerce").dropna()
-                            st.write(f"PLUS_MINUS values (first 5): `{pm.head().tolist()}`")
                             st.write(f"Avg PLUS_MINUS: `{pm.mean():.2f}`")
                             st.write(f"Estimated pts allowed: `{114.5 - pm.mean():.1f}`")
+                        break
+                if not found_pid:
+                    st.write("No resolvable players found in roster")
             except Exception as e:
-                st.write(f"Error in fallback test: `{repr(e)}`")
+                st.write(f"Error: `{repr(e)}`")
 
     # ── Stat cards ────────────────────────────
     st.markdown(f"<div class='section-header'>{full_name}</div>", unsafe_allow_html=True)
