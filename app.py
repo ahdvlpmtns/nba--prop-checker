@@ -145,29 +145,23 @@ for key, default in [
         st.session_state[key] = default
 
 # ─────────────────────────────────────────────
-# BallDontLie API layer
+# ─────────────────────────────────────────────
+# ESPN public API layer — no key required
 # ─────────────────────────────────────────────
 
-BDL_BASE = "https://api.balldontlie.io/nba/v1"
+ESPN_SITE  = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba"
+ESPN_CORE  = "https://sports.core.api.espn.com/v2/sports/basketball/leagues/nba"
+ESPN_WEB   = "https://site.web.api.espn.com/apis/common/v3/sports/basketball/nba"
 
-def bdl_headers() -> dict:
-    key = ""
-    try:
-        # support both uppercase and lowercase secret names
-        key = st.secrets.get("BALLDONTLIE_API_KEY") or st.secrets.get("balldontlie_api_key") or ""
-    except Exception:
-        key = os.environ.get("BALLDONTLIE_API_KEY", "") or os.environ.get("balldontlie_api_key", "")
-    if not key:
-        st.error("❌ BALLDONTLIE_API_KEY not found in Streamlit secrets. Add it at balldontlie.io (free).")
-        st.stop()
-    return {"Authorization": key}
+ESPN_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "Accept": "application/json",
+}
 
-def bdl_get(endpoint: str, params: dict = None, retries: int = 3) -> dict:
-    """GET from BallDontLie with simple retry."""
-    url = f"{BDL_BASE}/{endpoint}"
+def espn_get(url: str, params: dict = None, retries: int = 3) -> dict:
     for attempt in range(retries):
         try:
-            r = requests.get(url, headers=bdl_headers(), params=params, timeout=10)
+            r = requests.get(url, headers=ESPN_HEADERS, params=params, timeout=10)
             r.raise_for_status()
             return r.json()
         except Exception as e:
@@ -176,135 +170,142 @@ def bdl_get(endpoint: str, params: dict = None, retries: int = 3) -> dict:
             time.sleep(1.5 * (attempt + 1))
     return {}
 
-# ── Player search ─────────────────────────────
-
-@st.cache_data(ttl=86400)
-def bdl_get_all_players() -> List[dict]:
-    """Fetch all active NBA players from BallDontLie (paginated)."""
-    all_players = []
-    cursor = None
-    while True:
-        params = {"per_page": 100}
-        if cursor:
-            params["cursor"] = cursor
-        data = bdl_get("players/active", params=params)
-        all_players.extend(data.get("data", []))
-        meta = data.get("meta", {})
-        cursor = meta.get("next_cursor")
-        if not cursor:
-            break
-    return all_players
-
 def normalize_name(s: str) -> str:
     return re.sub(r"\s+", " ", s.strip().lower())
 
-def find_player(player_name: str) -> Tuple[Optional[int], Optional[str], Optional[str]]:
-    """
-    Returns (bdl_player_id, full_name, team_abbreviation).
-    """
-    name = normalize_name(player_name)
-    all_players = bdl_get_all_players()
-    for p in all_players:
-        full = f"{p['first_name']} {p['last_name']}"
-        if normalize_name(full) == name:
-            team_abbr = p.get("team", {}).get("abbreviation") if p.get("team") else None
-            return p["id"], full, team_abbr
-    # partial match
-    candidates = [
-        p for p in all_players
-        if name in normalize_name(f"{p['first_name']} {p['last_name']}")
-    ]
-    if len(candidates) == 1:
-        p = candidates[0]
-        full = f"{p['first_name']} {p['last_name']}"
-        team_abbr = p.get("team", {}).get("abbreviation") if p.get("team") else None
-        return p["id"], full, team_abbr
-    return None, None, None
+# ── Player search ─────────────────────────────
+
+@st.cache_data(ttl=86400)
+def espn_search_players(query: str) -> List[dict]:
+    """Search ESPN for NBA players by name. Returns list of {id, full_name, team_abbr}."""
+    try:
+        data = espn_get(f"{ESPN_SITE}/athletes", params={"search": query, "limit": 10})
+        results = []
+        for item in data.get("items", []):
+            pid  = item.get("id")
+            name = item.get("displayName") or item.get("fullName") or ""
+            team = ""
+            try:
+                team_ref = item.get("team", {})
+                team = team_ref.get("abbreviation", "")
+            except Exception:
+                pass
+            if pid and name:
+                results.append({"id": pid, "full_name": name, "team_abbr": team})
+        return results
+    except Exception:
+        return []
+
+@st.cache_data(ttl=3600)
+def espn_get_player_info(player_id: str) -> dict:
+    """Get player info including current team."""
+    try:
+        data = espn_get(f"{ESPN_SITE}/athletes/{player_id}")
+        athlete = data.get("athlete", data)
+        team_abbr = ""
+        try:
+            team_abbr = athlete.get("team", {}).get("abbreviation", "")
+        except Exception:
+            pass
+        return {
+            "id":         str(athlete.get("id", player_id)),
+            "full_name":  athlete.get("displayName", ""),
+            "team_abbr":  team_abbr,
+        }
+    except Exception:
+        return {}
+
+def find_player(player_name: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """Returns (espn_player_id, full_name, team_abbreviation)."""
+    results = espn_search_players(player_name)
+    if not results:
+        return None, None, None
+    # exact match first
+    name_norm = normalize_name(player_name)
+    for r in results:
+        if normalize_name(r["full_name"]) == name_norm:
+            return r["id"], r["full_name"], r["team_abbr"]
+    # return best partial match
+    return results[0]["id"], results[0]["full_name"], results[0]["team_abbr"]
 
 # ── Game logs ─────────────────────────────────
 
 @st.cache_data(ttl=600)
-def bdl_get_game_logs(player_id: int, season: int, n: int = 10) -> pd.DataFrame:
+def espn_get_game_logs(player_id: str, season: int, n: int = 10) -> pd.DataFrame:
     """
-    Fetch last N game logs for a player from BallDontLie.
-    season: integer year e.g. 2025 for 2025-26 season.
-    Returns DataFrame with columns: GAME_DATE, MATCHUP, MIN, PTS, FGA, FTA, FG3A, PLUS_MINUS
+    Fetch last N game logs for a player from ESPN gamelog endpoint.
+    season: start year e.g. 2025 for 2025-26.
+    Returns DataFrame: GAME_DATE, MATCHUP, MIN, PTS, FGA, FTA, FG3A
     """
-    all_stats = []
-    cursor = None
-    # Fetch up to 3 pages to ensure we get enough games
-    for _ in range(3):
-        params = {
-            "player_ids[]": player_id,
-            "seasons[]": season,
-            "per_page": 25,
-        }
-        if cursor:
-            params["cursor"] = cursor
-        data = bdl_get("stats", params=params)
-        all_stats.extend(data.get("data", []))
-        cursor = data.get("meta", {}).get("next_cursor")
-        if not cursor or len(all_stats) >= n * 2:
-            break
-
-    if not all_stats:
-        return pd.DataFrame(columns=["GAME_DATE", "MATCHUP", "MIN", "PTS", "FGA", "FTA", "FG3A", "PLUS_MINUS"])
-
-    rows = []
-    for s in all_stats:
-        g = s.get("game", {})
-        team = s.get("team", {})
-        # Build matchup string: "TEAM vs. OPP" or "TEAM @ OPP"
-        home_id   = g.get("home_team_id")
-        team_id   = team.get("id")
-        is_home   = (team_id == home_id)
-        opp_abbr  = ""  # we'll fill from the game teams endpoint if needed
-        team_abbr = team.get("abbreviation", "")
-        # BDL stats don't directly give opponent abbr in stats endpoint
-        # Use home_team_id vs visitor_team_id with a lookup
-        matchup = f"{team_abbr} {'vs.' if is_home else '@'} ?"
-        rows.append({
-            "GAME_DATE":  pd.to_datetime(g.get("date", "")[:10]),
-            "MATCHUP":    matchup,
-            "GAME_ID":    g.get("id"),
-            "IS_HOME":    is_home,
-            "TEAM_ABBR":  team_abbr,
-            "MIN":        s.get("min", "0"),
-            "PTS":        s.get("pts", 0),
-            "FGA":        s.get("fga", 0),
-            "FTA":        s.get("fta", 0),
-            "FG3A":       s.get("fg3a", 0),
-            "PLUS_MINUS": s.get("plus_minus", 0),
-        })
-
-    df = pd.DataFrame(rows)
-    df = df.sort_values("GAME_DATE", ascending=False).head(n).reset_index(drop=True)
-
-    # Enrich MATCHUP with actual opponent abbreviation using games endpoint
+    empty = pd.DataFrame(columns=["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A"])
     try:
-        game_ids = df["GAME_ID"].dropna().tolist()
-        if game_ids:
-            params = {"ids[]": game_ids[:n], "per_page": n}
-            gdata = bdl_get("games", params=params)
-            game_map = {}
-            for gm in gdata.get("data", []):
-                game_map[gm["id"]] = gm
-            for i, row in df.iterrows():
-                gm = game_map.get(row["GAME_ID"])
-                if not gm:
-                    continue
-                home_abbr = gm.get("home_team", {}).get("abbreviation", "")
-                away_abbr = gm.get("visitor_team", {}).get("abbreviation", "")
-                team_abbr = row["TEAM_ABBR"]
-                if row["IS_HOME"]:
-                    df.at[i, "MATCHUP"] = f"{team_abbr} vs. {away_abbr}"
-                else:
-                    df.at[i, "MATCHUP"] = f"{team_abbr} @ {home_abbr}"
-    except Exception:
-        pass
+        url  = f"{ESPN_WEB}/athletes/{player_id}/gamelog"
+        data = espn_get(url, params={"season": season})
 
-    return df[["GAME_DATE", "MATCHUP", "MIN", "PTS", "FGA", "FTA", "FG3A", "PLUS_MINUS"]]
+        # ESPN gamelog returns categories + events structure
+        cats   = data.get("categories", [])
+        events = data.get("events", {})
 
+        # Build category name -> index map
+        stat_names = []
+        for cat in cats:
+            for label in cat.get("labels", []):
+                stat_names.append(label.lower())
+
+        rows = []
+        for event_id, event_data in events.items():
+            stats_list = event_data.get("stats", [])
+            game_info  = event_data.get("gameInfo", {})
+            opp        = event_data.get("opponent", {})
+            at_vs      = event_data.get("homeAway", "home")
+
+            # Parse date
+            game_date_str = game_info.get("date", "")[:10]
+            try:
+                game_date = pd.to_datetime(game_date_str)
+            except Exception:
+                continue
+
+            # Build matchup
+            opp_abbr = opp.get("abbreviation", "?")
+            team_abbr = ""
+            try:
+                team_abbr = event_data.get("teamAbbrev", "")
+            except Exception:
+                pass
+            if at_vs == "home":
+                matchup = f"{team_abbr} vs. {opp_abbr}"
+            else:
+                matchup = f"{team_abbr} @ {opp_abbr}"
+
+            # Map stats
+            stat_map = {}
+            for i, val in enumerate(stats_list):
+                if i < len(stat_names):
+                    try:
+                        stat_map[stat_names[i]] = float(val)
+                    except Exception:
+                        stat_map[stat_names[i]] = 0.0
+
+            rows.append({
+                "GAME_DATE": game_date,
+                "MATCHUP":   matchup,
+                "MIN":       stat_map.get("min", stat_map.get("minutes", 0)),
+                "PTS":       stat_map.get("pts", stat_map.get("points", 0)),
+                "FGA":       stat_map.get("fga", stat_map.get("fieldgoalsattempted", 0)),
+                "FTA":       stat_map.get("fta", stat_map.get("freethrowsattempted", 0)),
+                "FG3A":      stat_map.get("3pa", stat_map.get("fg3a", stat_map.get("threepointerattempted", 0))),
+            })
+
+        if not rows:
+            return empty
+
+        df = pd.DataFrame(rows)
+        df = df.sort_values("GAME_DATE", ascending=False).head(n).reset_index(drop=True)
+        return df
+
+    except Exception as e:
+        return empty
 
 def season_str_to_int(season_str: str) -> int:
     """Convert '2025-26' -> 2025, '2024-25' -> 2024."""
@@ -316,42 +317,53 @@ def season_str_to_int(season_str: str) -> int:
 # ── Next game / schedule ──────────────────────
 
 @st.cache_data(ttl=300)
-def bdl_get_next_game(team_abbr: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+def espn_get_next_game(team_abbr: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """
-    Find next upcoming game for a team using BallDontLie games endpoint.
-    Returns (opp_abbr, game_date_str, venue) where venue is 'Home' or 'Away'.
-    Skips games with status 'Final'.
+    Find next upcoming game for a team using ESPN scoreboard.
+    Returns (opp_abbr, game_date_str, venue).
+    Skips completed games.
     """
     if not team_abbr:
         return None, None, None
 
     try:
         import pytz
-        et = pytz.timezone("America/New_York")
+        et    = pytz.timezone("America/New_York")
         today = datetime.now(et).date()
     except Exception:
         today = datetime.today().date()
 
-    # Check today + next 10 days
     for offset in range(10):
-        check = today + timedelta(days=offset)
-        date_str = check.strftime("%Y-%m-%d")
+        check    = today + timedelta(days=offset)
+        date_str = check.strftime("%Y%m%d")
         try:
-            data = bdl_get("games", params={"dates[]": date_str, "per_page": 30})
-            for gm in data.get("data", []):
-                home = gm.get("home_team", {}).get("abbreviation", "")
-                away = gm.get("visitor_team", {}).get("abbreviation", "")
-                if team_abbr not in (home, away):
+            data   = espn_get(f"{ESPN_SITE}/scoreboard", params={"dates": date_str})
+            events = data.get("events", [])
+            for ev in events:
+                comps = ev.get("competitions", [{}])[0]
+                competitors = comps.get("competitors", [])
+                teams_in_game = {c.get("team", {}).get("abbreviation", ""): c for c in competitors}
+
+                if team_abbr not in teams_in_game:
                     continue
-                status = str(gm.get("status", "")).strip()
-                # Skip finished games
-                if "final" in status.lower():
+
+                # Skip if final
+                status = ev.get("status", {}).get("type", {}).get("name", "")
+                if "final" in status.lower() or "complete" in status.lower():
                     continue
+
+                # Find opponent
+                opp = next((c for abbr, c in teams_in_game.items() if abbr != team_abbr), None)
+                if not opp:
+                    continue
+                opp_abbr_found = opp.get("team", {}).get("abbreviation", "")
+
+                # Home or away
+                my_side   = teams_in_game[team_abbr]
+                home_away = "Home" if my_side.get("homeAway", "") == "home" else "Away"
                 game_date_str = check.strftime("%b %d, %Y")
-                if team_abbr == home:
-                    return away, game_date_str, "Home"
-                else:
-                    return home, game_date_str, "Away"
+
+                return opp_abbr_found, game_date_str, home_away
         except Exception:
             continue
 
@@ -360,46 +372,39 @@ def bdl_get_next_game(team_abbr: str) -> Tuple[Optional[str], Optional[str], Opt
 # ── Opponent defense rating ───────────────────
 
 @st.cache_data(ttl=3600)
-def bdl_get_opp_pts_allowed(opp_abbr: str, season: int) -> Optional[float]:
-    """
-    Get opponent pts allowed per game using BallDontLie team season averages.
-    Uses pts_allowed directly from team averages if available.
-    """
+def espn_get_opp_pts_allowed(opp_abbr: str) -> Optional[float]:
+    """Get opponent pts allowed per game from ESPN team statistics."""
     try:
-        # Get all teams to find team ID
-        tdata = bdl_get("teams", params={"per_page": 30})
+        # Find team ID from ESPN teams list
+        data = espn_get(f"{ESPN_SITE}/teams")
         team_id = None
-        for t in tdata.get("data", []):
-            if t.get("abbreviation") == opp_abbr:
-                team_id = t["id"]
+        for t in data.get("sports", [{}])[0].get("leagues", [{}])[0].get("teams", []):
+            team = t.get("team", {})
+            if team.get("abbreviation", "") == opp_abbr:
+                team_id = team.get("id")
                 break
         if not team_id:
             return None
 
-        # Get team season averages
-        avg_data = bdl_get(
-            "team_season_averages/general",
-            params={"season": season, "season_type": "regular", "type": "base", "team_ids[]": team_id}
-        )
-        for row in avg_data.get("data", []):
-            if row.get("team", {}).get("id") == team_id:
-                stats = row.get("stats", {})
-                # pfd = personal fouls drawn (pts fouled = opponent pts)
-                # opp_pts not directly available — use pts - plus_minus approximation
-                pts = stats.get("pts")
-                if pts:
-                    return round(float(pts), 1)
+        # Get team statistics
+        stats_data = espn_get(f"{ESPN_SITE}/teams/{team_id}/statistics")
+        splits = stats_data.get("splits", {}).get("categories", [])
+        for cat in splits:
+            if cat.get("name", "").lower() in ("defensive", "defense", "general"):
+                for stat in cat.get("stats", []):
+                    if stat.get("name", "").lower() in ("pointspergame", "pts", "points"):
+                        return round(float(stat.get("value", 0)), 1)
         return None
     except Exception:
         return None
 
-def classify_matchup_bdl(opp_abbr: Optional[str], season: int) -> Tuple[str, Optional[float], str]:
-    """Classify opponent defense quality using BallDontLie team averages."""
+def classify_matchup_espn(opp_abbr: Optional[str]) -> Tuple[str, Optional[float], str]:
+    """Classify opponent defense quality using ESPN team stats."""
     league_avg = 114.5
     if not opp_abbr:
         return "Neutral", None, str(league_avg)
 
-    opp_pts = bdl_get_opp_pts_allowed(opp_abbr, season)
+    opp_pts = espn_get_opp_pts_allowed(opp_abbr)
 
     if opp_pts is None:
         return "Neutral", None, str(league_avg)
@@ -411,7 +416,6 @@ def classify_matchup_bdl(opp_abbr: Optional[str], season: int) -> Tuple[str, Opt
         return "Bad", opp_pts, str(league_avg)
     return "Neutral", opp_pts, str(league_avg)
 
-# ─────────────────────────────────────────────
 # Prediction engine (unchanged)
 # ─────────────────────────────────────────────
 
@@ -697,24 +701,18 @@ with col_e:
 
 season_int = season_str_to_int(season_str)
 
-# Live search: show matching players as a selectbox once user types 3+ chars
+# Live search via ESPN — instant, no API key needed
 selected_player = None
 if player_query and len(player_query.strip()) >= 3:
-    query_norm = normalize_name(player_query)
     try:
-        all_bdl_players = bdl_get_all_players()
-        matches = [
-            f"{p['first_name']} {p['last_name']}"
-            for p in all_bdl_players
-            if query_norm in normalize_name(f"{p['first_name']} {p['last_name']}")
-        ]
-        matches = sorted(matches, key=lambda x: x.split()[-1])
+        results = espn_search_players(player_query.strip())
+        matches = [r["full_name"] for r in results]
     except Exception as e:
         matches = []
-        st.warning(f"Could not load player list: {e}")
+        st.warning(f"Search failed: {e}")
 
     if not matches:
-        st.warning("No players found matching that name.")
+        st.warning("No players found. Try a different spelling.")
         st.stop()
     elif len(matches) == 1:
         selected_player = matches[0]
@@ -723,7 +721,7 @@ if player_query and len(player_query.strip()) >= 3:
         selected_player = st.selectbox(
             "Select player",
             options=matches,
-            help="Multiple matches found — select the right one"
+            help="Multiple matches — select the right one"
         )
 else:
     st.markdown("<div style='color:#475569; font-family:DM Mono; font-size:0.8rem; margin-top:0.5rem;'>Type a player name above to get started.</div>", unsafe_allow_html=True)
@@ -753,7 +751,7 @@ if fetch:
     st.session_state.ai_error    = None
     try:
         with st.spinner("Fetching game logs..."):
-            st.session_state.logs = bdl_get_game_logs(
+            st.session_state.logs = espn_get_game_logs(
                 player_id=player_id, season=season_int, n=n_games
             )
     except Exception as e:
@@ -805,7 +803,7 @@ if st.session_state.logs is not None:
     pts_flag = trend_flag(logs["PTS"], n_games)
 
     # ── Next game + defense ───────────────────
-    opp_abbr, game_date, tonight_venue = bdl_get_next_game(player_team) if player_team else (None, None, None)
+    opp_abbr, game_date, tonight_venue = espn_get_next_game(player_team) if player_team else (None, None, None)
 
     # Splits
     splits = home_away_split(logs, line, side, player_team)
@@ -818,7 +816,7 @@ if st.session_state.logs is not None:
         elif " @ " in str(latest_matchup):
             opp_abbr = latest_matchup.split(" @ ")[1].strip()
 
-    matchup_auto, opp_pts, league_avg = classify_matchup_bdl(opp_abbr, season_int)
+    matchup_auto, opp_pts, league_avg = classify_matchup_espn(opp_abbr)
 
     # ── Stat cards ────────────────────────────
     st.markdown(f"<div class='section-header'>{full_name}</div>", unsafe_allow_html=True)
