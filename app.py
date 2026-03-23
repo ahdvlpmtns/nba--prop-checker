@@ -160,6 +160,9 @@ def bdl_headers() -> dict:
     if not key:
         st.error("❌ BALLDONTLIE_API_KEY not found in Streamlit secrets. Add it at balldontlie.io (free).")
         st.stop()
+    # Debug: show first/last 4 chars so we can verify key is being read
+    with st.sidebar:
+        st.caption(f"🔑 Key loaded: {key[:4]}...{key[-4:]}")
     return {"Authorization": key}
 
 def bdl_get(endpoint: str, params: dict = None, retries: int = 3) -> dict:
