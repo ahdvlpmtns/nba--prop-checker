@@ -826,43 +826,43 @@ if st.session_state.logs is not None:
     Matchup: {matchup_sel} (vs {opp_abbr or "unknown"})
     </div>""", unsafe_allow_html=True)
 
-    # ── AI Analysis (auto-generates on fetch) ─
+    # ── AI Analysis ───────────────────────────
     st.markdown("<div class='section-header'>AI Breakdown</div>", unsafe_allow_html=True)
     api_key = get_api_key()
     if not api_key:
         st.error("❌ No GROQ_API_KEY found in Streamlit secrets.")
     else:
-        # Auto-generate on fresh fetch, show stored result on re-render
-        if fetch and not st.session_state.ai_analysis:
-            with st.spinner("Generating AI breakdown..."):
-                try:
-                    prompt = build_analysis_prompt(
-                        full_name=full_name, line=line, side=side, n_games=n_games,
-                        logs=logs, baseline=baseline, weighted_base=weighted_base,
-                        adjusted=adjusted, tier=tier, avg_pts=sample_avg_pts,
-                        avg_min=avg_min, avg_fga=avg_fga, consistency=consistency,
-                        min_flag=min_flag, fga_flag=fga_flag, pts_flag=pts_flag,
-                        minutes_sel=minutes_sel, role_sel=role_sel, shots_sel=shots_sel,
-                        matchup_sel=matchup_sel, script_sel=script_sel,
-                        opp_abbr=opp_abbr, opp_pts=opp_pts, league_avg=league_avg,
-                    )
-                    st.session_state.ai_analysis = generate_ai_analysis(prompt)
-                    st.session_state.ai_error    = None
-                except Exception as e:
-                    st.session_state.ai_error    = repr(e)
-                    st.session_state.ai_analysis = None
-
         if st.session_state.ai_analysis:
             st.markdown(f"<div class='ai-box'>{st.session_state.ai_analysis}</div>", unsafe_allow_html=True)
             if st.button("⚡  Regenerate"):
                 st.session_state.ai_analysis = None
+                st.session_state.ai_error = None
                 st.rerun()
         elif st.session_state.ai_error:
             st.error(f"AI analysis failed: {st.session_state.ai_error}")
-            if st.button("⚡  Retry AI Analysis"):
+            if st.button("⚡  Retry"):
                 st.session_state.ai_analysis = None
                 st.session_state.ai_error = None
                 st.rerun()
+        else:
+            if st.button("⚡  Generate AI Analysis"):
+                with st.spinner("Analyzing..."):
+                    try:
+                        prompt = build_analysis_prompt(
+                            full_name=full_name, line=line, side=side, n_games=n_games,
+                            logs=logs, baseline=baseline, weighted_base=weighted_base,
+                            adjusted=adjusted, tier=tier, avg_pts=sample_avg_pts,
+                            avg_min=avg_min, avg_fga=avg_fga, consistency=consistency,
+                            min_flag=min_flag, fga_flag=fga_flag, pts_flag=pts_flag,
+                            minutes_sel=minutes_sel, role_sel=role_sel, shots_sel=shots_sel,
+                            matchup_sel=matchup_sel, script_sel=script_sel,
+                            opp_abbr=opp_abbr, opp_pts=opp_pts, league_avg=league_avg,
+                        )
+                        st.session_state.ai_analysis = generate_ai_analysis(prompt)
+                        st.session_state.ai_error = None
+                    except Exception as e:
+                        st.session_state.ai_error = repr(e)
+                        st.session_state.ai_analysis = None
 
     # ── Export ────────────────────────────────
     st.markdown("<div class='section-header'>Export</div>", unsafe_allow_html=True)
