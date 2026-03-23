@@ -153,9 +153,10 @@ BDL_BASE = "https://api.balldontlie.io/nba/v1"
 def bdl_headers() -> dict:
     key = ""
     try:
-        key = st.secrets["BALLDONTLIE_API_KEY"]
+        # support both uppercase and lowercase secret names
+        key = st.secrets.get("BALLDONTLIE_API_KEY") or st.secrets.get("balldontlie_api_key") or ""
     except Exception:
-        key = os.environ.get("BALLDONTLIE_API_KEY", "")
+        key = os.environ.get("BALLDONTLIE_API_KEY", "") or os.environ.get("balldontlie_api_key", "")
     if not key:
         st.error("❌ BALLDONTLIE_API_KEY not found in Streamlit secrets. Add it at balldontlie.io (free).")
         st.stop()
