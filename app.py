@@ -587,9 +587,10 @@ col_a, col_b, col_c, col_d, col_e = st.columns([2.5, 1, 1, 1, 0.8])
 with col_a:
     selected_player = st.selectbox(
         "Player",
-        options=all_player_names,
-        index=all_player_names.index("De'Aaron Fox") if "De'Aaron Fox" in all_player_names else 0,
-        placeholder="Type to search...",
+        options=[None] + all_player_names,
+        index=0,
+        placeholder="Type to search for a player...",
+        format_func=lambda x: "" if x is None else x,
         help="Start typing a player's name to filter the list"
     )
 with col_b:
@@ -600,6 +601,10 @@ with col_d:
     n_games = st.selectbox("Sample", [5, 10, 15], index=1)
 with col_e:
     season = st.text_input("Season", value="2025-26")
+
+if not selected_player:
+    st.markdown("<div style='color:#475569; font-family:DM Mono; font-size:0.8rem; margin-top:1rem;'>Search for a player above to get started.</div>", unsafe_allow_html=True)
+    st.stop()
 
 player_id, full_name = find_player_id(selected_player)
 
@@ -756,28 +761,27 @@ if st.session_state.logs is not None:
 
     # Show next opponent clearly
     if opp_abbr:
-        date_display = f" · {game_date}" if game_date else ""
+        date_display = game_date if game_date else ""
         badge_css = matchup_auto.lower()
         badge_text = {"Good": "Weak defense", "Bad": "Strong defense", "Neutral": "Average defense"}[matchup_auto]
-        st.markdown(f"""
-        <div style='background:#0f172a; border:1px solid #1e293b; border-radius:10px;
-                    padding:0.75rem 1.2rem; margin-bottom:1rem; display:flex;
-                    align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.5rem;'>
-            <div>
-                <div style='font-family:DM Mono; font-size:0.65rem; color:#475569;
-                            letter-spacing:0.12em; text-transform:uppercase; margin-bottom:4px;'>
-                    Next Game
-                </div>
-                <div style='font-size:1.2rem; font-weight:800; color:#f1f5f9; letter-spacing:-0.5px;'>
-                    vs <span style='color:#f97316;'>{opp_abbr}</span>
-                    <span style='font-family:DM Mono; font-size:0.75rem; color:#475569; font-weight:400; margin-left:8px;'>
-                        {date_display.strip(" ·")}
-                    </span>
-                </div>
-            </div>
-            <span class='defense-badge {badge_css}'>{badge_text} · {f"{opp_pts:.1f}" if opp_pts else "N/A"} pts/g allowed</span>
-        </div>
-        """, unsafe_allow_html=True)
+        opp_pts_str = f"{opp_pts:.1f}" if opp_pts else "N/A"
+        next_game_html = (
+            "<div style='background:#0f172a; border:1px solid #1e293b; border-radius:10px; "
+            "padding:0.75rem 1.2rem; margin-bottom:1rem; display:flex; "
+            "align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.5rem;'>"
+            "<div>"
+            "<div style='font-family:DM Mono; font-size:0.65rem; color:#475569; "
+            "letter-spacing:0.12em; text-transform:uppercase; margin-bottom:4px;'>Next Game</div>"
+            "<div style='font-size:1.2rem; font-weight:800; color:#f1f5f9; letter-spacing:-0.5px;'>"
+            "vs <span style='color:#f97316;'>" + opp_abbr + "</span>"
+            "<span style='font-family:DM Mono; font-size:0.75rem; color:#475569; font-weight:400; margin-left:8px;'>"
+            + date_display + "</span></div>"
+            "</div>"
+            "<span class='defense-badge " + badge_css + "'>" + badge_text + " · " + opp_pts_str + " pts/g allowed</span>"
+            "</div>"
+        )
+        st.markdown(next_game_html, unsafe_allow_html=True)
+        st.caption("Matchup quality is auto-filled based on the next opponent's defensive rating. You can override it manually.")
     else:
         st.caption("Next opponent not found — matchup set to Neutral.")
 
