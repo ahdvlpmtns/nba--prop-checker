@@ -368,15 +368,55 @@ def normalize_name(s: str) -> str:
 
 @st.cache_data(ttl=86400)
 def nba_find_player(player_name: str) -> Tuple[Optional[int], Optional[str]]:
-    """Find player ID from nba_api static list."""
+    """
+    Find player ID from nba_api static list.
+    Tries multiple matching strategies to handle:
+    - Accented chars: Doncic -> Dončić
+    - Name order variants
+    - Partial last name matches
+    """
     name = normalize_name(player_name)
     all_p = nba_players.get_players()
+
+    # 1. Exact normalized match
     for p in all_p:
         if normalize_name(p["full_name"]) == name:
             return p["id"], p["full_name"]
+
+    # 2. Partial match — query contained in full name
     candidates = [p for p in all_p if name in normalize_name(p["full_name"])]
-    if candidates:
+    if len(candidates) == 1:
         return candidates[0]["id"], candidates[0]["full_name"]
+    if candidates:
+        # prefer active players
+        active = [p for p in candidates if p.get("is_active", True)]
+        if active:
+            return active[0]["id"], active[0]["full_name"]
+        return candidates[0]["id"], candidates[0]["full_name"]
+
+    # 3. Last name only match (e.g. "doncic" in "luka doncic")
+    parts = name.split()
+    if len(parts) >= 2:
+        last = parts[-1]
+        first = parts[0]
+        last_matches = [
+            p for p in all_p
+            if last in normalize_name(p["full_name"])
+            and first in normalize_name(p["full_name"])
+        ]
+        if last_matches:
+            active = [p for p in last_matches if p.get("is_active", True)]
+            best = active if active else last_matches
+            return best[0]["id"], best[0]["full_name"]
+
+    # 4. Last name only (single strong signal)
+    if len(parts) >= 1:
+        last = parts[-1]
+        if len(last) >= 5:  # avoid short names matching too broadly
+            last_only = [p for p in all_p if normalize_name(p["full_name"]).endswith(last)]
+            if len(last_only) == 1:
+                return last_only[0]["id"], last_only[0]["full_name"]
+
     return None, None
 
 @st.cache_data(ttl=600)
@@ -1145,7 +1185,14 @@ player_team = espn_player["team_abbr"] if espn_player else None
 player_id   = nba_id
 
 if player_id is None:
-    st.error(f"Could not find '{selected_player}' in NBA database. Try exact spelling.")
+    # Show what we tried vs what's available as a hint
+    import unicodedata as _ud
+    _norm = normalize_name(selected_player)
+    from nba_api.stats.static import players as _nba_p
+    _close = [p["full_name"] for p in _nba_p.get_players()
+              if any(part in normalize_name(p["full_name"]) for part in _norm.split() if len(part) > 3)][:5]
+    hint = f" Did you mean: {', '.join(_close)}?" if _close else ""
+    st.error(f"Could not find '{selected_player}' in NBA database.{hint}")
     st.stop()
 
 fetch = st.button("🔍  Analyze Prop")
