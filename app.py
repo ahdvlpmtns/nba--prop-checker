@@ -239,68 +239,78 @@ def find_player(player_name: str) -> Tuple[Optional[str], Optional[str], Optiona
 @st.cache_data(ttl=600)
 def espn_get_game_logs(player_id: str, season: int, n: int = 10) -> pd.DataFrame:
     """
-    Fetch last N game logs for a player from ESPN gamelog endpoint.
-    season: start year e.g. 2025 for 2025-26.
-    Returns DataFrame: GAME_DATE, MATCHUP, MIN, PTS, FGA, FTA, FG3A
+    Fetch last N game logs from ESPN gamelog endpoint.
+    Stores raw response in cache for debug inspection.
     """
     empty = pd.DataFrame(columns=["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A"])
     try:
         url  = f"{ESPN_WEB}/athletes/{player_id}/gamelog"
         data = espn_get(url, params={"season": season})
 
-        # ESPN gamelog returns categories + events structure
+        # Store raw keys for debug
+        espn_get_game_logs._last_raw = data
+
+        # ESPN structure: categories (with labels) + events (dict keyed by event id)
         cats   = data.get("categories", [])
         events = data.get("events", {})
 
-        # Build category name -> index map
+        # Build flat label list from all categories
         stat_names = []
         for cat in cats:
             for label in cat.get("labels", []):
                 stat_names.append(label.lower())
 
         rows = []
-        for event_id, event_data in events.items():
-            stats_list = event_data.get("stats", [])
-            game_info  = event_data.get("gameInfo", {})
-            opp        = event_data.get("opponent", {})
-            at_vs      = event_data.get("homeAway", "home")
+        for event_id, ev in events.items():
+            # stats is a flat list of values matching stat_names
+            stats_list = ev.get("stats", [])
 
-            # Parse date
-            game_date_str = game_info.get("date", "")[:10]
+            # Game date — try multiple keys
+            date_str = (
+                ev.get("gameDate") or
+                ev.get("date") or
+                ev.get("gameInfo", {}).get("date") or
+                ev.get("atVs", {}).get("date") or ""
+            )[:10]
             try:
-                game_date = pd.to_datetime(game_date_str)
+                game_date = pd.to_datetime(date_str)
             except Exception:
                 continue
 
-            # Build matchup
-            opp_abbr = opp.get("abbreviation", "?")
-            team_abbr = ""
-            try:
-                team_abbr = event_data.get("teamAbbrev", "")
-            except Exception:
-                pass
-            if at_vs == "home":
+            # Opponent + home/away
+            opp_abbr  = (ev.get("opponent") or {}).get("abbreviation", "?")
+            home_away = ev.get("homeAway", ev.get("atVs", ""))
+            team_abbr = ev.get("teamAbbrev", ev.get("teamAbbreviation", ""))
+
+            if str(home_away).lower() in ("home", "vs", "vs."):
                 matchup = f"{team_abbr} vs. {opp_abbr}"
             else:
                 matchup = f"{team_abbr} @ {opp_abbr}"
 
-            # Map stats
+            # Map stat values to names
             stat_map = {}
             for i, val in enumerate(stats_list):
                 if i < len(stat_names):
                     try:
-                        stat_map[stat_names[i]] = float(val)
+                        stat_map[stat_names[i]] = float(str(val).replace("--", "0").replace("-", "0") or 0)
                     except Exception:
                         stat_map[stat_names[i]] = 0.0
+
+            def g(*keys):
+                for k in keys:
+                    v = stat_map.get(k)
+                    if v is not None:
+                        return v
+                return 0
 
             rows.append({
                 "GAME_DATE": game_date,
                 "MATCHUP":   matchup,
-                "MIN":       stat_map.get("min", stat_map.get("minutes", 0)),
-                "PTS":       stat_map.get("pts", stat_map.get("points", 0)),
-                "FGA":       stat_map.get("fga", stat_map.get("fieldgoalsattempted", 0)),
-                "FTA":       stat_map.get("fta", stat_map.get("freethrowsattempted", 0)),
-                "FG3A":      stat_map.get("3pa", stat_map.get("fg3a", stat_map.get("threepointerattempted", 0))),
+                "MIN":  g("min", "minutes", "mins"),
+                "PTS":  g("pts", "points", "pt"),
+                "FGA":  g("fga", "fieldgoalsattempted", "fgattempted"),
+                "FTA":  g("fta", "freethrowsattempted", "ftattempted"),
+                "FG3A": g("3pa", "fg3a", "threepointerattempted", "3pta"),
             })
 
         if not rows:
@@ -311,7 +321,11 @@ def espn_get_game_logs(player_id: str, season: int, n: int = 10) -> pd.DataFrame
         return df
 
     except Exception as e:
+        espn_get_game_logs._last_error = str(e)
         return empty
+
+espn_get_game_logs._last_raw   = {}
+espn_get_game_logs._last_error = ""
 
 def season_str_to_int(season_str: str) -> int:
     """Convert '2025-26' -> 2025, '2024-25' -> 2024."""
@@ -707,30 +721,30 @@ with col_e:
 
 season_int = season_str_to_int(season_str)
 
-# Live search via ESPN — instant, no API key needed
+# Live search — filters roster as you type
 selected_player = None
-if player_query and len(player_query.strip()) >= 3:
-    try:
-        results = espn_search_players(player_query.strip())
-        matches = [r["full_name"] for r in results]
-    except Exception as e:
-        matches = []
-        st.warning(f"Search failed: {e}")
+if player_query and len(player_query.strip()) >= 2:
+    with st.spinner("Searching players..."):
+        try:
+            results = espn_search_players(player_query.strip())
+            matches = [r["full_name"] for r in results]
+        except Exception as e:
+            matches = []
+            st.warning(f"Search failed: {e}")
 
     if not matches:
-        st.warning("No players found. Try a different spelling.")
+        st.warning("No players found. Try typing first or last name.")
         st.stop()
     elif len(matches) == 1:
         selected_player = matches[0]
-        st.markdown(f"<div style='font-family:DM Mono; font-size:0.75rem; color:#22c55e; margin-top:-0.5rem;'>✓ {selected_player}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div style='font-family:DM Mono; font-size:0.75rem; color:#22c55e; margin-top:2px; margin-bottom:4px;'>✓ Matched: {selected_player}</div>", unsafe_allow_html=True)
     else:
         selected_player = st.selectbox(
-            "Select player",
+            f"Select from {len(matches)} matches",
             options=matches,
-            help="Multiple matches — select the right one"
         )
 else:
-    st.markdown("<div style='color:#475569; font-family:DM Mono; font-size:0.8rem; margin-top:0.5rem;'>Type a player name above to get started.</div>", unsafe_allow_html=True)
+    st.markdown("<div style='color:#475569; font-family:DM Mono; font-size:0.8rem; margin-top:0.5rem;'>Type a player name above (first or last name works).</div>", unsafe_allow_html=True)
     st.stop()
 
 if not selected_player:
@@ -788,7 +802,14 @@ if st.session_state.logs is not None:
     logs = st.session_state.logs
 
     if logs.empty:
-        st.warning("No game log data found for this player/season. Try a different season or check the player name.")
+        with st.expander("🛠️ ESPN debug — raw response"):
+            raw = getattr(espn_get_game_logs, "_last_raw", {})
+            err = getattr(espn_get_game_logs, "_last_error", "")
+            st.write("Top-level keys:", list(raw.keys()) if raw else "empty")
+            st.write("Error:", err or "none")
+            if raw:
+                st.json({k: v for k, v in list(raw.items())[:3]})
+        st.warning("No game log data found. Expand debug above to diagnose.")
         st.stop()
 
     # ── Core stats ────────────────────────────
