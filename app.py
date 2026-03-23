@@ -432,6 +432,82 @@ def season_str_to_int(season_str: str) -> int:
     except Exception:
         return 2025
 
+# ── Season average fetch + divergence signal ─────────────────────
+
+@st.cache_data(ttl=3600)
+def nba_get_season_avg(player_id: int, season: str) -> Optional[float]:
+    """
+    Fetch full season game log and return season avg pts.
+    Different from the L5/L10 sample — this is the full-season baseline.
+    """
+    try:
+        from nba_api.library.http import NBAStatsHTTP
+        NBAStatsHTTP.nba_response.headers = {
+            "Host": "stats.nba.com",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "x-nba-stats-origin": "stats",
+            "x-nba-stats-token": "true",
+            "Referer": "https://www.nba.com/",
+            "Origin": "https://www.nba.com",
+            "Connection": "keep-alive",
+        }
+    except Exception:
+        pass
+    for attempt in range(3):
+        try:
+            df = playergamelog.PlayerGameLog(
+                player_id=player_id, season=season, timeout=45,
+            ).get_data_frames()[0]
+            pts = pd.to_numeric(df["PTS"], errors="coerce").dropna()
+            return round(float(pts.mean()), 1) if len(pts) >= 5 else None
+        except Exception:
+            if attempt < 2:
+                time.sleep(3 * (attempt + 1))
+    return None
+
+
+def form_divergence_signal(
+    recent_avg: float,
+    season_avg: Optional[float],
+    line: float,
+    side: str,
+) -> Tuple[str, Optional[float]]:
+    """
+    Compare L5/L10 average to season average.
+    Returns (signal, divergence_pts) where:
+      'Hot'    — recent avg is 3+ pts above season avg (riding a hot streak)
+      'Cold'   — recent avg is 3+ pts below season avg (in a slump)
+      'Neutral' — within 3 pts either way
+    The signal then interacts with the line direction:
+      Hot + Over  = boost | Hot + Under = slight penalty
+      Cold + Under = boost | Cold + Over = penalty
+    We encode this as a single verdict-ready key.
+    """
+    if season_avg is None or season_avg == 0:
+        return "Neutral", None
+
+    diff = recent_avg - season_avg  # positive = running hot, negative = running cold
+
+    if diff >= 3.0:
+        streak = "Hot"
+    elif diff <= -3.0:
+        streak = "Cold"
+    else:
+        return "Neutral", round(diff, 1)
+
+    # Align streak direction with bet side for final signal
+    if streak == "Hot" and side == "Over":
+        return "Boost", round(diff, 1)
+    if streak == "Hot" and side == "Under":
+        return "Penalty", round(diff, 1)
+    if streak == "Cold" and side == "Under":
+        return "Boost", round(diff, 1)
+    if streak == "Cold" and side == "Over":
+        return "Penalty", round(diff, 1)
+    return "Neutral", round(diff, 1)
+
+
 # ── Next game / schedule ──────────────────────
 
 @st.cache_data(ttl=300)
@@ -667,6 +743,8 @@ def apply_adjustments(weighted: float, context: dict) -> float:
         "h2h":      {"Strong": 1.07, "Neutral": 1.00, "Risk": 0.91},
         # B2B: second night of back-to-back is a meaningful fatigue penalty
         "b2b":      {"Normal": 1.00, "B2B": 0.91},
+        # Form: recent avg vs season avg divergence aligned with bet direction
+        "form":     {"Boost": 1.07, "Neutral": 1.00, "Penalty": 0.92},
     }
     margin = weighted - 0.5
     for key, val in context.items():
@@ -796,6 +874,7 @@ CONTEXT:
 - Venue split adjustment: {venue_adj or "Neutral"} (based on home/away hit rate differential)
 - H2H vs {opp_abbr}: {h2h_sig} signal — {h2h_count} games, avg {f"{h2h_avg:.1f}" if h2h_avg else "N/A"} pts
 - Schedule: {b2b_status}{"  — FATIGUE RISK, second night of back-to-back" if b2b_status == "B2B" else ""}
+- Form: recent avg {sample_avg_pts:.1f} vs season avg {f"{season_avg:.1f}" if season_avg else "N/A"} ({f"{form_diff:+.1f} pts divergence" if form_diff else "N/A"}) — {form_sig} signal for {side}
 
 MODEL OUTPUT: {tier}
 
@@ -985,7 +1064,9 @@ if st.session_state.logs is not None:
     # ── H2H + B2B ────────────────────────────
     h2h_df     = get_h2h_logs(player_id, opp_abbr, season_str_clean) if opp_abbr else pd.DataFrame()
     h2h_sig, h2h_avg, h2h_count = h2h_signal(h2h_df, line, side)
-    b2b_status = detect_b2b(logs, game_date)
+    b2b_status  = detect_b2b(logs, game_date)
+    season_avg  = nba_get_season_avg(player_id, season_str_clean)
+    form_sig, form_diff = form_divergence_signal(sample_avg_pts, season_avg, line, side)
 
     # ── Stat cards ────────────────────────────
     st.markdown(f"<div class='section-header'>{full_name}</div>", unsafe_allow_html=True)
@@ -1060,9 +1141,9 @@ if st.session_state.logs is not None:
     </div>""", unsafe_allow_html=True)
     st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
 
-    # ── H2H + B2B cards ──────────────────────
-    st.markdown("<div class='section-header'>H2H & Schedule</div>", unsafe_allow_html=True)
-    hb1, hb2 = st.columns(2)
+    # ── H2H + B2B + Form cards ───────────────
+    st.markdown("<div class='section-header'>H2H, Form & Schedule</div>", unsafe_allow_html=True)
+    hb1, hb2, hb3 = st.columns(3)
 
     with hb1:
         if h2h_count >= 2:
@@ -1117,6 +1198,37 @@ if st.session_state.logs is not None:
                         </div>
                     </div>
                 </div>
+            </div>""", unsafe_allow_html=True)
+
+    with hb3:
+        if season_avg is not None and form_diff is not None:
+            is_hot     = form_diff >= 3.0
+            is_cold    = form_diff <= -3.0
+            form_color = "#22c55e" if form_sig == "Boost" else ("#ef4444" if form_sig == "Penalty" else "#94a3b8")
+            form_bg    = "#052e16" if form_sig == "Boost" else ("#1c0505" if form_sig == "Penalty" else "#0f172a")
+            form_border= "#166534" if form_sig == "Boost" else ("#991b1b" if form_sig == "Penalty" else "#1e293b")
+            streak_label = "🔥 Running Hot" if is_hot else ("🥶 Running Cold" if is_cold else "📊 On Pace")
+            streak_sub   = (
+                f"{form_diff:+.1f} pts vs season avg ({season_avg:.1f})"
+                if form_diff else f"Season avg: {season_avg:.1f}"
+            )
+            form_verdict = {
+                "Boost":   f"{'Favors Over' if side == 'Over' else 'Favors Under'} — applied",
+                "Penalty": f"{'Hurts Over' if side == 'Over' else 'Hurts Under'} — applied",
+                "Neutral": "No adjustment",
+            }.get(form_sig, "No adjustment")
+            st.markdown(f"""
+            <div class='stat-card' style='border-color:{form_border}; background:linear-gradient(135deg,{form_bg} 0%,#111827 100%);'>
+                <div class='stat-label'>Recent Form vs Season</div>
+                <div style='font-size:1rem; font-weight:800; color:{form_color}; margin-top:6px;'>{streak_label}</div>
+                <div style='font-family:DM Mono; font-size:0.7rem; color:#475569; margin-top:4px;'>{streak_sub}</div>
+                <div style='font-family:DM Mono; font-size:0.68rem; color:{form_color}; margin-top:4px;'>{form_verdict}</div>
+            </div>""", unsafe_allow_html=True)
+        else:
+            st.markdown("""
+            <div class='stat-card'>
+                <div class='stat-label'>Recent Form vs Season</div>
+                <div style='color:#475569; font-size:0.85rem; margin-top:8px;'>Season data loading...</div>
             </div>""", unsafe_allow_html=True)
 
     # ── Home/Away splits ──────────────────────
@@ -1248,6 +1360,7 @@ if st.session_state.logs is not None:
         "venue":   venue_adj,
         "h2h":     h2h_sig,
         "b2b":     b2b_status,
+        "form":    form_sig,
     }
 
     adjusted  = apply_adjustments(weighted_base, context)
@@ -1306,7 +1419,8 @@ if st.session_state.logs is not None:
         Matchup: {matchup_sel} (vs {opp_abbr or "unknown"}) &nbsp;·&nbsp;
         Venue: {tonight_venue or "Unknown"} ({venue_adj}) &nbsp;·&nbsp;
         H2H: {h2h_sig} ({h2h_count} games, avg {f"{h2h_avg:.1f}" if h2h_avg else "N/A"} pts) &nbsp;·&nbsp;
-        Schedule: {b2b_status}
+        Schedule: {b2b_status} &nbsp;·&nbsp;
+        Form: {form_sig} ({f"{form_diff:+.1f}" if form_diff else "N/A"} vs season avg {f"{season_avg:.1f}" if season_avg else "N/A"})
         </div>""", unsafe_allow_html=True)
 
     # ── AI Analysis ───────────────────────────
