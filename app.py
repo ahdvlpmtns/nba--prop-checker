@@ -302,6 +302,15 @@ def get_next_opponent(player_team):
 
         except Exception as e:
             debug.append(f"  day_offset {day_offset}: error - {e}")
+            # On first failure, dump the actual column names so we can fix them
+            try:
+                sb2 = scoreboardv2.ScoreboardV2(
+                    game_date=check_date_str, league_id="00", day_offset=0, timeout=20,
+                )
+                df0 = sb2.get_data_frames()[0]
+                debug.append(f"  columns: {list(df0.columns)}")
+            except Exception:
+                pass
             continue
 
     debug.append("No upcoming game found in 10-day window")
