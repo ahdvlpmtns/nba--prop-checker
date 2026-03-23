@@ -2,4 +2,4 @@ streamlit
 pandas
 nba_api
 requests
-ANTHROPIC_API_KEY = "sk-ant-..."
+anthropic
