@@ -563,7 +563,7 @@ st.markdown("""
     align-items:center;
     gap:8px;
 ' class='mobile-hint'>
-    ☰ st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)nbsp;Tap the <strong style='color:#f97316'>arrow</strong> in the top-left to access Settings, AI toggle, and Slate Scanner.
+    ☰ &nbsp;Tap the <strong style='color:#f97316'>arrow</strong> in the top-left to access Settings, AI toggle, and Slate Scanner.
 </div>
 <style>
 @media (max-width: 768px) {
