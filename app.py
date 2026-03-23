@@ -548,6 +548,30 @@ st.markdown("""
 
 st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
 
+# Mobile sidebar hint
+st.markdown("""
+<div style='
+    display:none;
+    background:#0f172a;
+    border:1px solid #1e293b;
+    border-radius:10px;
+    padding:0.6rem 1rem;
+    margin-bottom:0.75rem;
+    font-family:DM Mono;
+    font-size:0.72rem;
+    color:#94a3b8;
+    align-items:center;
+    gap:8px;
+' class='mobile-hint'>
+    ☰ st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)nbsp;Tap the <strong style='color:#f97316'>arrow</strong> in the top-left to access Settings, AI toggle, and Slate Scanner.
+</div>
+<style>
+@media (max-width: 768px) {
+    .mobile-hint { display:flex !important; }
+}
+</style>
+""", unsafe_allow_html=True)
+
 # ─────────────────────────────────────────────
 # Sidebar
 # ─────────────────────────────────────────────
