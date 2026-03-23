@@ -17,6 +17,21 @@ from nba_api.stats.endpoints import (
     leaguedashteamstats, commonplayerinfo,
 )
 
+# Patch nba_api to use browser-like headers — reduces timeout failures on Streamlit Cloud
+from nba_api.library.http import NBAStatsHTTP
+NBAStatsHTTP.nba_response.headers = {
+    "Host": "stats.nba.com",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "x-nba-stats-origin": "stats",
+    "x-nba-stats-token": "true",
+    "Referer": "https://www.nba.com/",
+    "Connection": "keep-alive",
+    "Origin": "https://www.nba.com",
+}
+
 # ─────────────────────────────────────────────
 # Page config
 # ─────────────────────────────────────────────
@@ -181,7 +196,7 @@ def search_candidates(player_name: str):
 @st.cache_data(ttl=600)
 def get_last_n_games(player_id: int, season: str, n: int = 10) -> pd.DataFrame:
     df = playergamelog.PlayerGameLog(
-        player_id=player_id, season=season, timeout=15,
+        player_id=player_id, season=season, timeout=45,
     ).get_data_frames()[0]
     df["GAME_DATE"] = pd.to_datetime(df["GAME_DATE"])
     df = df.sort_values("GAME_DATE", ascending=False).head(n).copy()
@@ -204,7 +219,7 @@ def get_live_roster(team_abbr: str, season: str) -> list:
         return []
     try:
         df = commonteamroster.CommonTeamRoster(
-            team_id=team_id, season=season, timeout=20,
+            team_id=team_id, season=season, timeout=45,
         ).get_data_frames()[0]
         return df["PLAYER"].tolist()
     except Exception:
@@ -214,7 +229,7 @@ def get_live_roster(team_abbr: str, season: str) -> list:
 def get_player_team(player_id: int) -> Optional[str]:
     try:
         info = commonplayerinfo.CommonPlayerInfo(
-            player_id=player_id, timeout=15,
+            player_id=player_id, timeout=45,
         ).get_data_frames()[0]
         return info["TEAM_ABBREVIATION"].iloc[0] if not info.empty else None
     except Exception:
@@ -254,7 +269,7 @@ def get_next_opponent(player_team):
                 game_date=check_date_str,
                 league_id="00",
                 day_offset=0,
-                timeout=20,
+                timeout=45,
             )
             games = sb.get_data_frames()[0]
 
@@ -305,7 +320,7 @@ def get_next_opponent(player_team):
             # On first failure, dump the actual column names so we can fix them
             try:
                 sb2 = scoreboardv2.ScoreboardV2(
-                    game_date=check_date_str, league_id="00", day_offset=0, timeout=20,
+                    game_date=check_date_str, league_id="00", day_offset=0, timeout=45,
                 )
                 df0 = sb2.get_data_frames()[0]
                 debug.append(f"  columns: {list(df0.columns)}")
@@ -347,7 +362,7 @@ def classify_matchup(opp_abbr: Optional[str], season: str) -> Tuple[str, Optiona
                 if not pid:
                     continue
                 log = playergamelog.PlayerGameLog(
-                    player_id=pid, season=season, timeout=15,
+                    player_id=pid, season=season, timeout=45,
                 ).get_data_frames()[0]
                 if log.empty or "PLUS_MINUS" not in log.columns:
                     continue
@@ -375,14 +390,16 @@ def classify_matchup(opp_abbr: Optional[str], season: str) -> Tuple[str, Optiona
         return "Bad", opp_pts, avg_str
     return "Neutral", opp_pts, avg_str
 
-def fetch_with_retries(fn, retries=3, wait=2):
+def fetch_with_retries(fn, retries=5, wait=3):
+    """Retry with exponential backoff — handles NBA API timeouts on Streamlit Cloud."""
     last_err = None
     for i in range(retries):
         try:
             return fn()
         except Exception as e:
             last_err = e
-            time.sleep(wait * (i + 1))
+            wait_time = wait * (2 ** i)  # exponential: 3, 6, 12, 24, 48s
+            time.sleep(wait_time)
     raise last_err
 
 # ─────────────────────────────────────────────
@@ -905,7 +922,7 @@ if st.session_state.logs is not None:
                     base_dt = datetime.today()
                 for day_offset in range(8):
                     check_date = (base_dt + timedelta(days=day_offset)).strftime("%m/%d/%Y")
-                    sb_check = scoreboardv2.ScoreboardV2(game_date=check_date, league_id="00", day_offset=0, timeout=10)
+                    sb_check = scoreboardv2.ScoreboardV2(game_date=check_date, league_id="00", day_offset=0, timeout=45)
                     g = sb_check.get_data_frames()[0]
                     if not g.empty:
                         r = g[(g["HOME_TEAM_ABBREVIATION"] == player_team) | (g["VISITOR_TEAM_ABBREVIATION"] == player_team)]
