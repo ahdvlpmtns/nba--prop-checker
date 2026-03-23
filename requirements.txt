@@ -3,4 +3,4 @@ pandas
 nba_api
 requests
 groq
-plotly
+plotly>=5.18.0,<6.0.0
