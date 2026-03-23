@@ -862,17 +862,18 @@ if st.session_state.logs is not None:
     shots_suggest   = "High" if avg_fga >= 15 else ("Low" if avg_fga < 10 else "Medium")
     role_suggest    = suggest_bucket(avg_fga + 0.5 * avg_fta, 18, 12)
 
-    # Home/away splits (uses full game log, not just last N)
-    splits = home_away_split(logs, line, side, player_team)
-    tonight_venue = None  # will be set in splits block below
+    tonight_venue = None  # set after player_team is resolved
 
     min_flag = trend_flag(logs["MIN"], n_games)
     fga_flag = trend_flag(logs["FGA"], n_games)
     pts_flag = trend_flag(logs["PTS"], n_games)
 
     # ── Auto-detect NEXT opponent + defense rating ─
-    player_team        = get_player_team(player_id)
+    player_team         = get_player_team(player_id)
     opp_abbr, game_date = get_next_opponent(player_team)
+
+    # Home/away splits — needs player_team to detect home vs away from MATCHUP
+    splits = home_away_split(logs, line, side, player_team)
 
     # Fall back to most recent game log opponent if no upcoming game found
     if not opp_abbr:
