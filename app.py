@@ -723,8 +723,7 @@ with col_a:
         "Player",
         options=[None] + all_player_names,
         index=0,
-        placeholder="Type to search for a player...",
-        format_func=lambda x: "" if x is None else x,
+        format_func=lambda x: "🔍  Type to search for a player..." if x is None else x,
         help="Start typing a player's name to filter the list"
     )
 with col_b:
