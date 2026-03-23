@@ -224,9 +224,20 @@ def label_from_prob(p: float) -> str:
 
 
 st.set_page_config(page_title="NBA Points Prop Checker", layout="wide")
-st.title("NBA Points Prop Checker (Conservative Method)")
+st.title("NBA Points Prop Checker")
 st.caption("Version 1.0 — Player prop analysis tool")
 st.caption("Analyze NBA points props using recent game logs, hit rate, and context adjustments.")
+
+st.markdown("## Inputs")
+
+player_query = st.text_input("Search player", value="Fox")
+line = st.number_input("Points line", min_value=0.0, value=24.5, step=0.5)
+side = st.selectbox("Higher / Lower", ["Over", "Under"])
+n_games = st.selectbox("Sample size", [5, 10, 15], index=1)
+season = st.text_input("Season", value="2025-26")
+fetch = st.button("Fetch logs")
+
+player_name = player_query
 
 NBA_TEAMS = [
     "ATL","BOS","BKN","CHA","CHI","CLE","DAL","DEN","DET","GSW",
@@ -287,24 +298,10 @@ def scan_team_players(team_abbr: str, season: str) -> pd.DataFrame:
     ).reset_index(drop=True)
 
 with st.sidebar:
-    st.header("Inputs")
-    player_query = st.text_input("Search player", value="Fox")
-    player_name = player_query
-    season = st.text_input("Season (format: 2025-26)", value="2025-26")
-
-    line = st.number_input("Points line", min_value=0.0, value=24.5, step=0.5)
-    side = st.selectbox("Over/Under", ["Over", "Under"])
-
-    n_games = st.selectbox("Sample size", [5, 10, 15], index=1)
-
-    fetch = st.button("Fetch logs")
-
+    st.markdown("## Advanced Tools")
     manual_mode = st.checkbox("Use manual last 10 input if fetch fails")
-
-    st.markdown("---")
-    st.subheader("Slate Scanner")
-
     scan_slate = st.checkbox("Enable slate scanner")
+
 
 st.divider()
 
@@ -492,42 +489,37 @@ if fetch:
     else:
         confidence_badge = "⚪ Pass"
 
-    cA, cB, cC = st.columns(3)
-    with cA:
-        st.metric("Baseline %", f"{baseline:.0%}")
-    with cB:
-        st.metric("Adjusted %", f"{adjusted:.0%}")
-    with cC:
-        st.metric("Traffic light", label)
 
     st.markdown("## Final Verdict")
     st.markdown(
         f"""
 ### {full_name} — Points Prop
 ## {confidence_badge}
-**Model Lean:** {model_lean}  
-**Edge vs Line:** {line_diff:+.1f}  
-**Hit Rate:** {baseline:.0%}
 """
     )
-    
-    st.markdown("## Quick Verdict")
 
-    s1, s2, s3 = st.columns(3)
+    v1, v2, v3 = st.columns(3)
 
-    with s1:
-        st.metric("Player", full_name)
+    with v1:
         st.metric("Line", f"{line:.1f}")
 
-    with s2:
-        st.metric(f"Avg (Last {n_games})", f"{sample_avg_pts:.1f}")
+    with v2:
+        st.metric(f"Recent Avg (Last {n_games})", f"{sample_avg_pts:.1f}")
+
+    with v3:
         st.metric("Hit Rate", f"{baseline:.0%}")
 
-    with s3:
-        st.metric("Model Lean", model_lean)
-        st.metric("Confidence Tier", confidence_tier)
-        st.markdown(f"### {confidence_badge}")
-        st.metric("Avg - Line", f"{line_diff:+.1f}")
+    with st.expander("Show detailed analysis"):
+        d1, d2, d3 = st.columns(3)
+
+        with d1:
+            st.metric("Model Lean", model_lean)
+
+        with d2:
+            st.metric("Confidence Tier", confidence_tier)
+
+        with d3:
+            st.metric("Edge vs Line", f"{line_diff:+.1f}")
 
     out = logs.copy()
     out.insert(0, "PLAYER", full_name)
@@ -573,3 +565,4 @@ st.caption(
     "This tool provides statistical analysis for educational purposes only. "
     "It does not guarantee outcomes and should not be considered financial or betting advice."
 )
+
