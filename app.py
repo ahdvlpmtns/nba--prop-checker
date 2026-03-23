@@ -221,25 +221,31 @@ def get_player_team(player_id: int) -> Optional[str]:
         return None
 
 @st.cache_data(ttl=300)
-def get_next_opponent(player_team: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+def get_next_opponent(player_team):
     """
     Find the next UPCOMING (not yet finished) game for a team.
+    Returns (opp_abbr, game_date, debug_log).
     - Uses Eastern Time since NBA schedules are ET-based
-    - Looks up to 7 days ahead
-    - Skips games with 'Final' in GAME_STATUS_TEXT (already completed)
+    - Looks up to 10 days ahead
+    - Skips games where GAME_STATUS_TEXT contains 'Final' or a score pattern
     """
     if not player_team:
-        return None, None
+        return None, None, ["No player_team provided"]
 
     from datetime import timedelta
+    import re as _re
+    debug = []
+
     try:
         import pytz
         et = pytz.timezone("America/New_York")
         base_date = datetime.now(et)
-    except Exception:
+        debug.append(f"ET base date: {base_date.strftime('%Y-%m-%d %H:%M ET')}")
+    except Exception as e:
         base_date = datetime.today()
+        debug.append(f"pytz unavailable, using local: {base_date.strftime('%Y-%m-%d %H:%M')}")
 
-    for day_offset in range(8):  # look up to 7 days ahead
+    for day_offset in range(10):
         try:
             check_date = base_date + timedelta(days=day_offset)
             check_date_str = check_date.strftime("%m/%d/%Y")
@@ -251,38 +257,55 @@ def get_next_opponent(player_team: Optional[str]) -> Tuple[Optional[str], Option
                 timeout=20,
             )
             games = sb.get_data_frames()[0]
+
             if games.empty:
+                debug.append(f"{check_date_str}: no games scheduled")
                 continue
 
-            # Filter to this team's game
-            row = games[
+            all_teams = sorted(set(
+                list(games["HOME_TEAM_ABBREVIATION"].tolist()) +
+                list(games["VISITOR_TEAM_ABBREVIATION"].tolist())
+            ))
+            debug.append(f"{check_date_str}: {len(games)} games | teams: {', '.join(all_teams)}")
+
+            row_df = games[
                 (games["HOME_TEAM_ABBREVIATION"] == player_team) |
                 (games["VISITOR_TEAM_ABBREVIATION"] == player_team)
             ]
-            if row.empty:
+
+            if row_df.empty:
+                debug.append(f"  -> {player_team} not playing")
                 continue
 
-            row = row.iloc[0]
+            row = row_df.iloc[0]
+            status = str(row["GAME_STATUS_TEXT"]).strip() if "GAME_STATUS_TEXT" in row.index else ""
+            home   = str(row["HOME_TEAM_ABBREVIATION"]).strip()
+            away   = str(row["VISITOR_TEAM_ABBREVIATION"]).strip()
+            debug.append(f"  -> {away} @ {home} | status: '{status}'")
 
-            # Skip games that are already final
-            status = str(row.get("GAME_STATUS_TEXT", "")).strip()
-            if "Final" in status or "final" in status:
+            is_final = (
+                "final" in status.lower() or
+                bool(_re.search(r"\d+\s*-\s*\d+", status))
+            )
+
+            if is_final:
+                debug.append(f"  -> SKIPPED (already final)")
                 continue
 
-            home = row["HOME_TEAM_ABBREVIATION"]
-            away = row["VISITOR_TEAM_ABBREVIATION"]
-            game_date = check_date.strftime("%b %d, %Y")
+            debug.append(f"  -> SELECTED as next game")
+            game_date_str = check_date.strftime("%b %d, %Y")
 
             if player_team == home:
-                return away, game_date
+                return away, game_date_str, debug
             else:
-                return home, game_date
+                return home, game_date_str, debug
 
-        except Exception:
+        except Exception as e:
+            debug.append(f"  day_offset {day_offset}: error - {e}")
             continue
 
-    return None, None
-
+    debug.append("No upcoming game found in 10-day window")
+    return None, None, debug
 
 def get_opponent_from_logs(logs: pd.DataFrame, player_team: Optional[str]) -> Optional[str]:
     if logs is None or logs.empty:
@@ -780,7 +803,7 @@ if st.session_state.logs is not None:
 
     # ── Auto-detect NEXT opponent + defense rating ─
     player_team         = get_player_team(player_id)
-    opp_abbr, game_date = get_next_opponent(player_team)
+    opp_abbr, game_date, debug_log = get_next_opponent(player_team)
 
     # Home/away splits
     splits = home_away_split(logs, line, side, player_team)
@@ -788,6 +811,11 @@ if st.session_state.logs is not None:
     if not opp_abbr:
         opp_abbr  = get_opponent_from_logs(logs, player_team)
         game_date = None
+
+    # Temporary debug expander so we can see what scoreboard returns
+    with st.expander("Schedule debug log"):
+        for _line in debug_log:
+            st.text(_line)
 
     matchup_auto, opp_pts, league_avg = classify_matchup(opp_abbr, season)
 
