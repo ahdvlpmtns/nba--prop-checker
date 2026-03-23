@@ -240,6 +240,16 @@ div[data-testid="stExpander"] {
     border: 1px solid var(--border) !important;
     border-radius: 10px !important; background: var(--bg2) !important;
 }
+div[data-testid="stExpander"] p,
+div[data-testid="stExpander"] li,
+div[data-testid="stExpander"] span,
+div[data-testid="stExpander"] label,
+div[data-testid="stExpander"] div {
+    color: #94a3b8 !important;
+}
+div[data-testid="stExpander"] summary {
+    color: #94a3b8 !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -1550,14 +1560,7 @@ if st.session_state.logs is not None:
 
     # ── Verdict banner ────────────────────────
     st.markdown("<div class='section-header'>Verdict</div>", unsafe_allow_html=True)
-    st.markdown(f"""
-    <div class='explainer'>
-        <strong>How the verdict is calculated:</strong> starts with the recency-weighted hit rate ({weighted_base:.0%}),
-        then applies 8 multipliers — matchup quality, home/away splits, H2H history, back-to-back rest,
-        recent form vs season avg, minutes, role, and shot volume — to produce an adjusted probability ({adjusted:.0%}).
-        The tier is assigned based on that probability and the edge vs the line ({sample_avg_pts - line:+.1f} pts).
-    </div>
-    """, unsafe_allow_html=True)
+
 
     venue_adj_labels = {
         "Boost":   ("▲ Venue Boost",   "#22c55e"),
@@ -1597,14 +1600,19 @@ if st.session_state.logs is not None:
 
     with st.expander("🔢  Model details"):
         st.markdown(f"""<div class='model-note'>
+        <strong style='color:#94a3b8;'>How the verdict was calculated:</strong><br>
+        Started with a recency-weighted hit rate of <strong style='color:#e2e8f0;'>{weighted_base:.0%}</strong>,
+        then applied 8 context multipliers to reach an adjusted probability of
+        <strong style='color:#e2e8f0;'>{adjusted:.0%}</strong>.
+        The edge vs the line is <strong style='color:#e2e8f0;'>{sample_avg_pts - line:+.1f} pts</strong>.<br><br>
         Raw hit rate: {baseline:.0%} &nbsp;·&nbsp;
         Weighted (recency): {weighted_base:.0%} &nbsp;·&nbsp;
         After context: {adjusted:.0%} &nbsp;·&nbsp;
-        Sample: {n_games} games &nbsp;·&nbsp;
+        Sample: {n_games} games<br>
         Matchup: {matchup_sel} (vs {opp_abbr or "unknown"}) &nbsp;·&nbsp;
-        Venue: {tonight_venue or "Unknown"} ({venue_adj}) &nbsp;·&nbsp;
+        Venue: {tonight_venue or "Unknown"} ({venue_adj})<br>
         H2H: {h2h_sig} ({h2h_count} games, avg {f"{h2h_avg:.1f}" if h2h_avg else "N/A"} pts) &nbsp;·&nbsp;
-        Schedule: {b2b_status} &nbsp;·&nbsp;
+        Schedule: {b2b_status}<br>
         Form: {form_sig} ({f"{form_diff:+.1f}" if form_diff else "N/A"} vs season avg {f"{season_avg:.1f}" if season_avg else "N/A"})
         </div>""", unsafe_allow_html=True)
 
