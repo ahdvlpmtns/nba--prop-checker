@@ -14,7 +14,7 @@ import streamlit as st
 from nba_api.stats.static import players, teams
 from nba_api.stats.endpoints import (
     playergamelog, scoreboardv2, commonteamroster,
-    leaguedashteamstats, commonplayerinfo,
+    leaguedashteamstats, teamdashboardbygeneralsplits, commonplayerinfo,
 )
 
 # ─────────────────────────────────────────────
@@ -222,23 +222,59 @@ def get_player_team(player_id: int) -> Optional[str]:
 @st.cache_data(ttl=3600)
 def get_league_defense_stats(season: str) -> pd.DataFrame:
     """
-    Pull opponent points allowed per game for all 30 teams.
-    Tries Defense measure type first, falls back to Base (OPP_PTS not always
-    available on Defense measure — Base has OPP_PTS as standard).
+    Pull opponent points per game allowed for all 30 teams.
+    Tries multiple parameter combinations since the NBA API
+    changes accepted values between seasons.
     """
-    # Try Base measure which reliably has OPP_PTS
-    for measure in ["Base", "Defense"]:
+    attempts = [
+        {"measure_type_detailed_defense": "Base", "per_mode_simple": "PerGame"},
+        {"measure_type_detailed_defense": "Defense", "per_mode_simple": "PerGame"},
+        {"measure_type_detailed_defense": "Base", "per_mode_simple": "Totals"},
+    ]
+    for kwargs in attempts:
         try:
             df = leaguedashteamstats.LeagueDashTeamStats(
                 season=season,
-                measure_type_detailed_defense=measure,
-                per_mode_simple="PerGame",
                 timeout=30,
+                **kwargs
             ).get_data_frames()[0]
-            if "OPP_PTS" in df.columns and not df.empty:
-                return df[["TEAM_ABBREVIATION", "OPP_PTS"]].copy()
+            if df.empty:
+                continue
+            # OPP_PTS is the column we need
+            if "OPP_PTS" in df.columns:
+                result = df[["TEAM_ABBREVIATION", "OPP_PTS"]].copy()
+                # If Totals, divide by GP to get per game
+                if kwargs.get("per_mode_simple") == "Totals" and "GP" in df.columns:
+                    result["OPP_PTS"] = df["OPP_PTS"] / df["GP"]
+                return result
         except Exception:
             continue
+
+    # Last resort: pull each team individually using teamdashboardbygeneralsplits
+    try:
+        all_teams = teams.get_teams()
+        results = []
+        for t in all_teams:
+            try:
+                df = teamdashboardbygeneralsplits.TeamDashboardByGeneralSplits(
+                    team_id=t["id"],
+                    season=season,
+                    measure_type_detailed_defense="Base",
+                    per_mode_simple="PerGame",
+                    timeout=15,
+                ).get_data_frames()[0]
+                if not df.empty and "OPP_PTS" in df.columns:
+                    results.append({
+                        "TEAM_ABBREVIATION": t["abbreviation"],
+                        "OPP_PTS": float(df["OPP_PTS"].iloc[0])
+                    })
+            except Exception:
+                continue
+        if results:
+            return pd.DataFrame(results)
+    except Exception:
+        pass
+
     return pd.DataFrame()
 
 @st.cache_data(ttl=300)
@@ -716,7 +752,10 @@ if st.session_state.logs is not None:
         st.write(f"OPP_PTS from defense data: `{opp_pts}`")
         st.write(f"Defense data loaded: `{not defense_df.empty}`")
         if not defense_df.empty:
-            st.write(f"Teams in defense data: `{sorted(defense_df['TEAM_ABBREVIATION'].tolist())}`")
+            st.write(f"Sample rows:")
+            st.dataframe(defense_df.head(5))
+        else:
+            st.warning("Defense data is empty — API call failed for all attempts.")
 
     # ── Stat cards ────────────────────────────
     st.markdown(f"<div class='section-header'>{full_name}</div>", unsafe_allow_html=True)
