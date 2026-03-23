@@ -1,6 +1,7 @@
 streamlit
 requests
 pandas
-plotly>=5.18.0,<6.0.0
+plotly
 groq
+nba_api
 pytz
