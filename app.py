@@ -98,19 +98,6 @@ def fetch_with_retries(fn, retries=3, wait=2):
 
 
 @st.cache_data(ttl=600)
-def get_todays_teams() -> list:
-    today_str = datetime.today().strftime("%m/%d/%Y")
-    sb = scoreboardv2.ScoreboardV2(game_date=today_str, league_id="00", day_offset=0, timeout=20)
-    games = sb.get_data_frames()[0]
-    if games.empty:
-        return []
-    return sorted(
-        set(games["HOME_TEAM_ABBREVIATION"].tolist()) |
-        set(games["VISITOR_TEAM_ABBREVIATION"].tolist())
-    )
-
-
-@st.cache_data(ttl=600)
 def get_todays_matchup_for_player(player_team_abbr: str) -> dict:
     today_str = datetime.today().strftime("%m/%d/%Y")
     sb = scoreboardv2.ScoreboardV2(game_date=today_str, league_id="00", day_offset=0, timeout=120)
@@ -159,29 +146,22 @@ def label_from_prob(p: float) -> str:
 
 
 # ─────────────────────────────────────────────
-# AI Analysis
+# AI Analysis (Groq)
 # ─────────────────────────────────────────────
 
+def get_api_key() -> str:
+    try:
+        return st.secrets["GROQ_API_KEY"]
+    except Exception:
+        return os.environ.get("GROQ_API_KEY", "")
+
+
 def build_analysis_prompt(
-    full_name: str,
-    line: float,
-    side: str,
-    n_games: int,
-    logs: pd.DataFrame,
-    baseline: float,
-    adjusted: float,
-    confidence_tier: str,
-    avg_pts: float,
-    avg_min: float,
-    avg_fga: float,
-    min_flag: str,
-    fga_flag: str,
-    pts_flag: str,
-    minutes_sel: str,
-    role_sel: str,
-    shots_sel: str,
-    matchup_sel: str,
-    script_sel: str,
+    full_name, line, side, n_games, logs,
+    baseline, adjusted, confidence_tier,
+    avg_pts, avg_min, avg_fga,
+    min_flag, fga_flag, pts_flag,
+    minutes_sel, role_sel, shots_sel, matchup_sel, script_sel,
 ) -> str:
     game_rows = []
     for _, row in logs.iterrows():
@@ -195,20 +175,19 @@ def build_analysis_prompt(
 
     game_log_str = "\n".join(game_rows)
 
-    return f"""You are a sharp NBA prop analyst. Your job is to write a clear, confident, data-driven breakdown of a player points prop.
+    return f"""You are a sharp NBA prop analyst. Write a clear, confident, data-driven breakdown of this points prop.
 
 Player: {full_name}
 Prop Line: {line} points ({side})
 Sample: Last {n_games} games
-Season: 2025-26
 
 === GAME LOG ===
 {game_log_str}
 
 === KEY STATS ===
-- Avg PTS (last {n_games}): {avg_pts:.1f}
-- Avg MIN (last {n_games}): {avg_min:.1f}
-- Avg FGA (last {n_games}): {avg_fga:.1f}
+- Avg PTS: {avg_pts:.1f}
+- Avg MIN: {avg_min:.1f}
+- Avg FGA: {avg_fga:.1f}
 - Baseline hit rate vs {line}: {baseline:.0%}
 - Adjusted hit rate: {adjusted:.0%}
 
@@ -223,32 +202,20 @@ Season: 2025-26
 - Shot volume: {shots_sel}
 - Matchup/pace: {matchup_sel}
 - Game script: {script_sel}
-
-=== MODEL OUTPUT ===
 - Confidence tier: {confidence_tier}
 
-Write a 3–4 paragraph prop breakdown. Include:
-1. A lead sentence with the prop and your lean.
-2. What the recent game log shows — call out specific patterns, streaks, or outliers.
-3. How the context factors (matchup, role, minutes) affect this prop tonight.
-4. A closing verdict with your confidence level.
+Write a 3-4 paragraph prop breakdown:
+1. Lead with the prop and your lean.
+2. What the recent game log shows — patterns, streaks, outliers.
+3. How context factors affect this prop tonight.
+4. Closing verdict with confidence level.
 
-Be direct. Use real numbers. Avoid filler phrases like "it's worth noting" or "it's important to consider." Write like a sharp bettor, not a TV analyst."""
-
-
-def get_api_key() -> str:
-    """Retrieve the Groq API key from Streamlit secrets or environment."""
-    try:
-        return st.secrets["GROQ_API_KEY"]
-    except Exception:
-        return os.environ.get("GROQ_API_KEY", "")
+Be direct. Use real numbers. Write like a sharp bettor, not a TV analyst."""
 
 
 def generate_ai_analysis(prompt: str) -> str:
-    """Call the Groq API and return the analysis text."""
     api_key = get_api_key()
     client = Groq(api_key=api_key)
-
     chat_completion = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         max_tokens=1024,
@@ -325,8 +292,7 @@ def scan_team_players(team_abbr: str, season: str) -> pd.DataFrame:
 
 st.set_page_config(page_title="NBA Points Prop Checker", layout="wide")
 st.title("NBA Points Prop Checker")
-st.caption("Version 2.0 — Player prop analysis tool with AI-powered breakdown")
-st.caption("Analyze NBA points props using recent game logs, hit rate, and context adjustments.")
+st.caption("Version 2.0 — AI-powered prop analysis")
 
 st.markdown("## Inputs")
 
@@ -344,10 +310,6 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("## AI Analysis")
     enable_ai = st.checkbox("Enable AI-powered breakdown", value=True)
-    st.caption(
-        "Uses Claude to write a natural language prop analysis. "
-        "Requires `ANTHROPIC_API_KEY` to be set in your environment."
-    )
 
 st.divider()
 
@@ -369,7 +331,7 @@ st.markdown("## Player Analysis")
 st.subheader(f"Player: {full_name}")
 
 if not fetch and not scan_slate:
-    st.info("Enter inputs, then click **Fetch logs** or use **Scan today's slate**.")
+    st.info("Enter inputs, then click **Fetch logs**.")
 
 if fetch:
     logs = None
@@ -405,7 +367,6 @@ if fetch:
             "FG3A": [None] * 10,
         })
 
-if fetch:
     baseline = hit_rate(logs, line=line, side=side)
 
     avg_min = pd.to_numeric(logs["MIN"], errors="coerce").dropna().mean()
@@ -431,16 +392,13 @@ if fetch:
         st.markdown("### Key Metrics")
         st.metric("Baseline hit rate", f"{baseline:.0%}")
         st.caption(f"Baseline = hits vs the line using the selected last {n_games} games.")
-
         st.markdown("### Quick Flags")
         st.write(f"Minutes trend: **{min_flag}**")
         st.write(f"Shot volume (FGA) trend: **{fga_flag}**")
         st.write(f"Points trend: **{pts_flag}**")
 
     st.divider()
-
     st.markdown("## Context Adjuster")
-    st.caption("You still choose context, but the app calculates adjusted %.")
 
     adj_map_minutes = {"Strong": 0.05, "Okay": 0.00, "Risk": -0.07}
     adj_map_role    = {"Strong": 0.04, "Okay": 0.00, "Risk": -0.05}
@@ -504,15 +462,13 @@ if fetch:
         st.markdown("## 🤖 AI-Powered Breakdown")
 
         api_key = get_api_key()
+
         if not api_key:
-            st.warning(
-                "No `ANTHROPIC_API_KEY` found in your environment. "
-                "Set it to enable AI analysis.\n\n"
-                "```\nexport ANTHROPIC_API_KEY=sk-ant-...\n```"
-            )
+            st.error("❌ No GROQ_API_KEY found. Add it to your Streamlit secrets.")
         else:
+            st.success(f"✅ API key loaded (starts with: {api_key[:8]}...)")
             if st.button("Generate AI Analysis"):
-                with st.spinner("Claude is analyzing this prop..."):
+                with st.spinner("Analyzing this prop..."):
                     try:
                         prompt = build_analysis_prompt(
                             full_name=full_name,
@@ -539,6 +495,7 @@ if fetch:
                         st.markdown(analysis)
                     except Exception as e:
                         st.error(f"AI analysis failed: {repr(e)}")
+                        st.exception(e)
 
     # ── FINAL VERDICT ─────────────────────────────────────────────────────────
     st.divider()
@@ -592,7 +549,7 @@ if scan_slate:
         st.write(f"Running scan for **{selected_team}**...")
         df_team_scan = scan_team_players(selected_team, season)
         if df_team_scan.empty:
-            st.warning("No players returned. This usually means the API timed out for all scanned players.")
+            st.warning("No players returned. API may have timed out.")
         else:
             st.dataframe(df_team_scan, use_container_width=True)
 
