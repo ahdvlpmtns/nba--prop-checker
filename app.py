@@ -28,43 +28,96 @@ st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Mono:wght@400;500&display=swap');
 
+:root {
+    --bg:       #07090f;
+    --bg2:      #0c1018;
+    --bg3:      #111827;
+    --border:   #1a2333;
+    --border2:  #243044;
+    --orange:   #f97316;
+    --orange2:  #fb923c;
+    --green:    #22c55e;
+    --red:      #ef4444;
+    --yellow:   #eab308;
+    --blue:     #60a5fa;
+    --muted:    #475569;
+    --muted2:   #64748b;
+    --text:     #e2e8f0;
+    --text2:    #94a3b8;
+}
+
 html, body, [class*="css"] {
     font-family: 'Syne', sans-serif;
-    background-color: #080c14;
-    color: #e2e8f0;
+    background-color: var(--bg);
+    color: var(--text);
 }
 #MainMenu, footer, header { visibility: hidden; }
-.block-container { padding-top: 2rem; padding-bottom: 3rem; max-width: 1200px; }
+.block-container { padding-top: 1.5rem; padding-bottom: 4rem; max-width: 1180px; }
 
-.proplens-header { display: flex; align-items: center; gap: 14px; margin-bottom: 0.25rem; }
-.proplens-logo {
-    font-size: 2.6rem; font-weight: 800; letter-spacing: -2px;
-    background: linear-gradient(135deg, #f97316 0%, #fb923c 50%, #fdba74 100%);
+/* ── Logo ── */
+.pl-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 1.2rem 1.8rem; margin-bottom: 1.5rem;
+    background: linear-gradient(135deg, #0c1018 0%, #0f1623 100%);
+    border: 1px solid var(--border2); border-radius: 18px;
+    box-shadow: 0 4px 24px rgba(249,115,22,0.06);
+}
+.pl-logo-wrap { display: flex; align-items: center; gap: 14px; }
+.pl-icon {
+    width: 44px; height: 44px; border-radius: 12px;
+    background: linear-gradient(135deg, #ea580c, #f97316);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.4rem; box-shadow: 0 2px 12px rgba(249,115,22,0.35);
+    flex-shrink: 0;
+}
+.pl-logo {
+    font-size: 2rem; font-weight: 800; letter-spacing: -1.5px;
+    background: linear-gradient(135deg, #f97316 0%, #fb923c 60%, #fdba74 100%);
     -webkit-background-clip: text; -webkit-text-fill-color: transparent; line-height: 1;
 }
-.proplens-sub {
-    font-family: 'DM Mono', monospace; font-size: 0.72rem; color: #64748b;
-    letter-spacing: 0.15em; text-transform: uppercase; margin-top: 2px;
+.pl-sub {
+    font-family: 'DM Mono', monospace; font-size: 0.65rem; color: var(--muted2);
+    letter-spacing: 0.18em; text-transform: uppercase; margin-top: 3px;
+}
+.pl-badge {
+    font-family: 'DM Mono', monospace; font-size: 0.65rem;
+    background: rgba(249,115,22,0.12); color: var(--orange);
+    border: 1px solid rgba(249,115,22,0.25); padding: 4px 12px;
+    border-radius: 999px; letter-spacing: 0.08em;
 }
 
+/* ── Cards ── */
 .stat-card {
-    background: linear-gradient(135deg, #0f172a 0%, #111827 100%);
-    border: 1px solid #1e293b; border-radius: 14px;
+    background: linear-gradient(135deg, var(--bg2) 0%, var(--bg3) 100%);
+    border: 1px solid var(--border); border-radius: 14px;
     padding: 1.1rem 1.3rem; margin-bottom: 0.75rem;
+    transition: border-color 0.2s;
 }
-.stat-label {
-    font-family: 'DM Mono', monospace; font-size: 0.65rem; color: #475569;
-    letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 4px;
-}
-.stat-value { font-size: 1.8rem; font-weight: 800; color: #f1f5f9; letter-spacing: -1px; line-height: 1.1; }
-.stat-value.orange { color: #f97316; }
-.stat-value.green  { color: #22c55e; }
-.stat-value.red    { color: #ef4444; }
-.stat-value.yellow { color: #eab308; }
+.stat-card:hover { border-color: var(--border2); }
 
+.stat-label {
+    font-family: 'DM Mono', monospace; font-size: 0.63rem; color: var(--muted);
+    letter-spacing: 0.14em; text-transform: uppercase; margin-bottom: 4px;
+    display: flex; align-items: center; gap: 5px;
+}
+.stat-label .tip {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 13px; height: 13px; border-radius: 50%;
+    background: var(--border2); color: var(--muted2);
+    font-size: 0.55rem; font-weight: 700; cursor: default;
+    flex-shrink: 0;
+}
+.stat-value { font-size: 1.8rem; font-weight: 800; color: var(--text); letter-spacing: -1px; line-height: 1.1; }
+.stat-value.orange { color: var(--orange); }
+.stat-value.green  { color: var(--green); }
+.stat-value.red    { color: var(--red); }
+.stat-value.yellow { color: var(--yellow); }
+.stat-hint { font-family: 'DM Mono', monospace; font-size: 0.68rem; color: var(--muted); margin-top: 5px; line-height: 1.5; }
+
+/* ── Defense card ── */
 .defense-card {
-    background: linear-gradient(135deg, #0f172a 0%, #111827 100%);
-    border: 1px solid #1e293b; border-radius: 14px;
+    background: linear-gradient(135deg, var(--bg2) 0%, var(--bg3) 100%);
+    border: 1px solid var(--border); border-radius: 14px;
     padding: 1rem 1.3rem; margin-bottom: 0.75rem;
     display: flex; align-items: center; justify-content: space-between;
 }
@@ -72,64 +125,121 @@ html, body, [class*="css"] {
     font-family: 'DM Mono', monospace; font-size: 0.7rem; font-weight: 500;
     padding: 4px 12px; border-radius: 999px; letter-spacing: 0.05em;
 }
-.defense-badge.good    { background: #052e16; color: #22c55e; border: 1px solid #166534; }
-.defense-badge.neutral { background: #0f172a; color: #94a3b8; border: 1px solid #1e293b; }
-.defense-badge.bad     { background: #1c0505; color: #ef4444; border: 1px solid #991b1b; }
+.defense-badge.good    { background: #052e16; color: var(--green);  border: 1px solid #166534; }
+.defense-badge.neutral { background: var(--bg2); color: var(--text2); border: 1px solid var(--border); }
+.defense-badge.bad     { background: #1c0505; color: var(--red);    border: 1px solid #991b1b; }
 
+/* ── Verdict ── */
 .verdict-banner {
-    border-radius: 16px; padding: 1.5rem 2rem; margin: 1.5rem 0;
-    border: 1px solid #1e293b; display: flex; align-items: center;
+    border-radius: 18px; padding: 1.6rem 2rem; margin: 1.5rem 0;
+    border: 1px solid var(--border); display: flex; align-items: center;
     justify-content: space-between; flex-wrap: wrap; gap: 1rem;
+    box-shadow: 0 4px 32px rgba(0,0,0,0.3);
 }
-.verdict-banner.green  { background: linear-gradient(135deg, #052e16 0%, #0f2a1a 100%); border-color: #166534; }
-.verdict-banner.yellow { background: linear-gradient(135deg, #1c1a05 0%, #2a260f 100%); border-color: #854d0e; }
-.verdict-banner.orange { background: linear-gradient(135deg, #1c1005 0%, #2a1a0f 100%); border-color: #9a3412; }
-.verdict-banner.red    { background: linear-gradient(135deg, #1c0505 0%, #2a0f0f 100%); border-color: #991b1b; }
-.verdict-banner.gray   { background: linear-gradient(135deg, #0f172a 0%, #111827 100%); border-color: #1e293b; }
+.verdict-banner.green  { background: linear-gradient(135deg, #041f10 0%, #0a2018 100%); border-color: #166534; box-shadow: 0 4px 32px rgba(34,197,94,0.08); }
+.verdict-banner.yellow { background: linear-gradient(135deg, #151200 0%, #1f1a00 100%); border-color: #854d0e; box-shadow: 0 4px 32px rgba(234,179,8,0.08); }
+.verdict-banner.orange { background: linear-gradient(135deg, #160800 0%, #1f1000 100%); border-color: #9a3412; box-shadow: 0 4px 32px rgba(249,115,22,0.08); }
+.verdict-banner.red    { background: linear-gradient(135deg, #140000 0%, #1f0505 100%); border-color: #991b1b; box-shadow: 0 4px 32px rgba(239,68,68,0.08); }
+.verdict-banner.gray   { background: linear-gradient(135deg, var(--bg2) 0%, var(--bg3) 100%); border-color: var(--border); }
 
-.verdict-label { font-size: 0.65rem; font-family: 'DM Mono', monospace; letter-spacing: 0.15em; text-transform: uppercase; color: #64748b; margin-bottom: 4px; }
-.verdict-tier { font-size: 2rem; font-weight: 800; letter-spacing: -1px; }
-.verdict-tier.green  { color: #22c55e; }
-.verdict-tier.yellow { color: #eab308; }
-.verdict-tier.orange { color: #f97316; }
-.verdict-tier.red    { color: #ef4444; }
-.verdict-tier.gray   { color: #64748b; }
+.verdict-label { font-size: 0.63rem; font-family: 'DM Mono', monospace; letter-spacing: 0.15em; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; }
+.verdict-tier  { font-size: 2.2rem; font-weight: 800; letter-spacing: -1px; }
+.verdict-tier.green  { color: var(--green); }
+.verdict-tier.yellow { color: var(--yellow); }
+.verdict-tier.orange { color: var(--orange); }
+.verdict-tier.red    { color: var(--red); }
+.verdict-tier.gray   { color: var(--muted); }
 
+/* ── Section headers ── */
 .section-header {
-    font-size: 0.65rem; font-family: 'DM Mono', monospace; letter-spacing: 0.2em;
-    text-transform: uppercase; color: #f97316; margin: 1.75rem 0 0.75rem 0;
-    padding-bottom: 6px; border-bottom: 1px solid #1e293b;
+    font-size: 0.62rem; font-family: 'DM Mono', monospace; letter-spacing: 0.22em;
+    text-transform: uppercase; color: var(--orange); margin: 2rem 0 0.8rem 0;
+    padding-bottom: 7px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 8px;
+}
+.section-header::before {
+    content: ''; display: inline-block; width: 3px; height: 12px;
+    background: var(--orange); border-radius: 2px;
 }
 
+/* ── AI box ── */
 .ai-box {
-    background: linear-gradient(135deg, #0a0f1e 0%, #0d1525 100%);
-    border: 1px solid #1e3a5f; border-radius: 14px; padding: 1.5rem;
-    margin-top: 1rem; font-size: 0.95rem; line-height: 1.75; color: #cbd5e1;
+    background: linear-gradient(135deg, #080e1c 0%, #0b1220 100%);
+    border: 1px solid #1a3050; border-radius: 14px; padding: 1.6rem;
+    margin-top: 1rem; font-size: 0.95rem; line-height: 1.8; color: #c8d5e8;
 }
 
+/* ── Model note ── */
 .model-note {
-    background: #0f172a; border: 1px solid #1e293b; border-radius: 10px;
-    padding: 0.75rem 1rem; margin-top: 0.5rem;
-    font-family: 'DM Mono', monospace; font-size: 0.7rem; color: #475569; line-height: 1.6;
+    background: var(--bg2); border: 1px solid var(--border); border-radius: 10px;
+    padding: 0.8rem 1.1rem; margin-top: 0.5rem;
+    font-family: 'DM Mono', monospace; font-size: 0.68rem; color: var(--muted); line-height: 1.7;
 }
 
-.flag-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 0.5rem; }
-.flag-pill { font-family: 'DM Mono', monospace; font-size: 0.7rem; padding: 4px 10px; border-radius: 999px; letter-spacing: 0.05em; }
-.flag-pill.up     { background: #052e16; color: #22c55e; border: 1px solid #166534; }
-.flag-pill.down   { background: #1c0505; color: #ef4444; border: 1px solid #991b1b; }
-.flag-pill.flat   { background: #0f172a; color: #94a3b8; border: 1px solid #1e293b; }
-.flag-pill.nodata { background: #0f172a; color: #475569; border: 1px solid #1e293b; }
+/* ── Pills ── */
+.flag-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 0.6rem; }
+.flag-pill {
+    font-family: 'DM Mono', monospace; font-size: 0.68rem;
+    padding: 4px 11px; border-radius: 999px; letter-spacing: 0.05em;
+}
+.flag-pill.up     { background: #052e16; color: var(--green);  border: 1px solid #166534; }
+.flag-pill.down   { background: #1c0505; color: var(--red);    border: 1px solid #991b1b; }
+.flag-pill.flat   { background: var(--bg2); color: var(--text2); border: 1px solid var(--border); }
+.flag-pill.nodata { background: var(--bg2); color: var(--muted); border: 1px solid var(--border); }
 
+/* ── Explainer box ── */
+.explainer {
+    background: linear-gradient(135deg, #0c1018 0%, #0f1420 100%);
+    border: 1px solid var(--border); border-left: 3px solid var(--orange);
+    border-radius: 0 10px 10px 0; padding: 0.75rem 1rem;
+    margin-bottom: 1rem; font-size: 0.82rem; color: var(--text2); line-height: 1.6;
+}
+.explainer strong { color: var(--text); }
+
+/* ── How it works panel ── */
+.how-it-works {
+    background: var(--bg2); border: 1px solid var(--border);
+    border-radius: 14px; padding: 1.2rem 1.4rem; margin-bottom: 1.5rem;
+}
+.how-step {
+    display: flex; gap: 12px; align-items: flex-start; margin-bottom: 0.9rem;
+}
+.how-step:last-child { margin-bottom: 0; }
+.how-num {
+    min-width: 24px; height: 24px; border-radius: 50%;
+    background: linear-gradient(135deg, #ea580c, #f97316);
+    color: white; font-size: 0.7rem; font-weight: 800;
+    display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.how-text { font-size: 0.82rem; color: var(--text2); line-height: 1.5; }
+.how-text strong { color: var(--text); }
+
+/* ── Buttons ── */
 .stButton > button {
     background: linear-gradient(135deg, #ea580c, #f97316) !important;
-    color: white !important; border: none !important; border-radius: 8px !important;
+    color: white !important; border: none !important; border-radius: 9px !important;
     font-family: 'Syne', sans-serif !important; font-weight: 700 !important;
-    letter-spacing: 0.03em !important; padding: 0.5rem 1.5rem !important;
-    transition: opacity 0.2s !important;
+    letter-spacing: 0.03em !important; padding: 0.55rem 1.6rem !important;
+    transition: all 0.2s !important; box-shadow: 0 2px 12px rgba(249,115,22,0.25) !important;
 }
-.stButton > button:hover { opacity: 0.85 !important; }
-hr { border-color: #1e293b !important; }
-section[data-testid="stSidebar"] { background: #0a0f1e !important; border-right: 1px solid #1e293b !important; }
+.stButton > button:hover { opacity: 0.88 !important; transform: translateY(-1px) !important; box-shadow: 0 4px 16px rgba(249,115,22,0.35) !important; }
+
+hr { border-color: var(--border) !important; }
+section[data-testid="stSidebar"] {
+    background: #080d15 !important;
+    border-right: 1px solid var(--border) !important;
+}
+
+/* ── Streamlit overrides ── */
+.stSelectbox label, .stTextInput label, .stNumberInput label {
+    font-family: 'DM Mono', monospace !important;
+    font-size: 0.68rem !important; color: var(--muted) !important;
+    text-transform: uppercase; letter-spacing: 0.1em;
+}
+div[data-testid="stExpander"] {
+    border: 1px solid var(--border) !important;
+    border-radius: 10px !important; background: var(--bg2) !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -893,26 +1003,78 @@ def generate_ai_analysis(prompt: str) -> str:
 # ─────────────────────────────────────────────
 
 st.markdown("""
-<div class="proplens-header">
-    <div>
-        <div class="proplens-logo">PropLens</div>
-        <div class="proplens-sub">NBA Points Prop Analyzer</div>
+<div class="pl-header">
+    <div class="pl-logo-wrap">
+        <div class="pl-icon">🏀</div>
+        <div>
+            <div class="pl-logo">PropLens</div>
+            <div class="pl-sub">NBA Points Prop Analyzer</div>
+        </div>
+    </div>
+    <div style="display:flex; align-items:center; gap:10px;">
+        <span class="pl-badge">v2.0 · 2025-26</span>
     </div>
 </div>
 """, unsafe_allow_html=True)
-st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
 # Sidebar
 # ─────────────────────────────────────────────
 
 with st.sidebar:
+    st.markdown("""
+    <div style='padding:0.5rem 0 1rem 0;'>
+        <div style='font-size:1.1rem; font-weight:800; color:#f97316; letter-spacing:-0.5px; margin-bottom:2px;'>🏀 PropLens</div>
+        <div style='font-family:DM Mono; font-size:0.62rem; color:#475569; letter-spacing:0.15em; text-transform:uppercase;'>NBA Prop Analyzer</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("<div class='section-header'>How It Works</div>", unsafe_allow_html=True)
+    st.markdown("""
+    <div class='how-it-works'>
+        <div class='how-step'>
+            <div class='how-num'>1</div>
+            <div class='how-text'><strong>Game Logs</strong> — fetches your last 5–15 games from NBA.com</div>
+        </div>
+        <div class='how-step'>
+            <div class='how-num'>2</div>
+            <div class='how-text'><strong>Hit Rate</strong> — calculates raw + recency-weighted % over/under the line</div>
+        </div>
+        <div class='how-step'>
+            <div class='how-num'>3</div>
+            <div class='how-text'><strong>Signals</strong> — applies 8 context multipliers: matchup, venue, H2H, rest, form, role, minutes, shots</div>
+        </div>
+        <div class='how-step'>
+            <div class='how-num'>4</div>
+            <div class='how-text'><strong>Verdict</strong> — outputs a confidence tier from Strong Over to Strong Under</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("<div class='section-header'>Verdict Guide</div>", unsafe_allow_html=True)
+    st.markdown("""
+    <div style='font-family:DM Mono; font-size:0.72rem; line-height:2; color:#94a3b8;'>
+        🟢 <span style='color:#22c55e;'>Strong Over/Under</span> — High confidence<br>
+        🟡 <span style='color:#eab308;'>Lean Over</span> — Moderate edge<br>
+        🟠 <span style='color:#f97316;'>Lean Under</span> — Moderate edge<br>
+        🔴 <span style='color:#ef4444;'>Strong Under</span> — High confidence<br>
+        ⚪ <span style='color:#64748b;'>Pass</span> — No clear edge
+    </div>
+    """, unsafe_allow_html=True)
+
     st.markdown("<div class='section-header'>Settings</div>", unsafe_allow_html=True)
-    manual_mode = st.checkbox("Manual input fallback")
+    manual_mode = st.checkbox("Manual input fallback", help="Enter points manually if NBA API is unavailable")
     if st.button("🔄 Clear Cache"):
         st.cache_data.clear()
         st.success("Cache cleared!")
-    st.markdown("<div style='margin-top:2rem; font-family:DM Mono; font-size:0.65rem; color:#334155; line-height:1.6;'>For educational purposes only. Not financial or betting advice.</div>", unsafe_allow_html=True)
+
+    st.markdown("""
+    <div style='margin-top:2rem; padding:0.75rem; background:#0c1018; border:1px solid #1a2333;
+                border-radius:8px; font-family:DM Mono; font-size:0.62rem; color:#334155; line-height:1.7;'>
+        ⚠️ For educational purposes only.<br>Not financial or betting advice.<br>
+        Always bet responsibly.
+    </div>
+    """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
 # Player & Prop inputs
@@ -1069,30 +1231,45 @@ if st.session_state.logs is not None:
     form_sig, form_diff = form_divergence_signal(sample_avg_pts, season_avg, line, side)
 
     # ── Stat cards ────────────────────────────
-    st.markdown(f"<div class='section-header'>{full_name}</div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='section-header'>{full_name} &nbsp;·&nbsp; {line} pts {side}</div>", unsafe_allow_html=True)
 
     m1, m2, m3, m4 = st.columns(4)
     with m1:
         st.markdown(f"""<div class='stat-card'>
-            <div class='stat-label'>Avg PTS (L{n_games})</div>
+            <div class='stat-label'>Avg PTS (L{n_games})
+                <span class='tip' title='Average points scored across the last {n_games} games'>?</span>
+            </div>
             <div class='stat-value orange'>{sample_avg_pts:.1f}</div>
+            <div class='stat-hint'>Line is {line} · edge {sample_avg_pts - line:+.1f}</div>
         </div>""", unsafe_allow_html=True)
     with m2:
         hr_color = "green" if weighted_base >= 0.6 else ("yellow" if weighted_base >= 0.5 else "red")
+        hr_label = "Strong" if weighted_base >= 0.6 else ("Moderate" if weighted_base >= 0.5 else "Weak")
         st.markdown(f"""<div class='stat-card'>
-            <div class='stat-label'>Weighted Hit Rate</div>
+            <div class='stat-label'>Weighted Hit Rate
+                <span class='tip' title='% of games hitting the line, with more weight on recent games'>?</span>
+            </div>
             <div class='stat-value {hr_color}'>{weighted_base:.0%}</div>
+            <div class='stat-hint'>{hr_label} signal · L{n_games} sample</div>
         </div>""", unsafe_allow_html=True)
     with m3:
         cons_color = "green" if consistency >= 0.5 else ("yellow" if consistency >= 0.35 else "red")
+        cons_label = "Consistent" if consistency >= 0.5 else ("Variable" if consistency >= 0.35 else "Volatile")
         st.markdown(f"""<div class='stat-card'>
-            <div class='stat-label'>Consistency Score</div>
+            <div class='stat-label'>Consistency Score
+                <span class='tip' title='% of games where points landed within 3 of the line — high = predictable'>?</span>
+            </div>
             <div class='stat-value {cons_color}'>{consistency:.0%}</div>
+            <div class='stat-hint'>{cons_label} scorer</div>
         </div>""", unsafe_allow_html=True)
     with m4:
+        min_color = "green" if avg_min >= 32 else ("yellow" if avg_min >= 26 else "red")
         st.markdown(f"""<div class='stat-card'>
-            <div class='stat-label'>Avg MIN (L{n_games})</div>
-            <div class='stat-value'>{avg_min:.1f}</div>
+            <div class='stat-label'>Avg Minutes
+                <span class='tip' title='Average minutes per game — more minutes = more scoring opportunities'>?</span>
+            </div>
+            <div class='stat-value {min_color}'>{avg_min:.1f}</div>
+            <div class='stat-hint'>Avg FGA: {avg_fga:.1f} · FTA: {avg_fta:.1f}</div>
         </div>""", unsafe_allow_html=True)
 
     # ── Defense card ──────────────────────────
@@ -1373,6 +1550,14 @@ if st.session_state.logs is not None:
 
     # ── Verdict banner ────────────────────────
     st.markdown("<div class='section-header'>Verdict</div>", unsafe_allow_html=True)
+    st.markdown(f"""
+    <div class='explainer'>
+        <strong>How the verdict is calculated:</strong> starts with the recency-weighted hit rate ({weighted_base:.0%}),
+        then applies 8 multipliers — matchup quality, home/away splits, H2H history, back-to-back rest,
+        recent form vs season avg, minutes, role, and shot volume — to produce an adjusted probability ({adjusted:.0%}).
+        The tier is assigned based on that probability and the edge vs the line ({sample_avg_pts - line:+.1f} pts).
+    </div>
+    """, unsafe_allow_html=True)
 
     venue_adj_labels = {
         "Boost":   ("▲ Venue Boost",   "#22c55e"),
