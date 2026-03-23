@@ -411,25 +411,48 @@ def get_opponent_from_logs(logs: pd.DataFrame, player_team: Optional[str]) -> Op
 
 def classify_matchup(opp_abbr: Optional[str], season: str) -> Tuple[str, Optional[float], str]:
     """
-    Fetch opponent pts allowed and league avg directly.
-    Returns (classification, opp_pts, league_avg_str).
-
-    > +1.5 pts allowed above avg  → Weak defense  → Good matchup for over
-    < -1.5 pts allowed below avg  → Strong defense → Bad matchup for over
-    In between                    → Neutral
+    Estimate pts allowed by opponent using PLUS_MINUS from their player game logs.
+    pts_allowed = 114.5 - avg_PLUS_MINUS (inlined to avoid caching issues).
     """
     if not opp_abbr:
         return "Neutral", None, "N/A"
 
-    opp_pts = get_opponent_pts_allowed(opp_abbr, season)
-    avg_pts = get_league_avg_pts_allowed(season)  # hardcoded baseline
-
-    if opp_pts is None or avg_pts is None:
-        return "Neutral", opp_pts, f"{avg_pts:.1f}" if avg_pts else "N/A"
-
-    diff    = opp_pts - avg_pts
+    avg_pts = 114.5
     avg_str = f"{avg_pts:.1f}"
+    opp_pts = None
 
+    # Try all roster players until we accumulate enough PLUS_MINUS data
+    try:
+        roster = get_live_roster(opp_abbr, season)
+        all_pm = []
+        for player_name in roster:
+            try:
+                pid, _ = find_player_id(player_name)
+                if not pid:
+                    continue
+                log = playergamelog.PlayerGameLog(
+                    player_id=pid, season=season, timeout=15,
+                ).get_data_frames()[0]
+                if log.empty or "PLUS_MINUS" not in log.columns:
+                    continue
+                pm = pd.to_numeric(log["PLUS_MINUS"], errors="coerce").dropna()
+                if len(pm) < 5:
+                    continue
+                all_pm.extend(pm.tolist())
+                if len(all_pm) >= 20:
+                    break
+            except Exception:
+                continue
+        if all_pm:
+            avg_pm = sum(all_pm) / len(all_pm)
+            opp_pts = round(avg_pts - avg_pm, 1)
+    except Exception:
+        pass
+
+    if opp_pts is None:
+        return "Neutral", None, avg_str
+
+    diff = opp_pts - avg_pts
     if diff >= 1.5:
         return "Good", opp_pts, avg_str
     if diff <= -1.5:
