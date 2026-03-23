@@ -239,92 +239,92 @@ def find_player(player_name: str) -> Tuple[Optional[str], Optional[str], Optiona
 @st.cache_data(ttl=600)
 def espn_get_game_logs(player_id: str, season: int, n: int = 10) -> pd.DataFrame:
     """
-    Fetch last N game logs from ESPN gamelog endpoint.
-    Stores raw response in cache for debug inspection.
+    Scrape ESPN player gamelog page using pd.read_html — the most reliable method.
+    URL: https://www.espn.com/nba/player/gamelog/_/id/{id}/year/{season+1}
     """
     empty = pd.DataFrame(columns=["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A"])
     try:
-        url  = f"{ESPN_WEB}/athletes/{player_id}/gamelog"
-        data = espn_get(url, params={"season": season})
+        # ESPN uses the END year of the season (2025-26 -> year=2026)
+        year = season + 1
+        url  = f"https://www.espn.com/nba/player/gamelog/_/id/{player_id}/year/{year}"
+        hdrs = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                          "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+        resp = requests.get(url, headers=hdrs, timeout=15)
+        resp.raise_for_status()
 
-        # Store raw keys for debug
-        espn_get_game_logs._last_raw = data
-
-        # ESPN structure: categories (with labels) + events (dict keyed by event id)
-        cats   = data.get("categories", [])
-        events = data.get("events", {})
-
-        # Build flat label list from all categories
-        stat_names = []
-        for cat in cats:
-            for label in cat.get("labels", []):
-                stat_names.append(label.lower())
-
-        rows = []
-        for event_id, ev in events.items():
-            # stats is a flat list of values matching stat_names
-            stats_list = ev.get("stats", [])
-
-            # Game date — try multiple keys
-            date_str = (
-                ev.get("gameDate") or
-                ev.get("date") or
-                ev.get("gameInfo", {}).get("date") or
-                ev.get("atVs", {}).get("date") or ""
-            )[:10]
-            try:
-                game_date = pd.to_datetime(date_str)
-            except Exception:
-                continue
-
-            # Opponent + home/away
-            opp_abbr  = (ev.get("opponent") or {}).get("abbreviation", "?")
-            home_away = ev.get("homeAway", ev.get("atVs", ""))
-            team_abbr = ev.get("teamAbbrev", ev.get("teamAbbreviation", ""))
-
-            if str(home_away).lower() in ("home", "vs", "vs."):
-                matchup = f"{team_abbr} vs. {opp_abbr}"
-            else:
-                matchup = f"{team_abbr} @ {opp_abbr}"
-
-            # Map stat values to names
-            stat_map = {}
-            for i, val in enumerate(stats_list):
-                if i < len(stat_names):
-                    try:
-                        stat_map[stat_names[i]] = float(str(val).replace("--", "0").replace("-", "0") or 0)
-                    except Exception:
-                        stat_map[stat_names[i]] = 0.0
-
-            def g(*keys):
-                for k in keys:
-                    v = stat_map.get(k)
-                    if v is not None:
-                        return v
-                return 0
-
-            rows.append({
-                "GAME_DATE": game_date,
-                "MATCHUP":   matchup,
-                "MIN":  g("min", "minutes", "mins"),
-                "PTS":  g("pts", "points", "pt"),
-                "FGA":  g("fga", "fieldgoalsattempted", "fgattempted"),
-                "FTA":  g("fta", "freethrowsattempted", "ftattempted"),
-                "FG3A": g("3pa", "fg3a", "threepointerattempted", "3pta"),
-            })
-
-        if not rows:
+        tables = pd.read_html(resp.text)
+        if not tables:
             return empty
 
-        df = pd.DataFrame(rows)
-        df = df.sort_values("GAME_DATE", ascending=False).head(n).reset_index(drop=True)
-        return df
+        # Find the table that has a DATE column and PTS column
+        log_df = None
+        for t in tables:
+            cols = [str(c).upper() for c in t.columns]
+            if any("DATE" in c for c in cols) and any("PTS" in c or "PT" in c for c in cols):
+                log_df = t
+                break
+
+        if log_df is None:
+            # fallback — use largest table
+            log_df = max(tables, key=len)
+
+        # Normalize column names
+        log_df.columns = [str(c).upper().strip() for c in log_df.columns]
+
+        # Drop rows that are section headers (e.g. "SEPTEMBER", "Regular Season")
+        # These usually have DATE == DATE or NaN in stat columns
+        if "DATE" in log_df.columns:
+            log_df = log_df[log_df["DATE"].notna()]
+            log_df = log_df[log_df["DATE"] != "DATE"]
+            log_df = log_df[~log_df["DATE"].astype(str).str.upper().isin([
+                "DATE","JANUARY","FEBRUARY","MARCH","APRIL","MAY","JUNE",
+                "JULY","AUGUST","SEPTEMBER","OCTOBER","NOVEMBER","DECEMBER",
+                "REGULAR SEASON","PLAYOFFS","PRESEASON"
+            ])]
+
+        # Map columns to our standard names
+        col_map = {}
+        for c in log_df.columns:
+            cu = c.upper()
+            if "DATE" in cu:          col_map[c] = "GAME_DATE"
+            elif cu in ("OPP","OPPONENT","MATCHUP","VS"): col_map[c] = "MATCHUP"
+            elif cu in ("MIN","MINUTES","MINS"):          col_map[c] = "MIN"
+            elif cu in ("PTS","POINTS","PT"):             col_map[c] = "PTS"
+            elif cu in ("FGA","FG ATTEMPTED"):            col_map[c] = "FGA"
+            elif cu in ("FTA","FT ATTEMPTED"):            col_map[c] = "FTA"
+            elif cu in ("3PA","3P ATTEMPTED","FG3A"):     col_map[c] = "FG3A"
+
+        log_df = log_df.rename(columns=col_map)
+
+        # Ensure required columns exist
+        for col in ["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A"]:
+            if col not in log_df.columns:
+                log_df[col] = None
+
+        # Parse dates
+        log_df["GAME_DATE"] = pd.to_datetime(
+            log_df["GAME_DATE"].astype(str).str.replace(r"[A-Z][a-z]+,\s*", "", regex=True),
+            errors="coerce", infer_datetime_format=True
+        )
+        log_df = log_df.dropna(subset=["GAME_DATE"])
+
+        # Convert stats to numeric
+        for col in ["MIN","PTS","FGA","FTA","FG3A"]:
+            log_df[col] = pd.to_numeric(
+                log_df[col].astype(str).str.replace("--","-1").str.extract(r"([\d.]+)")[0],
+                errors="coerce"
+            ).fillna(0)
+
+        log_df = log_df.sort_values("GAME_DATE", ascending=False).head(n).reset_index(drop=True)
+        return log_df[["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A"]]
 
     except Exception as e:
         espn_get_game_logs._last_error = str(e)
         return empty
 
-espn_get_game_logs._last_raw   = {}
 espn_get_game_logs._last_error = ""
 
 def season_str_to_int(season_str: str) -> int:
@@ -705,10 +705,23 @@ st.markdown("<div class='section-header'>Player & Prop</div>", unsafe_allow_html
 
 col_a, col_b, col_c, col_d, col_e = st.columns([2.5, 1, 1, 1, 0.8])
 with col_a:
-    player_query = st.text_input(
+    # Load player list once and use native selectbox search (built-in filter)
+    with st.spinner("Loading players..."):
+        try:
+            all_players_list = espn_get_all_players()
+            player_names_list = sorted(
+                [p["full_name"] for p in all_players_list],
+                key=lambda x: x.split()[-1]
+            )
+        except Exception:
+            player_names_list = []
+
+    player_query = st.selectbox(
         "Player",
-        placeholder="🔍  Type a player name (e.g. LeBron James)...",
-        help="Type at least 3 characters to search"
+        options=[""] + player_names_list,
+        index=0,
+        format_func=lambda x: "🔍  Type to search..." if x == "" else x,
+        help="Start typing a name to filter"
     )
 with col_b:
     line = st.number_input("Points Line", min_value=0.0, value=24.5, step=0.5)
@@ -721,30 +734,10 @@ with col_e:
 
 season_int = season_str_to_int(season_str)
 
-# Live search — filters roster as you type
-selected_player = None
-if player_query and len(player_query.strip()) >= 2:
-    with st.spinner("Searching players..."):
-        try:
-            results = espn_search_players(player_query.strip())
-            matches = [r["full_name"] for r in results]
-        except Exception as e:
-            matches = []
-            st.warning(f"Search failed: {e}")
-
-    if not matches:
-        st.warning("No players found. Try typing first or last name.")
-        st.stop()
-    elif len(matches) == 1:
-        selected_player = matches[0]
-        st.markdown(f"<div style='font-family:DM Mono; font-size:0.75rem; color:#22c55e; margin-top:2px; margin-bottom:4px;'>✓ Matched: {selected_player}</div>", unsafe_allow_html=True)
-    else:
-        selected_player = st.selectbox(
-            f"Select from {len(matches)} matches",
-            options=matches,
-        )
-else:
-    st.markdown("<div style='color:#475569; font-family:DM Mono; font-size:0.8rem; margin-top:0.5rem;'>Type a player name above (first or last name works).</div>", unsafe_allow_html=True)
+# Player selected directly from the searchable selectbox
+selected_player = player_query if player_query else None
+if not selected_player:
+    st.markdown("<div style='color:#475569; font-family:DM Mono; font-size:0.8rem; margin-top:0.5rem;'>Select a player above to get started.</div>", unsafe_allow_html=True)
     st.stop()
 
 if not selected_player:
