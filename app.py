@@ -903,24 +903,36 @@ def suggest_bucket(value: float, strong_cut: float, risk_cut: float) -> str:
     return "Okay"
 
 def apply_adjustments(weighted: float, context: dict) -> float:
-    multipliers = {
-        "minutes":  {"Strong": 1.08, "Okay": 1.00, "Risk": 0.88},
-        "role":     {"Strong": 1.06, "Okay": 1.00, "Risk": 0.92},
-        "shots":    {"High":   1.05, "Medium": 1.00, "Low": 0.90},
-        "matchup":  {"Good":   1.08, "Neutral": 1.00, "Bad": 0.91},
-        "script":   {"Competitive": 1.03, "Neutral": 1.00, "Blowout risk": 0.93},
-        "venue":    {"Boost": 1.06, "Neutral": 1.00, "Penalty": 0.92},
-        # H2H: how does player historically perform vs this specific opponent
-        "h2h":      {"Strong": 1.07, "Neutral": 1.00, "Risk": 0.91},
-        # B2B: second night of back-to-back is a meaningful fatigue penalty
-        "b2b":      {"Normal": 1.00, "B2B": 0.91},
-        # Form: recent avg vs season avg divergence aligned with bet direction
-        "form":     {"Boost": 1.07, "Neutral": 1.00, "Penalty": 0.92},
+    """
+    Apply context multipliers as additive boosts/penalties in percentage points.
+
+    Using additive adjustments (not multiplicative on the margin) ensures that
+    positive signals always push probability UP and negative signals always push
+    DOWN — regardless of whether the starting probability is above or below 50%.
+
+    Each multiplier value is converted to a pp adjustment:
+      1.08 → +8pp boost toward the bet side  (always helps)
+      0.91 → -9pp penalty away from bet side  (always hurts)
+      1.00 → no change
+    """
+    # Convert multipliers to flat pp adjustments
+    # Positive = helps the bet (pushes probability toward the over/under hitting)
+    # Negative = hurts the bet
+    adj_map = {
+        "minutes":  {"Strong": +0.05, "Okay": 0.00, "Risk": -0.07},
+        "role":     {"Strong": +0.04, "Okay": 0.00, "Risk": -0.05},
+        "shots":    {"High":   +0.03, "Medium": 0.00, "Low": -0.06},
+        "matchup":  {"Good":   +0.06, "Neutral": 0.00, "Bad": -0.06},
+        "script":   {"Competitive": +0.02, "Neutral": 0.00, "Blowout risk": -0.04},
+        "venue":    {"Boost": +0.04, "Neutral": 0.00, "Penalty": -0.05},
+        "h2h":      {"Strong": +0.05, "Neutral": 0.00, "Risk": -0.06},
+        "b2b":      {"Normal": 0.00, "B2B": -0.06},
+        "form":     {"Boost": +0.05, "Neutral": 0.00, "Penalty": -0.05},
     }
-    margin = weighted - 0.5
+    adjusted = weighted
     for key, val in context.items():
-        margin *= multipliers[key][val]
-    return max(0.0, min(1.0, 0.5 + margin))
+        adjusted += adj_map[key].get(val, 0.0)
+    return max(0.0, min(1.0, adjusted))
 
 def get_confidence_tier(adjusted: float, line_diff: float, consistency: float) -> str:
     """
@@ -1677,17 +1689,17 @@ if st.session_state.logs is not None:
     """, unsafe_allow_html=True)
 
     with st.expander("🔬  Logic Debugger — step-by-step verdict breakdown"):
-        # ── Step-by-step multiplier trace ─────────────────────────────
+        # ── Step-by-step adjustment trace ────────────────────────────
         multipliers_map = {
-            "minutes":  {"Strong": 1.08, "Okay": 1.00, "Risk": 0.88},
-            "role":     {"Strong": 1.06, "Okay": 1.00, "Risk": 0.92},
-            "shots":    {"High":   1.05, "Medium": 1.00, "Low": 0.90},
-            "matchup":  {"Good":   1.08, "Neutral": 1.00, "Bad": 0.91},
-            "script":   {"Competitive": 1.03, "Neutral": 1.00, "Blowout risk": 0.93},
-            "venue":    {"Boost": 1.06, "Neutral": 1.00, "Penalty": 0.92},
-            "h2h":      {"Strong": 1.07, "Neutral": 1.00, "Risk": 0.91},
-            "b2b":      {"Normal": 1.00, "B2B": 0.91},
-            "form":     {"Boost": 1.07, "Neutral": 1.00, "Penalty": 0.92},
+            "minutes":  {"Strong": +0.05, "Okay": 0.00, "Risk": -0.07},
+            "role":     {"Strong": +0.04, "Okay": 0.00, "Risk": -0.05},
+            "shots":    {"High":   +0.03, "Medium": 0.00, "Low": -0.06},
+            "matchup":  {"Good":   +0.06, "Neutral": 0.00, "Bad": -0.06},
+            "script":   {"Competitive": +0.02, "Neutral": 0.00, "Blowout risk": -0.04},
+            "venue":    {"Boost": +0.04, "Neutral": 0.00, "Penalty": -0.05},
+            "h2h":      {"Strong": +0.05, "Neutral": 0.00, "Risk": -0.06},
+            "b2b":      {"Normal": 0.00, "B2B": -0.06},
+            "form":     {"Boost": +0.05, "Neutral": 0.00, "Penalty": -0.05},
         }
         signal_labels = {
             "minutes": "Minutes load",
@@ -1701,17 +1713,16 @@ if st.session_state.logs is not None:
             "form":    "Recent form vs season",
         }
 
-        # Simulate the computation step by step
+        # Simulate the computation step by step (additive)
         running = weighted_base
-        margin  = weighted_base - 0.5
         steps   = []
         for key, val in context.items():
-            mult   = multipliers_map[key][val]
-            before = max(0.0, min(1.0, 0.5 + margin))
-            margin *= mult
-            after  = max(0.0, min(1.0, 0.5 + margin))
+            adj    = multipliers_map[key].get(val, 0.0)
+            before = running
+            running = max(0.0, min(1.0, running + adj))
+            after  = running
             delta  = after - before
-            steps.append((key, val, mult, before, after, delta))
+            steps.append((key, val, adj, before, after, delta))
 
         # Consistency override check
         edge_is_tight = abs(line_diff) < 5.0
@@ -1773,8 +1784,8 @@ if st.session_state.logs is not None:
         rows_html = ""
         for key, val, mult, before, after, delta in steps:
             impact_color = "#22c55e" if delta > 0.005 else "#ef4444" if delta < -0.005 else "#475569"
-            mult_display = f"{mult:.2f}x" if mult != 1.0 else "1.00x (neutral)"
-            mult_color   = "#22c55e" if mult > 1.0 else "#ef4444" if mult < 1.0 else "#475569"
+            mult_display = (f"+{adj:.0%}" if adj > 0 else f"{adj:.0%}" if adj < 0 else "no change")
+            mult_color   = "#22c55e" if adj > 0 else "#ef4444" if adj < 0 else "#475569"
             rows_html += f"""
             <tr style='border-bottom:1px solid #111827;'>
                 <td style='padding:4px 0; color:#94a3b8;'>{signal_labels.get(key, key)}</td>
