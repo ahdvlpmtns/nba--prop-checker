@@ -1176,6 +1176,196 @@ with st.sidebar:
     """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
+# Mode selector
+# ─────────────────────────────────────────────
+
+for _k in ["scanner_results", "scanner_error"]:
+    if _k not in st.session_state:
+        st.session_state[_k] = None
+
+_mode = st.radio(
+    "mode", ["🏀  Player Prop", "🎯  Slate Scanner"],
+    horizontal=True, label_visibility="collapsed", key="app_mode"
+)
+st.markdown("<div style='height:0.25rem'></div>", unsafe_allow_html=True)
+
+# ─────────────────────────────────────────────
+# Slate Scanner
+# ─────────────────────────────────────────────
+
+if _mode == "🎯  Slate Scanner":
+    st.markdown("<div class='section-header'>PrizePicks NBA — Today's Slate</div>", unsafe_allow_html=True)
+    st.markdown("""
+    <div class='explainer'>
+        Fetches today's NBA points props from PrizePicks and runs every player through the PropLens model.
+        Surfaces <strong>Strong Over</strong> and <strong>Strong Under</strong> results ranked by confidence.
+        Takes 2–4 minutes. Results are cached for 5 minutes.
+    </div>
+    """, unsafe_allow_html=True)
+
+    _sc1, _sc2 = st.columns([1, 3])
+    with _sc1:
+        _run = st.button("🔍  Scan Today's Slate", key="run_scanner")
+    with _sc2:
+        _filter = st.selectbox(
+            "Show", ["Strong Only", "Strong + Lean", "All results"],
+            key="scanner_filter", label_visibility="collapsed"
+        )
+
+    if _run:
+        st.session_state.scanner_results = None
+        st.session_state.scanner_error   = None
+        with st.spinner("Fetching PrizePicks slate..."):
+            try:
+                _r = requests.get(
+                    "https://api.prizepicks.com/projections",
+                    params={"league_id": 7, "per_page": 250, "single_stat": "true"},
+                    headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json",
+                             "Referer": "https://prizepicks.com/"},
+                    timeout=15
+                )
+                _data = _r.json()
+                _pmap = {}
+                for _item in _data.get("included", []):
+                    if _item.get("type") == "new_player":
+                        _a = _item.get("attributes", {})
+                        _pmap[_item["id"]] = {
+                            "name": _a.get("display_name", _a.get("name", "")),
+                            "team": _a.get("team_abbreviation", ""),
+                        }
+                _slate = []
+                for _proj in _data.get("data", []):
+                    _a = _proj.get("attributes", {})
+                    if _a.get("stat_type", "").lower() not in ("points", "pts"):
+                        continue
+                    _ln = _a.get("line_score")
+                    if not _ln:
+                        continue
+                    _pid  = _proj.get("relationships", {}).get("new_player", {}).get("data", {}).get("id")
+                    _pi   = _pmap.get(_pid, {})
+                    if _pi.get("name"):
+                        _slate.append({"player_name": _pi["name"], "line": float(_ln), "team": _pi.get("team", "")})
+            except Exception as _e:
+                _slate = []
+                st.session_state.scanner_error = f"Could not fetch PrizePicks slate: {_e}"
+
+        if _slate and not st.session_state.scanner_error:
+            st.info(f"Found {len(_slate)} NBA points props. Running model on each player...")
+            _results  = []
+            _progress = st.progress(0)
+            _status   = st.empty()
+            _season   = "2025-26"
+
+            for _i, _prop in enumerate(_slate):
+                _progress.progress((_i + 1) / len(_slate))
+                _status.text(f"Analyzing {_prop['player_name']} ({_i+1}/{len(_slate)})...")
+                try:
+                    _nid, _fn = nba_find_player(_prop["player_name"])
+                    if not _nid:
+                        continue
+                    _logs = nba_get_game_logs(_nid, _season, n=10)
+                    if _logs.empty:
+                        continue
+                    _ln   = _prop["line"]
+                    _wb   = weighted_hit_rate(_logs, _ln, "Over")
+                    _cons = consistency_score(_logs, _ln)
+                    _avgp = pd.to_numeric(_logs["PTS"], errors="coerce").dropna().mean()
+                    _avgm = pd.to_numeric(_logs["MIN"], errors="coerce").dropna().mean()
+                    _avgf = pd.to_numeric(_logs["FGA"], errors="coerce").dropna().mean()
+                    _avgt = pd.to_numeric(_logs["FTA"], errors="coerce").dropna().mean()
+                    _ld   = _avgp - _ln
+                    _ep   = next((p for p in espn_get_all_players()
+                                  if normalize_name(p["full_name"]) == normalize_name(_fn)), None)
+                    _team = _ep["team_abbr"] if _ep else None
+                    _opp, _gd, _ven = espn_get_next_game(_team) if _team else (None, None, None)
+                    _mq, _, _  = classify_matchup_espn(_opp)
+                    _sp        = home_away_split(_logs, _ln, "Over", _team)
+                    _vadj      = venue_adjustment(_sp, _ven, "Over")
+                    _b2b       = detect_b2b(_logs, _gd)
+                    _h2hdf     = get_h2h_logs(_nid, _opp, _season) if _opp else pd.DataFrame()
+                    _hsig, _, _= h2h_signal(_h2hdf, _ln, "Over")
+                    _savg      = nba_get_season_avg(_nid, _season)
+                    _fsig, _   = form_divergence_signal(_avgp, _savg, _ln, "Over")
+                    _ctx = {
+                        "minutes": suggest_bucket(_avgm, 32, 26),
+                        "role":    suggest_bucket(_avgf + 0.5 * _avgt, 18, 12),
+                        "shots":   "High" if _avgf >= 15 else ("Low" if _avgf < 10 else "Medium"),
+                        "matchup": _mq, "script": "Neutral", "venue": _vadj,
+                        "h2h": _hsig, "b2b": _b2b, "form": _fsig,
+                    }
+                    _adj  = apply_adjustments(_wb, _ctx)
+                    _tier = get_confidence_tier(_adj, _ld, _cons)
+                    _results.append({
+                        "Player": _fn, "Line": _ln, "Avg PTS": round(_avgp, 1),
+                        "Edge": round(_ld, 1), "Weighted HR": f"{_wb:.0%}",
+                        "Adjusted": f"{_adj:.0%}", "Matchup": _mq,
+                        "B2B": _b2b, "Form": _fsig, "Venue": _ven or "?",
+                        "Tier": _tier, "_adj_raw": _adj,
+                    })
+                except Exception:
+                    continue
+
+            _progress.empty()
+            _status.empty()
+            st.session_state.scanner_results = sorted(
+                _results,
+                key=lambda x: -x["_adj_raw"] if "Over" in x["Tier"] else x["_adj_raw"]
+            )
+
+    if st.session_state.scanner_error:
+        st.error(st.session_state.scanner_error)
+
+    if st.session_state.scanner_results is not None:
+        _res = st.session_state.scanner_results
+        if _filter == "Strong Only":
+            _show = [r for r in _res if r["Tier"] in ("Strong Over", "Strong Under")]
+        elif _filter == "Strong + Lean":
+            _show = [r for r in _res if "Strong" in r["Tier"] or "Lean" in r["Tier"]]
+        else:
+            _show = _res
+
+        _tc = {"Strong Over":"green","Lean Over":"yellow","Lean Under":"orange","Strong Under":"red","Pass":"gray"}
+        _te = {"Strong Over":"🟢","Lean Over":"🟡","Lean Under":"🟠","Strong Under":"🔴","Pass":"⚪"}
+
+        if not _show:
+            st.info("No results match the filter. Try 'Strong + Lean' or 'All results'.")
+        else:
+            st.markdown(f"<div style='font-family:DM Mono;font-size:0.72rem;color:#475569;margin-bottom:1rem;'>Showing {len(_show)} results · sorted by confidence</div>", unsafe_allow_html=True)
+            for _r in _show:
+                _t  = _r["Tier"]
+                _cs = _tc.get(_t, "gray")
+                _em = _te.get(_t, "⚪")
+                _ec = "#22c55e" if _r["Edge"] > 0 else "#ef4444"
+                st.markdown(f"""
+                <div class='verdict-banner {_cs}' style='margin:0.4rem 0;padding:1rem 1.4rem;'>
+                    <div>
+                        <div class='verdict-label'>{_r["Line"]} pts Over · PrizePicks</div>
+                        <div style='font-size:1.1rem;font-weight:800;color:#f1f5f9;'>{_r["Player"]}</div>
+                        <div style='font-family:DM Mono;font-size:0.68rem;color:#475569;margin-top:4px;'>
+                            {_r["Venue"]} · {_r["Matchup"]} defense · {_r["B2B"]} · Form: {_r["Form"]}
+                        </div>
+                    </div>
+                    <div style='display:flex;gap:1.5rem;flex-wrap:wrap;align-items:center;'>
+                        <div><div class='verdict-label'>Tier</div>
+                             <div class='verdict-tier {_cs}' style='font-size:1rem;'>{_em} {_t}</div></div>
+                        <div><div class='verdict-label'>Avg PTS</div>
+                             <div style='font-size:1rem;font-weight:700;color:#f1f5f9;'>{_r["Avg PTS"]}</div></div>
+                        <div><div class='verdict-label'>Edge</div>
+                             <div style='font-size:1rem;font-weight:700;color:{_ec};'>{_r["Edge"]:+.1f}</div></div>
+                        <div><div class='verdict-label'>Hit Rate</div>
+                             <div style='font-size:1rem;font-weight:700;color:#f1f5f9;'>{_r["Weighted HR"]}</div></div>
+                        <div><div class='verdict-label'>Adjusted</div>
+                             <div style='font-size:1rem;font-weight:700;color:#f1f5f9;'>{_r["Adjusted"]}</div></div>
+                    </div>
+                </div>""", unsafe_allow_html=True)
+
+            _edf = pd.DataFrame([{k: v for k, v in r.items() if not k.startswith("_")} for r in _show])
+            st.download_button("⬇  Export CSV", data=_edf.to_csv(index=False).encode(),
+                               file_name="slate_scanner.csv", mime="text/csv")
+
+    st.stop()  # prevents player prop section rendering in scanner mode
+
+# ─────────────────────────────────────────────
 # Player & Prop inputs
 # ─────────────────────────────────────────────
 
