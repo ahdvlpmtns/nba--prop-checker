@@ -1770,7 +1770,7 @@ if st.session_state.logs is not None:
             <tr>
                 <td style='padding:3px 8px 3px 0; color:#475569;'>Consistency</td>
                 <td style='color:{"#22c55e" if consistency>=0.5 else "#eab308" if consistency>=0.35 else "#ef4444"};'>
-                    {consistency:.1%} {"⚠️ low but edge={line_diff:+.1f} > 5pts — override skipped" if not edge_is_tight and consistency < 0.35 else ""}
+                    {consistency:.1%} {f"⚠️ low but edge {line_diff:+.1f} > 5pts — override skipped" if not edge_is_tight and consistency < 0.35 else ""}
                 </td>
                 <td style='padding:3px 8px; color:#475569;'>Season avg</td>
                 <td style='color:#e2e8f0;'>{f"{season_avg:.1f} pts" if season_avg else "N/A"}</td>
