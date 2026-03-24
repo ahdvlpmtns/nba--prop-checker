@@ -932,6 +932,17 @@ def apply_adjustments(weighted: float, context: dict) -> float:
     adjusted = weighted
     for key, val in context.items():
         adjusted += adj_map[key].get(val, 0.0)
+    adjusted = max(0.0, min(1.0, adjusted))
+
+    # Hard cap: context cannot override what the raw data says.
+    # Rule: context can move probability by at most 12pp in total.
+    # This prevents a player with 52% hit rate from reaching 67% just from signals.
+    max_shift = 0.12
+    if adjusted > weighted + max_shift:
+        adjusted = weighted + max_shift
+    if adjusted < weighted - max_shift:
+        adjusted = weighted - max_shift
+
     return max(0.0, min(1.0, adjusted))
 
 def get_confidence_tier(adjusted: float, line_diff: float, consistency: float) -> str:
@@ -1836,7 +1847,7 @@ if st.session_state.logs is not None:
                 <td colspan='3' style='font-size:0.9rem; font-weight:800;
                     color:{"#22c55e" if "Strong Over" in tier else "#eab308" if "Lean Over" in tier else "#f97316" if "Lean Under" in tier else "#ef4444" if "Strong Under" in tier else "#64748b"};'>
                     {tier_emoji[tier]} {tier}
-                    {"  ← consistency override applied" if low_cons else ""}
+                    {"  ← consistency downgrade applied" if low_cons and tier in ["Lean Over","Lean Under"] else ""}
                 </td>
             </tr>
         </table>
