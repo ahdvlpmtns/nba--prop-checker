@@ -1203,10 +1203,15 @@ if _mode == "🎯  Slate Scanner":
     </div>
     """, unsafe_allow_html=True)
 
-    _sc1, _sc2 = st.columns([1, 3])
+    _sc1, _sc2, _sc3 = st.columns([1, 1, 2])
     with _sc1:
-        _run = st.button("🔍  Scan Today's Slate", key="run_scanner")
+        _run = st.button("🔍  Scan Slate", key="run_scanner")
     with _sc2:
+        _day_sel = st.selectbox(
+            "Day", ["Today", "Tomorrow"],
+            key="scanner_day", label_visibility="collapsed"
+        )
+    with _sc3:
         _filter = st.selectbox(
             "Show", ["Strong Only", "Strong + Lean", "All results"],
             key="scanner_filter", label_visibility="collapsed"
@@ -1215,11 +1220,17 @@ if _mode == "🎯  Slate Scanner":
     if _run:
         st.session_state.scanner_results = None
         st.session_state.scanner_error   = None
-        with st.spinner("Fetching PrizePicks slate..."):
+        with st.spinner(f"Fetching PrizePicks slate for {_day_sel}..."):
             try:
+                import pytz as _pytz
+                _et      = _pytz.timezone("America/New_York")
+                _today   = datetime.now(_et).date()
+                _tgt     = _today + timedelta(days=1) if _day_sel == "Tomorrow" else _today
+                _tgt_str = _tgt.strftime("%Y-%m-%d")
                 _r = requests.get(
                     "https://api.prizepicks.com/projections",
-                    params={"league_id": 7, "per_page": 250, "single_stat": "true"},
+                    params={"league_id": 7, "per_page": 250, "single_stat": "true",
+                            "game_date": _tgt_str},
                     headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json",
                              "Referer": "https://prizepicks.com/"},
                     timeout=15
@@ -1311,6 +1322,7 @@ if _mode == "🎯  Slate Scanner":
                 _results,
                 key=lambda x: -x["_adj_raw"] if "Over" in x["Tier"] else x["_adj_raw"]
             )
+            st.session_state["scanner_day_label"] = _day_sel
 
     if st.session_state.scanner_error:
         st.error(st.session_state.scanner_error)
@@ -1330,7 +1342,8 @@ if _mode == "🎯  Slate Scanner":
         if not _show:
             st.info("No results match the filter. Try 'Strong + Lean' or 'All results'.")
         else:
-            st.markdown(f"<div style='font-family:DM Mono;font-size:0.72rem;color:#475569;margin-bottom:1rem;'>Showing {len(_show)} results · sorted by confidence</div>", unsafe_allow_html=True)
+            _day_label = st.session_state.get("scanner_day_label", "Today")
+            st.markdown(f"<div style='font-family:DM Mono;font-size:0.72rem;color:#475569;margin-bottom:1rem;'>Showing {len(_show)} results for {_day_label} · sorted by confidence</div>", unsafe_allow_html=True)
             for _r in _show:
                 _t  = _r["Tier"]
                 _cs = _tc.get(_t, "gray")
