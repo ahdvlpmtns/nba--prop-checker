@@ -226,6 +226,36 @@ html, body, [class*="css"] {
 
 hr { border-color: var(--border) !important; }
 
+/* ── Clear ✕ overlaid inside the selectbox ── */
+div[data-testid="column"]:first-child {
+    position: relative;
+}
+div[data-testid="column"]:first-child .stButton {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    z-index: 100;
+    width: auto !important;
+}
+div[data-testid="column"]:first-child .stButton > button {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    color: #475569 !important;
+    font-size: 0.78rem !important;
+    padding: 0.3rem 0.5rem !important;
+    min-width: unset !important;
+    border-radius: 4px !important;
+    line-height: 1 !important;
+    transform: none !important;
+}
+div[data-testid="column"]:first-child .stButton > button:hover {
+    color: #ef4444 !important;
+    background: rgba(239,68,68,0.1) !important;
+    transform: none !important;
+    box-shadow: none !important;
+}
+
 /* ── Player search suggestion buttons ── */
 button[data-testid="baseButton-secondary"] {
     background: #0c1018 !important;
@@ -1479,22 +1509,13 @@ with col_a:
         key=f"player_sel_{st.session_state.player_key}",
     )
 
-    # Show clear button only when a player is selected
+    # Overlay ✕ button — only visible when a player is selected
     if player_query:
-        _pc, _xc = st.columns([5, 1])
-        with _pc:
-            st.markdown(
-                f"<div style='font-family:DM Mono;font-size:0.72rem;color:#22c55e;"
-                f"background:#052e16;border:1px solid #166534;border-radius:8px;"
-                f"padding:5px 12px;margin-top:-0.2rem;'>✓ {player_query}</div>",
-                unsafe_allow_html=True
-            )
-        with _xc:
-            if st.button("✕", key="clear_player_x", help="Clear"):
-                st.session_state.player_key += 1
-                st.session_state.logs = None
-                st.session_state.ai_analysis = None
-                st.rerun()
+        if st.button("✕", key="clear_player_x", help="Clear player"):
+            st.session_state.player_key += 1
+            st.session_state.logs = None
+            st.session_state.ai_analysis = None
+            st.rerun()
 
 with col_b:
     line = st.number_input("Points Line", min_value=0.0, value=24.5, step=0.5)
