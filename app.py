@@ -1463,66 +1463,69 @@ with st.spinner("Loading players..."):
         player_names_list = []
 
 # Session state for player search
-if "player_search_input" not in st.session_state:
-    st.session_state.player_search_input = ""
-if "selected_player_val" not in st.session_state:
-    st.session_state.selected_player_val = ""
+for _k, _v in [("player_search_query", ""), ("selected_player_val", "")]:
+    if _k not in st.session_state:
+        st.session_state[_k] = _v
+
+def _on_search_change():
+    """Live suggestions — fires on every keystroke via on_change."""
+    q = st.session_state["player_search_query"]
+    # If user is clearing the field, also clear the selected player
+    if not q.strip():
+        st.session_state.selected_player_val = ""
 
 col_a, col_b, col_c, col_d, col_e = st.columns([2.5, 1, 1, 1, 0.8])
 
 with col_a:
-    # Text input — real placeholder, never editable by accident
-    _search = st.text_input(
+    st.text_input(
         "Player",
-        value=st.session_state.player_search_input,
-        placeholder="Search player name...",
-        key="player_text_input",
+        placeholder="Type a player name...",
+        key="player_search_query",
+        on_change=_on_search_change,
+        label_visibility="visible",
     )
-    st.session_state.player_search_input = _search
 
-    # Show filtered dropdown only when typing (not yet a full match)
-    _norm_search = normalize_name(_search.strip())
-    _matched = next((p for p in player_names_list
-                     if normalize_name(p) == _norm_search), None)
+    _q     = st.session_state.player_search_query.strip()
+    _qnorm = normalize_name(_q)
 
-    if _search.strip() and not _matched:
-        # Show up to 6 fuzzy matches as clickable options
-        _candidates = [p for p in player_names_list
-                       if _norm_search in normalize_name(p)][:6]
-        if _candidates:
-            st.markdown("<div style='margin-top:-0.5rem; margin-bottom:0.25rem;'>", unsafe_allow_html=True)
-            for _c in _candidates:
-                if st.button(_c, key=f"pick_{_c}", use_container_width=True):
-                    st.session_state.player_search_input = _c
-                    st.session_state.selected_player_val = _c
-                    st.rerun()
-            st.markdown("</div>", unsafe_allow_html=True)
-        else:
-            st.markdown("<div style='font-family:DM Mono;font-size:0.7rem;color:#475569;margin-top:-0.4rem;'>No players found</div>", unsafe_allow_html=True)
-
-    # If input exactly matches a player, lock it in
-    if _matched and _matched != st.session_state.selected_player_val:
-        st.session_state.selected_player_val = _matched
-
-    # Show clear ✕ inline when a player is selected
     if st.session_state.selected_player_val:
+        # ── Confirmed state: show green pill + ✕ ──────────────
         _sel = st.session_state.selected_player_val
-        _col_name, _col_x = st.columns([5, 1])
-        with _col_name:
+        st.markdown(
+            f"<div style='display:flex;align-items:center;gap:8px;margin-top:4px;'>",
+            unsafe_allow_html=True
+        )
+        _pc, _xc = st.columns([6, 1])
+        with _pc:
             st.markdown(
                 f"<div style='font-family:DM Mono;font-size:0.72rem;color:#22c55e;"
                 f"background:#052e16;border:1px solid #166534;border-radius:8px;"
-                f"padding:4px 10px;margin-top:-0.3rem;display:inline-block;'>"
-                f"✓ {_sel}</div>",
+                f"padding:5px 12px;'>✓ {_sel}</div>",
                 unsafe_allow_html=True
             )
-        with _col_x:
-            if st.button("✕", key="clear_player_x", help="Clear player"):
-                st.session_state.player_search_input = ""
+        with _xc:
+            if st.button("✕", key="clear_player_x"):
                 st.session_state.selected_player_val = ""
+                st.session_state.player_search_query = ""
                 st.session_state.logs = None
                 st.session_state.ai_analysis = None
                 st.rerun()
+
+    elif _q:
+        # ── Live suggestions as user types ────────────────────
+        _hits = [p for p in player_names_list if _qnorm in normalize_name(p)][:6]
+        if _hits:
+            for _c in _hits:
+                if st.button(_c, key=f"pick_{normalize_name(_c)}", use_container_width=True):
+                    st.session_state.selected_player_val = _c
+                    st.session_state.player_search_query = _c
+                    st.rerun()
+        else:
+            st.markdown(
+                "<div style='font-family:DM Mono;font-size:0.7rem;"
+                "color:#475569;padding:4px 0;'>No players found</div>",
+                unsafe_allow_html=True
+            )
 
 with col_b:
     line = st.number_input("Points Line", min_value=0.0, value=24.5, step=0.5)
@@ -1538,7 +1541,11 @@ season_str_clean = season_str_to_season(season_str)
 
 selected_player = st.session_state.selected_player_val or None
 if not selected_player:
-    st.markdown("<div style='color:#475569; font-family:DM Mono; font-size:0.8rem; margin-top:0.5rem;'>Type a player name above to get started.</div>", unsafe_allow_html=True)
+    st.markdown(
+        "<div style='color:#475569;font-family:DM Mono;font-size:0.8rem;"
+        "margin-top:0.5rem;'>Type a player name above to get started.</div>",
+        unsafe_allow_html=True
+    )
     st.stop()
 
 # Look up player: nba_api for ID/logs, ESPN roster for team
