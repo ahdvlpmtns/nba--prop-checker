@@ -225,6 +225,26 @@ html, body, [class*="css"] {
 .stButton > button:hover { opacity: 0.88 !important; transform: translateY(-1px) !important; box-shadow: 0 4px 16px rgba(249,115,22,0.35) !important; }
 
 hr { border-color: var(--border) !important; }
+
+/* ── Clear player button — compact ✕ ── */
+button[kind="secondary"][data-testid="baseButton-secondary"]:has(+ *),
+div[data-testid="column"]:nth-child(2) .stButton > button {
+    padding: 0.4rem 0.6rem !important;
+    min-width: unset !important;
+    background: #1a2333 !important;
+    color: #64748b !important;
+    box-shadow: none !important;
+    border: 1px solid #243044 !important;
+    border-radius: 8px !important;
+    font-size: 0.8rem !important;
+}
+div[data-testid="column"]:nth-child(2) .stButton > button:hover {
+    background: #1c0505 !important;
+    color: #ef4444 !important;
+    border-color: #991b1b !important;
+    transform: none !important;
+    box-shadow: none !important;
+}
 section[data-testid="stSidebar"] {
     background: #080d15 !important;
     border-right: 1px solid var(--border) !important;
@@ -1417,26 +1437,49 @@ if _mode == "🎯  Slate Scanner":
 
 st.markdown("<div class='section-header'>Player & Prop</div>", unsafe_allow_html=True)
 
-col_a, col_b, col_c, col_d, col_e = st.columns([2.5, 1, 1, 1, 0.8])
+# Load player list
+with st.spinner("Loading players..."):
+    try:
+        all_players_list = espn_get_all_players()
+        player_names_list = sorted(
+            [p["full_name"] for p in all_players_list],
+            key=lambda x: x.split()[-1]
+        )
+    except Exception:
+        player_names_list = []
+
+# Track selected player in session state so clear button can reset it
+if "selected_player_val" not in st.session_state:
+    st.session_state.selected_player_val = ""
+
+# Player row: search + clear button + prop inputs
+col_a, col_clear, col_b, col_c, col_d, col_e = st.columns([2.2, 0.3, 1, 1, 1, 0.8])
+
 with col_a:
-    # Load player list once and use native selectbox search (built-in filter)
-    with st.spinner("Loading players..."):
-        try:
-            all_players_list = espn_get_all_players()
-            player_names_list = sorted(
-                [p["full_name"] for p in all_players_list],
-                key=lambda x: x.split()[-1]
-            )
-        except Exception:
-            player_names_list = []
+    # Index based on session state so clear button resets to blank
+    _cur_idx = 0
+    if st.session_state.selected_player_val in player_names_list:
+        _cur_idx = player_names_list.index(st.session_state.selected_player_val) + 1
 
     player_query = st.selectbox(
         "Player",
         options=[""] + player_names_list,
-        index=0,
-        format_func=lambda x: "🔍  Type to search..." if x == "" else x,
-        help="Start typing a name to filter"
+        index=_cur_idx,
+        format_func=lambda x: "Search player..." if x == "" else x,
+        key="player_selectbox",
+        label_visibility="visible",
     )
+    # Keep session state in sync
+    if player_query != st.session_state.selected_player_val:
+        st.session_state.selected_player_val = player_query
+
+with col_clear:
+    st.markdown("<div style='height:1.85rem'></div>", unsafe_allow_html=True)
+    if st.button("✕", key="clear_player", help="Clear player",
+                 disabled=not bool(st.session_state.selected_player_val)):
+        st.session_state.selected_player_val = ""
+        st.rerun()
+
 with col_b:
     line = st.number_input("Points Line", min_value=0.0, value=24.5, step=0.5)
 with col_c:
@@ -1449,13 +1492,9 @@ with col_e:
 season_int = season_str_to_int(season_str)
 season_str_clean = season_str_to_season(season_str)
 
-# Player selected directly from the searchable selectbox
-selected_player = player_query if player_query else None
+selected_player = st.session_state.selected_player_val if st.session_state.selected_player_val else None
 if not selected_player:
     st.markdown("<div style='color:#475569; font-family:DM Mono; font-size:0.8rem; margin-top:0.5rem;'>Select a player above to get started.</div>", unsafe_allow_html=True)
-    st.stop()
-
-if not selected_player:
     st.stop()
 
 # Look up player: nba_api for ID/logs, ESPN roster for team
