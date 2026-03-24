@@ -1203,7 +1203,7 @@ if _mode == "🎯  Slate Scanner":
     </div>
     """, unsafe_allow_html=True)
 
-    _sc1, _sc2, _sc3 = st.columns([1, 1, 2])
+    _sc1, _sc2, _sc3, _sc4 = st.columns([1, 1, 1, 1])
     with _sc1:
         _run = st.button("🔍  Scan Slate", key="run_scanner")
     with _sc2:
@@ -1212,6 +1212,12 @@ if _mode == "🎯  Slate Scanner":
             key="scanner_day", label_visibility="collapsed"
         )
     with _sc3:
+        _batch = st.selectbox(
+            "Players", [20, 40, "All"],
+            key="scanner_batch", label_visibility="collapsed",
+            help="How many props to analyze. Fewer = faster."
+        )
+    with _sc4:
         _filter = st.selectbox(
             "Show", ["Strong Only", "Strong + Lean", "All results"],
             key="scanner_filter", label_visibility="collapsed"
@@ -1261,30 +1267,39 @@ if _mode == "🎯  Slate Scanner":
                 st.session_state.scanner_error = f"Could not fetch PrizePicks slate: {_e}"
 
         if _slate and not st.session_state.scanner_error:
-            st.info(f"Found {len(_slate)} NBA points props. Running model on each player...")
+            # Apply batch limit
+            _limit = len(_slate) if _batch == "All" else int(_batch)
+            _slate = _slate[:_limit]
+            st.info(f"Analyzing {len(_slate)} props for {_day_sel}...")
             _results  = []
             _progress = st.progress(0)
             _status   = st.empty()
             _season   = "2025-26"
 
-            for _i, _prop in enumerate(_slate):
-                _progress.progress((_i + 1) / len(_slate))
-                _status.text(f"Analyzing {_prop['player_name']} ({_i+1}/{len(_slate)})...")
+            def _analyze_prop(_prop, _season):
+                """Analyze a single prop. Returns result dict or None."""
                 try:
                     _nid, _fn = nba_find_player(_prop["player_name"])
                     if not _nid:
-                        continue
+                        return None
                     _logs = nba_get_game_logs(_nid, _season, n=10)
                     if _logs.empty:
-                        continue
+                        return None
                     _ln   = _prop["line"]
                     _wb   = weighted_hit_rate(_logs, _ln, "Over")
-                    _cons = consistency_score(_logs, _ln)
                     _avgp = pd.to_numeric(_logs["PTS"], errors="coerce").dropna().mean()
+                    _ld   = _avgp - _ln
+
+                    # ── Early exit: skip players with no clear edge ──
+                    # If weighted hit rate is 44-56% AND edge is within 1pt,
+                    # this prop will almost certainly be Pass — skip expensive calls
+                    if 0.44 <= _wb <= 0.56 and abs(_ld) < 1.0:
+                        return None
+
+                    _cons = consistency_score(_logs, _ln)
                     _avgm = pd.to_numeric(_logs["MIN"], errors="coerce").dropna().mean()
                     _avgf = pd.to_numeric(_logs["FGA"], errors="coerce").dropna().mean()
                     _avgt = pd.to_numeric(_logs["FTA"], errors="coerce").dropna().mean()
-                    _ld   = _avgp - _ln
                     _ep   = next((p for p in espn_get_all_players()
                                   if normalize_name(p["full_name"]) == normalize_name(_fn)), None)
                     _team = _ep["team_abbr"] if _ep else None
@@ -1306,15 +1321,33 @@ if _mode == "🎯  Slate Scanner":
                     }
                     _adj  = apply_adjustments(_wb, _ctx)
                     _tier = get_confidence_tier(_adj, _ld, _cons)
-                    _results.append({
+                    return {
                         "Player": _fn, "Line": _ln, "Avg PTS": round(_avgp, 1),
                         "Edge": round(_ld, 1), "Weighted HR": f"{_wb:.0%}",
                         "Adjusted": f"{_adj:.0%}", "Matchup": _mq,
                         "B2B": _b2b, "Form": _fsig, "Venue": _ven or "?",
                         "Tier": _tier, "_adj_raw": _adj,
-                    })
+                    }
                 except Exception:
-                    continue
+                    return None
+
+            # Run in parallel batches of 5
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            _WORKERS = 5
+            _futures = {}
+            with ThreadPoolExecutor(max_workers=_WORKERS) as _ex:
+                for _prop in _slate:
+                    _f = _ex.submit(_analyze_prop, _prop, _season)
+                    _futures[_f] = _prop["player_name"]
+
+                _done = 0
+                for _f in as_completed(_futures):
+                    _done += 1
+                    _progress.progress(_done / len(_slate))
+                    _status.text(f"Analyzed {_done}/{len(_slate)} · {len(_results)} results so far...")
+                    _res = _f.result()
+                    if _res:
+                        _results.append(_res)
 
             _progress.empty()
             _status.empty()
