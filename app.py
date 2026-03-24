@@ -1809,6 +1809,14 @@ if st.session_state.logs is not None:
 
         st.markdown(rows_html + "</table>", unsafe_allow_html=True)
 
+        # Pre-compute values to avoid nested f-string quote issues in HTML
+        _tier_color = ("#22c55e" if "Strong Over" in tier else
+                       "#eab308" if "Lean Over" in tier else
+                       "#f97316" if "Lean Under" in tier else
+                       "#ef4444" if "Strong Under" in tier else "#64748b")
+        _cons_note  = ("  ← consistency downgrade applied"
+                       if low_cons and tier in ["Lean Over","Lean Under"] else "")
+
         # Final decision
         # Consistency override only matters when tier is Strong Over/Under
         override_relevant = tier in ["Strong Over", "Strong Under", "Lean Over", "Lean Under"]
@@ -1844,10 +1852,8 @@ if st.session_state.logs is not None:
             </tr>
             <tr style='border-top:1px solid #1a2333; margin-top:4px;'>
                 <td style='padding:6px 8px 3px 0; color:#475569;'>Final tier</td>
-                <td colspan='3' style='font-size:0.9rem; font-weight:800;
-                    color:{"#22c55e" if "Strong Over" in tier else "#eab308" if "Lean Over" in tier else "#f97316" if "Lean Under" in tier else "#ef4444" if "Strong Under" in tier else "#64748b"};'>
-                    {tier_emoji[tier]} {tier}
-                    {"  ← consistency downgrade applied" if low_cons and tier in ["Lean Over","Lean Under"] else ""}
+                <td colspan='3' style='font-size:0.9rem; font-weight:800; color:{_tier_color};'>
+                    {tier_emoji[tier]} {tier}{_cons_note}
                 </td>
             </tr>
         </table>
