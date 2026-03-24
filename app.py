@@ -226,23 +226,37 @@ html, body, [class*="css"] {
 
 hr { border-color: var(--border) !important; }
 
-/* ── Clear player button — compact ✕ ── */
-button[kind="secondary"][data-testid="baseButton-secondary"]:has(+ *),
-div[data-testid="column"]:nth-child(2) .stButton > button {
-    padding: 0.4rem 0.6rem !important;
-    min-width: unset !important;
-    background: #1a2333 !important;
-    color: #64748b !important;
-    box-shadow: none !important;
-    border: 1px solid #243044 !important;
+/* ── Player search suggestion buttons ── */
+button[data-testid="baseButton-secondary"] {
+    background: #0c1018 !important;
+    color: #94a3b8 !important;
+    border: 1px solid #1a2333 !important;
     border-radius: 8px !important;
-    font-size: 0.8rem !important;
+    font-family: 'Syne', sans-serif !important;
+    font-size: 0.82rem !important;
+    font-weight: 400 !important;
+    text-align: left !important;
+    padding: 0.4rem 0.8rem !important;
+    box-shadow: none !important;
+    transition: background 0.15s !important;
+    margin-bottom: 2px !important;
 }
-div[data-testid="column"]:nth-child(2) .stButton > button:hover {
-    background: #1c0505 !important;
-    color: #ef4444 !important;
-    border-color: #991b1b !important;
+button[data-testid="baseButton-secondary"]:hover {
+    background: #1a2333 !important;
+    color: #f1f5f9 !important;
+    border-color: #243044 !important;
     transform: none !important;
+    box-shadow: none !important;
+}
+/* ── Clear ✕ button — small and red on hover ── */
+button[key="clear_player_x"],
+button[data-testid="baseButton-secondary"][title="Clear player"] {
+    background: transparent !important;
+    color: #475569 !important;
+    border: 1px solid #1a2333 !important;
+    border-radius: 6px !important;
+    padding: 0.2rem 0.5rem !important;
+    font-size: 0.75rem !important;
     box-shadow: none !important;
 }
 section[data-testid="stSidebar"] {
@@ -1448,37 +1462,67 @@ with st.spinner("Loading players..."):
     except Exception:
         player_names_list = []
 
-# Track selected player in session state so clear button can reset it
+# Session state for player search
+if "player_search_input" not in st.session_state:
+    st.session_state.player_search_input = ""
 if "selected_player_val" not in st.session_state:
     st.session_state.selected_player_val = ""
 
-# Player row: search + clear button + prop inputs
-col_a, col_clear, col_b, col_c, col_d, col_e = st.columns([2.2, 0.3, 1, 1, 1, 0.8])
+col_a, col_b, col_c, col_d, col_e = st.columns([2.5, 1, 1, 1, 0.8])
 
 with col_a:
-    # Index based on session state so clear button resets to blank
-    _cur_idx = 0
-    if st.session_state.selected_player_val in player_names_list:
-        _cur_idx = player_names_list.index(st.session_state.selected_player_val) + 1
-
-    player_query = st.selectbox(
+    # Text input — real placeholder, never editable by accident
+    _search = st.text_input(
         "Player",
-        options=[""] + player_names_list,
-        index=_cur_idx,
-        format_func=lambda x: "Search player..." if x == "" else x,
-        key="player_selectbox",
-        label_visibility="visible",
+        value=st.session_state.player_search_input,
+        placeholder="Search player name...",
+        key="player_text_input",
     )
-    # Keep session state in sync
-    if player_query != st.session_state.selected_player_val:
-        st.session_state.selected_player_val = player_query
+    st.session_state.player_search_input = _search
 
-with col_clear:
-    st.markdown("<div style='height:1.85rem'></div>", unsafe_allow_html=True)
-    if st.button("✕", key="clear_player", help="Clear player",
-                 disabled=not bool(st.session_state.selected_player_val)):
-        st.session_state.selected_player_val = ""
-        st.rerun()
+    # Show filtered dropdown only when typing (not yet a full match)
+    _norm_search = normalize_name(_search.strip())
+    _matched = next((p for p in player_names_list
+                     if normalize_name(p) == _norm_search), None)
+
+    if _search.strip() and not _matched:
+        # Show up to 6 fuzzy matches as clickable options
+        _candidates = [p for p in player_names_list
+                       if _norm_search in normalize_name(p)][:6]
+        if _candidates:
+            st.markdown("<div style='margin-top:-0.5rem; margin-bottom:0.25rem;'>", unsafe_allow_html=True)
+            for _c in _candidates:
+                if st.button(_c, key=f"pick_{_c}", use_container_width=True):
+                    st.session_state.player_search_input = _c
+                    st.session_state.selected_player_val = _c
+                    st.rerun()
+            st.markdown("</div>", unsafe_allow_html=True)
+        else:
+            st.markdown("<div style='font-family:DM Mono;font-size:0.7rem;color:#475569;margin-top:-0.4rem;'>No players found</div>", unsafe_allow_html=True)
+
+    # If input exactly matches a player, lock it in
+    if _matched and _matched != st.session_state.selected_player_val:
+        st.session_state.selected_player_val = _matched
+
+    # Show clear ✕ inline when a player is selected
+    if st.session_state.selected_player_val:
+        _sel = st.session_state.selected_player_val
+        _col_name, _col_x = st.columns([5, 1])
+        with _col_name:
+            st.markdown(
+                f"<div style='font-family:DM Mono;font-size:0.72rem;color:#22c55e;"
+                f"background:#052e16;border:1px solid #166534;border-radius:8px;"
+                f"padding:4px 10px;margin-top:-0.3rem;display:inline-block;'>"
+                f"✓ {_sel}</div>",
+                unsafe_allow_html=True
+            )
+        with _col_x:
+            if st.button("✕", key="clear_player_x", help="Clear player"):
+                st.session_state.player_search_input = ""
+                st.session_state.selected_player_val = ""
+                st.session_state.logs = None
+                st.session_state.ai_analysis = None
+                st.rerun()
 
 with col_b:
     line = st.number_input("Points Line", min_value=0.0, value=24.5, step=0.5)
@@ -1492,9 +1536,9 @@ with col_e:
 season_int = season_str_to_int(season_str)
 season_str_clean = season_str_to_season(season_str)
 
-selected_player = st.session_state.selected_player_val if st.session_state.selected_player_val else None
+selected_player = st.session_state.selected_player_val or None
 if not selected_player:
-    st.markdown("<div style='color:#475569; font-family:DM Mono; font-size:0.8rem; margin-top:0.5rem;'>Select a player above to get started.</div>", unsafe_allow_html=True)
+    st.markdown("<div style='color:#475569; font-family:DM Mono; font-size:0.8rem; margin-top:0.5rem;'>Type a player name above to get started.</div>", unsafe_allow_html=True)
     st.stop()
 
 # Look up player: nba_api for ID/logs, ESPN roster for team
