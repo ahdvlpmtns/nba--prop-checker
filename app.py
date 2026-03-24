@@ -1462,70 +1462,39 @@ with st.spinner("Loading players..."):
     except Exception:
         player_names_list = []
 
-# Session state for player search
-for _k, _v in [("player_search_query", ""), ("selected_player_val", "")]:
-    if _k not in st.session_state:
-        st.session_state[_k] = _v
-
-def _on_search_change():
-    """Live suggestions — fires on every keystroke via on_change."""
-    q = st.session_state["player_search_query"]
-    # If user is clearing the field, also clear the selected player
-    if not q.strip():
-        st.session_state.selected_player_val = ""
+# Session state for player clear
+if "player_key" not in st.session_state:
+    st.session_state.player_key = 0
 
 col_a, col_b, col_c, col_d, col_e = st.columns([2.5, 1, 1, 1, 0.8])
 
 with col_a:
-    st.text_input(
+    # st.selectbox has native instant filtering — fastest possible search
+    # We use a unique key driven by player_key so clearing resets it to blank
+    player_query = st.selectbox(
         "Player",
-        placeholder="Type a player name...",
-        key="player_search_query",
-        on_change=_on_search_change,
-        label_visibility="visible",
+        options=[""] + player_names_list,
+        index=0,
+        format_func=lambda x: "— select a player —" if x == "" else x,
+        key=f"player_sel_{st.session_state.player_key}",
     )
 
-    _q     = st.session_state.player_search_query.strip()
-    _qnorm = normalize_name(_q)
-
-    if st.session_state.selected_player_val:
-        # ── Confirmed state: show green pill + ✕ ──────────────
-        _sel = st.session_state.selected_player_val
-        st.markdown(
-            f"<div style='display:flex;align-items:center;gap:8px;margin-top:4px;'>",
-            unsafe_allow_html=True
-        )
-        _pc, _xc = st.columns([6, 1])
+    # Show clear button only when a player is selected
+    if player_query:
+        _pc, _xc = st.columns([5, 1])
         with _pc:
             st.markdown(
                 f"<div style='font-family:DM Mono;font-size:0.72rem;color:#22c55e;"
                 f"background:#052e16;border:1px solid #166534;border-radius:8px;"
-                f"padding:5px 12px;'>✓ {_sel}</div>",
+                f"padding:5px 12px;margin-top:-0.2rem;'>✓ {player_query}</div>",
                 unsafe_allow_html=True
             )
         with _xc:
-            if st.button("✕", key="clear_player_x"):
-                st.session_state.selected_player_val = ""
-                st.session_state.player_search_query = ""
+            if st.button("✕", key="clear_player_x", help="Clear"):
+                st.session_state.player_key += 1
                 st.session_state.logs = None
                 st.session_state.ai_analysis = None
                 st.rerun()
-
-    elif _q:
-        # ── Live suggestions as user types ────────────────────
-        _hits = [p for p in player_names_list if _qnorm in normalize_name(p)][:6]
-        if _hits:
-            for _c in _hits:
-                if st.button(_c, key=f"pick_{normalize_name(_c)}", use_container_width=True):
-                    st.session_state.selected_player_val = _c
-                    st.session_state.player_search_query = _c
-                    st.rerun()
-        else:
-            st.markdown(
-                "<div style='font-family:DM Mono;font-size:0.7rem;"
-                "color:#475569;padding:4px 0;'>No players found</div>",
-                unsafe_allow_html=True
-            )
 
 with col_b:
     line = st.number_input("Points Line", min_value=0.0, value=24.5, step=0.5)
@@ -1539,11 +1508,11 @@ with col_e:
 season_int = season_str_to_int(season_str)
 season_str_clean = season_str_to_season(season_str)
 
-selected_player = st.session_state.selected_player_val or None
+selected_player = player_query if player_query else None
 if not selected_player:
     st.markdown(
         "<div style='color:#475569;font-family:DM Mono;font-size:0.8rem;"
-        "margin-top:0.5rem;'>Type a player name above to get started.</div>",
+        "margin-top:0.5rem;'>Select a player above to get started.</div>",
         unsafe_allow_html=True
     )
     st.stop()
