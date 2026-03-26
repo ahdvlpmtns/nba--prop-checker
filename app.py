@@ -2228,18 +2228,27 @@ if st.session_state.logs is not None:
     _cons_word      = "Predictable" if consistency >= 0.5 else ("Variable" if consistency >= 0.35 else "Volatile")
     _bar_style      = f"background:{_bar_color};height:6px;width:{_bar_w}%;border-radius:999px;box-shadow:0 0 6px {_bar_color}55;"
 
+    # Ruler pip position: adjusted % mapped to 0-100 scale
+    _pip = max(2, min(98, int(_display_adj * 100)))
+    _pip_style = f"position:absolute;top:2px;left:{_pip}%;transform:translateX(-50%);width:11px;height:11px;border-radius:50%;background:{_bar_color};box-shadow:0 0 5px {_bar_color};"
+    _fill_style = f"position:absolute;top:6px;left:0;width:{_pip}%;height:3px;background:{_bar_color};border-radius:2px;opacity:0.5;"
+
     _verdict_html = (
         f"<div class='verdict-banner {css}'>"
         f"<div style='flex:1;min-width:200px;'>"
         f"<div class='verdict-label'>{full_name} · {line} pts · {_display_side}</div>"
         f"<div class='verdict-tier {css}'>{tier_emoji[_display_tier]} {_display_tier}</div>"
-        f"<div style='margin-top:10px;'>"
-        f"<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;'>"
-        f"<div style='font-family:DM Mono;font-size:0.6rem;color:#475569;letter-spacing:0.1em;text-transform:uppercase;'>Confidence</div>"
-        f"<div style='font-family:DM Mono;font-size:0.72rem;font-weight:800;color:{_bar_color};letter-spacing:0.03em;'>{_conf_label}</div>"
+        f"<div style='margin-top:12px;margin-bottom:2px;padding-right:8px;'>"
+        f"<div style='position:relative;height:16px;'>"
+        f"<div style='position:absolute;top:6px;left:0;right:0;height:3px;background:#1a2333;border-radius:2px;'></div>"
+        f"<div style='{_fill_style}'></div>"
+        f"<div style='position:absolute;top:6px;left:45%;width:1px;height:7px;background:#334155;'></div>"
+        f"<div style='position:absolute;top:6px;left:55%;width:1px;height:7px;background:#334155;'></div>"
+        f"<div style='position:absolute;top:6px;left:64%;width:1px;height:7px;background:#475569;'></div>"
+        f"<div style='{_pip_style}'></div>"
         f"</div>"
-        f"<div style='background:#1a2333;border-radius:999px;height:7px;width:100%;max-width:220px;overflow:hidden;'>"
-        f"<div style='{_bar_style}'></div>"
+        f"<div style='display:flex;justify-content:space-between;font-family:DM Mono;font-size:0.55rem;color:#334155;padding-right:4px;margin-top:2px;'>"
+        f"<span>Under</span><span style='padding-left:38%;'>Lean</span><span>Strong</span><span>Max</span>"
         f"</div>"
         f"</div>"
         f"{_flip_note_html}"
