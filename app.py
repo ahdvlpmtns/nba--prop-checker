@@ -1222,6 +1222,208 @@ def get_player_injury_status(player_name: str) -> Tuple[str, str]:
     return "Active", ""
 
 
+# ── Usage spike detector ─────────────────────────────────
+
+@st.cache_data(ttl=300)
+def get_team_injury_report(team_abbr: str) -> list:
+    """
+    Fetch all injured players for a given team from NBA official report.
+    Returns list of dicts: {name, status, reason}
+    """
+    results = []
+
+    # Source 1: nbainjuries package
+    try:
+        from nbainjuries import injury
+        from datetime import datetime
+        import pytz
+        et = pytz.timezone("America/New_York")
+        now = datetime.now(et)
+        report = injury.get_reportdata(now)
+        if report:
+            # Build team name → abbr mapping
+            _team_map = {
+                "Atlanta Hawks": "ATL", "Boston Celtics": "BOS",
+                "Brooklyn Nets": "BKN", "Charlotte Hornets": "CHA",
+                "Chicago Bulls": "CHI", "Cleveland Cavaliers": "CLE",
+                "Dallas Mavericks": "DAL", "Denver Nuggets": "DEN",
+                "Detroit Pistons": "DET", "Golden State Warriors": "GSW",
+                "Houston Rockets": "HOU", "Indiana Pacers": "IND",
+                "LA Clippers": "LAC", "Los Angeles Clippers": "LAC",
+                "Los Angeles Lakers": "LAL", "Memphis Grizzlies": "MEM",
+                "Miami Heat": "MIA", "Milwaukee Bucks": "MIL",
+                "Minnesota Timberwolves": "MIN", "New Orleans Pelicans": "NOP",
+                "New York Knicks": "NYK", "Oklahoma City Thunder": "OKC",
+                "Orlando Magic": "ORL", "Philadelphia 76ers": "PHI",
+                "Phoenix Suns": "PHX", "Portland Trail Blazers": "POR",
+                "Sacramento Kings": "SAC", "San Antonio Spurs": "SAS",
+                "Toronto Raptors": "TOR", "Utah Jazz": "UTA",
+                "Washington Wizards": "WAS",
+            }
+            for entry in report:
+                entry_team = entry.get("Team", "")
+                entry_abbr = _team_map.get(entry_team, "")
+                if entry_abbr != team_abbr:
+                    continue
+                raw_name = entry.get("Player Name", "")
+                parts = raw_name.split(", ")
+                name = f"{parts[1]} {parts[0]}" if len(parts) == 2 else raw_name
+                results.append({
+                    "name":   name,
+                    "status": entry.get("Current Status", "Unknown"),
+                    "reason": entry.get("Reason", ""),
+                })
+        if results:
+            return results
+    except Exception:
+        pass
+
+    # Source 2: ESPN team roster injuries
+    try:
+        teams_data = espn_get(f"{ESPN_SITE}/teams")
+        teams_list = (
+            teams_data.get("sports", [{}])[0].get("leagues", [{}])[0].get("teams", [])
+            or teams_data.get("teams", [])
+        )
+        team_id = None
+        for t in teams_list:
+            team = t.get("team", t)
+            if team.get("abbreviation", "") == team_abbr:
+                team_id = team.get("id")
+                break
+        if team_id:
+            roster = espn_get(f"{ESPN_SITE}/teams/{team_id}/roster")
+            for athlete in roster.get("athletes", []):
+                for item in (athlete.get("items") or [athlete]):
+                    injuries = item.get("injuries", [])
+                    if injuries:
+                        inj    = injuries[0]
+                        status = inj.get("status", "Unknown")
+                        if status and status not in ("Active", ""):
+                            results.append({
+                                "name":   item.get("displayName", ""),
+                                "status": status,
+                                "reason": inj.get("shortComment", ""),
+                            })
+    except Exception:
+        pass
+
+    return results
+
+
+@st.cache_data(ttl=3600)
+def get_teammate_minutes(team_abbr: str, season: str = "2025-26") -> dict:
+    """
+    Returns dict of {player_name: avg_minutes} for all players on a team.
+    Used to assess how significant an absent teammate's minutes are.
+    """
+    result = {}
+    try:
+        from nba_api.library.http import NBAStatsHTTP
+        NBAStatsHTTP.nba_response.headers = {
+            "Host": "stats.nba.com",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "x-nba-stats-origin": "stats",
+            "x-nba-stats-token": "true",
+            "Referer": "https://www.nba.com/",
+            "Origin": "https://www.nba.com",
+        }
+        from nba_api.stats.endpoints import leaguedashplayerstats
+        df = leaguedashplayerstats.LeagueDashPlayerStats(
+            season=season, timeout=45,
+        ).get_data_frames()[0]
+        # Filter to team
+        team_df = df[df["TEAM_ABBREVIATION"] == team_abbr]
+        for _, row in team_df.iterrows():
+            name = str(row.get("PLAYER_NAME", ""))
+            mins = float(row.get("MIN", 0))
+            if name and mins > 0:
+                result[normalize_name(name)] = round(mins, 1)
+    except Exception:
+        pass
+    return result
+
+
+def detect_usage_spike(
+    player_name: str,
+    player_team: str,
+    side: str,
+) -> Tuple[str, list, str]:
+    """
+    Checks if key teammates are out tonight, which would redistribute
+    minutes/usage to the player being analyzed.
+
+    Returns:
+      (signal, absent_key_players, alert_html)
+      signal: "Boost", "Neutral"
+      absent_key_players: list of {name, status, minutes}
+      alert_html: HTML string for display
+    """
+    if not player_team:
+        return "Neutral", [], ""
+
+    injured = get_team_injury_report(player_team)
+    if not injured:
+        return "Neutral", [], ""
+
+    # Get teammate minutes to assess importance
+    teammate_mins = get_teammate_minutes(player_team)
+
+    # Filter to OUT/Doubtful only — these are confirmed absences
+    absent = [
+        p for p in injured
+        if any(x in p["status"].upper() for x in ("OUT", "DOUBTFUL"))
+        and normalize_name(p["name"]) != normalize_name(player_name)
+    ]
+
+    if not absent:
+        return "Neutral", [], ""
+
+    # Check if any absent player is high-usage (>22 min/game)
+    key_absent = []
+    total_redistributed_mins = 0.0
+
+    for p in absent:
+        norm = normalize_name(p["name"])
+        mins = teammate_mins.get(norm, 0)
+        # Try partial match if exact not found
+        if mins == 0:
+            for k, v in teammate_mins.items():
+                if norm in k or k in norm:
+                    mins = v
+                    break
+        if mins >= 22:
+            key_absent.append({
+                "name":    p["name"],
+                "status":  p["status"],
+                "minutes": mins,
+                "reason":  p["reason"].replace("Injury/Illness - ", "").strip(),
+            })
+            total_redistributed_mins += mins * 0.4  # ~40% redistributes
+
+    if not key_absent:
+        return "Neutral", [], ""
+
+    # Build alert HTML
+    _names = ", ".join(f"{p['name']} ({p['minutes']:.0f} mpg)" for p in key_absent)
+    _total = f"+{total_redistributed_mins:.0f} min available"
+
+    alert_html = (
+        f"<div style='background:#0c1a0c;border:1px solid #166534;border-radius:10px;"
+        f"padding:0.65rem 1rem;margin-bottom:0.5rem;display:flex;align-items:center;gap:10px;'>"
+        f"<span style='font-size:1.1rem;'>📈</span>"
+        f"<div style='font-family:DM Mono;font-size:0.7rem;'>"
+        f"<span style='color:#22c55e;font-weight:800;text-transform:uppercase;"
+        f"letter-spacing:0.08em;'>Usage spike detected</span>"
+        f"<span style='color:#475569;'> · {_names} out — {_total} to redistribute</span>"
+        f"</div>"
+        f"</div>"
+    )
+
+    return "Boost", key_absent, alert_html
+
+
 def injury_alert_html(status: str, reason: str) -> str:
     """
     Returns an HTML alert string for the injury status.
@@ -1835,6 +2037,7 @@ CONTEXT:
 - H2H vs {opp_abbr}: {h2h_sig} signal — {h2h_count} games, avg {f"{h2h_avg:.1f}" if h2h_avg else "N/A"} pts
 - Schedule: {b2b_status}{"  — FATIGUE RISK, second night of back-to-back" if b2b_status == "B2B" else ""}
 - Injury status: {_inj_status}{f" ({_inj_reason})" if _inj_reason else ""}
+- Usage spike: {f"YES — {', '.join(p['name'] for p in _spike_players)} out ({', '.join(str(p['minutes']) for p in _spike_players)} mpg)" if _spike_players else "None detected"}
 - Form: recent avg {sample_avg_pts:.1f} vs season avg {f"{season_avg:.1f}" if season_avg else "N/A"} ({f"{form_diff:+.1f} pts divergence" if form_diff else "N/A"}) — {form_sig} signal for {side}
 
 MODEL OUTPUT: {tier}
@@ -2545,6 +2748,12 @@ if st.session_state.logs is not None:
     season_avg     = nba_get_season_avg(player_id, season_str_clean)
     season_avg_min = nba_get_season_avg_min(player_id, season_str_clean)
     form_sig, form_diff = form_divergence_signal(sample_avg_pts, season_avg, line, side)
+
+    # Usage spike — check if key teammates are out
+    with st.spinner("Checking teammate availability..."):
+        _spike_sig, _spike_players, _spike_html = detect_usage_spike(
+            selected_player, player_team, side
+        )
     pace_sig, player_pace, opp_pace = pace_adjustment(player_team, opp_abbr, side)
 
     # Get last 3 games minutes for restriction check
@@ -2651,6 +2860,10 @@ if st.session_state.logs is not None:
     # Minutes restriction alert
     if _min_alert_html:
         st.markdown(_min_alert_html, unsafe_allow_html=True)
+
+    # Usage spike alert
+    if _spike_html:
+        st.markdown(_spike_html, unsafe_allow_html=True)
 
     # ── H2H + B2B + Form cards ───────────────
     st.markdown("<div class='section-header'>H2H, Form, Schedule & Pace</div>", unsafe_allow_html=True)
@@ -2891,9 +3104,13 @@ if st.session_state.logs is not None:
 
     venue_adj = venue_adjustment(splits, tonight_venue, side)
 
+    # Boost minutes/role if key teammate is out — more usage redistributes to player
+    _minutes_ctx = "Strong" if _spike_sig == "Boost" and minutes_sel != "Risk" else minutes_sel
+    _role_ctx    = "Strong" if _spike_sig == "Boost" and role_sel    != "Risk" else role_sel
+
     context = {
-        "minutes": minutes_sel,
-        "role":    role_sel,
+        "minutes": _minutes_ctx,
+        "role":    _role_ctx,
         "shots":   shots_sel,
         "matchup": matchup_sel,
         "script":  script_sel,
@@ -2951,6 +3168,17 @@ if st.session_state.logs is not None:
 
     # ── Injury + minutes signals for verdict banner ──────────────
     _verdict_signals = []
+
+    # Usage spike signal
+    if _spike_players:
+        _spike_names = " · ".join(p["name"].split()[-1] for p in _spike_players[:2])
+        _verdict_signals.append(
+            f"<span style='font-family:DM Mono;font-size:0.68rem;font-weight:700;"
+            f"color:#22c55e;background:#0c1a0c88;"
+            f"border:1px solid #16653488;padding:3px 10px;border-radius:999px;"
+            f"display:inline-flex;align-items:center;gap:4px;'>"
+            f"📈 Usage ↑ ({_spike_names} out)</span>"
+        )
 
     # Injury status signal
     if _inj_status not in ("Active", "Unknown", ""):
