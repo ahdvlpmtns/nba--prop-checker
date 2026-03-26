@@ -2213,74 +2213,58 @@ if st.session_state.logs is not None:
     # Confidence bar fill width (out of 100%)
     _bar_w = max(4, int(_conf_pct * 100))
 
-    # Flip note
-    _flip_note = (
-        f"<div style='font-family:DM Mono;font-size:0.65rem;color:#854d0e;"
-        f"background:#1c1005;border:1px solid #854d0e;border-radius:6px;"
-        f"padding:3px 10px;display:inline-block;margin-top:6px;'>"
-        f"⚠️ You selected {side} — data favors the {_display_side}</div>"
+    # Pre-compute all string values to avoid complex nested f-strings
+    _flip_note_html = (
+        "<div style='font-family:DM Mono;font-size:0.65rem;color:#854d0e;"
+        "background:#1c1005;border:1px solid #854d0e;border-radius:6px;"
+        "padding:3px 10px;display:inline-block;margin-top:6px;'>"
+        f"You selected {side} — data favors the {_display_side}</div>"
     ) if _auto_flipped else ""
 
-    st.markdown(f"""
-    <div class='verdict-banner {css}'>
-        <div style='flex:1; min-width:200px;'>
-            <div class='verdict-label'>{full_name} · {line} pts · {_display_side}</div>
-            <div class='verdict-tier {css}'>{tier_emoji[_display_tier]} {_display_tier}</div>
+    _edge_num_color = "#22c55e" if line_diff > 0 else "#ef4444"
+    _edge_diff_str  = f"{line_diff:+.1f}"
+    _adj_pct_str    = f"{_display_adj:.0%}"
+    _cons_pct_str   = f"{consistency:.0%}"
+    _cons_word      = "Predictable" if consistency >= 0.5 else ("Variable" if consistency >= 0.35 else "Volatile")
+    _bar_style      = f"background:{_bar_color};height:6px;width:{_bar_w}%;border-radius:999px;box-shadow:0 0 6px {_bar_color}55;"
 
-            <div style='margin-top:10px;'>
-                <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;'>
-                    <div style='font-family:DM Mono;font-size:0.6rem;color:#475569;letter-spacing:0.1em;text-transform:uppercase;'>
-                        Confidence
-                    </div>
-                    <div style='font-family:DM Mono;font-size:0.65rem;font-weight:700;color:{_bar_color};'>
-                        {_conf_label}
-                    </div>
-                </div>
-                <div style='background:#1a2333;border-radius:999px;height:6px;width:100%;max-width:220px;overflow:hidden;'>
-                    <div style='background:{_bar_color};height:6px;width:{_bar_w}%;border-radius:999px;
-                                transition:width 0.4s ease;box-shadow:0 0 6px {_bar_color}66;'></div>
-                </div>
-            </div>
-            {_flip_note}
-            <div style='margin-top:6px;'>{venue_badge_html}</div>
-        </div>
-        <div style='display:flex; gap:2rem; flex-wrap:wrap; align-items:flex-start;'>
-            <div>
-                <div class='verdict-label' title='% of recent games this bet would have hit, adjusted for context signals'>
-                    Adjusted Hit Rate
-                    <span style='font-size:0.55rem;background:#1e293b;color:#64748b;border-radius:50%;
-                                 padding:1px 4px;margin-left:3px;cursor:default;'>i</span>
-                </div>
-                <div style='font-size:1.4rem; font-weight:800; color:#f1f5f9;'>{_display_adj:.0%}</div>
-                <div style='font-family:DM Mono;font-size:0.65rem;color:#475569;margin-top:2px;'>
-                    ≥64% = Strong · ≥55% = Lean
-                </div>
-            </div>
-            <div>
-                <div class='verdict-label' title='Player avg pts minus the line. Positive = avg above line (good for Over)'>
-                    Edge vs Line
-                    <span style='font-size:0.55rem;background:#1e293b;color:#64748b;border-radius:50%;
-                                 padding:1px 4px;margin-left:3px;cursor:default;'>i</span>
-                </div>
-                <div style='font-size:1.4rem; font-weight:800; color:{"#22c55e" if line_diff > 0 else "#ef4444"};'>{line_diff:+.1f}</div>
-                <div style='font-family:DM Mono;font-size:0.65rem;color:{_edge_color};margin-top:2px;'>
-                    {_edge_label}
-                </div>
-            </div>
-            <div>
-                <div class='verdict-label' title='% of games where pts landed within 3 of the line. Low = volatile scorer'>
-                    Consistency
-                    <span style='font-size:0.55rem;background:#1e293b;color:#64748b;border-radius:50%;
-                                 padding:1px 4px;margin-left:3px;cursor:default;'>i</span>
-                </div>
-                <div style='font-size:1.4rem; font-weight:800; color:#f1f5f9;'>{consistency:.0%}</div>
-                <div style='font-family:DM Mono;font-size:0.65rem;color:#475569;margin-top:2px;'>
-                    {"Predictable" if consistency >= 0.5 else "Variable" if consistency >= 0.35 else "Volatile"}
-                </div>
-            </div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    _verdict_html = (
+        f"<div class='verdict-banner {css}'>"
+        f"<div style='flex:1;min-width:200px;'>"
+        f"<div class='verdict-label'>{full_name} · {line} pts · {_display_side}</div>"
+        f"<div class='verdict-tier {css}'>{tier_emoji[_display_tier]} {_display_tier}</div>"
+        f"<div style='margin-top:10px;'>"
+        f"<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;'>"
+        f"<div style='font-family:DM Mono;font-size:0.6rem;color:#475569;letter-spacing:0.1em;text-transform:uppercase;'>Confidence</div>"
+        f"<div style='font-family:DM Mono;font-size:0.65rem;font-weight:700;color:{_bar_color};'>{_conf_label}</div>"
+        f"</div>"
+        f"<div style='background:#1a2333;border-radius:999px;height:6px;width:100%;max-width:220px;overflow:hidden;'>"
+        f"<div style='{_bar_style}'></div>"
+        f"</div>"
+        f"</div>"
+        f"{_flip_note_html}"
+        f"<div style='margin-top:6px;'>{venue_badge_html}</div>"
+        f"</div>"
+        f"<div style='display:flex;gap:2rem;flex-wrap:wrap;align-items:flex-start;'>"
+        f"<div>"
+        f"<div class='verdict-label'>Adjusted Hit Rate <span style='font-size:0.55rem;background:#1e293b;color:#64748b;border-radius:50%;padding:1px 4px;margin-left:3px;cursor:default;' title='% of recent games hitting the line, adjusted for context signals'>i</span></div>"
+        f"<div style='font-size:1.4rem;font-weight:800;color:#f1f5f9;'>{_adj_pct_str}</div>"
+        f"<div style='font-family:DM Mono;font-size:0.65rem;color:#475569;margin-top:2px;'>64%+ = Strong · 55%+ = Lean</div>"
+        f"</div>"
+        f"<div>"
+        f"<div class='verdict-label'>Edge vs Line <span style='font-size:0.55rem;background:#1e293b;color:#64748b;border-radius:50%;padding:1px 4px;margin-left:3px;cursor:default;' title='Player avg pts minus the line. Larger = more confident the line is beatable'>i</span></div>"
+        f"<div style='font-size:1.4rem;font-weight:800;color:{_edge_num_color};'>{_edge_diff_str}</div>"
+        f"<div style='font-family:DM Mono;font-size:0.65rem;color:{_edge_color};margin-top:2px;'>{_edge_label}</div>"
+        f"</div>"
+        f"<div>"
+        f"<div class='verdict-label'>Consistency <span style='font-size:0.55rem;background:#1e293b;color:#64748b;border-radius:50%;padding:1px 4px;margin-left:3px;cursor:default;' title='% of games pts landed within 3 of the line. Low = unpredictable scorer'>i</span></div>"
+        f"<div style='font-size:1.4rem;font-weight:800;color:#f1f5f9;'>{_cons_pct_str}</div>"
+        f"<div style='font-family:DM Mono;font-size:0.65rem;color:#475569;margin-top:2px;'>{_cons_word}</div>"
+        f"</div>"
+        f"</div>"
+        f"</div>"
+    )
+    st.markdown(_verdict_html, unsafe_allow_html=True)
 
     with st.expander("🔬  Logic Debugger — step-by-step verdict breakdown"):
         # ── Step-by-step adjustment trace ────────────────────────────
