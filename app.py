@@ -1237,7 +1237,7 @@ def _norm_team_abbr(abbr: str) -> str:
     return _ESPN_ABBR_MAP.get(abbr, abbr)
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=300, show_spinner=False)
 def get_team_injury_report(team_abbr: str) -> list:
     """
     Fetch all injured players for a given team from NBA official report.
@@ -1371,7 +1371,7 @@ def get_team_injury_report(team_abbr: str) -> list:
     return results
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3600, show_spinner=False)
 def get_teammate_minutes(team_abbr: str, season: str = "2025-26") -> dict:
     """
     Returns dict of {normalized_player_name: avg_minutes} for all players on a team.
@@ -2897,11 +2897,17 @@ if st.session_state.logs is not None:
     season_avg_min = nba_get_season_avg_min(player_id, season_str_clean)
     form_sig, form_diff = form_divergence_signal(sample_avg_pts, season_avg, line, side)
 
-    # Usage spike — check if key teammates are out
-    with st.spinner("Checking teammate availability..."):
-        _spike_sig, _spike_players, _spike_html = detect_usage_spike(
-            selected_player, player_team, side
-        )
+    # Usage spike — run with timeout so it never blocks render
+    try:
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _ex:
+            _spike_future = _ex.submit(detect_usage_spike, selected_player, player_team, side)
+            try:
+                _spike_sig, _spike_players, _spike_html = _spike_future.result(timeout=4)
+            except concurrent.futures.TimeoutError:
+                _spike_sig, _spike_players, _spike_html = "Neutral", [], ""
+    except Exception:
+        _spike_sig, _spike_players, _spike_html = "Neutral", [], ""
     pace_sig, player_pace, opp_pace = pace_adjustment(player_team, opp_abbr, side)
 
     # Get last 3 games minutes for restriction check
