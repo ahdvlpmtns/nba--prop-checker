@@ -118,41 +118,75 @@ html, body, [class*="css"] {
     animation: pulse-glow 3s ease-in-out infinite;
 }
 
-/* ── Pill tab switcher ── */
-/* Active tab = orange filled (primary button) */
-/* Inactive tab = ghost (secondary button) */
+/* ── Logo animation ── */
+@keyframes logo-spin-glow {
+    0%   { filter: drop-shadow(0 0 3px rgba(249,115,22,0.4)); transform: rotate(0deg); }
+    50%  { filter: drop-shadow(0 0 8px rgba(249,115,22,0.8)); transform: rotate(180deg); }
+    100% { filter: drop-shadow(0 0 3px rgba(249,115,22,0.4)); transform: rotate(360deg); }
+}
+@keyframes logo-glow-pulse {
+    0%, 100% { filter: drop-shadow(0 0 4px rgba(249,115,22,0.5)); }
+    50%       { filter: drop-shadow(0 0 12px rgba(249,115,22,0.9)); }
+}
+.pl-icon svg {
+    animation: logo-glow-pulse 2.5s ease-in-out infinite;
+    transition: transform 0.3s ease;
+}
+.pl-icon:hover svg {
+    animation: logo-spin-glow 0.8s ease-in-out forwards;
+}
+
+/* ── Underline tab switcher ── */
 button[data-testid="baseButton-secondary"][key="tab_player"],
-button[data-testid="baseButton-secondary"][key="tab_scanner"] {
+button[data-testid="baseButton-secondary"][key="tab_scanner"],
+button[data-testid="baseButton-primary"][key="tab_player"],
+button[data-testid="baseButton-primary"][key="tab_scanner"] {
     background: transparent !important;
+    border: none !important;
+    border-radius: 0 !important;
+    border-bottom: 2px solid transparent !important;
     color: var(--muted2) !important;
-    border: 1px solid var(--border) !important;
-    border-radius: 999px !important;
-    font-size: 0.78rem !important;
+    font-size: 0.82rem !important;
     font-weight: 600 !important;
-    padding: 0.4rem 1.1rem !important;
+    padding: 0.5rem 0.25rem !important;
     letter-spacing: 0.02em !important;
     width: 100% !important;
-    transition: all 0.2s !important;
+    box-shadow: none !important;
+    transition: color 0.2s, border-color 0.2s !important;
+    text-align: left !important;
 }
 button[data-testid="baseButton-secondary"][key="tab_player"]:hover,
 button[data-testid="baseButton-secondary"][key="tab_scanner"]:hover {
-    background: var(--border) !important;
     color: var(--text) !important;
-    transform: none !important;
+    background: transparent !important;
     box-shadow: none !important;
+    transform: none !important;
+    border-bottom: 2px solid var(--border2) !important;
 }
-/* Active state via primary type */
+
+/* Active tab — orange underline + bright text */
 button[data-testid="baseButton-primary"][key="tab_player"],
 button[data-testid="baseButton-primary"][key="tab_scanner"] {
-    background: linear-gradient(135deg, #ea580c, #f97316) !important;
-    color: white !important;
-    border: none !important;
-    border-radius: 999px !important;
-    font-size: 0.78rem !important;
+    color: var(--orange) !important;
     font-weight: 700 !important;
-    padding: 0.4rem 1.1rem !important;
-    width: 100% !important;
-    box-shadow: 0 2px 10px rgba(249,115,22,0.3) !important;
+    border-bottom: 2px solid var(--orange) !important;
+}
+
+/* Underline bar container */
+.ul-tab-bar {
+    position: relative;
+    height: 2px;
+    background: var(--border);
+    margin: 0 0 0.75rem 0;
+    border-radius: 1px;
+}
+.ul-tab-underline {
+    position: absolute;
+    top: 0; height: 2px;
+    background: var(--orange);
+    border-radius: 1px;
+    transition: transform 0.25s cubic-bezier(0.4,0,0.2,1);
+    box-shadow: 0 0 8px var(--orange);
 }
 
 /* ── Stat cards ── */
@@ -1823,16 +1857,16 @@ st.markdown("""
 <div class="pl-header">
     <div class="pl-logo-wrap">
         <div class="pl-icon">
-            <svg width="22" height="22" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <!-- Lens circle -->
-                <circle cx="9" cy="9" r="7" stroke="white" stroke-width="2" fill="none" opacity="0.95"/>
-                <!-- Crosshair lines inside lens -->
-                <line x1="9" y1="3" x2="9" y2="15" stroke="white" stroke-width="1.2" opacity="0.7"/>
-                <line x1="3" y1="9" x2="15" y2="9" stroke="white" stroke-width="1.2" opacity="0.7"/>
-                <!-- Diagonal handle -->
-                <line x1="14" y1="14" x2="20" y2="20" stroke="white" stroke-width="2.2" stroke-linecap="round" opacity="0.95"/>
-                <!-- Center dot -->
-                <circle cx="9" cy="9" r="1.5" fill="white" opacity="0.9"/>
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <!-- Basketball circle -->
+                <circle cx="12" cy="12" r="10.5" stroke="white" stroke-width="1.5" fill="none" opacity="0.9"/>
+                <!-- Horizontal seam -->
+                <path d="M1.5 12 Q6 8 12 12 Q18 16 22.5 12" stroke="white" stroke-width="1.2" fill="none" opacity="0.55"/>
+                <!-- Vertical seam -->
+                <path d="M12 1.5 Q8 6 12 12 Q16 18 12 22.5" stroke="white" stroke-width="1.2" fill="none" opacity="0.55"/>
+                <!-- Bold P lettermark -->
+                <text x="6.5" y="17" font-family="Arial Black, sans-serif" font-size="13" font-weight="900"
+                      fill="white" opacity="0.97" letter-spacing="-0.5">P</text>
             </svg>
         </div>
         <div>
@@ -1922,27 +1956,36 @@ for _k in ["scanner_results", "scanner_error"]:
     if _k not in st.session_state:
         st.session_state[_k] = None
 
-# ── Pill tab switcher ─────────────────────────────────────
-_tab_c1, _tab_c2, _tab_c3 = st.columns([1, 1, 2])
-with _tab_c1:
-    if st.button(
-        "Player Prop",
-        key="tab_player",
-        type="primary" if st.session_state.active_tab == "player" else "secondary",
-    ):
+# ── Underline tab switcher ──────────────────────────────────
+_ul_c1, _ul_c2, _ul_c3 = st.columns([1, 1, 3])
+with _ul_c1:
+    _p_active = st.session_state.active_tab == "player"
+    if st.button("Player Prop", key="tab_player", use_container_width=True):
         st.session_state.active_tab = "player"
         st.rerun()
-with _tab_c2:
-    if st.button(
-        "Slate Scanner",
-        key="tab_scanner",
-        type="primary" if st.session_state.active_tab == "scanner" else "secondary",
-    ):
+with _ul_c2:
+    _s_active = st.session_state.active_tab == "scanner"
+    if st.button("Slate Scanner", key="tab_scanner", use_container_width=True):
         st.session_state.active_tab = "scanner"
         st.rerun()
 
+# Underline indicator — rendered separately so it doesn't affect button layout
+_p_active = st.session_state.active_tab == "player"
+_s_active = st.session_state.active_tab == "scanner"
+st.markdown(f"""
+<style>
+button[data-testid="baseButton-secondary"][kind="secondary"]:has(+ *) {{ display:none; }}
+</style>
+<div class="ul-tab-bar">
+    <div class="ul-tab-underline" style="
+        width: calc(50% / 4);
+        transform: translateX({'0%' if _p_active else '100%'});
+    "></div>
+</div>
+""", unsafe_allow_html=True)
+
 _mode = "🎯  Slate Scanner" if st.session_state.active_tab == "scanner" else "🏀  Player Prop"
-st.markdown("<div style='height:0.25rem'></div>", unsafe_allow_html=True)
+st.markdown("<div style='height:0.1rem'></div>", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
 # Slate Scanner
