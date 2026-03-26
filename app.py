@@ -1353,9 +1353,14 @@ def get_confidence_tier(adjusted: float, line_diff: float, consistency: float, s
         else:
             tier = "Pass"
 
-    # Consistency downgrade: only when edge is tight AND consistency is low
-    edge_is_tight   = abs(line_diff) < 5.0
-    low_consistency = consistency < 0.35 and edge_is_tight
+    # Consistency downgrade: only fires when edge is tight AND hit rate is not dominant
+    # If adjusted >= 65% with low consistency = player consistently BEATS the line
+    # (scores way above it every game) — that's a good signal, not a reason to downgrade
+    # Only downgrade when edge < 3pts AND hit rate < 65% — truly volatile player
+    edge_is_tight     = abs(line_diff) < 3.0
+    hit_rate_dominant = adjusted >= 0.65
+    low_consistency   = consistency < 0.35 and edge_is_tight and not hit_rate_dominant
+
     if low_consistency:
         if tier == "Strong Over":   tier = "Lean Over"
         elif tier == "Strong Under": tier = "Lean Under"
@@ -2947,8 +2952,9 @@ if st.session_state.logs is not None:
             steps.append((key, val, adj, before, after, delta))
 
         # Consistency override check
-        edge_is_tight = abs(line_diff) < 5.0
-        low_cons = consistency < 0.35 and edge_is_tight
+        edge_is_tight     = abs(line_diff) < 3.0
+        hit_rate_dominant = adjusted >= 0.65
+        low_cons = consistency < 0.35 and edge_is_tight and not hit_rate_dominant
         cons_override = low_cons and tier in ["Lean Over", "Lean Under"]
 
         # Render debug table
@@ -3031,11 +3037,12 @@ if st.session_state.logs is not None:
         # Final decision
         # Consistency override only matters when tier is Strong Over/Under
         override_relevant = tier in ["Strong Over", "Strong Under", "Lean Over", "Lean Under"]
-        if consistency < 0.35 and edge_is_tight and override_relevant:
-            edge_tight_note = f"Edge {line_diff:+.1f} {'< 5 → downgrade applied' if edge_is_tight else '≥ 5 → skipped'}"
-            cons_note = f"Consistency {consistency:.0%} < 35% · {edge_tight_note}"
-        elif not edge_is_tight and consistency < 0.35:
-            cons_note = f"Consistency {consistency:.0%} < 35% but edge {line_diff:+.1f} ≥ 5 → override skipped (player dominates line)"
+        if low_cons and override_relevant:
+            cons_note = f"Consistency {consistency:.0%} < 35% · Edge {line_diff:+.1f} < 3pts → downgrade applied"
+        elif consistency < 0.35 and hit_rate_dominant:
+            cons_note = f"Consistency {consistency:.0%} < 35% but hit rate {adjusted:.0%} ≥ 65% → override skipped (dominates line)"
+        elif consistency < 0.35 and not edge_is_tight:
+            cons_note = f"Consistency {consistency:.0%} < 35% but edge {line_diff:+.1f} ≥ 3pts → override skipped"
         else:
             cons_note = f"Consistency {consistency:.0%} · No override needed"
 
