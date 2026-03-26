@@ -854,6 +854,103 @@ def espn_get_opp_pts_allowed(opp_abbr: str) -> Optional[float]:
     except Exception:
         return None
 
+# ── Injury status ─────────────────────────────────────────────
+
+@st.cache_data(ttl=300)  # refresh every 5 mins — injury status can change fast
+def get_player_injury_status(player_name: str) -> Tuple[str, str]:
+    """
+    Fetch current NBA injury status for a player.
+    Returns (status, reason) where status is one of:
+      'Out', 'Doubtful', 'Questionable', 'Probable', 'Active', 'Unknown'
+
+    Sources tried in order:
+    1. NBA official injury report via nbainjuries package
+    2. ESPN injuries endpoint as fallback
+    """
+    norm = normalize_name(player_name)
+
+    # ── Source 1: nbainjuries package (NBA official data) ──
+    try:
+        from nbainjuries import injury
+        from datetime import datetime
+        import pytz
+        et = pytz.timezone("America/New_York")
+        now = datetime.now(et)
+        report = injury.get_reportdata(now)
+        if report:
+            for entry in report:
+                entry_name = normalize_name(entry.get("Player Name", ""))
+                # NBA report uses "Last, First" format
+                parts = entry_name.split(", ")
+                if len(parts) == 2:
+                    entry_name = f"{parts[1]} {parts[0]}"
+                if norm in entry_name or entry_name in norm:
+                    status = entry.get("Current Status", "Unknown")
+                    reason = entry.get("Reason", "")
+                    return status, reason
+    except Exception:
+        pass
+
+    # ── Source 2: ESPN injuries endpoint ──
+    try:
+        data = espn_get(f"{ESPN_SITE}/injuries")
+        for team in data.get("injuries", []):
+            for item in team.get("injuries", []):
+                ath  = item.get("athlete", {})
+                name = normalize_name(ath.get("displayName", ""))
+                if norm in name or name in norm:
+                    status = item.get("status", "Unknown")
+                    detail = item.get("shortComment", item.get("longComment", ""))
+                    return status, detail
+    except Exception:
+        pass
+
+    return "Active", ""
+
+
+def injury_alert_html(status: str, reason: str) -> str:
+    """
+    Returns an HTML alert string for the injury status.
+    Returns empty string if player is Active/Unknown (no issue).
+    """
+    status_upper = status.upper()
+
+    if "OUT" in status_upper:
+        bg, border, color, icon = "#1c0505", "#991b1b", "#ef4444", "🚫"
+        label = "OUT"
+        block_verdict = True
+    elif "DOUBTFUL" in status_upper:
+        bg, border, color, icon = "#1c0505", "#991b1b", "#ef4444", "⛔"
+        label = "DOUBTFUL"
+        block_verdict = True
+    elif "QUESTIONABLE" in status_upper:
+        bg, border, color, icon = "#1c1005", "#854d0e", "#f97316", "⚠️"
+        label = "QUESTIONABLE"
+        block_verdict = False
+    elif "PROBABLE" in status_upper:
+        bg, border, color, icon = "#0c1a0c", "#166534", "#86efac", "🟡"
+        label = "PROBABLE"
+        block_verdict = False
+    else:
+        return "", False
+
+    reason_short = reason.replace("Injury/Illness - ", "").replace("Injury/Illness -", "").strip()
+    reason_html  = f"<span style='color:#64748b;'> · {reason_short}</span>" if reason_short else ""
+
+    html = (
+        f"<div style='background:{bg};border:1px solid {border};border-radius:10px;"
+        f"padding:0.7rem 1rem;margin-bottom:0.75rem;display:flex;align-items:center;gap:10px;'>"
+        f"<span style='font-size:1.2rem;'>{icon}</span>"
+        f"<div>"
+        f"<span style='font-family:DM Mono;font-size:0.7rem;font-weight:800;color:{color};"
+        f"letter-spacing:0.08em;text-transform:uppercase;'>{label}</span>"
+        f"{reason_html}"
+        f"</div>"
+        f"</div>"
+    )
+    return html, block_verdict
+
+
 def classify_matchup_espn(opp_abbr: Optional[str]) -> Tuple[str, Optional[float], str]:
     """Classify opponent defense quality using ESPN team stats."""
     league_avg = 114.5
@@ -1155,6 +1252,7 @@ CONTEXT:
 - Venue split adjustment: {venue_adj or "Neutral"} (based on home/away hit rate differential)
 - H2H vs {opp_abbr}: {h2h_sig} signal — {h2h_count} games, avg {f"{h2h_avg:.1f}" if h2h_avg else "N/A"} pts
 - Schedule: {b2b_status}{"  — FATIGUE RISK, second night of back-to-back" if b2b_status == "B2B" else ""}
+- Injury status: {_inj_status}{f" ({_inj_reason})" if _inj_reason else ""}
 - Form: recent avg {sample_avg_pts:.1f} vs season avg {f"{season_avg:.1f}" if season_avg else "N/A"} ({f"{form_diff:+.1f} pts divergence" if form_diff else "N/A"}) — {form_sig} signal for {side}
 
 MODEL OUTPUT: {tier}
@@ -1710,6 +1808,19 @@ if player_id is None:
     st.error(f"Could not find '{selected_player}' in NBA database.{hint}")
     st.stop()
 
+# ── Injury status check ──────────────────────────────────────
+with st.spinner("Checking injury status..."):
+    _inj_status, _inj_reason = get_player_injury_status(selected_player)
+    _inj_html, _inj_blocks   = injury_alert_html(_inj_status, _inj_reason)
+
+if _inj_html:
+    st.markdown(_inj_html, unsafe_allow_html=True)
+    if _inj_blocks:
+        st.warning(
+            f"⚠️ {selected_player} is listed as **{_inj_status}** — verdict may be unreliable. "
+            f"Check the latest injury report before betting."
+        )
+
 fetch = st.button("🔍  Analyze Prop")
 st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
 
@@ -2223,6 +2334,10 @@ if st.session_state.logs is not None:
 
     _edge_num_color = "#22c55e" if line_diff > 0 else "#ef4444"
     _edge_diff_str  = f"{line_diff:+.1f}"
+    _inj_verdict_note = (
+        f" · ⚠️ {_inj_status} ({_inj_reason.replace('Injury/Illness - ','').strip()})"
+        if _inj_html else ""
+    )
     _adj_pct_str    = f"{_display_adj:.0%}"
     _cons_pct_str   = f"{consistency:.0%}"
     _cons_word      = "Predictable" if consistency >= 0.5 else ("Variable" if consistency >= 0.35 else "Volatile")
