@@ -1465,97 +1465,57 @@ def detect_usage_spike(
     player_name: str,
     player_team: str,
     side: str,
+    teammate_mins: dict,
 ) -> Tuple[str, list, str]:
     """
-    Checks if key teammates are out tonight, which would redistribute
-    minutes/usage to the player being analyzed.
+    Checks if key teammates are out tonight using get_player_injury_status
+    (already proven working) on each high-minute teammate individually.
+
+    teammate_mins: pre-fetched dict of {normalized_name: avg_minutes}
     """
-    if not player_team:
-        return "Neutral", [], ""
-    player_team = _norm_team_abbr(player_team)
-
-    injured = get_team_injury_report(player_team)
-    
-    # Fallback: try nbainjuries directly if ESPN failed
-    if not injured:
-        try:
-            from nbainjuries import injury as nba_inj
-            from datetime import datetime
-            import pytz
-            et = pytz.timezone("America/New_York")
-            now_et = datetime.now(et)
-            report = nba_inj.get_reportdata(now_et)
-            _team_map = {
-                "Atlanta Hawks":"ATL","Boston Celtics":"BOS","Brooklyn Nets":"BKN",
-                "Charlotte Hornets":"CHA","Chicago Bulls":"CHI","Cleveland Cavaliers":"CLE",
-                "Dallas Mavericks":"DAL","Denver Nuggets":"DEN","Detroit Pistons":"DET",
-                "Golden State Warriors":"GSW","Houston Rockets":"HOU","Indiana Pacers":"IND",
-                "LA Clippers":"LAC","Los Angeles Clippers":"LAC","Los Angeles Lakers":"LAL",
-                "Memphis Grizzlies":"MEM","Miami Heat":"MIA","Milwaukee Bucks":"MIL",
-                "Minnesota Timberwolves":"MIN","New Orleans Pelicans":"NOP","New York Knicks":"NYK",
-                "Oklahoma City Thunder":"OKC","Orlando Magic":"ORL","Philadelphia 76ers":"PHI",
-                "Phoenix Suns":"PHX","Portland Trail Blazers":"POR","Sacramento Kings":"SAC",
-                "San Antonio Spurs":"SAS","Toronto Raptors":"TOR","Utah Jazz":"UTA",
-                "Washington Wizards":"WAS",
-            }
-            if report:
-                for entry in report:
-                    if _team_map.get(entry.get("Team","")) == player_team:
-                        raw = entry.get("Player Name","")
-                        parts = raw.split(", ")
-                        name = f"{parts[1]} {parts[0]}" if len(parts)==2 else raw
-                        injured.append({
-                            "name":   name,
-                            "status": entry.get("Current Status","Unknown"),
-                            "reason": entry.get("Reason",""),
-                        })
-        except Exception:
-            pass
-
-    if not injured:
+    if not player_team or not teammate_mins:
         return "Neutral", [], ""
 
-    # Get teammate minutes to assess importance
-    teammate_mins = get_teammate_minutes(player_team)
+    player_norm = normalize_name(player_name)
 
-    # Filter to OUT/Doubtful only — these are confirmed absences
-    absent = [
-        p for p in injured
-        if any(x in p["status"].upper() for x in ("OUT", "DOUBTFUL"))
-        and normalize_name(p["name"]) != normalize_name(player_name)
+    # Identify key teammates (>22 min/game) excluding the player themselves
+    key_teammates = [
+        (name, mins)
+        for name, mins in teammate_mins.items()
+        if mins >= 22 and name != player_norm
     ]
 
-    if not absent:
+    if not key_teammates:
         return "Neutral", [], ""
 
-    # Check if any absent player is high-usage (>22 min/game)
+    # Check injury status for each key teammate — reuse the working function
     key_absent = []
-    total_redistributed_mins = 0.0
+    total_redistributed = 0.0
 
-    for p in absent:
-        norm = normalize_name(p["name"])
-        mins = teammate_mins.get(norm, 0)
-        # Try partial match if exact not found
-        if mins == 0:
-            for k, v in teammate_mins.items():
-                if norm in k or k in norm:
-                    mins = v
-                    break
-        if mins >= 22:
+    for norm_name, mins in key_teammates:
+        # Find display name from ESPN players list
+        all_players = espn_get_all_players()
+        display_name = next(
+            (p["full_name"] for p in all_players
+             if normalize_name(p["full_name"]) == norm_name
+             and _norm_team_abbr(p.get("team_abbr", "")) == player_team),
+            norm_name.title()
+        )
+        status, reason = get_player_injury_status(display_name)
+        if status.upper() in ("OUT", "DOUBTFUL"):
             key_absent.append({
-                "name":    p["name"],
-                "status":  p["status"],
+                "name":    display_name,
+                "status":  status,
                 "minutes": mins,
-                "reason":  p["reason"].replace("Injury/Illness - ", "").strip(),
+                "reason":  reason.replace("Injury/Illness - ", "").strip(),
             })
-            total_redistributed_mins += mins * 0.4  # ~40% redistributes
+            total_redistributed += mins * 0.4
 
     if not key_absent:
         return "Neutral", [], ""
 
-    # Build alert HTML
     _names = ", ".join(f"{p['name']} ({p['minutes']:.0f} mpg)" for p in key_absent)
-    _total = f"+{total_redistributed_mins:.0f} min available"
+    _total = f"+{total_redistributed:.0f} min available"
 
     alert_html = (
         f"<div style='background:#0c1a0c;border:1px solid #166534;border-radius:10px;"
@@ -1568,7 +1528,6 @@ def detect_usage_spike(
         f"</div>"
         f"</div>"
     )
-
     return "Boost", key_absent, alert_html
 
 
@@ -2897,15 +2856,12 @@ if st.session_state.logs is not None:
     season_avg_min = nba_get_season_avg_min(player_id, season_str_clean)
     form_sig, form_diff = form_divergence_signal(sample_avg_pts, season_avg, line, side)
 
-    # Usage spike — run with timeout so it never blocks render
+    # Usage spike — fetch teammate minutes first (cached), then check injuries
+    _teammate_mins = get_teammate_minutes(player_team) if player_team else {}
     try:
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as _ex:
-            _spike_future = _ex.submit(detect_usage_spike, selected_player, player_team, side)
-            try:
-                _spike_sig, _spike_players, _spike_html = _spike_future.result(timeout=4)
-            except concurrent.futures.TimeoutError:
-                _spike_sig, _spike_players, _spike_html = "Neutral", [], ""
+        _spike_sig, _spike_players, _spike_html = detect_usage_spike(
+            selected_player, player_team, side, _teammate_mins
+        )
     except Exception:
         _spike_sig, _spike_players, _spike_html = "Neutral", [], ""
     pace_sig, player_pace, opp_pace = pace_adjustment(player_team, opp_abbr, side)
@@ -3026,13 +2982,8 @@ if st.session_state.logs is not None:
         **Spike signal:** `{_spike_sig}`
         **Key absent players:** `{_spike_players}`
         """)
-        _raw_injured = get_team_injury_report(player_team) if player_team else []
-        _raw_mins    = get_teammate_minutes(player_team) if player_team else {}
-        st.markdown(f"**Raw injury report ({len(_raw_injured)} entries):**")
-        for p in _raw_injured:
-            st.markdown(f"- {p['name']} · {p['status']} · {p.get('reason','')}")
-        st.markdown(f"**Teammate minutes ({len(_raw_mins)} entries):**")
-        for name, mins in list(_raw_mins.items())[:10]:
+        st.markdown(f"**Teammate minutes ({len(_teammate_mins)} entries):**")
+        for name, mins in sorted(_teammate_mins.items(), key=lambda x: -x[1])[:10]:
             st.markdown(f"- {name}: {mins} min")
 
     # ── H2H + B2B + Form cards ───────────────
