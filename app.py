@@ -966,22 +966,20 @@ def suggest_bucket(value: float, strong_cut: float, risk_cut: float) -> str:
         return "Risk"
     return "Okay"
 
-def apply_adjustments(weighted: float, context: dict) -> float:
+def apply_adjustments(weighted: float, context: dict, side: str = "Over") -> float:
     """
-    Apply context multipliers as additive boosts/penalties in percentage points.
+    Apply context signals as additive pp adjustments.
 
-    Using additive adjustments (not multiplicative on the margin) ensures that
-    positive signals always push probability UP and negative signals always push
-    DOWN — regardless of whether the starting probability is above or below 50%.
+    weighted = probability that THIS BET SIDE hits (already side-aware from weighted_hit_rate).
+    So 89% for an Under means the Under has an 89% hit rate.
 
-    Each multiplier value is converted to a pp adjustment:
-      1.08 → +8pp boost toward the bet side  (always helps)
-      0.91 → -9pp penalty away from bet side  (always hurts)
-      1.00 → no change
+    Signals are defined in terms of "scoring volume":
+      - High scoring signals (Strong minutes, Good matchup, Hot form) boost Over / hurt Under
+      - Low scoring signals (Risk minutes, Bad matchup, B2B) hurt Over / boost Under
+
+    For Under bets we flip the sign of every adjustment so the direction is always correct.
     """
-    # Convert multipliers to flat pp adjustments
-    # Positive = helps the bet (pushes probability toward the over/under hitting)
-    # Negative = hurts the bet
+    # Adjustments defined as: positive = MORE scoring = good for Over
     adj_map = {
         "minutes":  {"Strong": +0.05, "Okay": 0.00, "Risk": -0.07},
         "role":     {"Strong": +0.04, "Okay": 0.00, "Risk": -0.05},
@@ -993,14 +991,15 @@ def apply_adjustments(weighted: float, context: dict) -> float:
         "b2b":      {"Normal": 0.00, "B2B": -0.06},
         "form":     {"Boost": +0.05, "Neutral": 0.00, "Penalty": -0.05},
     }
+    # For Under bets, flip every signal: high scoring hurts the Under, low scoring helps it
+    _flip = -1.0 if side == "Under" else 1.0
+
     adjusted = weighted
     for key, val in context.items():
-        adjusted += adj_map[key].get(val, 0.0)
+        adjusted += adj_map[key].get(val, 0.0) * _flip
     adjusted = max(0.0, min(1.0, adjusted))
 
-    # Hard cap: context cannot override what the raw data says.
-    # Rule: context can move probability by at most 12pp in total.
-    # This prevents a player with 52% hit rate from reaching 67% just from signals.
+    # Cap: context can shift probability by at most 12pp from weighted base
     max_shift = 0.12
     if adjusted > weighted + max_shift:
         adjusted = weighted + max_shift
@@ -1009,32 +1008,41 @@ def apply_adjustments(weighted: float, context: dict) -> float:
 
     return max(0.0, min(1.0, adjusted))
 
-def get_confidence_tier(adjusted: float, line_diff: float, consistency: float) -> str:
+def get_confidence_tier(adjusted: float, line_diff: float, consistency: float, side: str = "Over") -> str:
     """
-    Assign confidence tier based on adjusted hit rate + edge vs line.
+    Assign confidence tier.
 
-    Consistency override logic:
-    - Only fires when edge is SMALL (abs < 5 pts).
-    - When edge is large (e.g. +14 pts), low consistency just means the player
-      consistently scores FAR above the line — which is a positive signal, not
-      a risk. So we skip the downgrade in those cases.
+    adjusted = probability that THIS BET SIDE hits (side-aware).
+    line_diff = avg_pts - line (positive = avg above line = good for Over).
+
+    For Over:  high adjusted + positive edge = Strong Over
+    For Under: high adjusted + negative edge = Strong Under
+               (edge is negative because avg is below the line)
+
+    We unify the logic: strong = adjusted >= 0.64 AND edge favors the side.
     """
-    if adjusted >= 0.64 and line_diff >= 1.5:
-        tier = "Strong Over"
-    elif adjusted >= 0.55 and line_diff > 0:
-        tier = "Lean Over"
-    elif adjusted <= 0.36 and line_diff <= -1.5:
-        tier = "Strong Under"
-    elif adjusted <= 0.45 and line_diff < 0:
-        tier = "Lean Under"
-    else:
-        tier = "Pass"
+    if side == "Over":
+        edge_favors = line_diff >= 1.5
+        edge_any    = line_diff > 0
+        if adjusted >= 0.64 and edge_favors:
+            tier = "Strong Over"
+        elif adjusted >= 0.55 and edge_any:
+            tier = "Lean Over"
+        else:
+            tier = "Pass"
+    else:  # Under
+        edge_favors = line_diff <= -1.5   # avg well below line = good for Under
+        edge_any    = line_diff < 0
+        if adjusted >= 0.64 and edge_favors:
+            tier = "Strong Under"
+        elif adjusted >= 0.55 and edge_any:
+            tier = "Lean Under"
+        else:
+            tier = "Pass"
 
-    # Only apply consistency downgrade when edge is tight (within 5 pts of line)
-    # Large edges with low consistency = player consistently blows past the line
-    edge_is_tight = abs(line_diff) < 5.0
+    # Consistency downgrade: only when edge is tight AND consistency is low
+    edge_is_tight   = abs(line_diff) < 5.0
     low_consistency = consistency < 0.35 and edge_is_tight
-
     if low_consistency:
         if tier == "Strong Over":   tier = "Lean Over"
         elif tier == "Strong Under": tier = "Lean Under"
@@ -1383,8 +1391,8 @@ if _mode == "🎯  Slate Scanner":
                         "matchup": _mq, "script": "Neutral", "venue": _vadj,
                         "h2h": _hsig, "b2b": _b2b, "form": _fsig,
                     }
-                    _adj  = apply_adjustments(_wb, _ctx)
-                    _tier = get_confidence_tier(_adj, _ld, _cons)
+                    _adj  = apply_adjustments(_wb, _ctx, "Over")
+                    _tier = get_confidence_tier(_adj, _ld, _cons, "Over")
                     return {
                         "Player": _fn, "Line": _ln, "Avg PTS": round(_avgp, 1),
                         "Edge": round(_ld, 1), "Weighted HR": f"{_wb:.0%}",
@@ -1474,6 +1482,152 @@ if _mode == "🎯  Slate Scanner":
                                file_name="slate_scanner.csv", mime="text/csv")
 
     st.stop()  # prevents player prop section rendering in scanner mode
+
+# ─────────────────────────────────────────────
+# Quick Entry — batch manual input
+# ─────────────────────────────────────────────
+
+if "quick_entry_results" not in st.session_state:
+    st.session_state.quick_entry_results = None
+
+with st.expander("⚡  Quick Entry — analyze multiple props at once"):
+    st.markdown("""
+    <div class='explainer'>
+        Enter up to 6 props manually — useful when browsing Underdog or any other platform.
+        Hit <strong>Run All</strong> and PropLens analyzes each one instantly.
+    </div>
+    """, unsafe_allow_html=True)
+
+    _qe_players = player_names_list if 'player_names_list' in dir() else []
+
+    # Build 6-row entry table
+    _qe_rows = []
+    _hc1, _hc2, _hc3, _hc4 = st.columns([3, 1.2, 1, 1])
+    _hc1.markdown("<div style='font-family:DM Mono;font-size:0.65rem;color:#475569;letter-spacing:0.1em;text-transform:uppercase;'>Player</div>", unsafe_allow_html=True)
+    _hc2.markdown("<div style='font-family:DM Mono;font-size:0.65rem;color:#475569;letter-spacing:0.1em;text-transform:uppercase;'>Line</div>", unsafe_allow_html=True)
+    _hc3.markdown("<div style='font-family:DM Mono;font-size:0.65rem;color:#475569;letter-spacing:0.1em;text-transform:uppercase;'>Over/Under</div>", unsafe_allow_html=True)
+    _hc4.markdown("<div style='font-family:DM Mono;font-size:0.65rem;color:#475569;letter-spacing:0.1em;text-transform:uppercase;'>Platform</div>", unsafe_allow_html=True)
+
+    for _ri in range(6):
+        _rc1, _rc2, _rc3, _rc4 = st.columns([3, 1.2, 1, 1])
+        with _rc1:
+            _pname = st.selectbox(
+                f"p{_ri}", options=[""] + _qe_players,
+                format_func=lambda x: "— player —" if x == "" else x,
+                key=f"qe_player_{_ri}", label_visibility="collapsed"
+            )
+        with _rc2:
+            _pline = st.number_input(
+                f"l{_ri}", min_value=0.0, value=20.0, step=0.5,
+                key=f"qe_line_{_ri}", label_visibility="collapsed"
+            )
+        with _rc3:
+            _pside = st.selectbox(
+                f"s{_ri}", ["Over", "Under"],
+                key=f"qe_side_{_ri}", label_visibility="collapsed"
+            )
+        with _rc4:
+            _pplat = st.selectbox(
+                f"pl{_ri}", ["Underdog", "PrizePicks", "Other"],
+                key=f"qe_plat_{_ri}", label_visibility="collapsed"
+            )
+        if _pname:
+            _qe_rows.append({
+                "player": _pname, "line": _pline,
+                "side": _pside, "platform": _pplat
+            })
+
+    _run_qe = st.button("⚡  Run All", key="run_quick_entry")
+
+    if _run_qe and _qe_rows:
+        _qe_results = []
+        _qe_prog = st.progress(0)
+        _season_qe = season_str_to_season("2025-26")
+
+        for _qi, _qrow in enumerate(_qe_rows):
+            _qe_prog.progress((_qi + 1) / len(_qe_rows))
+            try:
+                _qnid, _qfn = nba_find_player(_qrow["player"])
+                if not _qnid:
+                    continue
+                _qlogs = nba_get_game_logs(_qnid, _season_qe, n=10)
+                if _qlogs.empty:
+                    continue
+                _qln   = _qrow["line"]
+                _qside = _qrow["side"]
+                _qwb   = weighted_hit_rate(_qlogs, _qln, _qside)
+                _qcons = consistency_score(_qlogs, _qln)
+                _qavgp = pd.to_numeric(_qlogs["PTS"], errors="coerce").dropna().mean()
+                _qavgm = pd.to_numeric(_qlogs["MIN"], errors="coerce").dropna().mean()
+                _qavgf = pd.to_numeric(_qlogs["FGA"], errors="coerce").dropna().mean()
+                _qavgt = pd.to_numeric(_qlogs["FTA"], errors="coerce").dropna().mean()
+                _qld   = _qavgp - _qln
+                _qep   = next((p for p in espn_get_all_players()
+                               if normalize_name(p["full_name"]) == normalize_name(_qfn)), None)
+                _qteam = _qep["team_abbr"] if _qep else None
+                _qopp, _qgd, _qven = espn_get_next_game(_qteam) if _qteam else (None, None, None)
+                _qmq, _, _ = classify_matchup_espn(_qopp)
+                _qsp   = home_away_split(_qlogs, _qln, _qside, _qteam)
+                _qvadj = venue_adjustment(_qsp, _qven, _qside)
+                _qb2b  = detect_b2b(_qlogs, _qgd)
+                _qh2h  = get_h2h_logs(_qnid, _qopp, _season_qe) if _qopp else pd.DataFrame()
+                _qhsig, _, _ = h2h_signal(_qh2h, _qln, _qside)
+                _qsavg = nba_get_season_avg(_qnid, _season_qe)
+                _qfsig, _ = form_divergence_signal(_qavgp, _qsavg, _qln, _qside)
+                _qctx  = {
+                    "minutes": suggest_bucket(_qavgm, 32, 26),
+                    "role":    suggest_bucket(_qavgf + 0.5 * _qavgt, 18, 12),
+                    "shots":   "High" if _qavgf >= 15 else ("Low" if _qavgf < 10 else "Medium"),
+                    "matchup": _qmq, "script": "Neutral", "venue": _qvadj,
+                    "h2h": _qhsig, "b2b": _qb2b, "form": _qfsig,
+                }
+                _qadj  = apply_adjustments(_qwb, _qctx, _qside)
+                _qtier = get_confidence_tier(_qadj, _qld, _qcons, _qside)
+                _qe_results.append({
+                    "Player":    _qfn,
+                    "Platform":  _qrow["platform"],
+                    "Line":      f"{_qln} {_qside}",
+                    "Avg PTS":   round(_qavgp, 1),
+                    "Edge":      round(_qld, 1),
+                    "Hit Rate":  f"{_qwb:.0%}",
+                    "Adjusted":  f"{_qadj:.0%}",
+                    "Tier":      _qtier,
+                    "_adj_raw":  _qadj,
+                })
+            except Exception:
+                continue
+
+        _qe_prog.empty()
+        st.session_state.quick_entry_results = _qe_results
+
+    if st.session_state.quick_entry_results:
+        _qtc = {"Strong Over":"green","Lean Over":"yellow","Lean Under":"orange","Strong Under":"red","Pass":"gray"}
+        _qte = {"Strong Over":"🟢","Lean Over":"🟡","Lean Under":"🟠","Strong Under":"🔴","Pass":"⚪"}
+        st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
+        for _qr in st.session_state.quick_entry_results:
+            _qt  = _qr["Tier"]
+            _qcs = _qtc.get(_qt, "gray")
+            _qem = _qte.get(_qt, "⚪")
+            _qec = "#22c55e" if _qr["Edge"] > 0 else "#ef4444"
+            st.markdown(f"""
+            <div class='verdict-banner {_qcs}' style='margin:0.3rem 0;padding:0.9rem 1.3rem;'>
+                <div>
+                    <div class='verdict-label'>{_qr["Line"]} · {_qr["Platform"]}</div>
+                    <div style='font-size:1rem;font-weight:800;color:#f1f5f9;'>{_qr["Player"]}</div>
+                </div>
+                <div style='display:flex;gap:1.5rem;flex-wrap:wrap;align-items:center;'>
+                    <div><div class='verdict-label'>Verdict</div>
+                         <div class='verdict-tier {_qcs}' style='font-size:0.95rem;'>{_qem} {_qt}</div></div>
+                    <div><div class='verdict-label'>Avg PTS</div>
+                         <div style='font-size:0.95rem;font-weight:700;color:#f1f5f9;'>{_qr["Avg PTS"]}</div></div>
+                    <div><div class='verdict-label'>Edge</div>
+                         <div style='font-size:0.95rem;font-weight:700;color:{_qec};'>{_qr["Edge"]:+.1f}</div></div>
+                    <div><div class='verdict-label'>Hit Rate</div>
+                         <div style='font-size:0.95rem;font-weight:700;color:#f1f5f9;'>{_qr["Hit Rate"]}</div></div>
+                    <div><div class='verdict-label'>Adjusted</div>
+                         <div style='font-size:0.95rem;font-weight:700;color:#f1f5f9;'>{_qr["Adjusted"]}</div></div>
+                </div>
+            </div>""", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
 # Player & Prop inputs
@@ -1967,9 +2121,9 @@ if st.session_state.logs is not None:
         "form":    form_sig,
     }
 
-    adjusted  = apply_adjustments(weighted_base, context)
+    adjusted  = apply_adjustments(weighted_base, context, side)
     line_diff = sample_avg_pts - line
-    tier      = get_confidence_tier(adjusted, line_diff, consistency)
+    tier      = get_confidence_tier(adjusted, line_diff, consistency, side)
 
     tier_css   = {"Strong Over": "green", "Lean Over": "yellow", "Lean Under": "orange", "Strong Under": "red", "Pass": "gray"}
     tier_emoji = {"Strong Over": "🟢", "Lean Over": "🟡", "Lean Under": "🟠", "Strong Under": "🔴", "Pass": "⚪"}
@@ -2040,11 +2194,12 @@ if st.session_state.logs is not None:
             "form":    "Recent form vs season",
         }
 
-        # Simulate the computation step by step (additive)
+        # Simulate the computation step by step (additive, side-aware)
+        _flip   = -1.0 if side == "Under" else 1.0
         running = weighted_base
         steps   = []
         for key, val in context.items():
-            adj    = multipliers_map[key].get(val, 0.0)
+            adj    = multipliers_map[key].get(val, 0.0) * _flip
             before = running
             running = max(0.0, min(1.0, running + adj))
             after  = running
