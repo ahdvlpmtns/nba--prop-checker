@@ -2228,12 +2228,30 @@ if st.session_state.logs is not None:
     _cons_word      = "Predictable" if consistency >= 0.5 else ("Variable" if consistency >= 0.35 else "Volatile")
     _bar_style      = f"background:{_bar_color};height:6px;width:{_bar_w}%;border-radius:999px;box-shadow:0 0 6px {_bar_color}55;"
 
+    # Tier ruler — shows where adjusted % sits across all thresholds
+    # Positions: 0%=left, 45%=lean under boundary, 55%=lean over boundary, 64%=strong boundary, 100%=right
+    _ruler_pos = max(2, min(98, int(_display_adj * 100)))  # % position on ruler
+    _ruler_pip_color = _bar_color
+
     _verdict_html = (
         f"<div class='verdict-banner {css}'>"
         f"<div style='flex:1;min-width:200px;'>"
         f"<div class='verdict-label'>{full_name} · {line} pts · {_display_side}</div>"
         f"<div class='verdict-tier {css}'>{tier_emoji[_display_tier]} {_display_tier}</div>"
-        f"<div style='margin-top:10px;'>"
+        f"<div style='margin-top:8px;margin-bottom:2px;'>"
+        f"<div style='position:relative;height:18px;'>"
+        f"<div style='position:absolute;top:8px;left:0;right:0;height:3px;background:#1a2333;border-radius:2px;'></div>"
+        f"<div style='position:absolute;top:8px;left:0;width:{_ruler_pos}%;height:3px;background:{_ruler_pip_color};border-radius:2px;opacity:0.6;'></div>"
+        f"<div style='position:absolute;top:3px;left:{_ruler_pos}%;transform:translateX(-50%);width:10px;height:10px;border-radius:50%;background:{_ruler_pip_color};box-shadow:0 0 5px {_ruler_pip_color};'></div>"
+        f"<div style='position:absolute;top:8px;left:45%;width:1px;height:8px;background:#475569;opacity:0.6;'></div>"
+        f"<div style='position:absolute;top:8px;left:55%;width:1px;height:8px;background:#475569;opacity:0.6;'></div>"
+        f"<div style='position:absolute;top:8px;left:64%;width:1px;height:8px;background:#94a3b8;opacity:0.8;'></div>"
+        f"</div>"
+        f"<div style='display:flex;justify-content:space-between;font-family:DM Mono;font-size:0.55rem;color:#334155;margin-top:2px;'>"
+        f"<span>Under</span><span style='margin-left:37%;'>Lean</span><span>Strong</span><span>Max</span>"
+        f"</div>"
+        f"</div>"
+        f"<div style='margin-top:6px;'>"
         f"<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;'>"
         f"<div style='font-family:DM Mono;font-size:0.6rem;color:#475569;letter-spacing:0.1em;text-transform:uppercase;'>Confidence</div>"
         f"<div style='font-family:DM Mono;font-size:0.65rem;font-weight:700;color:{_bar_color};'>{_conf_label}</div>"
