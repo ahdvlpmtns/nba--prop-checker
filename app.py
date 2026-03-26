@@ -2166,9 +2166,56 @@ if st.session_state.logs is not None:
         f"padding:3px 10px; border-radius:999px;'>{venue_label_text}</span>"
     ) if venue_adj != "Neutral" else ""
 
-    # Flip note shown when auto-flipped to opposite side
+    # ── Confidence depth within tier ─────────────────────────────
+    # How far into the tier are we? Gives "strong lean" vs "weak lean" etc.
+    if _display_tier == "Strong Over":
+        # 64% - 100% range → how far above 64%?
+        _conf_pct  = min(1.0, (_display_adj - 0.64) / 0.36)
+        _conf_label = "Deep Strong" if _conf_pct >= 0.5 else "Strong"
+        _bar_color  = "#22c55e"
+    elif _display_tier == "Lean Over":
+        # 55% - 64% range
+        _conf_pct  = (_display_adj - 0.55) / 0.09
+        _conf_label = "High Lean" if _conf_pct >= 0.5 else "Low Lean"
+        _bar_color  = "#eab308"
+    elif _display_tier == "Strong Under":
+        # 64% - 100% range (same logic, high = more confident)
+        _conf_pct  = min(1.0, (_display_adj - 0.64) / 0.36)
+        _conf_label = "Deep Strong" if _conf_pct >= 0.5 else "Strong"
+        _bar_color  = "#ef4444"
+    elif _display_tier == "Lean Under":
+        _conf_pct  = (_display_adj - 0.55) / 0.09
+        _conf_label = "High Lean" if _conf_pct >= 0.5 else "Low Lean"
+        _bar_color  = "#f97316"
+    else:  # Pass
+        _conf_pct  = 0.0
+        _conf_label = "No edge"
+        _bar_color  = "#475569"
+
+    # Edge strength label
+    _abs_edge = abs(line_diff)
+    if _abs_edge >= 5.0:
+        _edge_label = "Large edge"
+        _edge_color = "#22c55e"
+    elif _abs_edge >= 2.5:
+        _edge_label = "Solid edge"
+        _edge_color = "#86efac"
+    elif _abs_edge >= 1.5:
+        _edge_label = "Moderate edge"
+        _edge_color = "#eab308"
+    elif _abs_edge >= 0.5:
+        _edge_label = "Small edge"
+        _edge_color = "#f97316"
+    else:
+        _edge_label = "Razor thin"
+        _edge_color = "#ef4444"
+
+    # Confidence bar fill width (out of 100%)
+    _bar_w = max(4, int(_conf_pct * 100))
+
+    # Flip note
     _flip_note = (
-        f"<div style='font-family:DM Mono;font-size:0.68rem;color:#854d0e;"
+        f"<div style='font-family:DM Mono;font-size:0.65rem;color:#854d0e;"
         f"background:#1c1005;border:1px solid #854d0e;border-radius:6px;"
         f"padding:3px 10px;display:inline-block;margin-top:6px;'>"
         f"⚠️ You selected {side} — data favors the {_display_side}</div>"
@@ -2176,24 +2223,61 @@ if st.session_state.logs is not None:
 
     st.markdown(f"""
     <div class='verdict-banner {css}'>
-        <div>
+        <div style='flex:1; min-width:200px;'>
             <div class='verdict-label'>{full_name} · {line} pts · {_display_side}</div>
             <div class='verdict-tier {css}'>{tier_emoji[_display_tier]} {_display_tier}</div>
+
+            <!-- Confidence bar -->
+            <div style='margin-top:10px;'>
+                <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;'>
+                    <div style='font-family:DM Mono;font-size:0.6rem;color:#475569;letter-spacing:0.1em;text-transform:uppercase;'>
+                        Confidence
+                    </div>
+                    <div style='font-family:DM Mono;font-size:0.65rem;font-weight:700;color:{_bar_color};'>
+                        {_conf_label}
+                    </div>
+                </div>
+                <div style='background:#1a2333;border-radius:999px;height:6px;width:100%;max-width:220px;overflow:hidden;'>
+                    <div style='background:{_bar_color};height:6px;width:{_bar_w}%;border-radius:999px;
+                                transition:width 0.4s ease;box-shadow:0 0 6px {_bar_color}66;'></div>
+                </div>
+            </div>
             {_flip_note}
             <div style='margin-top:6px;'>{venue_badge_html}</div>
         </div>
-        <div style='display:flex; gap:2rem; flex-wrap:wrap;'>
+        <div style='display:flex; gap:2rem; flex-wrap:wrap; align-items:flex-start;'>
             <div>
-                <div class='verdict-label'>Adjusted Hit Rate</div>
+                <div class='verdict-label' title='% of recent games this bet would have hit, adjusted for context signals'>
+                    Adjusted Hit Rate
+                    <span style='font-size:0.55rem;background:#1e293b;color:#64748b;border-radius:50%;
+                                 padding:1px 4px;margin-left:3px;cursor:default;'>i</span>
+                </div>
                 <div style='font-size:1.4rem; font-weight:800; color:#f1f5f9;'>{_display_adj:.0%}</div>
+                <div style='font-family:DM Mono;font-size:0.65rem;color:#475569;margin-top:2px;'>
+                    ≥64% = Strong · ≥55% = Lean
+                </div>
             </div>
             <div>
-                <div class='verdict-label'>Edge vs Line</div>
+                <div class='verdict-label' title='Player avg pts minus the line. Positive = avg above line (good for Over)'>
+                    Edge vs Line
+                    <span style='font-size:0.55rem;background:#1e293b;color:#64748b;border-radius:50%;
+                                 padding:1px 4px;margin-left:3px;cursor:default;'>i</span>
+                </div>
                 <div style='font-size:1.4rem; font-weight:800; color:{"#22c55e" if line_diff > 0 else "#ef4444"};'>{line_diff:+.1f}</div>
+                <div style='font-family:DM Mono;font-size:0.65rem;color:{_edge_color};margin-top:2px;'>
+                    {_edge_label}
+                </div>
             </div>
             <div>
-                <div class='verdict-label'>Consistency</div>
+                <div class='verdict-label' title='% of games where pts landed within 3 of the line. Low = volatile scorer'>
+                    Consistency
+                    <span style='font-size:0.55rem;background:#1e293b;color:#64748b;border-radius:50%;
+                                 padding:1px 4px;margin-left:3px;cursor:default;'>i</span>
+                </div>
                 <div style='font-size:1.4rem; font-weight:800; color:#f1f5f9;'>{consistency:.0%}</div>
+                <div style='font-family:DM Mono;font-size:0.65rem;color:#475569;margin-top:2px;'>
+                    {"Predictable" if consistency >= 0.5 else "Variable" if consistency >= 0.35 else "Volatile"}
+                </div>
             </div>
         </div>
     </div>
