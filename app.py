@@ -1232,6 +1232,31 @@ def get_team_injury_report(team_abbr: str) -> list:
     """
     results = []
 
+    # Source 0: ESPN direct injuries endpoint — most reliable
+    try:
+        inj_data = espn_get(
+            f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/injuries"
+        )
+        for team_entry in inj_data.get("injuries", []):
+            abbr = team_entry.get("team", {}).get("abbreviation", "")
+            if abbr != team_abbr:
+                continue
+            for item in team_entry.get("injuries", []):
+                ath    = item.get("athlete", {})
+                name   = ath.get("displayName", "")
+                status = item.get("status", "")
+                detail = item.get("shortComment", item.get("longComment", ""))
+                if name and status:
+                    results.append({
+                        "name":   name,
+                        "status": status,
+                        "reason": detail,
+                    })
+        if results:
+            return results
+    except Exception:
+        pass
+
     # Source 1: nbainjuries package
     try:
         from nbainjuries import injury
@@ -1314,34 +1339,64 @@ def get_team_injury_report(team_abbr: str) -> list:
 @st.cache_data(ttl=3600)
 def get_teammate_minutes(team_abbr: str, season: str = "2025-26") -> dict:
     """
-    Returns dict of {player_name: avg_minutes} for all players on a team.
-    Used to assess how significant an absent teammate's minutes are.
+    Returns dict of {normalized_player_name: avg_minutes} for all players on a team.
+    Uses ESPN team stats endpoint — reliable, no API key needed.
+    Falls back to nba_api if ESPN fails.
     """
     result = {}
+
+    # Source 1: ESPN team roster with stats
     try:
-        from nba_api.library.http import NBAStatsHTTP
-        NBAStatsHTTP.nba_response.headers = {
-            "Host": "stats.nba.com",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "application/json, text/plain, */*",
-            "x-nba-stats-origin": "stats",
-            "x-nba-stats-token": "true",
-            "Referer": "https://www.nba.com/",
-            "Origin": "https://www.nba.com",
-        }
-        from nba_api.stats.endpoints import leaguedashplayerstats
-        df = leaguedashplayerstats.LeagueDashPlayerStats(
-            season=season, timeout=45,
-        ).get_data_frames()[0]
-        # Filter to team
-        team_df = df[df["TEAM_ABBREVIATION"] == team_abbr]
-        for _, row in team_df.iterrows():
-            name = str(row.get("PLAYER_NAME", ""))
-            mins = float(row.get("MIN", 0))
-            if name and mins > 0:
-                result[normalize_name(name)] = round(mins, 1)
+        # Get team ID
+        teams_data = espn_get(f"{ESPN_SITE}/teams")
+        teams_list = (
+            teams_data.get("sports", [{}])[0].get("leagues", [{}])[0].get("teams", [])
+            or teams_data.get("teams", [])
+        )
+        team_id = None
+        for t in teams_list:
+            team = t.get("team", t)
+            if team.get("abbreviation", "") == team_abbr:
+                team_id = team.get("id")
+                break
+
+        if team_id:
+            # ESPN athlete stats endpoint
+            stats_data = espn_get(
+                f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba"
+                f"/teams/{team_id}/roster"
+            )
+            for athlete in stats_data.get("athletes", []):
+                for item in (athlete.get("items") or [athlete]):
+                    name  = item.get("displayName", "")
+                    stats = item.get("statistics", {})
+                    # Try to get MIN from stats categories
+                    cats  = stats.get("splits", {}).get("categories", []) or []
+                    for cat in cats:
+                        for s in cat.get("stats", []):
+                            if s.get("name", "").lower() in ("minutespergame", "min", "minutes"):
+                                val = float(s.get("value", 0))
+                                if val > 0 and name:
+                                    result[normalize_name(name)] = round(val, 1)
     except Exception:
         pass
+
+    # Source 2: nba_api fallback
+    if not result:
+        try:
+            from nba_api.stats.endpoints import leaguedashplayerstats
+            df = leaguedashplayerstats.LeagueDashPlayerStats(
+                season=season, timeout=30,
+            ).get_data_frames()[0]
+            team_df = df[df["TEAM_ABBREVIATION"] == team_abbr]
+            for _, row in team_df.iterrows():
+                name = str(row.get("PLAYER_NAME", ""))
+                mins = float(row.get("MIN", 0))
+                if name and mins > 0:
+                    result[normalize_name(name)] = round(mins, 1)
+        except Exception:
+            pass
+
     return result
 
 
@@ -1365,6 +1420,7 @@ def detect_usage_spike(
 
     injured = get_team_injury_report(player_team)
     if not injured:
+        # Show debug in sidebar if no injury data found
         return "Neutral", [], ""
 
     # Get teammate minutes to assess importance
@@ -2864,6 +2920,22 @@ if st.session_state.logs is not None:
     # Usage spike alert
     if _spike_html:
         st.markdown(_spike_html, unsafe_allow_html=True)
+
+    # Debug expander — shows raw data to diagnose issues
+    with st.expander("🔍 Usage Spike Debug", expanded=False):
+        st.markdown(f"""
+        **Player team:** `{player_team}`
+        **Spike signal:** `{_spike_sig}`
+        **Key absent players:** `{_spike_players}`
+        """)
+        _raw_injured = get_team_injury_report(player_team) if player_team else []
+        _raw_mins    = get_teammate_minutes(player_team) if player_team else {}
+        st.markdown(f"**Raw injury report ({len(_raw_injured)} entries):**")
+        for p in _raw_injured:
+            st.markdown(f"- {p['name']} · {p['status']} · {p.get('reason','')}")
+        st.markdown(f"**Teammate minutes ({len(_raw_mins)} entries):**")
+        for name, mins in list(_raw_mins.items())[:10]:
+            st.markdown(f"- {name}: {mins} min")
 
     # ── H2H + B2B + Form cards ───────────────
     st.markdown("<div class='section-header'>H2H, Form, Schedule & Pace</div>", unsafe_allow_html=True)
