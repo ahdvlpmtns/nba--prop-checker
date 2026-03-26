@@ -328,6 +328,26 @@ div[data-testid="stTextInput"] input {
     border-color: var(--border) !important;
     border-radius: 10px !important;
 }
+/* Streamlit selectbox typed search input */
+div[data-testid="stSelectbox"] input,
+div[data-baseweb="select"] input,
+div[data-baseweb="input"] input,
+.st-emotion-cache input,
+input[aria-autocomplete="list"],
+input[type="text"] {
+    color: var(--text) !important;
+    caret-color: var(--orange) !important;
+}
+/* Dropdown option list */
+ul[data-testid="stSelectboxVirtualDropdown"] li,
+div[data-baseweb="popover"] li,
+div[data-baseweb="menu"] li {
+    color: var(--text) !important;
+    background: var(--bg2) !important;
+}
+div[data-baseweb="menu"] li:hover {
+    background: var(--border2) !important;
+}
 
 /* ── Expanders ── */
 div[data-testid="stExpander"] {
