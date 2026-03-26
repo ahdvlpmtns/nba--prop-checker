@@ -695,6 +695,79 @@ def nba_get_season_avg(player_id: int, season: str) -> Optional[float]:
     return None
 
 
+@st.cache_data(ttl=3600)
+def nba_get_season_avg_min(player_id: int, season: str) -> Optional[float]:
+    """Fetch full season average minutes per game."""
+    try:
+        from nba_api.library.http import NBAStatsHTTP
+        NBAStatsHTTP.nba_response.headers = {
+            "Host": "stats.nba.com",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "x-nba-stats-origin": "stats",
+            "x-nba-stats-token": "true",
+            "Referer": "https://www.nba.com/",
+            "Origin": "https://www.nba.com",
+        }
+    except Exception:
+        pass
+    for attempt in range(3):
+        try:
+            df = playergamelog.PlayerGameLog(
+                player_id=player_id, season=season, timeout=45,
+            ).get_data_frames()[0]
+            mins = pd.to_numeric(df["MIN"], errors="coerce").dropna()
+            return round(float(mins.mean()), 1) if len(mins) >= 5 else None
+        except Exception:
+            if attempt < 2:
+                time.sleep(3 * (attempt + 1))
+    return None
+
+
+def minutes_restriction_alert(
+    recent_avg_min: float,
+    season_avg_min: Optional[float],
+    last_3_mins: Optional[list],
+) -> str:
+    """
+    Detect if a player's minutes have dropped significantly recently,
+    which may indicate injury recovery, load management, or a role change.
+    Returns an HTML alert string or empty string if no concern.
+    """
+    if season_avg_min is None or season_avg_min < 10:
+        return ""
+
+    # Check L3 average vs season average
+    if last_3_mins and len(last_3_mins) >= 2:
+        l3_avg = sum(last_3_mins) / len(last_3_mins)
+        drop = season_avg_min - l3_avg
+
+        if drop >= 7:
+            severity = "significant"
+            bg, border, color = "#1c1005", "#854d0e", "#f97316"
+            icon = "⚠️"
+        elif drop >= 4:
+            severity = "moderate"
+            bg, border, color = "#0c1018", "#243044", "#60a5fa"
+            icon = "📉"
+        else:
+            return ""
+
+        return (
+            f"<div style='background:{bg};border:1px solid {border};border-radius:10px;"
+            f"padding:0.65rem 1rem;margin-bottom:0.5rem;display:flex;align-items:center;gap:10px;'>"
+            f"<span style='font-size:1.1rem;'>{icon}</span>"
+            f"<div style='font-family:DM Mono;font-size:0.7rem;'>"
+            f"<span style='color:{color};font-weight:800;text-transform:uppercase;letter-spacing:0.08em;'>"
+            f"Minutes restriction detected</span>"
+            f"<span style='color:#475569;'> · L3 avg {l3_avg:.1f} min vs season avg {season_avg_min:.1f} min "
+            f"({drop:+.1f}) — possible injury or load management</span>"
+            f"</div>"
+            f"</div>"
+        )
+    return ""
+
+
 def form_divergence_signal(
     recent_avg: float,
     season_avg: Optional[float],
@@ -1914,8 +1987,17 @@ if st.session_state.logs is not None:
     h2h_df     = get_h2h_logs(player_id, opp_abbr, season_str_clean) if opp_abbr else pd.DataFrame()
     h2h_sig, h2h_avg, h2h_count = h2h_signal(h2h_df, line, side)
     b2b_status  = detect_b2b(logs, game_date)
-    season_avg  = nba_get_season_avg(player_id, season_str_clean)
+    season_avg     = nba_get_season_avg(player_id, season_str_clean)
+    season_avg_min = nba_get_season_avg_min(player_id, season_str_clean)
     form_sig, form_diff = form_divergence_signal(sample_avg_pts, season_avg, line, side)
+
+    # Get last 3 games minutes for restriction check
+    _last3_mins = (
+        pd.to_numeric(logs["MIN"], errors="coerce")
+        .dropna().head(3).tolist()
+        if logs is not None and not logs.empty else []
+    )
+    _min_alert_html = minutes_restriction_alert(avg_min, season_avg_min, _last3_mins)
 
     # ── Stat cards ────────────────────────────
     st.markdown(f"<div class='section-header'>{full_name} &nbsp;·&nbsp; {line} pts {side}</div>", unsafe_allow_html=True)
@@ -1961,7 +2043,7 @@ if st.session_state.logs is not None:
                 <span class='tip' title='Average minutes per game — more minutes = more scoring opportunities'>?</span>
             </div>
             <div class='stat-value {min_color}'>{avg_min:.1f}</div>
-            <div class='stat-hint'>Avg FGA: {avg_fga:.1f} · FTA: {avg_fta:.1f}</div>
+            <div class='stat-hint'>Avg FGA: {avg_fga:.1f} · FTA: {avg_fta:.1f}{f" · Season avg: {season_avg_min:.1f} min" if season_avg_min else ""}</div>
         </div>""", unsafe_allow_html=True)
 
     # ── Defense card ──────────────────────────
@@ -2009,6 +2091,10 @@ if st.session_state.logs is not None:
         {flag_pill("PTS", pts_flag)}
     </div>""", unsafe_allow_html=True)
     st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
+
+    # Minutes restriction alert
+    if _min_alert_html:
+        st.markdown(_min_alert_html, unsafe_allow_html=True)
 
     # ── H2H + B2B + Form cards ───────────────
     st.markdown("<div class='section-header'>H2H, Form & Schedule</div>", unsafe_allow_html=True)
@@ -2277,6 +2363,58 @@ if st.session_state.logs is not None:
         f"padding:3px 10px; border-radius:999px;'>{venue_label_text}</span>"
     ) if venue_adj != "Neutral" else ""
 
+    # ── Injury + minutes signals for verdict banner ──────────────
+    _verdict_signals = []
+
+    # Injury status signal
+    if _inj_status not in ("Active", "Unknown", ""):
+        _inj_up = _inj_status.upper()
+        if "OUT" in _inj_up or "DOUBTFUL" in _inj_up:
+            _sig_color = "#ef4444"
+            _sig_bg    = "#1c050588"
+            _sig_icon  = "🚫"
+        elif "QUESTIONABLE" in _inj_up:
+            _sig_color = "#f97316"
+            _sig_bg    = "#1c100588"
+            _sig_icon  = "⚠️"
+        else:  # Probable
+            _sig_color = "#86efac"
+            _sig_bg    = "#0c1a0c88"
+            _sig_icon  = "🟡"
+        _reason_short = _inj_reason.replace("Injury/Illness - ", "").replace("Injury/Illness -", "").strip()
+        _reason_part  = f" · {_reason_short}" if _reason_short else ""
+        _verdict_signals.append(
+            f"<span style='font-family:DM Mono;font-size:0.68rem;font-weight:700;"
+            f"color:{_sig_color};background:{_sig_bg};"
+            f"border:1px solid {_sig_color}44;padding:3px 10px;border-radius:999px;"
+            f"display:inline-flex;align-items:center;gap:4px;'>"
+            f"{_sig_icon} {_inj_status}{_reason_part}</span>"
+        )
+
+    # Minutes restriction signal
+    if _min_alert_html:
+        _last3_avg = sum(_last3_mins) / len(_last3_mins) if _last3_mins else avg_min
+        _min_drop  = season_avg_min - _last3_avg if season_avg_min else 0
+        if _min_drop >= 7:
+            _min_sig_color = "#f97316"
+            _min_sig_icon  = "⚠️"
+        else:
+            _min_sig_color = "#60a5fa"
+            _min_sig_icon  = "📉"
+        _verdict_signals.append(
+            f"<span style='font-family:DM Mono;font-size:0.68rem;font-weight:700;"
+            f"color:{_min_sig_color};background:{_min_sig_color}18;"
+            f"border:1px solid {_min_sig_color}44;padding:3px 10px;border-radius:999px;"
+            f"display:inline-flex;align-items:center;gap:4px;'>"
+            f"{_min_sig_icon} Minutes ↓ {_last3_avg:.0f} vs {season_avg_min:.0f} avg</span>"
+        )
+
+    _signals_html = (
+        f"<div style='display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;'>"
+        + "".join(_verdict_signals)
+        + "</div>"
+    ) if _verdict_signals else ""
+
     # ── Confidence depth within tier ─────────────────────────────
     # How far into the tier are we? Gives "strong lean" vs "weak lean" etc.
     if _display_tier == "Strong Over":
@@ -2393,6 +2531,7 @@ if st.session_state.logs is not None:
         f"<div style='height:0.4rem;'></div>"
         f"</div>"
         f"{_flip_note_html}"
+        f"{_signals_html}"
         f"<div style='margin-top:6px;'>{venue_badge_html}</div>"
         f"</div>"
         f"<div style='display:flex;gap:2rem;flex-wrap:wrap;align-items:flex-start;'>"
