@@ -1077,6 +1077,99 @@ def classify_matchup_espn(opp_abbr: Optional[str]) -> Tuple[str, Optional[float]
         return "Bad", opp_pts, str(league_avg)
     return "Neutral", opp_pts, str(league_avg)
 
+# ── Pace of play ─────────────────────────────────────────────
+
+@st.cache_data(ttl=3600)
+def get_team_pace(team_abbr: str) -> Optional[float]:
+    """
+    Fetch team pace (possessions per game) from nba_api leaguedashteamstats.
+    Falls back to league average (104.5) if unavailable.
+    """
+    if not team_abbr:
+        return None
+    try:
+        from nba_api.library.http import NBAStatsHTTP
+        NBAStatsHTTP.nba_response.headers = {
+            "Host": "stats.nba.com",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "x-nba-stats-origin": "stats",
+            "x-nba-stats-token": "true",
+            "Referer": "https://www.nba.com/",
+            "Origin": "https://www.nba.com",
+        }
+    except Exception:
+        pass
+    try:
+        from nba_api.stats.endpoints import leaguedashteamstats
+        df = leaguedashteamstats.LeagueDashTeamStats(
+            measure_type_simple_defense="Advanced",
+            season="2025-26",
+            timeout=45,
+        ).get_data_frames()[0]
+        # Match by abbreviation
+        row = df[df["TEAM_ABBREVIATION"] == team_abbr]
+        if not row.empty and "PACE" in df.columns:
+            return round(float(row["PACE"].iloc[0]), 1)
+        # Try matching by team name
+        for _, r in df.iterrows():
+            if team_abbr in str(r.get("TEAM_ABBREVIATION", "")):
+                return round(float(r["PACE"]), 1)
+    except Exception:
+        pass
+    return None
+
+
+def pace_adjustment(
+    player_team_abbr: Optional[str],
+    opp_abbr: Optional[str],
+    side: str,
+) -> Tuple[str, Optional[float], Optional[float]]:
+    """
+    Compare expected game pace vs league average.
+    Returns (signal, player_team_pace, opp_pace).
+
+    Game pace = average of both teams' pace.
+    League avg pace = 104.5 possessions (2025-26 season).
+
+    Fast game (>107 poss) → more scoring opportunities → boosts Over / hurts Under
+    Slow game (<102 poss) → fewer opportunities → hurts Over / boosts Under
+    """
+    LEAGUE_AVG_PACE = 104.5
+
+    p1 = get_team_pace(player_team_abbr) if player_team_abbr else None
+    p2 = get_team_pace(opp_abbr) if opp_abbr else None
+
+    if p1 is None and p2 is None:
+        return "Neutral", None, None
+
+    # Use available data — average if both, otherwise use what we have
+    if p1 and p2:
+        game_pace = (p1 + p2) / 2
+    else:
+        game_pace = p1 or p2
+
+    diff = game_pace - LEAGUE_AVG_PACE
+
+    # Align with bet side
+    if side == "Over":
+        if diff >= 2.5:
+            signal = "Boost"    # fast game = more possessions = more scoring
+        elif diff <= -2.5:
+            signal = "Penalty"  # slow game = fewer possessions
+        else:
+            signal = "Neutral"
+    else:  # Under
+        if diff >= 2.5:
+            signal = "Penalty"  # fast game hurts Under
+        elif diff <= -2.5:
+            signal = "Boost"    # slow game helps Under
+        else:
+            signal = "Neutral"
+
+    return signal, p1, p2
+
+
 # Prediction engine (unchanged)
 # ─────────────────────────────────────────────
 
@@ -1195,6 +1288,8 @@ def apply_adjustments(weighted: float, context: dict, side: str = "Over") -> flo
         "h2h":      {"Strong": +0.05, "Neutral": 0.00, "Risk": -0.06},
         "b2b":      {"Normal": 0.00, "B2B": -0.06},
         "form":     {"Boost": +0.05, "Neutral": 0.00, "Penalty": -0.05},
+        # Pace: fast game = more possessions = more scoring opportunities
+        "pace":     {"Boost": +0.04, "Neutral": 0.00, "Penalty": -0.04},
     }
     # For Under bets, flip every signal: high scoring hurts the Under, low scoring helps it
     _flip = -1.0 if side == "Under" else 1.0
@@ -2191,6 +2286,7 @@ if st.session_state.logs is not None:
     season_avg     = nba_get_season_avg(player_id, season_str_clean)
     season_avg_min = nba_get_season_avg_min(player_id, season_str_clean)
     form_sig, form_diff = form_divergence_signal(sample_avg_pts, season_avg, line, side)
+    pace_sig, player_pace, opp_pace = pace_adjustment(player_team, opp_abbr, side)
 
     # Get last 3 games minutes for restriction check
     _last3_mins = (
@@ -2298,8 +2394,8 @@ if st.session_state.logs is not None:
         st.markdown(_min_alert_html, unsafe_allow_html=True)
 
     # ── H2H + B2B + Form cards ───────────────
-    st.markdown("<div class='section-header'>H2H, Form & Schedule</div>", unsafe_allow_html=True)
-    hb1, hb2, hb3 = st.columns(3)
+    st.markdown("<div class='section-header'>H2H, Form, Schedule & Pace</div>", unsafe_allow_html=True)
+    hb1, hb2, hb3, hb4 = st.columns(4)
 
     with hb1:
         if h2h_count >= 2:
@@ -2385,6 +2481,35 @@ if st.session_state.logs is not None:
             <div class='stat-card'>
                 <div class='stat-label'>Recent Form vs Season</div>
                 <div style='color:#475569; font-size:0.85rem; margin-top:8px;'>Season data loading...</div>
+            </div>""", unsafe_allow_html=True)
+
+    with hb4:
+        LEAGUE_AVG_PACE = 104.5
+        if player_pace or opp_pace:
+            _gp = ((player_pace or 0) + (opp_pace or 0)) / (2 if player_pace and opp_pace else 1)
+            _pd = _gp - LEAGUE_AVG_PACE
+            _pc = "#22c55e" if pace_sig == "Boost" else ("#ef4444" if pace_sig == "Penalty" else "#94a3b8")
+            _pb = "#052e16" if pace_sig == "Boost" else ("#1c0505" if pace_sig == "Penalty" else "#0f172a")
+            _pborder = "#166534" if pace_sig == "Boost" else ("#991b1b" if pace_sig == "Penalty" else "#1e293b")
+            _plabel = "🚀 Fast" if _pd >= 2.5 else ("🐢 Slow" if _pd <= -2.5 else "⚖️ Average")
+            _psub = f"{_gp:.1f} poss/game · league avg {LEAGUE_AVG_PACE}"
+            _pverdict = {
+                "Boost":   f"{'More scoring' if side=='Over' else 'Fewer scoring opp'} — applied",
+                "Penalty": f"{'Fewer scoring opp' if side=='Over' else 'More scoring'} — applied",
+                "Neutral": "No pace adjustment",
+            }.get(pace_sig, "No adjustment")
+            st.markdown(f"""
+            <div class='stat-card' style='border-color:{_pborder};background:linear-gradient(135deg,{_pb} 0%,#111827 100%);'>
+                <div class='stat-label'>Game Pace</div>
+                <div style='font-size:1rem;font-weight:800;color:{_pc};margin-top:6px;'>{_plabel}</div>
+                <div style='font-family:DM Mono;font-size:0.7rem;color:#475569;margin-top:4px;'>{_psub}</div>
+                <div style='font-family:DM Mono;font-size:0.68rem;color:{_pc};margin-top:4px;'>{_pverdict}</div>
+            </div>""", unsafe_allow_html=True)
+        else:
+            st.markdown("""
+            <div class='stat-card'>
+                <div class='stat-label'>Game Pace</div>
+                <div style='color:#475569;font-size:0.85rem;margin-top:8px;'>Pace data loading...</div>
             </div>""", unsafe_allow_html=True)
 
     # ── Home/Away splits ──────────────────────
@@ -2517,6 +2642,7 @@ if st.session_state.logs is not None:
         "h2h":     h2h_sig,
         "b2b":     b2b_status,
         "form":    form_sig,
+        "pace":    pace_sig,
     }
 
     adjusted  = apply_adjustments(weighted_base, context, side)
@@ -2768,6 +2894,7 @@ if st.session_state.logs is not None:
             "h2h":      {"Strong": +0.05, "Neutral": 0.00, "Risk": -0.06},
             "b2b":      {"Normal": 0.00, "B2B": -0.06},
             "form":     {"Boost": +0.05, "Neutral": 0.00, "Penalty": -0.05},
+            "pace":     {"Boost": +0.04, "Neutral": 0.00, "Penalty": -0.04},
         }
         signal_labels = {
             "minutes": "Minutes load",
@@ -2779,6 +2906,7 @@ if st.session_state.logs is not None:
             "h2h":     "H2H vs opponent",
             "b2b":     "Back-to-back rest",
             "form":    "Recent form vs season",
+            "pace":    "Game pace",
         }
 
         # Simulate the computation step by step (additive, side-aware)
