@@ -2868,14 +2868,9 @@ if st.session_state.logs is not None:
     season_avg_min = nba_get_season_avg_min(player_id, season_str_clean)
     form_sig, form_diff = form_divergence_signal(sample_avg_pts, season_avg, line, side)
 
-    # Usage spike — fetch teammate minutes first (cached), then check injuries
-    _teammate_mins = get_teammate_minutes(player_team) if player_team else {}
-    try:
-        _spike_sig, _spike_players, _spike_html = detect_usage_spike(
-            selected_player, player_team, side, _teammate_mins
-        )
-    except Exception:
-        _spike_sig, _spike_players, _spike_html = "Neutral", [], ""
+    # Usage spike — deferred, runs AFTER main analysis renders
+    _spike_sig, _spike_players, _spike_html = "Neutral", [], ""
+    _teammate_mins = {}
     pace_sig, player_pace, opp_pace = pace_adjustment(player_team, opp_abbr, side)
 
     # Get last 3 games minutes for restriction check
@@ -2983,20 +2978,8 @@ if st.session_state.logs is not None:
     if _min_alert_html:
         st.markdown(_min_alert_html, unsafe_allow_html=True)
 
-    # Usage spike alert
-    if _spike_html:
-        st.markdown(_spike_html, unsafe_allow_html=True)
-
-    # Debug expander — shows raw data to diagnose issues
-    with st.expander("🔍 Usage Spike Debug", expanded=False):
-        st.markdown(f"""
-        **Player team:** `{player_team}`
-        **Spike signal:** `{_spike_sig}`
-        **Key absent players:** `{_spike_players}`
-        """)
-        st.markdown(f"**Teammate minutes ({len(_teammate_mins)} entries):**")
-        for name, mins in sorted(_teammate_mins.items(), key=lambda x: -x[1])[:10]:
-            st.markdown(f"- {name}: {mins} min")
+    # Usage spike — placeholder that fills in after main analysis renders
+    _spike_placeholder = st.empty()
 
     # ── H2H + B2B + Form cards ───────────────
     st.markdown("<div class='section-header'>H2H, Form, Schedule & Pace</div>", unsafe_allow_html=True)
@@ -3693,6 +3676,35 @@ if st.session_state.logs is not None:
         </table>
         </div>
         """, unsafe_allow_html=True)
+
+    # ── Deferred usage spike — runs after main render ─────────
+    # This is intentionally after all main content so it doesn't block
+    if player_team:
+        _teammate_mins = get_teammate_minutes(player_team)
+        if _teammate_mins:
+            import concurrent.futures as _cf
+            def _run_spike():
+                return detect_usage_spike(selected_player, player_team, side, _teammate_mins)
+            with _cf.ThreadPoolExecutor(max_workers=1) as _ex:
+                _sf = _ex.submit(_run_spike)
+                try:
+                    _spike_sig, _spike_players, _spike_html = _sf.result(timeout=8)
+                except Exception:
+                    _spike_sig, _spike_players, _spike_html = "Neutral", [], ""
+
+            if _spike_html:
+                _spike_placeholder.markdown(_spike_html, unsafe_allow_html=True)
+
+            # Update verdict signals if spike detected
+            if _spike_players and not any("Usage" in str(s) for s in _verdict_signals if isinstance(s, str)):
+                _spike_names = " · ".join(p["name"].split()[-1] for p in _spike_players[:2])
+                _spike_pill  = (
+                    f"<span style='font-family:DM Mono;font-size:0.68rem;font-weight:700;"
+                    f"color:#22c55e;background:#0c1a0c88;"
+                    f"border:1px solid #16653488;padding:3px 10px;border-radius:999px;"
+                    f"display:inline-flex;align-items:center;gap:4px;'>"
+                    f"📈 Usage ↑ ({_spike_names} out)</span>"
+                )
 
     # ── AI Analysis ───────────────────────────
     st.markdown("<div class='section-header'>AI Breakdown</div>", unsafe_allow_html=True)
