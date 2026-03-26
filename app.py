@@ -2134,25 +2134,24 @@ if st.session_state.logs is not None:
     _opp_strong  = _opp_tier in ("Strong Over", "Strong Under")
     _selected_pass = tier == "Pass"
 
+    # Auto-flip: if the opposite side has a stronger verdict, show that instead
+    _auto_flipped = False
+    if _opp_strong and (_selected_pass or "Lean" in tier):
+        _display_tier = _opp_tier
+        _display_adj  = _opp_adj
+        _display_side = _opp_side
+        _auto_flipped = True
+    else:
+        _display_tier = tier
+        _display_adj  = adjusted
+        _display_side = side
+
     tier_css   = {"Strong Over": "green", "Lean Over": "yellow", "Lean Under": "orange", "Strong Under": "red", "Pass": "gray"}
     tier_emoji = {"Strong Over": "🟢", "Lean Over": "🟡", "Lean Under": "🟠", "Strong Under": "🔴", "Pass": "⚪"}
     css = tier_css[_display_tier]
 
     # ── Verdict banner ────────────────────────
     st.markdown("<div class='section-header'>Verdict</div>", unsafe_allow_html=True)
-
-    # Auto-flip: if the opposite side has a stronger verdict, show that instead
-    _auto_flipped = False
-    if _opp_strong and (_selected_pass or "Lean" in tier):
-        # Override display with the stronger opposite verdict
-        _display_tier    = _opp_tier
-        _display_adj     = _opp_adj
-        _display_side    = _opp_side
-        _auto_flipped    = True
-    else:
-        _display_tier    = tier
-        _display_adj     = adjusted
-        _display_side    = side
 
 
     venue_adj_labels = {
