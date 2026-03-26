@@ -1478,23 +1478,21 @@ def detect_usage_spike(
 
     player_norm = normalize_name(player_name)
 
-    # Identify key teammates (>22 min/game) excluding the player themselves
-    key_teammates = [
-        (name, mins)
-        for name, mins in teammate_mins.items()
-        if mins >= 22 and name != player_norm
-    ]
+    # Top 5 key teammates by minutes (>22 mpg), excluding the player
+    key_teammates = sorted(
+        [(name, mins) for name, mins in teammate_mins.items()
+         if mins >= 22 and name != player_norm],
+        key=lambda x: -x[1]
+    )[:5]
 
     if not key_teammates:
         return "Neutral", [], ""
 
-    # Check injury status for each key teammate — reuse the working function
-    key_absent = []
-    total_redistributed = 0.0
+    # Pre-fetch all ESPN players once
+    all_players = espn_get_all_players()
 
-    for norm_name, mins in key_teammates:
-        # Find display name from ESPN players list
-        all_players = espn_get_all_players()
+    def _check_teammate(norm_name_mins):
+        norm_name, mins = norm_name_mins
         display_name = next(
             (p["full_name"] for p in all_players
              if normalize_name(p["full_name"]) == norm_name
@@ -1502,14 +1500,28 @@ def detect_usage_spike(
             norm_name.title()
         )
         status, reason = get_player_injury_status(display_name)
-        if status.upper() in ("OUT", "DOUBTFUL"):
-            key_absent.append({
-                "name":    display_name,
-                "status":  status,
-                "minutes": mins,
-                "reason":  reason.replace("Injury/Illness - ", "").strip(),
-            })
-            total_redistributed += mins * 0.4
+        return display_name, status, reason, mins
+
+    # Check all key teammates in parallel
+    import concurrent.futures
+    key_absent = []
+    total_redistributed = 0.0
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        futures = {executor.submit(_check_teammate, t): t for t in key_teammates}
+        for future in concurrent.futures.as_completed(futures, timeout=6):
+            try:
+                display_name, status, reason, mins = future.result()
+                if status.upper() in ("OUT", "DOUBTFUL"):
+                    key_absent.append({
+                        "name":    display_name,
+                        "status":  status,
+                        "minutes": mins,
+                        "reason":  reason.replace("Injury/Illness - ", "").strip(),
+                    })
+                    total_redistributed += mins * 0.4
+            except Exception:
+                pass
 
     if not key_absent:
         return "Neutral", [], ""
