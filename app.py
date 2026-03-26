@@ -118,10 +118,41 @@ html, body, [class*="css"] {
     animation: pulse-glow 3s ease-in-out infinite;
 }
 
-/* ── Mode radio ── */
-div[data-testid="stHorizontalBlock"] > div[data-testid="stRadio"] {
-    background: var(--bg2); border: 1px solid var(--border);
-    border-radius: 12px; padding: 3px;
+/* ── Pill tab switcher ── */
+/* Active tab = orange filled (primary button) */
+/* Inactive tab = ghost (secondary button) */
+button[data-testid="baseButton-secondary"][key="tab_player"],
+button[data-testid="baseButton-secondary"][key="tab_scanner"] {
+    background: transparent !important;
+    color: var(--muted2) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 999px !important;
+    font-size: 0.78rem !important;
+    font-weight: 600 !important;
+    padding: 0.4rem 1.1rem !important;
+    letter-spacing: 0.02em !important;
+    width: 100% !important;
+    transition: all 0.2s !important;
+}
+button[data-testid="baseButton-secondary"][key="tab_player"]:hover,
+button[data-testid="baseButton-secondary"][key="tab_scanner"]:hover {
+    background: var(--border) !important;
+    color: var(--text) !important;
+    transform: none !important;
+    box-shadow: none !important;
+}
+/* Active state via primary type */
+button[data-testid="baseButton-primary"][key="tab_player"],
+button[data-testid="baseButton-primary"][key="tab_scanner"] {
+    background: linear-gradient(135deg, #ea580c, #f97316) !important;
+    color: white !important;
+    border: none !important;
+    border-radius: 999px !important;
+    font-size: 0.78rem !important;
+    font-weight: 700 !important;
+    padding: 0.4rem 1.1rem !important;
+    width: 100% !important;
+    box-shadow: 0 2px 10px rgba(249,115,22,0.3) !important;
 }
 
 /* ── Stat cards ── */
@@ -464,7 +495,7 @@ hr { border-color: var(--border) !important; }
 
 for key, default in [
     ("logs", None), ("ai_analysis", None), ("ai_error", None),
-    ("defense_data", None), ("tracker", []),
+    ("defense_data", None), ("tracker", []), ("active_tab", "player"),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -1791,7 +1822,19 @@ def generate_ai_analysis(prompt: str) -> str:
 st.markdown("""
 <div class="pl-header">
     <div class="pl-logo-wrap">
-        <div class="pl-icon">🏀</div>
+        <div class="pl-icon">
+            <svg width="22" height="22" viewBox="0 0 22 22" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <!-- Lens circle -->
+                <circle cx="9" cy="9" r="7" stroke="white" stroke-width="2" fill="none" opacity="0.95"/>
+                <!-- Crosshair lines inside lens -->
+                <line x1="9" y1="3" x2="9" y2="15" stroke="white" stroke-width="1.2" opacity="0.7"/>
+                <line x1="3" y1="9" x2="15" y2="9" stroke="white" stroke-width="1.2" opacity="0.7"/>
+                <!-- Diagonal handle -->
+                <line x1="14" y1="14" x2="20" y2="20" stroke="white" stroke-width="2.2" stroke-linecap="round" opacity="0.95"/>
+                <!-- Center dot -->
+                <circle cx="9" cy="9" r="1.5" fill="white" opacity="0.9"/>
+            </svg>
+        </div>
         <div>
             <div class="pl-logo">PropLens</div>
             <div class="pl-sub">NBA Points Prop Analyzer</div>
@@ -1879,10 +1922,26 @@ for _k in ["scanner_results", "scanner_error"]:
     if _k not in st.session_state:
         st.session_state[_k] = None
 
-_mode = st.radio(
-    "mode", ["🏀  Player Prop", "🎯  Slate Scanner"],
-    horizontal=True, label_visibility="collapsed", key="app_mode"
-)
+# ── Pill tab switcher ─────────────────────────────────────
+_tab_c1, _tab_c2, _tab_c3 = st.columns([1, 1, 2])
+with _tab_c1:
+    if st.button(
+        "Player Prop",
+        key="tab_player",
+        type="primary" if st.session_state.active_tab == "player" else "secondary",
+    ):
+        st.session_state.active_tab = "player"
+        st.rerun()
+with _tab_c2:
+    if st.button(
+        "Slate Scanner",
+        key="tab_scanner",
+        type="primary" if st.session_state.active_tab == "scanner" else "secondary",
+    ):
+        st.session_state.active_tab = "scanner"
+        st.rerun()
+
+_mode = "🎯  Slate Scanner" if st.session_state.active_tab == "scanner" else "🏀  Player Prop"
 st.markdown("<div style='height:0.25rem'></div>", unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
