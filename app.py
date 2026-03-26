@@ -1224,12 +1224,27 @@ def get_player_injury_status(player_name: str) -> Tuple[str, str]:
 
 # ── Usage spike detector ─────────────────────────────────
 
+# ESPN uses non-standard abbreviations for some teams — normalize them
+_ESPN_ABBR_MAP = {
+    "GS":  "GSW", "SA":  "SAS", "NY":  "NYK", "NO":  "NOP",
+    "OKC": "OKC", "UTA": "UTA", "PHX": "PHX", "LAC": "LAC",
+    "LAL": "LAL", "BKN": "BKN", "CHA": "CHA", "WSH": "WAS",
+    "MEM": "MEM", "MIN": "MIN",
+}
+
+def _norm_team_abbr(abbr: str) -> str:
+    """Normalize ESPN team abbreviation to standard 3-letter NBA abbr."""
+    return _ESPN_ABBR_MAP.get(abbr, abbr)
+
+
 @st.cache_data(ttl=300)
 def get_team_injury_report(team_abbr: str) -> list:
     """
     Fetch all injured players for a given team from NBA official report.
     Returns list of dicts: {name, status, reason}
     """
+    # Normalize incoming abbr
+    team_abbr = _norm_team_abbr(team_abbr)
     results = []
 
     # Source 0: ESPN direct injuries endpoint — most reliable
@@ -1238,7 +1253,7 @@ def get_team_injury_report(team_abbr: str) -> list:
             f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/injuries"
         )
         for team_entry in inj_data.get("injuries", []):
-            abbr = team_entry.get("team", {}).get("abbreviation", "")
+            abbr = _norm_team_abbr(team_entry.get("team", {}).get("abbreviation", ""))
             if abbr != team_abbr:
                 continue
             for item in team_entry.get("injuries", []):
@@ -1340,14 +1355,13 @@ def get_team_injury_report(team_abbr: str) -> list:
 def get_teammate_minutes(team_abbr: str, season: str = "2025-26") -> dict:
     """
     Returns dict of {normalized_player_name: avg_minutes} for all players on a team.
-    Uses ESPN team stats endpoint — reliable, no API key needed.
-    Falls back to nba_api if ESPN fails.
+    Uses ESPN athlete stats endpoint which returns per-game averages.
     """
+    team_abbr = _norm_team_abbr(team_abbr)
     result = {}
 
-    # Source 1: ESPN team roster with stats
     try:
-        # Get team ID
+        # Get team ID using normalized abbr
         teams_data = espn_get(f"{ESPN_SITE}/teams")
         teams_list = (
             teams_data.get("sports", [{}])[0].get("leagues", [{}])[0].get("teams", [])
@@ -1356,44 +1370,71 @@ def get_teammate_minutes(team_abbr: str, season: str = "2025-26") -> dict:
         team_id = None
         for t in teams_list:
             team = t.get("team", t)
-            if team.get("abbreviation", "") == team_abbr:
+            # Match against both ESPN abbr and normalized abbr
+            t_abbr = team.get("abbreviation", "")
+            if t_abbr == team_abbr or _norm_team_abbr(t_abbr) == team_abbr:
                 team_id = team.get("id")
                 break
 
         if team_id:
-            # ESPN athlete stats endpoint
-            stats_data = espn_get(
+            # ESPN athlete stats — includes season averages per player
+            url = (
                 f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba"
-                f"/teams/{team_id}/roster"
+                f"/teams/{team_id}/athletes?season=2026"
             )
-            for athlete in stats_data.get("athletes", []):
-                for item in (athlete.get("items") or [athlete]):
-                    name  = item.get("displayName", "")
-                    stats = item.get("statistics", {})
-                    # Try to get MIN from stats categories
-                    cats  = stats.get("splits", {}).get("categories", []) or []
-                    for cat in cats:
-                        for s in cat.get("stats", []):
-                            if s.get("name", "").lower() in ("minutespergame", "min", "minutes"):
-                                val = float(s.get("value", 0))
-                                if val > 0 and name:
-                                    result[normalize_name(name)] = round(val, 1)
+            athletes_data = espn_get(url)
+            for item in athletes_data.get("athletes", []):
+                name  = item.get("displayName", "")
+                stats = item.get("stats", [])
+                # Stats array: index 9 is usually MIN in ESPN's athlete endpoint
+                # Try to find by label first
+                labels = athletes_data.get("labels", [])
+                if labels and "MIN" in labels:
+                    idx = labels.index("MIN")
+                    if idx < len(stats):
+                        val = float(stats[idx] or 0)
+                        if val > 0 and name:
+                            result[normalize_name(name)] = round(val, 1)
+                elif len(stats) > 9:
+                    # Fallback: index 9 is typically MIN
+                    try:
+                        val = float(stats[9] or 0)
+                        if 5 < val < 48 and name:  # sanity check range
+                            result[normalize_name(name)] = round(val, 1)
+                    except Exception:
+                        pass
     except Exception:
         pass
 
-    # Source 2: nba_api fallback
+    # Fallback: use nba_api player game logs for each player on the team
     if not result:
         try:
-            from nba_api.stats.endpoints import leaguedashplayerstats
-            df = leaguedashplayerstats.LeagueDashPlayerStats(
-                season=season, timeout=30,
-            ).get_data_frames()[0]
-            team_df = df[df["TEAM_ABBREVIATION"] == team_abbr]
-            for _, row in team_df.iterrows():
-                name = str(row.get("PLAYER_NAME", ""))
-                mins = float(row.get("MIN", 0))
-                if name and mins > 0:
-                    result[normalize_name(name)] = round(mins, 1)
+            from nba_api.stats.static import players as nba_static
+            from nba_api.stats.endpoints import commonteamroster
+            # Find team ID in nba_api
+            from nba_api.stats.static import teams as nba_teams
+            nba_team = next(
+                (t for t in nba_teams.get_teams()
+                 if t.get("abbreviation") == team_abbr),
+                None
+            )
+            if nba_team:
+                roster_df = commonteamroster.CommonTeamRoster(
+                    team_id=nba_team["id"], season=season, timeout=30,
+                ).get_data_frames()[0]
+                for _, row in roster_df.iterrows():
+                    pid  = row.get("PLAYER_ID")
+                    name = str(row.get("PLAYER", ""))
+                    if pid and name:
+                        try:
+                            logs = playergamelog.PlayerGameLog(
+                                player_id=pid, season=season, timeout=15,
+                            ).get_data_frames()[0]
+                            mins = pd.to_numeric(logs["MIN"], errors="coerce").dropna().mean()
+                            if mins > 0:
+                                result[normalize_name(name)] = round(float(mins), 1)
+                        except Exception:
+                            pass
         except Exception:
             pass
 
@@ -1408,15 +1449,10 @@ def detect_usage_spike(
     """
     Checks if key teammates are out tonight, which would redistribute
     minutes/usage to the player being analyzed.
-
-    Returns:
-      (signal, absent_key_players, alert_html)
-      signal: "Boost", "Neutral"
-      absent_key_players: list of {name, status, minutes}
-      alert_html: HTML string for display
     """
     if not player_team:
         return "Neutral", [], ""
+    player_team = _norm_team_abbr(player_team)
 
     injured = get_team_injury_report(player_team)
     if not injured:
