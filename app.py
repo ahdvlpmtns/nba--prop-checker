@@ -2125,12 +2125,42 @@ if st.session_state.logs is not None:
     line_diff = sample_avg_pts - line
     tier      = get_confidence_tier(adjusted, line_diff, consistency, side)
 
+    # Also compute the opposite side — if it's stronger, flag it
+    _opp_side    = "Under" if side == "Over" else "Over"
+    _opp_wb      = weighted_hit_rate(logs, line, _opp_side)
+    _opp_ctx     = dict(context)
+    _opp_adj     = apply_adjustments(_opp_wb, _opp_ctx, _opp_side)
+    _opp_tier    = get_confidence_tier(_opp_adj, line_diff, consistency, _opp_side)
+    _opp_strong  = _opp_tier in ("Strong Over", "Strong Under")
+    _selected_pass = tier == "Pass"
+
     tier_css   = {"Strong Over": "green", "Lean Over": "yellow", "Lean Under": "orange", "Strong Under": "red", "Pass": "gray"}
     tier_emoji = {"Strong Over": "🟢", "Lean Over": "🟡", "Lean Under": "🟠", "Strong Under": "🔴", "Pass": "⚪"}
     css = tier_css[tier]
 
     # ── Verdict banner ────────────────────────
     st.markdown("<div class='section-header'>Verdict</div>", unsafe_allow_html=True)
+
+    # Alert when the opposite side has a stronger signal
+    if _opp_strong and (_selected_pass or "Lean" in tier):
+        _opp_emoji = {"Strong Over":"🟢","Strong Under":"🔴","Lean Over":"🟡","Lean Under":"🟠"}.get(_opp_tier,"⚪")
+        st.markdown(f"""
+        <div style='background:#1c1005;border:1px solid #854d0e;border-radius:12px;
+                    padding:0.9rem 1.2rem;margin-bottom:0.75rem;display:flex;
+                    align-items:center;gap:12px;'>
+            <div style='font-size:1.4rem;'>⚠️</div>
+            <div>
+                <div style='font-family:DM Mono;font-size:0.65rem;color:#854d0e;
+                            letter-spacing:0.12em;text-transform:uppercase;margin-bottom:3px;'>
+                    Stronger signal on opposite side
+                </div>
+                <div style='font-size:0.9rem;color:#f1f5f9;font-weight:700;'>
+                    {_opp_emoji} {_opp_tier} — consider betting the {_opp_side} instead
+                    <span style='font-family:DM Mono;font-size:0.7rem;color:#64748b;
+                                font-weight:400;margin-left:8px;'>({_opp_adj:.0%} adjusted)</span>
+                </div>
+            </div>
+        </div>""", unsafe_allow_html=True)
 
 
     venue_adj_labels = {
@@ -2299,6 +2329,20 @@ if st.session_state.logs is not None:
         else:
             cons_note = f"Consistency {consistency:.0%} · No override needed"
 
+        # Side-aware threshold labels and edge check for debugger
+        if side == "Over":
+            _strong_label = "Strong Over"
+            _lean_label   = "Lean Over"
+            _strong_thresh = "≥ 64% AND edge ≥ +1.5"
+            _lean_thresh   = "≥ 55% AND edge > 0"
+            _edge_ok = line_diff >= 1.5
+        else:
+            _strong_label = "Strong Under"
+            _lean_label   = "Lean Under"
+            _strong_thresh = "≥ 64% AND edge ≤ -1.5"
+            _lean_thresh   = "≥ 55% AND edge < 0"
+            _edge_ok = line_diff <= -1.5
+
         st.markdown(f"""
         <div style='color:#f97316; font-size:0.65rem; letter-spacing:0.15em; text-transform:uppercase;
                     border-bottom:1px solid #1a2333; padding-bottom:4px; margin:14px 0 10px 0;'>
@@ -2308,14 +2352,14 @@ if st.session_state.logs is not None:
             <tr>
                 <td style='padding:3px 8px 3px 0; color:#475569;'>Adjusted probability</td>
                 <td style='color:#e2e8f0; font-weight:700;'>{adjusted:.1%}</td>
-                <td style='padding:3px 8px; color:#475569;'>Threshold for Strong Over</td>
-                <td style='color:#94a3b8;'>≥ 64% AND edge ≥ +1.5</td>
+                <td style='padding:3px 8px; color:#475569;'>Threshold for {_strong_label}</td>
+                <td style='color:#94a3b8;'>{_strong_thresh}</td>
             </tr>
             <tr>
                 <td style='padding:3px 8px 3px 0; color:#475569;'>Edge vs line</td>
-                <td style='color:{"#22c55e" if line_diff>=1.5 else "#ef4444"};'>{line_diff:+.1f} pts {"✓" if abs(line_diff)>=1.5 else "✗ too small"}</td>
-                <td style='padding:3px 8px; color:#475569;'>Threshold for Lean Over</td>
-                <td style='color:#94a3b8;'>≥ 55% AND edge > 0</td>
+                <td style='color:{"#22c55e" if _edge_ok else "#ef4444"};'>{line_diff:+.1f} pts {"✓" if abs(line_diff)>=1.5 else "✗ too small"}</td>
+                <td style='padding:3px 8px; color:#475569;'>Threshold for {_lean_label}</td>
+                <td style='color:#94a3b8;'>{_lean_thresh}</td>
             </tr>
             <tr>
                 <td style='padding:3px 8px 3px 0; color:#475569;'>Consistency check</td>
