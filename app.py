@@ -310,6 +310,23 @@ div[data-testid="stSelectbox"] > div > div {
     border-radius: 10px !important;
     border-color: var(--border) !important;
     background: var(--bg2) !important;
+    color: var(--text) !important;
+}
+div[data-testid="stSelectbox"] > div > div > div {
+    color: var(--text) !important;
+}
+div[data-testid="stSelectbox"] span,
+div[data-testid="stSelectbox"] p {
+    color: var(--text) !important;
+}
+div[data-testid="stNumberInput"] input {
+    color: var(--text) !important;
+}
+div[data-testid="stTextInput"] input {
+    color: var(--text) !important;
+    background: var(--bg2) !important;
+    border-color: var(--border) !important;
+    border-radius: 10px !important;
 }
 
 /* ── Expanders ── */
