@@ -1247,19 +1247,39 @@ def get_team_injury_report(team_abbr: str) -> list:
     team_abbr = _norm_team_abbr(team_abbr)
     results = []
 
-    # Source 0: ESPN direct injuries endpoint — most reliable
-    try:
-        inj_data = espn_get(
-            f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/injuries"
-        )
-        for team_entry in inj_data.get("injuries", []):
-            abbr = _norm_team_abbr(team_entry.get("team", {}).get("abbreviation", ""))
-            if abbr != team_abbr:
-                continue
-            for item in team_entry.get("injuries", []):
-                ath    = item.get("athlete", {})
-                name   = ath.get("displayName", "")
-                status = item.get("status", "")
+    # Source 0: ESPN injuries endpoint — try multiple URL patterns
+    for _inj_url in [
+        f"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/injuries",
+        f"https://sports.core.api.espn.com/v2/sports/basketball/leagues/nba/injuries?limit=300",
+    ]:
+        try:
+            inj_data = espn_get(_inj_url)
+            # Pattern 1: {injuries: [{team: {abbreviation}, injuries: [...]}]}
+            for team_entry in inj_data.get("injuries", []):
+                raw_abbr  = team_entry.get("team", {}).get("abbreviation", "")
+                norm_abbr = _norm_team_abbr(raw_abbr)
+                if norm_abbr != team_abbr and raw_abbr != team_abbr:
+                    continue
+                for item in team_entry.get("injuries", []):
+                    ath    = item.get("athlete", {})
+                    name   = ath.get("displayName", "")
+                    status = item.get("status", item.get("type", {}).get("description", ""))
+                    detail = item.get("shortComment", item.get("longComment", ""))
+                    if name and status:
+                        results.append({
+                            "name":   name,
+                            "status": status,
+                            "reason": detail,
+                        })
+            # Pattern 2: flat items list
+            for item in inj_data.get("items", []):
+                ath      = item.get("athlete", {})
+                name     = ath.get("displayName", "")
+                team_ref = item.get("team", {})
+                raw_abbr = team_ref.get("abbreviation", "")
+                if _norm_team_abbr(raw_abbr) != team_abbr and raw_abbr != team_abbr:
+                    continue
+                status = item.get("status", item.get("type", {}).get("description", ""))
                 detail = item.get("shortComment", item.get("longComment", ""))
                 if name and status:
                     results.append({
@@ -1267,10 +1287,10 @@ def get_team_injury_report(team_abbr: str) -> list:
                         "status": status,
                         "reason": detail,
                     })
-        if results:
-            return results
-    except Exception:
-        pass
+            if results:
+                return results
+        except Exception:
+            continue
 
     # Source 1: nbainjuries package
     try:
@@ -1455,8 +1475,44 @@ def detect_usage_spike(
     player_team = _norm_team_abbr(player_team)
 
     injured = get_team_injury_report(player_team)
+    
+    # Fallback: try nbainjuries directly if ESPN failed
     if not injured:
-        # Show debug in sidebar if no injury data found
+        try:
+            from nbainjuries import injury as nba_inj
+            from datetime import datetime
+            import pytz
+            et = pytz.timezone("America/New_York")
+            now_et = datetime.now(et)
+            report = nba_inj.get_reportdata(now_et)
+            _team_map = {
+                "Atlanta Hawks":"ATL","Boston Celtics":"BOS","Brooklyn Nets":"BKN",
+                "Charlotte Hornets":"CHA","Chicago Bulls":"CHI","Cleveland Cavaliers":"CLE",
+                "Dallas Mavericks":"DAL","Denver Nuggets":"DEN","Detroit Pistons":"DET",
+                "Golden State Warriors":"GSW","Houston Rockets":"HOU","Indiana Pacers":"IND",
+                "LA Clippers":"LAC","Los Angeles Clippers":"LAC","Los Angeles Lakers":"LAL",
+                "Memphis Grizzlies":"MEM","Miami Heat":"MIA","Milwaukee Bucks":"MIL",
+                "Minnesota Timberwolves":"MIN","New Orleans Pelicans":"NOP","New York Knicks":"NYK",
+                "Oklahoma City Thunder":"OKC","Orlando Magic":"ORL","Philadelphia 76ers":"PHI",
+                "Phoenix Suns":"PHX","Portland Trail Blazers":"POR","Sacramento Kings":"SAC",
+                "San Antonio Spurs":"SAS","Toronto Raptors":"TOR","Utah Jazz":"UTA",
+                "Washington Wizards":"WAS",
+            }
+            if report:
+                for entry in report:
+                    if _team_map.get(entry.get("Team","")) == player_team:
+                        raw = entry.get("Player Name","")
+                        parts = raw.split(", ")
+                        name = f"{parts[1]} {parts[0]}" if len(parts)==2 else raw
+                        injured.append({
+                            "name":   name,
+                            "status": entry.get("Current Status","Unknown"),
+                            "reason": entry.get("Reason",""),
+                        })
+        except Exception:
+            pass
+
+    if not injured:
         return "Neutral", [], ""
 
     # Get teammate minutes to assess importance
@@ -2717,7 +2773,7 @@ if not selected_player:
 nba_id, full_name = nba_find_player(selected_player)
 # ESPN player lookup for team abbr (already loaded in roster)
 espn_player = next((p for p in espn_get_all_players() if normalize_name(p["full_name"]) == normalize_name(selected_player)), None)
-player_team = espn_player["team_abbr"] if espn_player else None
+player_team = _norm_team_abbr(espn_player["team_abbr"]) if espn_player else None
 player_id   = nba_id
 
 if player_id is None:
