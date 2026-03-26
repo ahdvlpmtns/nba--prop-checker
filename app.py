@@ -2064,9 +2064,7 @@ if _mode == "🎯  Slate Scanner":
                     </div>
                 </div>""", unsafe_allow_html=True)
 
-            _edf = pd.DataFrame([{k: v for k, v in r.items() if not k.startswith("_")} for r in _show])
-            st.download_button("⬇  Export CSV", data=_edf.to_csv(index=False).encode(),
-                               file_name="slate_scanner.csv", mime="text/csv")
+
 
     st.stop()  # prevents player prop section rendering in scanner mode
 
@@ -3235,44 +3233,28 @@ if st.session_state.logs is not None:
                         st.session_state.ai_error = repr(e)
                         st.session_state.ai_analysis = None
 
-    # ── Export + Tracker ─────────────────────
-    st.markdown("<div class='section-header'>Export</div>", unsafe_allow_html=True)
-    ex1, ex2 = st.columns([1, 1])
-    with ex1:
-        out = logs.copy()
-        for i, (col, val) in enumerate([
-            ("PLAYER", full_name), ("LINE", line), ("SIDE", side),
-            ("OPPONENT", opp_abbr or ""), ("OPP_PTS_ALLOWED", opp_pts or ""),
-            ("MATCHUP_QUALITY", matchup_sel), ("VENUE", tonight_venue or ""),
-            ("VENUE_ADJ", venue_adj), ("RAW_HIT_RATE", baseline),
-            ("WEIGHTED_HIT_RATE", weighted_base), ("ADJUSTED_RATE", adjusted),
-            ("CONSISTENCY", consistency), ("TIER", tier),
-        ]):
-            out.insert(i, col, val)
-        csv = out.to_csv(index=False).encode("utf-8")
-        st.download_button("⬇  Download CSV", data=csv, file_name="prop_report.csv", mime="text/csv")
-    with ex2:
-        if st.button("➕  Add to Prop Tracker"):
-            entry = {
-                "Player":      full_name,
-                "Line":        f"{line} {side}",
-                "Opponent":    opp_abbr or "—",
-                "Matchup":     matchup_sel,
-                "Venue":       f"{tonight_venue or '?'} ({venue_adj})",
-                "Avg PTS":     round(sample_avg_pts, 1),
-                "Hit Rate":    f"{weighted_base:.0%}",
-                "Adjusted":    f"{adjusted:.0%}",
-                "Consistency": f"{consistency:.0%}",
-                "Verdict":     tier,
-            }
-            existing = [i for i, e in enumerate(st.session_state.tracker)
-                        if e["Player"] == full_name and e["Line"] == f"{line} {side}"]
-            if existing:
-                st.session_state.tracker[existing[0]] = entry
-                st.success(f"Updated {full_name} in tracker.")
-            else:
-                st.session_state.tracker.append(entry)
-                st.success(f"Added {full_name} to tracker!")
+    # ── Add to Tracker ───────────────────────
+    if st.button("➕  Add to Prop Tracker"):
+        entry = {
+            "Player":      full_name,
+            "Line":        f"{line} {side}",
+            "Opponent":    opp_abbr or "—",
+            "Matchup":     matchup_sel,
+            "Venue":       f"{tonight_venue or '?'} ({venue_adj})",
+            "Avg PTS":     round(sample_avg_pts, 1),
+            "Hit Rate":    f"{weighted_base:.0%}",
+            "Adjusted":    f"{adjusted:.0%}",
+            "Consistency": f"{consistency:.0%}",
+            "Verdict":     tier,
+        }
+        existing = [i for i, e in enumerate(st.session_state.tracker)
+                    if e["Player"] == full_name and e["Line"] == f"{line} {side}"]
+        if existing:
+            st.session_state.tracker[existing[0]] = entry
+            st.success(f"Updated {full_name} in tracker.")
+        else:
+            st.session_state.tracker.append(entry)
+            st.success(f"Added {full_name} to tracker!")
 
 # ─────────────────────────────────────────────
 # Prop Tracker
@@ -3327,8 +3309,6 @@ else:
     tc1, tc2 = st.columns([1, 1])
     with tc1:
         tracker_df  = pd.DataFrame(st.session_state.tracker)
-        tracker_csv = tracker_df.to_csv(index=False).encode("utf-8")
-        st.download_button("⬇  Export Tracker CSV", data=tracker_csv, file_name="prop_tracker.csv", mime="text/csv")
     with tc2:
         if st.button("🗑️  Clear All"):
             st.session_state.tracker = []
