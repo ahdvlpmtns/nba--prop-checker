@@ -1906,20 +1906,20 @@ if _mode == "📊  Backtest":
         else:
             with st.spinner(f"Running model on {len(_bt_logs)} games..."):
                 _bt_df = run_backtest(_bt_logs, _bt_line, _bt_side, _bt_window)
-                st.session_state.bt_results     = _bt_df
-                st.session_state.bt_player_name = _bt_fname
-                st.session_state.bt_line        = _bt_line
-                st.session_state.bt_side        = _bt_side
-                st.session_state.bt_season      = _bt_season
+                st.session_state.bt_results      = _bt_df
+                st.session_state.bt_player_name  = _bt_fname
+                st.session_state.bt_line_result  = _bt_line
+                st.session_state.bt_side_result  = _bt_side
+                st.session_state.bt_season_result= _bt_season
 
     if st.session_state.bt_results is not None and not st.session_state.bt_results.empty:
         _bt_df   = st.session_state.bt_results
         _bt_fname = st.session_state.bt_player_name
-        _bt_line  = st.session_state.get("bt_line", _bt_line)
-        _bt_side  = st.session_state.get("bt_side", _bt_side)
+        _bt_line  = st.session_state.get("bt_line_result", _bt_line)
+        _bt_side  = st.session_state.get("bt_side_result", _bt_side)
         _summary  = backtest_summary(_bt_df)
 
-        st.markdown(f"<div class='section-header'>{_bt_fname} · {_bt_line} {_bt_side} · {st.session_state.get('bt_season','')}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='section-header'>{_bt_fname} · {_bt_line} {_bt_side} · {st.session_state.get('bt_season_result','')}</div>", unsafe_allow_html=True)
 
         # Summary cards
         _tier_css   = {"Strong Over":"green","Lean Over":"yellow","Lean Under":"orange",
@@ -1973,7 +1973,7 @@ if _mode == "📊  Backtest":
         st.download_button(
             "⬇  Export Backtest CSV",
             data=_display_df.to_csv(index=False).encode(),
-            file_name=f"backtest_{_bt_fname.replace(' ','_')}_{_bt_line}_{_bt_side}.csv",
+            file_name=f"backtest_{_bt_fname.replace(' ','_')}_{st.session_state.get('bt_line_result','')}_{st.session_state.get('bt_side_result','')}.csv",
             mime="text/csv"
         )
 
