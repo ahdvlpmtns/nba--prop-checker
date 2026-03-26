@@ -2136,31 +2136,23 @@ if st.session_state.logs is not None:
 
     tier_css   = {"Strong Over": "green", "Lean Over": "yellow", "Lean Under": "orange", "Strong Under": "red", "Pass": "gray"}
     tier_emoji = {"Strong Over": "🟢", "Lean Over": "🟡", "Lean Under": "🟠", "Strong Under": "🔴", "Pass": "⚪"}
-    css = tier_css[tier]
+    css = tier_css[_display_tier]
 
     # ── Verdict banner ────────────────────────
     st.markdown("<div class='section-header'>Verdict</div>", unsafe_allow_html=True)
 
-    # Alert when the opposite side has a stronger signal
+    # Auto-flip: if the opposite side has a stronger verdict, show that instead
+    _auto_flipped = False
     if _opp_strong and (_selected_pass or "Lean" in tier):
-        _opp_emoji = {"Strong Over":"🟢","Strong Under":"🔴","Lean Over":"🟡","Lean Under":"🟠"}.get(_opp_tier,"⚪")
-        st.markdown(f"""
-        <div style='background:#1c1005;border:1px solid #854d0e;border-radius:12px;
-                    padding:0.9rem 1.2rem;margin-bottom:0.75rem;display:flex;
-                    align-items:center;gap:12px;'>
-            <div style='font-size:1.4rem;'>⚠️</div>
-            <div>
-                <div style='font-family:DM Mono;font-size:0.65rem;color:#854d0e;
-                            letter-spacing:0.12em;text-transform:uppercase;margin-bottom:3px;'>
-                    Stronger signal on opposite side
-                </div>
-                <div style='font-size:0.9rem;color:#f1f5f9;font-weight:700;'>
-                    {_opp_emoji} {_opp_tier} — consider betting the {_opp_side} instead
-                    <span style='font-family:DM Mono;font-size:0.7rem;color:#64748b;
-                                font-weight:400;margin-left:8px;'>({_opp_adj:.0%} adjusted)</span>
-                </div>
-            </div>
-        </div>""", unsafe_allow_html=True)
+        # Override display with the stronger opposite verdict
+        _display_tier    = _opp_tier
+        _display_adj     = _opp_adj
+        _display_side    = _opp_side
+        _auto_flipped    = True
+    else:
+        _display_tier    = tier
+        _display_adj     = adjusted
+        _display_side    = side
 
 
     venue_adj_labels = {
@@ -2175,17 +2167,26 @@ if st.session_state.logs is not None:
         f"padding:3px 10px; border-radius:999px;'>{venue_label_text}</span>"
     ) if venue_adj != "Neutral" else ""
 
+    # Flip note shown when auto-flipped to opposite side
+    _flip_note = (
+        f"<div style='font-family:DM Mono;font-size:0.68rem;color:#854d0e;"
+        f"background:#1c1005;border:1px solid #854d0e;border-radius:6px;"
+        f"padding:3px 10px;display:inline-block;margin-top:6px;'>"
+        f"⚠️ You selected {side} — data favors the {_display_side}</div>"
+    ) if _auto_flipped else ""
+
     st.markdown(f"""
     <div class='verdict-banner {css}'>
         <div>
-            <div class='verdict-label'>{full_name} · {line} pts · {side}</div>
-            <div class='verdict-tier {css}'>{tier_emoji[tier]} {tier}</div>
+            <div class='verdict-label'>{full_name} · {line} pts · {_display_side}</div>
+            <div class='verdict-tier {css}'>{tier_emoji[_display_tier]} {_display_tier}</div>
+            {_flip_note}
             <div style='margin-top:6px;'>{venue_badge_html}</div>
         </div>
         <div style='display:flex; gap:2rem; flex-wrap:wrap;'>
             <div>
                 <div class='verdict-label'>Adjusted Hit Rate</div>
-                <div style='font-size:1.4rem; font-weight:800; color:#f1f5f9;'>{adjusted:.0%}</div>
+                <div style='font-size:1.4rem; font-weight:800; color:#f1f5f9;'>{_display_adj:.0%}</div>
             </div>
             <div>
                 <div class='verdict-label'>Edge vs Line</div>
