@@ -2229,7 +2229,9 @@ if st.session_state.logs is not None:
     _bar_style      = f"background:{_bar_color};height:6px;width:{_bar_w}%;border-radius:999px;box-shadow:0 0 6px {_bar_color}55;"
 
     # Ruler pip position: adjusted % mapped to 0-100 scale
-    _pip = max(2, min(98, int(_display_adj * 100)))
+    # For Under bets, mirror the position — high adjusted% means strong Under (left side)
+    _ruler_adj = (1.0 - _display_adj) if _display_side == 'Under' else _display_adj
+    _pip = max(2, min(98, int(_ruler_adj * 100)))
     _pip_style = (
         f"position:absolute;top:1px;left:{_pip}%;"
         f"transform:translateX(-50%);"
