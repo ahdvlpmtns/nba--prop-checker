@@ -978,6 +978,41 @@ def get_player_injury_status(player_name: str) -> Tuple[str, str]:
     except Exception:
         pass
 
+    # ── Source 3: ESPN team-specific injuries ──
+    # More reliable — fetches per team roster injury data
+    try:
+        # Find the player's ESPN team first
+        all_players = espn_get_all_players()
+        ep = next((p for p in all_players if normalize_name(p["full_name"]) == norm), None)
+        if ep:
+            team_id = None
+            # Get team ID from team abbr
+            teams_data = espn_get(f"{ESPN_SITE}/teams")
+            teams_list = (
+                teams_data.get("sports", [{}])[0].get("leagues", [{}])[0].get("teams", [])
+                or teams_data.get("teams", [])
+            )
+            for t in teams_list:
+                team = t.get("team", t)
+                if team.get("abbreviation", "") == ep["team_abbr"]:
+                    team_id = team.get("id")
+                    break
+            if team_id:
+                roster = espn_get(f"{ESPN_SITE}/teams/{team_id}/roster")
+                for athlete in roster.get("athletes", []):
+                    for item in (athlete.get("items") or [athlete]):
+                        aname = normalize_name(item.get("displayName", ""))
+                        if norm in aname or aname in norm:
+                            injuries = item.get("injuries", [])
+                            if injuries:
+                                inj = injuries[0]
+                                status = inj.get("status", "Unknown")
+                                detail = inj.get("shortComment", inj.get("longComment", ""))
+                                if status and status != "Active":
+                                    return status, detail
+    except Exception:
+        pass
+
     return "Active", ""
 
 
@@ -1219,6 +1254,161 @@ def get_confidence_tier(adjusted: float, line_diff: float, consistency: float, s
 
     return tier
 
+# ─────────────────────────────────────────────
+# Backtesting engine
+# ─────────────────────────────────────────────
+
+@st.cache_data(ttl=3600)
+def nba_get_full_season_logs(player_id: int, season: str) -> pd.DataFrame:
+    """Fetch ALL games for a season (not capped at N)."""
+    empty = pd.DataFrame(columns=["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A"])
+    try:
+        from nba_api.library.http import NBAStatsHTTP
+        NBAStatsHTTP.nba_response.headers = {
+            "Host": "stats.nba.com",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "x-nba-stats-origin": "stats",
+            "x-nba-stats-token": "true",
+            "Referer": "https://www.nba.com/",
+            "Origin": "https://www.nba.com",
+        }
+    except Exception:
+        pass
+    for attempt in range(3):
+        try:
+            df = playergamelog.PlayerGameLog(
+                player_id=player_id, season=season, timeout=60,
+            ).get_data_frames()[0]
+            df["GAME_DATE"] = pd.to_datetime(df["GAME_DATE"])
+            df = df.sort_values("GAME_DATE", ascending=True).copy()
+            for c in ["MATCHUP","MIN","PTS","FGA","FTA","FG3A"]:
+                if c not in df.columns:
+                    df[c] = None
+            return df[["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A"]]
+        except Exception:
+            if attempt < 2:
+                time.sleep(3 * (attempt + 1))
+    return empty
+
+
+def run_backtest(
+    full_logs: pd.DataFrame,
+    line: float,
+    side: str,
+    window: int = 10,
+    min_games: int = 5,
+) -> pd.DataFrame:
+    """
+    Simulate the PropLens model game-by-game over a full season.
+
+    For each game G, uses the prior `window` games as the sample,
+    runs apply_adjustments with neutral context (no live signals),
+    records the verdict, then checks if the actual outcome matched.
+
+    Returns a DataFrame with one row per game showing:
+    - date, matchup, actual pts, hit (bool), tier, adjusted prob, correct (bool)
+    """
+    results = []
+    logs_sorted = full_logs.sort_values("GAME_DATE", ascending=True).reset_index(drop=True)
+
+    for i in range(len(logs_sorted)):
+        if i < min_games:
+            continue  # need enough history
+
+        # Sample = prior window games
+        start  = max(0, i - window)
+        sample = logs_sorted.iloc[start:i].copy()
+
+        if len(sample) < min_games:
+            continue
+
+        actual_pts = pd.to_numeric(logs_sorted.iloc[i]["PTS"], errors="coerce")
+        if pd.isna(actual_pts):
+            continue
+
+        # Core stats from sample (most recent first for weighted calc)
+        sample_rev = sample.sort_values("GAME_DATE", ascending=False)
+        wb   = weighted_hit_rate(sample_rev, line, side)
+        cons = consistency_score(sample_rev, line)
+        avg_pts = pd.to_numeric(sample_rev["PTS"], errors="coerce").dropna().mean()
+        line_diff = avg_pts - line
+
+        # Neutral context — no live signals available for historical games
+        ctx = {
+            "minutes": "Okay", "role": "Okay", "shots": "Medium",
+            "matchup": "Neutral", "script": "Neutral", "venue": "Neutral",
+            "h2h": "Neutral", "b2b": "Normal", "form": "Neutral",
+        }
+        adj  = apply_adjustments(wb, ctx, side)
+        tier = get_confidence_tier(adj, line_diff, cons, side)
+
+        # Did the bet actually hit?
+        if side == "Over":
+            hit = bool(actual_pts >= line)
+        else:
+            hit = bool(actual_pts <= line)
+
+        # Was the model right?
+        model_says_bet = tier not in ("Pass",)
+        model_direction = "Over" if "Over" in tier else ("Under" if "Under" in tier else "Pass")
+        correct = (model_direction == side and hit) or (model_direction != side and not hit and model_direction != "Pass")
+        if model_direction == "Pass":
+            correct = None  # Pass = no prediction
+
+        results.append({
+            "Date":        logs_sorted.iloc[i]["GAME_DATE"].strftime("%b %d"),
+            "Matchup":     str(logs_sorted.iloc[i].get("MATCHUP", "")),
+            "Actual PTS":  int(actual_pts),
+            "Hit":         "✅" if hit else "❌",
+            "Tier":        tier,
+            "Adjusted":    f"{adj:.0%}",
+            "Weighted HR": f"{wb:.0%}",
+            "Correct":     ("✅" if correct else "❌") if correct is not None else "—",
+            "_hit":        hit,
+            "_tier":       tier,
+            "_adj":        adj,
+            "_correct":    correct,
+        })
+
+    return pd.DataFrame(results)
+
+
+def backtest_summary(bt_df: pd.DataFrame) -> dict:
+    """Compute accuracy stats by tier from backtest results."""
+    if bt_df.empty:
+        return {}
+
+    summary = {}
+    tiers = ["Strong Over", "Lean Over", "Pass", "Lean Under", "Strong Under"]
+
+    for tier in tiers:
+        rows = bt_df[bt_df["_tier"] == tier]
+        if rows.empty:
+            continue
+        hits    = rows["_hit"].sum()
+        total   = len(rows)
+        correct = rows["_correct"].sum() if rows["_correct"].notna().any() else 0
+        summary[tier] = {
+            "games":   total,
+            "hits":    int(hits),
+            "hit_pct": round(hits / total * 100, 1),
+            "correct": int(correct) if correct is not None else 0,
+        }
+
+    # Overall (excluding Pass)
+    bet_rows = bt_df[bt_df["_tier"] != "Pass"]
+    if not bet_rows.empty:
+        summary["Overall (bet)"] = {
+            "games":   len(bet_rows),
+            "hits":    int(bet_rows["_hit"].sum()),
+            "hit_pct": round(bet_rows["_hit"].sum() / len(bet_rows) * 100, 1),
+            "correct": int(bet_rows["_correct"].sum()),
+        }
+
+    return summary
+
+
 def flag_pill(label: str, flag: str) -> str:
     icon = {"up": "↑", "down": "↓", "flat": "→", "nodata": "—"}.get(flag, "—")
     css  = flag if flag in ["up", "down", "flat", "nodata"] else "nodata"
@@ -1427,7 +1617,7 @@ for _k in ["scanner_results", "scanner_error"]:
         st.session_state[_k] = None
 
 _mode = st.radio(
-    "mode", ["🏀  Player Prop", "🎯  Slate Scanner"],
+    "mode", ["🏀  Player Prop", "🎯  Slate Scanner", "📊  Backtest"],
     horizontal=True, label_visibility="collapsed", key="app_mode"
 )
 st.markdown("<div style='height:0.25rem'></div>", unsafe_allow_html=True)
@@ -1653,6 +1843,162 @@ if _mode == "🎯  Slate Scanner":
                                file_name="slate_scanner.csv", mime="text/csv")
 
     st.stop()  # prevents player prop section rendering in scanner mode
+
+# ─────────────────────────────────────────────
+# Backtest mode
+# ─────────────────────────────────────────────
+
+if _mode == "📊  Backtest":
+
+    st.markdown("<div class='section-header'>📊  Backtest — How accurate is the model?</div>", unsafe_allow_html=True)
+    st.markdown("""
+    <div class='explainer'>
+        Simulates the PropLens model game-by-game over a full season using only historical data available
+        at the time of each game. Shows how often each verdict tier (Strong Over, Lean Over etc.)
+        actually hit, so you can see where the model is sharpest.
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Inputs
+    bt_c1, bt_c2, bt_c3, bt_c4 = st.columns([2.5, 1, 1, 1])
+    with bt_c1:
+        # Reuse player list
+        with st.spinner("Loading players..."):
+            try:
+                _bt_players = sorted(
+                    [p["full_name"] for p in espn_get_all_players()],
+                    key=lambda x: x.split()[-1]
+                )
+            except Exception:
+                _bt_players = []
+        _bt_player = st.selectbox(
+            "Player", [""] + _bt_players,
+            format_func=lambda x: "— select a player —" if x == "" else x,
+            key="bt_player"
+        )
+    with bt_c2:
+        _bt_line = st.number_input("Line", min_value=0.0, value=20.0, step=0.5, key="bt_line")
+    with bt_c3:
+        _bt_side = st.selectbox("Side", ["Over", "Under"], key="bt_side")
+    with bt_c4:
+        _bt_season = st.selectbox("Season", ["2025-26", "2024-25", "2023-24"], key="bt_season")
+
+    _bt_window = st.slider("Sample window (games)", min_value=5, max_value=15, value=10, key="bt_window",
+                           help="How many prior games the model uses to predict each game")
+
+    _run_bt = st.button("▶  Run Backtest", key="run_backtest")
+
+    if "bt_results" not in st.session_state:
+        st.session_state.bt_results = None
+    if "bt_player_name" not in st.session_state:
+        st.session_state.bt_player_name = ""
+
+    if _run_bt and _bt_player:
+        with st.spinner(f"Fetching full season logs for {_bt_player}..."):
+            _bt_nid, _bt_fname = nba_find_player(_bt_player)
+            if not _bt_nid:
+                st.error(f"Could not find {_bt_player} in NBA database.")
+                st.stop()
+            _bt_logs = nba_get_full_season_logs(_bt_nid, _bt_season)
+
+        if _bt_logs.empty:
+            st.warning("No game logs found for this player/season.")
+        else:
+            with st.spinner(f"Running model on {len(_bt_logs)} games..."):
+                _bt_df = run_backtest(_bt_logs, _bt_line, _bt_side, _bt_window)
+                st.session_state.bt_results     = _bt_df
+                st.session_state.bt_player_name = _bt_fname
+                st.session_state.bt_line        = _bt_line
+                st.session_state.bt_side        = _bt_side
+                st.session_state.bt_season      = _bt_season
+
+    if st.session_state.bt_results is not None and not st.session_state.bt_results.empty:
+        _bt_df   = st.session_state.bt_results
+        _bt_fname = st.session_state.bt_player_name
+        _bt_line  = st.session_state.get("bt_line", _bt_line)
+        _bt_side  = st.session_state.get("bt_side", _bt_side)
+        _summary  = backtest_summary(_bt_df)
+
+        st.markdown(f"<div class='section-header'>{_bt_fname} · {_bt_line} {_bt_side} · {st.session_state.get('bt_season','')}</div>", unsafe_allow_html=True)
+
+        # Summary cards
+        _tier_css   = {"Strong Over":"green","Lean Over":"yellow","Lean Under":"orange",
+                       "Strong Under":"red","Pass":"gray","Overall (bet)":"blue"}
+        _tier_emoji = {"Strong Over":"🟢","Lean Over":"🟡","Lean Under":"🟠",
+                       "Strong Under":"🔴","Pass":"⚪","Overall (bet)":"📊"}
+        _tier_colors = {"green":"#22c55e","yellow":"#eab308","orange":"#f97316",
+                        "red":"#ef4444","gray":"#475569","blue":"#60a5fa"}
+
+        _sum_cols = st.columns(len(_summary))
+        for col, (tier, stats) in zip(_sum_cols, _summary.items()):
+            _css   = _tier_css.get(tier, "gray")
+            _color = _tier_colors.get(_css, "#475569")
+            _em    = _tier_emoji.get(tier, "⚪")
+            _acc   = f"{stats['correct']}/{stats['games']}" if tier != "Pass" else "—"
+            with col:
+                st.markdown(f"""
+                <div class='stat-card' style='border-color:{_color}33;text-align:center;'>
+                    <div style='font-family:DM Mono;font-size:0.6rem;color:{_color};
+                                letter-spacing:0.1em;text-transform:uppercase;margin-bottom:6px;'>
+                        {_em} {tier}
+                    </div>
+                    <div style='font-size:1.6rem;font-weight:800;color:{_color};'>{stats["hit_pct"]}%</div>
+                    <div style='font-family:DM Mono;font-size:0.65rem;color:#475569;margin-top:4px;'>
+                        {stats["hits"]}/{stats["games"]} games hit
+                    </div>
+                </div>""", unsafe_allow_html=True)
+
+        # Game-by-game table
+        st.markdown("<div class='section-header'>Game-by-Game Results</div>", unsafe_allow_html=True)
+
+        _tier_order = ["Strong Over","Lean Over","Pass","Lean Under","Strong Under"]
+        _display_cols = ["Date","Matchup","Actual PTS","Hit","Tier","Adjusted","Weighted HR","Correct"]
+        _display_df = _bt_df[_display_cols].copy()
+
+        # Color-code the dataframe
+        def _color_tier(val):
+            colors = {"Strong Over":"#22c55e","Lean Over":"#eab308","Lean Under":"#f97316",
+                      "Strong Under":"#ef4444","Pass":"#475569"}
+            c = colors.get(val, "#475569")
+            return f"color: {c}; font-weight: 700"
+
+        st.dataframe(
+            _display_df.style.applymap(_color_tier, subset=["Tier"]),
+            use_container_width=True,
+            hide_index=True,
+            height=400,
+        )
+
+        # Export
+        st.download_button(
+            "⬇  Export Backtest CSV",
+            data=_display_df.to_csv(index=False).encode(),
+            file_name=f"backtest_{_bt_fname.replace(' ','_')}_{_bt_line}_{_bt_side}.csv",
+            mime="text/csv"
+        )
+
+        # Key insight
+        _strong_tiers = {k:v for k,v in _summary.items() if "Strong" in k}
+        if _strong_tiers:
+            _best = max(_strong_tiers.items(), key=lambda x: x[1]["hit_pct"])
+            _pct  = _best[1]["hit_pct"]
+            if _pct >= 65:
+                _insight_color = "#22c55e"
+                _insight = f"✅ Strong signals were accurate {_pct}% of the time — model is well-calibrated for this player at this line."
+            elif _pct >= 55:
+                _insight_color = "#eab308"
+                _insight = f"⚠️ Strong signals hit {_pct}% — slightly above average but room for improvement."
+            else:
+                _insight_color = "#ef4444"
+                _insight = f"❌ Strong signals only hit {_pct}% — model may be over-confident for this player/line combo."
+            st.markdown(
+                f"<div style='font-family:DM Mono;font-size:0.75rem;color:{_insight_color};"
+                f"background:{_insight_color}11;border:1px solid {_insight_color}33;"
+                f"border-radius:8px;padding:0.75rem 1rem;margin-top:0.5rem;'>{_insight}</div>",
+                unsafe_allow_html=True
+            )
+
+    st.stop()
 
 # ─────────────────────────────────────────────
 # Quick Entry — batch manual input
