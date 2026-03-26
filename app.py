@@ -2227,7 +2227,6 @@ if st.session_state.logs is not None:
             <div class='verdict-label'>{full_name} · {line} pts · {_display_side}</div>
             <div class='verdict-tier {css}'>{tier_emoji[_display_tier]} {_display_tier}</div>
 
-            <!-- Confidence bar -->
             <div style='margin-top:10px;'>
                 <div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;'>
                     <div style='font-family:DM Mono;font-size:0.6rem;color:#475569;letter-spacing:0.1em;text-transform:uppercase;'>
