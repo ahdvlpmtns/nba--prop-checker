@@ -2746,10 +2746,13 @@ nba_id, full_name = nba_find_player(selected_player)
 espn_player = next((p for p in espn_get_all_players() if normalize_name(p["full_name"]) == normalize_name(selected_player)), None)
 player_team = _norm_team_abbr(espn_player["team_abbr"]) if espn_player else None
 
-# Pre-fetch teammate minutes immediately on player selection (cached 1hr)
-# This runs before Analyze is clicked so data is ready when verdict renders
+# Pre-fetch teammate minutes in background thread so it doesn't block button render
 if player_team:
-    get_teammate_minutes(player_team)  # warms the cache silently
+    import threading as _threading
+    _warm_thread = _threading.Thread(
+        target=get_teammate_minutes, args=(player_team,), daemon=True
+    )
+    _warm_thread.start()
 player_id   = nba_id
 
 if player_id is None:
