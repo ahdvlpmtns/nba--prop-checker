@@ -2230,25 +2230,41 @@ if st.session_state.logs is not None:
 
     # Ruler pip position: adjusted % mapped to 0-100 scale
     _pip = max(2, min(98, int(_display_adj * 100)))
-    _pip_style = f"position:absolute;top:2px;left:{_pip}%;transform:translateX(-50%);width:11px;height:11px;border-radius:50%;background:{_bar_color};box-shadow:0 0 5px {_bar_color};"
-    _fill_style = f"position:absolute;top:6px;left:0;width:{_pip}%;height:3px;background:{_bar_color};border-radius:2px;opacity:0.5;"
+    _pip_style = (
+        f"position:absolute;top:1px;left:{_pip}%;"
+        f"transform:translateX(-50%);"
+        f"width:14px;height:14px;border-radius:50%;"
+        f"background:{_bar_color};"
+        f"box-shadow:0 0 8px {_bar_color},0 0 16px {_bar_color}88;"
+        f"border:2px solid #0c1018;"
+        f"z-index:2;"
+    )
+    _fill_style = (
+        f"position:absolute;top:7px;left:0;"
+        f"width:{_pip}%;height:4px;"
+        f"background:linear-gradient(90deg,{_bar_color}44,{_bar_color});"
+        f"border-radius:2px;"
+    )
 
     _verdict_html = (
         f"<div class='verdict-banner {css}'>"
         f"<div style='flex:1;min-width:200px;'>"
         f"<div class='verdict-label'>{full_name} · {line} pts · {_display_side}</div>"
         f"<div class='verdict-tier {css}'>{tier_emoji[_display_tier]} {_display_tier}</div>"
-        f"<div style='margin-top:12px;margin-bottom:2px;padding-right:8px;'>"
-        f"<div style='position:relative;height:16px;'>"
-        f"<div style='position:absolute;top:6px;left:0;right:0;height:3px;background:#1a2333;border-radius:2px;'></div>"
+        f"<div style='margin-top:14px;margin-bottom:4px;padding-right:4px;'>"
+        f"<div style='position:relative;height:18px;'>"
+        f"<div style='position:absolute;top:7px;left:0;right:0;height:4px;background:#1e293b;border-radius:2px;'></div>"
         f"<div style='{_fill_style}'></div>"
-        f"<div style='position:absolute;top:6px;left:45%;width:1px;height:7px;background:#334155;'></div>"
-        f"<div style='position:absolute;top:6px;left:55%;width:1px;height:7px;background:#334155;'></div>"
-        f"<div style='position:absolute;top:6px;left:64%;width:1px;height:7px;background:#475569;'></div>"
+        f"<div style='position:absolute;top:3px;left:45%;width:2px;height:12px;background:#475569;border-radius:1px;'></div>"
+        f"<div style='position:absolute;top:3px;left:55%;width:2px;height:12px;background:#64748b;border-radius:1px;'></div>"
+        f"<div style='position:absolute;top:3px;left:64%;width:2px;height:12px;background:#94a3b8;border-radius:1px;'></div>"
         f"<div style='{_pip_style}'></div>"
         f"</div>"
-        f"<div style='display:flex;justify-content:space-between;font-family:DM Mono;font-size:0.55rem;color:#334155;padding-right:4px;margin-top:2px;'>"
-        f"<span>Under</span><span style='padding-left:38%;'>Lean</span><span>Strong</span><span>Max</span>"
+        f"<div style='position:relative;font-family:DM Mono;font-size:0.6rem;margin-top:5px;'>"
+        f"<span style='color:#64748b;'>Under</span>"
+        f"<span style='position:absolute;left:43%;color:#94a3b8;'>Lean</span>"
+        f"<span style='position:absolute;left:53%;color:#94a3b8;'>Strong</span>"
+        f"<span style='position:absolute;right:0;color:#64748b;'>Max</span>"
         f"</div>"
         f"</div>"
         f"{_flip_note_html}"
