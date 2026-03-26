@@ -2841,6 +2841,18 @@ if st.session_state.logs is not None:
         f"border-radius:2px;"
     )
 
+    # Pre-compute zone label opacity/weight for ruler
+    _su_op = "1"   if _display_tier == "Strong Under" else "0.4"
+    _lu_op = "1"   if _display_tier == "Lean Under"   else "0.4"
+    _pa_op = "1"   if _display_tier == "Pass"         else "0.4"
+    _lo_op = "1"   if _display_tier == "Lean Over"    else "0.4"
+    _so_op = "1"   if _display_tier == "Strong Over"  else "0.4"
+    _su_fw = "800" if _display_tier == "Strong Under" else "400"
+    _lu_fw = "800" if _display_tier == "Lean Under"   else "400"
+    _pa_fw = "800" if _display_tier == "Pass"         else "400"
+    _lo_fw = "800" if _display_tier == "Lean Over"    else "400"
+    _so_fw = "800" if _display_tier == "Strong Over"  else "400"
+
     _verdict_html = (
         f"<div class='verdict-banner {css}'>"
         f"<div style='flex:1;min-width:200px;'>"
@@ -2861,12 +2873,12 @@ if st.session_state.logs is not None:
         f"<div style='position:absolute;top:2px;left:64%;width:2px;height:14px;background:#22c55e;border-radius:1px;opacity:0.5;'></div>"
         f"<div style='{_pip_style}'></div>"
         f"</div>"
-        f"<div style='display:flex;justify-content:space-between;font-family:DM Mono;font-size:0.52rem;margin-top:5px;letter-spacing:-0.01em;'>"
-        f"<span style='color:#ef4444;opacity:0.8;'>Strong Under</span>"
-        f"<span style='color:#f97316;opacity:0.9;'>Lean Under</span>"
-        f"<span style='color:#64748b;'>Pass</span>"
-        f"<span style='color:#eab308;opacity:0.9;'>Lean Over</span>"
-        f"<span style='color:#22c55e;opacity:0.8;'>Strong Over</span>"
+        f"<div style='position:relative;height:20px;margin-top:4px;font-family:DM Mono;'>"
+        f"<span style='position:absolute;left:0;font-size:0.5rem;color:#ef4444;opacity:{_su_op};font-weight:{_su_fw};text-align:center;width:60px;line-height:1.3;'>Strong<br>Under</span>"
+        f"<span style='position:absolute;left:36%;transform:translateX(-50%);font-size:0.5rem;color:#f97316;opacity:{_lu_op};font-weight:{_lu_fw};text-align:center;width:52px;line-height:1.3;'>Lean<br>Under</span>"
+        f"<span style='position:absolute;left:50%;transform:translateX(-50%);font-size:0.5rem;color:#64748b;opacity:{_pa_op};font-weight:{_pa_fw};text-align:center;width:30px;line-height:1.3;'>Pass</span>"
+        f"<span style='position:absolute;left:64%;transform:translateX(-50%);font-size:0.5rem;color:#eab308;opacity:{_lo_op};font-weight:{_lo_fw};text-align:center;width:42px;line-height:1.3;'>Lean<br>Over</span>"
+        f"<span style='position:absolute;right:0;font-size:0.5rem;color:#22c55e;opacity:{_so_op};font-weight:{_so_fw};text-align:center;width:52px;line-height:1.3;'>Strong<br>Over</span>"
         f"</div>"
         f"<div style='height:0.4rem;'></div>"
         f"</div>"
