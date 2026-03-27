@@ -551,7 +551,23 @@ ESPN_HEADERS = {
     "Accept": "application/json",
 }
 
+@st.cache_data(ttl=300, show_spinner=False)
+def espn_get_cached(url: str) -> dict:
+    """Cached version for parameterless ESPN calls."""
+    for attempt in range(3):
+        try:
+            r = requests.get(url, headers=ESPN_HEADERS, timeout=10)
+            r.raise_for_status()
+            return r.json()
+        except Exception:
+            if attempt < 2:
+                time.sleep(1.5 * (attempt + 1))
+    return {}
+
 def espn_get(url: str, params: dict = None, retries: int = 3) -> dict:
+    # Use cache for parameterless calls (vast majority)
+    if not params:
+        return espn_get_cached(url)
     for attempt in range(retries):
         try:
             r = requests.get(url, headers=ESPN_HEADERS, params=params, timeout=10)
@@ -1603,6 +1619,7 @@ def injury_alert_html(status: str, reason: str) -> str:
     return html, block_verdict
 
 
+@st.cache_data(ttl=1800, show_spinner=False)
 def classify_matchup_espn(opp_abbr: Optional[str]) -> Tuple[str, Optional[float], str]:
     """Classify opponent defense quality using ESPN team stats."""
     league_avg = 114.5
