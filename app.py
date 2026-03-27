@@ -2842,51 +2842,14 @@ with col_a:
             st.rerun()
 
 with col_b:
-    # Two-mode line input: selectbox (native mobile picker) + manual text entry
-    _all_lines = [round(x * 0.5, 1) for x in range(1, 121)]
-    if "line_mode" not in st.session_state:
-        st.session_state.line_mode = "pick"
-    if "line_val" not in st.session_state:
-        st.session_state.line_val = 24.5
-
-    _tab_pick = st.session_state.line_mode == "pick"
-    _lc1, _lc2 = st.columns(2)
-    with _lc1:
-        if st.button("🎯 Pick" if not _tab_pick else "✓ Pick",
-                     key="line_mode_pick",
-                     type="primary" if _tab_pick else "secondary",
-                     use_container_width=True):
-            st.session_state.line_mode = "pick"
-            st.rerun()
-    with _lc2:
-        if st.button("✏️ Type",
-                     key="line_mode_type",
-                     type="primary" if not _tab_pick else "secondary",
-                     use_container_width=True):
-            st.session_state.line_mode = "type"
-            st.rerun()
-
-    if st.session_state.line_mode == "pick":
-        _default_idx = _all_lines.index(st.session_state.line_val) if st.session_state.line_val in _all_lines else _all_lines.index(24.5)
-        line = st.selectbox(
-            "Points Line",
-            options=_all_lines,
-            index=_default_idx,
-            format_func=lambda x: f"{x:.1f}",
-            key="line_select",
-            label_visibility="collapsed",
-        )
-        st.session_state.line_val = line
-    else:
-        line = st.number_input(
-            "Points Line",
-            min_value=0.5, max_value=80.0,
-            value=st.session_state.line_val,
-            step=0.5, format="%.1f",
-            key="line_input",
-            label_visibility="collapsed",
-        )
-        st.session_state.line_val = line
+    line = st.number_input(
+        "Points Line",
+        min_value=0.5,
+        max_value=80.0,
+        value=24.5,
+        step=0.5,
+        format="%.1f",
+    )
 with col_c:
     side = st.selectbox("Over / Under", ["Over", "Under"])
 with col_d:
