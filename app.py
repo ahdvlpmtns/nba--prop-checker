@@ -2754,12 +2754,38 @@ st.markdown("<div class='section-header'>Player & Prop</div>", unsafe_allow_html
 with st.spinner("Loading players..."):
     try:
         all_players_list = espn_get_all_players()
-        player_names_list = sorted(
-            [p["full_name"] for p in all_players_list],
-            key=lambda x: x.split()[-1]
-        )
+        # Build both full names AND common aliases for fuzzy matching
+        _raw_names = [p["full_name"] for p in all_players_list]
+
+        # Add nickname/abbreviation mappings
+        _aliases = {
+            "LeBron": "LeBron James",
+            "SGA": "Shai Gilgeous-Alexander",
+            "KD": "Kevin Durant",
+            "PG": "Paul George",
+            "AD": "Anthony Davis",
+            "Giannis": "Giannis Antetokounmpo",
+            "Luka": "Luka Doncic",
+            "Steph": "Stephen Curry",
+            "Bron": "LeBron James",
+            "Embiid": "Joel Embiid",
+            "Jokic": "Nikola Jokic",
+            "Wemby": "Victor Wembanyama",
+            "CP3": "Chris Paul",
+            "Dame": "Damian Lillard",
+            "Trae": "Trae Young",
+            "Ja": "Ja Morant",
+            "Zion": "Zion Williamson",
+            "KAT": "Karl-Anthony Towns",
+            "Kawhi": "Kawhi Leonard",
+            "Draymond": "Draymond Green",
+        }
+
+        # Sort by last name
+        player_names_list = sorted(_raw_names, key=lambda x: x.split()[-1])
     except Exception:
         player_names_list = []
+        _aliases = {}
 
 # Session state for player clear
 if "player_key" not in st.session_state:
@@ -2768,15 +2794,21 @@ if "player_key" not in st.session_state:
 col_a, col_b, col_c, col_d, col_e = st.columns([2.5, 1, 1, 1, 0.8])
 
 with col_a:
-    # st.selectbox has native instant filtering — fastest possible search
-    # We use a unique key driven by player_key so clearing resets it to blank
+    # Fuzzy search — resolve alias before passing to selectbox
+    if "player_alias_input" not in st.session_state:
+        st.session_state.player_alias_input = ""
+
     player_query = st.selectbox(
-        "Player",
+        "Player — type name, nickname, or initials",
         options=[""] + player_names_list,
         index=0,
-        format_func=lambda x: "— select a player —" if x == "" else x,
+        format_func=lambda x: "— search by name, nickname, or initials —" if x == "" else x,
         key=f"player_sel_{st.session_state.player_key}",
     )
+
+    # Resolve alias: if user typed a known nickname, swap to full name
+    if player_query and player_query in _aliases:
+        player_query = _aliases[player_query]
 
     # Overlay ✕ button — only visible when a player is selected
     if player_query:
@@ -2787,7 +2819,28 @@ with col_a:
             st.rerun()
 
 with col_b:
-    line = st.number_input("Points Line", min_value=0.0, value=24.5, step=0.5)
+    # Common NBA points lines — scrollable on mobile
+    _common_lines = [
+        7.5, 8.5, 9.5, 10.5, 11.5, 12.5, 13.5, 14.5, 15.5,
+        16.5, 17.5, 18.5, 19.5, 20.5, 21.5, 22.5, 23.5, 24.5,
+        25.5, 26.5, 27.5, 28.5, 29.5, 30.5, 31.5, 32.5, 33.5,
+        34.5, 35.5, 36.5, 37.5, 38.5, 39.5, 40.5, 42.5, 44.5,
+        46.5, 48.5, 50.5,
+        # Also include whole numbers and .0 lines
+        8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0,
+        16.0, 17.0, 18.0, 19.0, 20.0, 21.0, 22.0, 23.0, 24.0,
+        25.0, 26.0, 27.0, 28.0, 29.0, 30.0, 32.0, 35.0, 40.0,
+    ]
+    _common_lines = sorted(set(_common_lines))
+    _default_line = 24.5
+    _line_idx = _common_lines.index(_default_line) if _default_line in _common_lines else 0
+    line = st.selectbox(
+        "Points Line",
+        options=_common_lines,
+        index=_line_idx,
+        format_func=lambda x: f"{x:.1f} pts",
+        key="line_select",
+    )
 with col_c:
     side = st.selectbox("Over / Under", ["Over", "Under"])
 with col_d:
@@ -2798,7 +2851,27 @@ with col_e:
 season_int = season_str_to_int(season_str)
 season_str_clean = season_str_to_season(season_str)
 
-selected_player = player_query if player_query else None
+# Fuzzy alias resolution — catches nicknames typed directly
+_resolved_player = player_query
+if player_query:
+    # Check alias map first
+    for alias, full in _aliases.items():
+        if alias.lower() == normalize_name(player_query):
+            _resolved_player = full
+            break
+    # Fuzzy partial match — if typed value not in list, find closest
+    if _resolved_player not in player_names_list and _resolved_player:
+        _q = normalize_name(_resolved_player)
+        _fuzzy_match = next(
+            (n for n in player_names_list
+             if _q in normalize_name(n) or
+             all(part in normalize_name(n) for part in _q.split() if len(part) > 2)),
+            None
+        )
+        if _fuzzy_match:
+            _resolved_player = _fuzzy_match
+
+selected_player = _resolved_player if _resolved_player else None
 if not selected_player:
     st.markdown(
         "<div style='color:#475569;font-family:DM Mono;font-size:0.8rem;"
