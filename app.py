@@ -3605,26 +3605,6 @@ if st.session_state.logs is not None:
         f"border-radius:2px;"
     )
 
-    # Value edge vs implied probability (PrizePicks = -110 juice = 52.38% implied)
-    _BOOK_IMPLIED = 0.5238
-    _val_edge = _display_adj - _BOOK_IMPLIED
-    _val_str  = f"{_val_edge:+.1%}"
-    if _val_edge >= 0.15:
-        _val_color = "#22c55e"
-        _val_label = "🔥 Elite edge"
-    elif _val_edge >= 0.10:
-        _val_color = "#22c55e"
-        _val_label = "Strong value"
-    elif _val_edge >= 0.05:
-        _val_color = "#eab308"
-        _val_label = "Solid value"
-    elif _val_edge >= 0.02:
-        _val_color = "#f97316"
-        _val_label = "Marginal value"
-    else:
-        _val_color = "#ef4444"
-        _val_label = "No value"
-
     # Pre-compute zone label opacity/weight for ruler
     _su_op = "1"   if _display_tier == "Strong Under" else "0.4"
     _lu_op = "1"   if _display_tier == "Lean Under"   else "0.4"
@@ -3675,11 +3655,6 @@ if st.session_state.logs is not None:
         f"<div class='verdict-label'>Adjusted Hit Rate <span style='font-size:0.55rem;background:#1e293b;color:#64748b;border-radius:50%;padding:1px 4px;margin-left:3px;cursor:default;' title='% of recent games hitting the line, adjusted for context signals'>i</span></div>"
         f"<div style='font-size:1.4rem;font-weight:800;color:#f1f5f9;'>{_adj_pct_str}</div>"
         f"<div style='font-family:DM Mono;font-size:0.65rem;color:#475569;margin-top:2px;'>64%+ = Strong · 55%+ = Lean</div>"
-        f"</div>"
-        f"<div>"
-        f"<div class='verdict-label'>Value Edge <span style='font-size:0.55rem;background:#1e293b;color:#64748b;border-radius:50%;padding:1px 4px;margin-left:3px;cursor:default;' title='Your edge vs the implied 52.4% probability built into PrizePicks lines'>i</span></div>"
-        f"<div style='font-size:1.4rem;font-weight:800;color:{_val_color};'>{_val_str}</div>"
-        f"<div style='font-family:DM Mono;font-size:0.65rem;color:{_val_color};margin-top:2px;'>{_val_label}</div>"
         f"</div>"
         f"<div>"
         f"<div class='verdict-label'>Edge vs Line <span style='font-size:0.55rem;background:#1e293b;color:#64748b;border-radius:50%;padding:1px 4px;margin-left:3px;cursor:default;' title='Player avg pts minus the line. Larger = more confident the line is beatable'>i</span></div>"
