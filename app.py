@@ -542,6 +542,7 @@ hr { border-color: var(--border) !important; }
 for key, default in [
     ("logs", None), ("ai_analysis", None), ("ai_error", None),
     ("defense_data", None), ("tracker", []), ("active_tab", "player"),
+    ("recent_players", []),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -2830,6 +2831,19 @@ with col_a:
             st.session_state.ai_analysis = None
             st.rerun()
 
+    # Recent players — quick tap chips
+    if st.session_state.recent_players and not player_query:
+        st.markdown(
+            "<div style='font-family:DM Mono;font-size:0.58rem;color:#475569;"
+            "letter-spacing:0.1em;text-transform:uppercase;margin:6px 0 4px 0;'>"
+            "Recent</div>",
+            unsafe_allow_html=True
+        )
+        for _rp in st.session_state.recent_players:
+            if st.button(_rp, key=f"recent_{_rp}", use_container_width=True):
+                st.session_state[f"player_sel_{st.session_state.player_key}"] = _rp
+                st.rerun()
+
 with col_b:
     line = st.number_input(
         "Points Line",
@@ -2930,6 +2944,13 @@ if not fetch and st.session_state.logs is None:
 if fetch:
     st.session_state.ai_analysis = None
     st.session_state.ai_error    = None
+    # Save to recent players (max 5, no duplicates)
+    if selected_player:
+        _recent = st.session_state.recent_players
+        if selected_player in _recent:
+            _recent.remove(selected_player)
+        _recent.insert(0, selected_player)
+        st.session_state.recent_players = _recent[:5]
     try:
         with st.spinner("Fetching game logs..."):
             st.session_state.logs = nba_get_game_logs(
