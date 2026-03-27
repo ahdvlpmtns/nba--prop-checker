@@ -693,40 +693,57 @@ def nba_find_player(player_name: str) -> Tuple[Optional[int], Optional[str]]:
 def nba_get_game_logs(player_id: int, season: str, n: int = 10) -> pd.DataFrame:
     """
     Fetch last N game logs using nba_api playergamelog.
-    Uses browser-like headers to avoid timeouts on Streamlit Cloud.
-    season: e.g. "2025-26"
+    Hard 15s timeout per attempt, max 3 attempts, exponential backoff.
+    Total max wait: ~45s before giving up cleanly.
     """
     empty = pd.DataFrame(columns=["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A"])
-    try:
-        from nba_api.library.http import NBAStatsHTTP
-        NBAStatsHTTP.nba_response.headers = {
-            "Host": "stats.nba.com",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "en-US,en;q=0.9",
-            "x-nba-stats-origin": "stats",
-            "x-nba-stats-token": "true",
-            "Referer": "https://www.nba.com/",
-            "Origin": "https://www.nba.com",
-            "Connection": "keep-alive",
-        }
-    except Exception:
-        pass
 
-    for attempt in range(4):
+    _HEADERS = {
+        "Host": "stats.nba.com",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "x-nba-stats-origin": "stats",
+        "x-nba-stats-token": "true",
+        "Referer": "https://www.nba.com/",
+        "Origin": "https://www.nba.com",
+        "Connection": "keep-alive",
+    }
+
+    def _fetch():
         try:
-            df = playergamelog.PlayerGameLog(
-                player_id=player_id, season=season, timeout=45,
-            ).get_data_frames()[0]
+            from nba_api.library.http import NBAStatsHTTP
+            NBAStatsHTTP.nba_response.headers = _HEADERS
+        except Exception:
+            pass
+        return playergamelog.PlayerGameLog(
+            player_id=player_id, season=season, timeout=15,
+        ).get_data_frames()[0]
+
+    import concurrent.futures
+    for attempt in range(3):
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                future = ex.submit(_fetch)
+                df = future.result(timeout=18)  # hard wall-clock timeout
+
             df["GAME_DATE"] = pd.to_datetime(df["GAME_DATE"])
             df = df.sort_values("GAME_DATE", ascending=False).head(n).copy()
             for c in ["MATCHUP","MIN","PTS","FGA","FTA","FG3A"]:
                 if c not in df.columns:
                     df[c] = None
             return df[["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A"]]
+        except concurrent.futures.TimeoutError:
+            if attempt < 2:
+                time.sleep(2 ** attempt)  # 1s, 2s
+            else:
+                raise TimeoutError(
+                    f"NBA stats API timed out after 3 attempts for player {player_id}. "
+                    f"Try again in a few seconds."
+                )
         except Exception as e:
-            if attempt < 3:
-                time.sleep(3 * (attempt + 1))
+            if attempt < 2:
+                time.sleep(2 ** attempt)
             else:
                 raise
     return empty
@@ -2797,6 +2814,12 @@ if fetch:
             st.session_state.logs = nba_get_game_logs(
                 player_id=player_id, season=season_str_clean, n=n_games
             )
+    except TimeoutError as e:
+        st.warning(
+            f"⏱️ NBA stats server is slow right now — please try again in a few seconds. "
+            f"This usually resolves on retry."
+        )
+        st.stop()
     except Exception as e:
         if not manual_mode:
             st.error(f"Fetch failed: {repr(e)}")
