@@ -705,7 +705,7 @@ def nba_find_player(player_name: str) -> Tuple[Optional[int], Optional[str]]:
 
     return None, None
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=1800)
 def nba_get_game_logs(player_id: int, season: str, n: int = 10) -> pd.DataFrame:
     """
     Fetch last N game logs using nba_api playergamelog.
@@ -901,7 +901,7 @@ def season_str_to_int(season_str: str) -> int:
 
 # ── Season average fetch + divergence signal ─────────────────────
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=21600)
 def nba_get_season_avg(player_id: int, season: str) -> Optional[float]:
     """
     Fetch full season game log and return season avg pts.
@@ -934,7 +934,7 @@ def nba_get_season_avg(player_id: int, season: str) -> Optional[float]:
     return None
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=21600)
 def nba_get_season_avg_min(player_id: int, season: str) -> Optional[float]:
     """Fetch full season average minutes per game."""
     try:
@@ -1932,7 +1932,7 @@ def get_confidence_tier(adjusted: float, line_diff: float, consistency: float, s
 # Backtesting engine
 # ─────────────────────────────────────────────
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=21600)
 def nba_get_full_season_logs(player_id: int, season: str) -> pd.DataFrame:
     """Fetch ALL games for a season (not capped at N)."""
     empty = pd.DataFrame(columns=["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A"])
