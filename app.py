@@ -2481,6 +2481,8 @@ if _mode == "🎯  Slate Scanner":
                         "Adjusted": f"{_adj:.0%}", "Matchup": _mq,
                         "B2B": _b2b, "Form": _fsig, "Venue": _ven or "?",
                         "Tier": _tier, "_adj_raw": _adj,
+                        "_team": _norm_team_abbr(_team) if _team else "",
+                        "_opp":  _norm_team_abbr(_opp)  if _opp  else "",
                     }
                 except Exception:
                     return None
@@ -2525,6 +2527,37 @@ if _mode == "🎯  Slate Scanner":
 
         _tc = {"Strong Over":"green","Lean Over":"yellow","Lean Under":"orange","Strong Under":"red","Pass":"gray"}
         _te = {"Strong Over":"🟢","Lean Over":"🟡","Lean Under":"🟠","Strong Under":"🔴","Pass":"⚪"}
+
+        # ── Correlated picks warning ──────────────────────────────
+        # Find players from the same game (same team OR same opponent)
+        _game_groups = {}
+        for _r in _show:
+            _t = _r.get("_team", "")
+            _o = _r.get("_opp", "")
+            if _t and _o:
+                # Game key = sorted pair of teams
+                _gkey = "_".join(sorted([_t, _o]))
+                _game_groups.setdefault(_gkey, []).append(_r["Player"])
+
+        _correlated_games = {k: v for k, v in _game_groups.items() if len(v) >= 2}
+
+        if _correlated_games:
+            for _gkey, _players in _correlated_games.items():
+                _teams = _gkey.split("_")
+                _plist = ", ".join(_players)
+                st.markdown(
+                    f"<div style='background:#1c1005;border:1px solid #854d0e;"
+                    f"border-radius:10px;padding:0.7rem 1rem;margin-bottom:0.5rem;"
+                    f"display:flex;align-items:center;gap:10px;'>"
+                    f"<span style='font-size:1.1rem;'>⚠️</span>"
+                    f"<div style='font-family:DM Mono;font-size:0.7rem;'>"
+                    f"<span style='color:#f97316;font-weight:800;text-transform:uppercase;"
+                    f"letter-spacing:0.08em;'>Correlated picks</span>"
+                    f"<span style='color:#475569;'> · {_plist} are all in the same game "
+                    f"({_teams[0]} vs {_teams[1]}) — a blowout tanks all of them</span>"
+                    f"</div></div>",
+                    unsafe_allow_html=True
+                )
 
         if not _show:
             st.info("No results match the filter. Try 'Strong + Lean' or 'All results'.")
