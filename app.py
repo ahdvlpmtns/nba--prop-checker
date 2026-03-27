@@ -2811,10 +2811,16 @@ with col_a:
     if "player_alias_input" not in st.session_state:
         st.session_state.player_alias_input = ""
 
+    # Pre-select if a recent player was tapped
+    _recent_pick = st.session_state.pop("_recent_pick", None)
+    _preselect_idx = 0
+    if _recent_pick and _recent_pick in player_names_list:
+        _preselect_idx = player_names_list.index(_recent_pick) + 1  # +1 for blank option
+
     player_query = st.selectbox(
         "Player — type name, nickname, or initials",
         options=[""] + player_names_list,
-        index=0,
+        index=_preselect_idx,
         format_func=lambda x: "— search by name, nickname, or initials —" if x == "" else x,
         key=f"player_sel_{st.session_state.player_key}",
     )
@@ -2841,7 +2847,8 @@ with col_a:
         )
         for _rp in st.session_state.recent_players:
             if st.button(_rp, key=f"recent_{_rp}", use_container_width=True):
-                st.session_state[f"player_sel_{st.session_state.player_key}"] = _rp
+                st.session_state.player_key += 1
+                st.session_state._recent_pick = _rp
                 st.rerun()
 
 with col_b:
