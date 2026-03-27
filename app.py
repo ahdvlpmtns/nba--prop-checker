@@ -513,6 +513,29 @@ div[data-testid="stDataFrame"] {
 /* ── Progress / spinner ── */
 div[data-testid="stSpinner"] { color: var(--orange) !important; }
 
+/* ── Number input — hide steppers, tap to type ── */
+div[data-testid="stNumberInput"] button {
+    display: none !important;
+}
+div[data-testid="stNumberInput"] input {
+    font-size: 1.1rem !important;
+    font-weight: 700 !important;
+    font-family: 'DM Mono', monospace !important;
+    color: var(--text) !important;
+    background: var(--bg2) !important;
+    border: 1px solid var(--border2) !important;
+    border-radius: 10px !important;
+    text-align: center !important;
+    padding: 0.6rem !important;
+    min-height: 48px !important;
+    -webkit-appearance: none !important;
+}
+div[data-testid="stNumberInput"] input:focus {
+    border-color: var(--orange) !important;
+    box-shadow: 0 0 0 2px rgba(249,115,22,0.2) !important;
+    outline: none !important;
+}
+
 /* ── Scrollbar ── */
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: var(--bg); }
@@ -2819,27 +2842,14 @@ with col_a:
             st.rerun()
 
 with col_b:
-    # Common NBA points lines — scrollable on mobile
-    _common_lines = [
-        7.5, 8.5, 9.5, 10.5, 11.5, 12.5, 13.5, 14.5, 15.5,
-        16.5, 17.5, 18.5, 19.5, 20.5, 21.5, 22.5, 23.5, 24.5,
-        25.5, 26.5, 27.5, 28.5, 29.5, 30.5, 31.5, 32.5, 33.5,
-        34.5, 35.5, 36.5, 37.5, 38.5, 39.5, 40.5, 42.5, 44.5,
-        46.5, 48.5, 50.5,
-        # Also include whole numbers and .0 lines
-        8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0,
-        16.0, 17.0, 18.0, 19.0, 20.0, 21.0, 22.0, 23.0, 24.0,
-        25.0, 26.0, 27.0, 28.0, 29.0, 30.0, 32.0, 35.0, 40.0,
-    ]
-    _common_lines = sorted(set(_common_lines))
-    _default_line = 24.5
-    _line_idx = _common_lines.index(_default_line) if _default_line in _common_lines else 0
-    line = st.selectbox(
+    line = st.number_input(
         "Points Line",
-        options=_common_lines,
-        index=_line_idx,
-        format_func=lambda x: f"{x:.1f} pts",
-        key="line_select",
+        min_value=0.5,
+        max_value=80.0,
+        value=24.5,
+        step=0.5,
+        format="%.1f",
+        key="line_input",
     )
 with col_c:
     side = st.selectbox("Over / Under", ["Over", "Under"])
