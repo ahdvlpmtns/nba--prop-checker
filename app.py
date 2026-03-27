@@ -2842,143 +2842,51 @@ with col_a:
             st.rerun()
 
 with col_b:
-    st.markdown("<div style='font-family:DM Mono;font-size:0.62rem;color:#475569;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:4px;'>Points Line</div>", unsafe_allow_html=True)
+    # Two-mode line input: selectbox (native mobile picker) + manual text entry
+    _all_lines = [round(x * 0.5, 1) for x in range(1, 121)]
+    if "line_mode" not in st.session_state:
+        st.session_state.line_mode = "pick"
     if "line_val" not in st.session_state:
         st.session_state.line_val = 24.5
 
-    # Build list of lines 0.5–60.0 in 0.5 steps
-    _all_lines = [round(x * 0.5, 1) for x in range(1, 121)]  # 0.5 to 60.0
-    _line_strs = [f"{l:.1f}" for l in _all_lines]
-    _default_idx = _all_lines.index(st.session_state.line_val) if st.session_state.line_val in _all_lines else _all_lines.index(24.5)
+    _tab_pick = st.session_state.line_mode == "pick"
+    _lc1, _lc2 = st.columns(2)
+    with _lc1:
+        if st.button("🎯 Pick" if not _tab_pick else "✓ Pick",
+                     key="line_mode_pick",
+                     type="primary" if _tab_pick else "secondary",
+                     use_container_width=True):
+            st.session_state.line_mode = "pick"
+            st.rerun()
+    with _lc2:
+        if st.button("✏️ Type",
+                     key="line_mode_type",
+                     type="primary" if not _tab_pick else "secondary",
+                     use_container_width=True):
+            st.session_state.line_mode = "type"
+            st.rerun()
 
-    import streamlit.components.v1 as _components
-    _picker_html = f"""
-    <style>
-    .picker-wrap {{
-        position: relative; width: 100%; height: 110px;
-        overflow: hidden; border-radius: 10px;
-        background: #0b0f18; border: 1px solid #243044;
-        cursor: ns-resize; user-select: none;
-    }}
-    .picker-drum {{
-        display: flex; flex-direction: column;
-        align-items: center; transition: transform 0.15s ease;
-        will-change: transform;
-    }}
-    .picker-item {{
-        height: 36px; line-height: 36px; font-size: 1.1rem;
-        font-weight: 700; font-family: 'DM Mono', monospace;
-        color: #475569; width: 100%; text-align: center;
-        flex-shrink: 0; transition: color 0.1s, font-size 0.1s;
-    }}
-    .picker-item.active {{ color: #f97316; font-size: 1.3rem; }}
-    .picker-fade-top {{
-        position: absolute; top: 0; left: 0; right: 0; height: 37px;
-        background: linear-gradient(to bottom, #0b0f18 0%, transparent 100%);
-        pointer-events: none; z-index: 2;
-    }}
-    .picker-fade-bot {{
-        position: absolute; bottom: 0; left: 0; right: 0; height: 37px;
-        background: linear-gradient(to top, #0b0f18 0%, transparent 100%);
-        pointer-events: none; z-index: 2;
-    }}
-    .picker-line {{
-        position: absolute; top: 50%; left: 10%; right: 10%;
-        height: 1px; background: #f97316; opacity: 0.3;
-        transform: translateY(-18px); z-index: 3; pointer-events: none;
-    }}
-    .picker-line2 {{
-        position: absolute; top: 50%; left: 10%; right: 10%;
-        height: 1px; background: #f97316; opacity: 0.3;
-        transform: translateY(17px); z-index: 3; pointer-events: none;
-    }}
-    </style>
-    <div class="picker-wrap" id="picker">
-        <div class="picker-fade-top"></div>
-        <div class="picker-fade-bot"></div>
-        <div class="picker-line"></div>
-        <div class="picker-line2"></div>
-        <div class="picker-drum" id="drum">
-        {"".join(f'<div class="picker-item" data-val="{l}">{l:.1f}</div>' for l in _all_lines)}
-        </div>
-    </div>
-    <input type="hidden" id="picked-val" value="{st.session_state.line_val:.1f}">
-    <script>
-    (function() {{
-        const drum      = document.getElementById('drum');
-        const picker    = document.getElementById('picker');
-        const items     = Array.from(drum.querySelectorAll('.picker-item'));
-        const ITEM_H    = 36;
-        const CENTER    = 37; // px from top to center item
-        let idx         = {_default_idx};
-        let startY      = 0;
-        let startOffset = 0;
-        let dragging    = false;
-
-        function getOffset(i) {{ return CENTER - i * ITEM_H; }}
-
-        function snapTo(i) {{
-            idx = Math.max(0, Math.min(items.length - 1, i));
-            drum.style.transform = `translateY(${{getOffset(idx)}}px)`;
-            items.forEach((el, j) => el.classList.toggle('active', j === idx));
-            const val = items[idx].dataset.val;
-            document.getElementById('picked-val').value = val;
-            // Send to Streamlit
-            window.parent.postMessage({{type:'streamlit:setComponentValue', value: parseFloat(val)}}, '*');
-        }}
-
-        // Initialize
-        drum.style.transform = `translateY(${{getOffset(idx)}}px)`;
-        items[idx].classList.add('active');
-
-        // Touch
-        picker.addEventListener('touchstart', e => {{
-            startY = e.touches[0].clientY;
-            startOffset = getOffset(idx);
-            dragging = true;
-        }}, {{passive: true}});
-        picker.addEventListener('touchmove', e => {{
-            if (!dragging) return;
-            const dy = e.touches[0].clientY - startY;
-            drum.style.transform = `translateY(${{startOffset + dy}}px)`;
-        }}, {{passive: true}});
-        picker.addEventListener('touchend', e => {{
-            if (!dragging) return;
-            dragging = false;
-            const dy = e.changedTouches[0].clientY - startY;
-            const newIdx = Math.round(idx - dy / ITEM_H);
-            snapTo(newIdx);
-        }});
-
-        // Mouse (desktop)
-        picker.addEventListener('mousedown', e => {{
-            startY = e.clientY; startOffset = getOffset(idx); dragging = true;
-        }});
-        document.addEventListener('mousemove', e => {{
-            if (!dragging) return;
-            const dy = e.clientY - startY;
-            drum.style.transform = `translateY(${{startOffset + dy}}px)`;
-        }});
-        document.addEventListener('mouseup', e => {{
-            if (!dragging) return;
-            dragging = false;
-            const dy = e.clientY - startY;
-            snapTo(Math.round(idx - dy / ITEM_H));
-        }});
-
-        // Scroll wheel
-        picker.addEventListener('wheel', e => {{
-            e.preventDefault();
-            snapTo(idx + (e.deltaY > 0 ? 1 : -1));
-        }}, {{passive: false}});
-    }})();
-    </script>
-    """
-
-    _picked = _components.html(_picker_html, height=115)
-    if _picked is not None:
-        st.session_state.line_val = float(_picked)
-    line = st.session_state.line_val
+    if st.session_state.line_mode == "pick":
+        _default_idx = _all_lines.index(st.session_state.line_val) if st.session_state.line_val in _all_lines else _all_lines.index(24.5)
+        line = st.selectbox(
+            "Points Line",
+            options=_all_lines,
+            index=_default_idx,
+            format_func=lambda x: f"{x:.1f}",
+            key="line_select",
+            label_visibility="collapsed",
+        )
+        st.session_state.line_val = line
+    else:
+        line = st.number_input(
+            "Points Line",
+            min_value=0.5, max_value=80.0,
+            value=st.session_state.line_val,
+            step=0.5, format="%.1f",
+            key="line_input",
+            label_visibility="collapsed",
+        )
+        st.session_state.line_val = line
 with col_c:
     side = st.selectbox("Over / Under", ["Over", "Under"])
 with col_d:
