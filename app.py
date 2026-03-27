@@ -513,26 +513,15 @@ div[data-testid="stDataFrame"] {
 /* ── Progress / spinner ── */
 div[data-testid="stSpinner"] { color: var(--orange) !important; }
 
-/* ── Number input — hide steppers, tap to type ── */
-div[data-testid="stNumberInput"] button {
-    display: none !important;
-}
+/* ── Number input ── */
 div[data-testid="stNumberInput"] input {
-    font-size: 1.1rem !important;
-    font-weight: 700 !important;
-    font-family: 'DM Mono', monospace !important;
     color: var(--text) !important;
     background: var(--bg2) !important;
-    border: 1px solid var(--border2) !important;
+    border-color: var(--border) !important;
     border-radius: 10px !important;
-    text-align: center !important;
-    padding: 0.6rem !important;
-    min-height: 48px !important;
-    -webkit-appearance: none !important;
 }
 div[data-testid="stNumberInput"] input:focus {
     border-color: var(--orange) !important;
-    box-shadow: 0 0 0 2px rgba(249,115,22,0.2) !important;
     outline: none !important;
 }
 
