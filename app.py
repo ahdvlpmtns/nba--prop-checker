@@ -3470,8 +3470,21 @@ if st.session_state.logs is not None:
 
     # Ruler pip position: adjusted % mapped to 0-100 scale
     # For Under bets, mirror the position — high adjusted% means strong Under (left side)
-    _ruler_adj = (1.0 - _display_adj) if _display_side == 'Under' else _display_adj
-    _pip = max(2, min(98, int(_ruler_adj * 100)))
+    # Ruler pip: always map to the 5-zone scale regardless of side
+    # Zones: Strong Under(0-36%) | Lean Under(36-45%) | Pass(45-55%) | Lean Over(55-64%) | Strong Over(64-100%)
+    # For Over: high adjusted % → right side (Strong Over zone)
+    # For Under: high adjusted % → left side (Strong Under zone), so mirror
+    # BUT: if verdict is Pass, pip should sit in the middle (45-55%) regardless
+    if _display_tier == "Pass":
+        _pip = 50  # always center for Pass
+    elif _display_side == "Under":
+        # Mirror: 100% adjusted Under → pip at 0% (Strong Under left)
+        # 64% adjusted Under → pip at 36% (boundary of Strong Under)
+        # 55% adjusted Under → pip at 45% (boundary of Lean Under)
+        _pip = max(2, min(44, int((1.0 - _display_adj) * 100)))
+    else:
+        # Over: 64% → 64%, 100% → 100%
+        _pip = max(56, min(98, int(_display_adj * 100))) if _display_adj >= 0.55 else max(2, min(98, int(_display_adj * 100)))
     _pip_style = (
         f"position:absolute;top:1px;left:{_pip}%;"
         f"transform:translateX(-50%);"
