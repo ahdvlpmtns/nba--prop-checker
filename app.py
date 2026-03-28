@@ -1329,6 +1329,69 @@ def delete_from_supabase(row_id: str) -> bool:
         return False
 
 
+# ── Auto prop result detection ───────────────────────────────
+
+def auto_detect_result(entry: dict) -> Optional[str]:
+    """
+    Check if a tracked prop has a result by looking at the player's
+    most recent game log. Returns 'Hit', 'Miss', or None if game
+    hasn't been played yet.
+    """
+    try:
+        player_name = entry.get("Player", "")
+        line_str    = entry.get("Line", "")  # e.g. "24.5 Over" or "17.0 Under"
+
+        if not player_name or not line_str:
+            return None
+
+        # Parse line and side
+        parts = line_str.strip().split()
+        if len(parts) < 2:
+            return None
+        try:
+            line_val = float(parts[0])
+        except ValueError:
+            return None
+        side = parts[1] if len(parts) > 1 else "Over"
+
+        # Find player ID
+        nba_id, _ = nba_find_player(player_name)
+        if not nba_id:
+            return None
+
+        # Get most recent game log (uses cache)
+        from datetime import datetime, timedelta
+        import pytz
+        et  = pytz.timezone("America/New_York")
+        now = datetime.now(et)
+
+        logs = nba_get_game_logs(nba_id, "2025-26", n=1)
+        if logs.empty:
+            return None
+
+        # Check if the most recent game was today or yesterday
+        last_game_date = pd.to_datetime(logs.iloc[0]["GAME_DATE"])
+        days_ago = (now.date() - last_game_date.date()).days
+
+        # Only auto-detect if game was within last 2 days
+        if days_ago > 2:
+            return None
+
+        # Get actual points
+        actual_pts = pd.to_numeric(logs.iloc[0]["PTS"], errors="coerce")
+        if pd.isna(actual_pts):
+            return None
+
+        # Determine result
+        if side == "Over":
+            return "Hit" if actual_pts >= line_val else "Miss"
+        else:
+            return "Hit" if actual_pts <= line_val else "Miss"
+
+    except Exception:
+        return None
+
+
 # ── Injury status ─────────────────────────────────────────────
 
 @st.cache_data(ttl=300)  # refresh every 5 mins — injury status can change fast
@@ -4131,6 +4194,21 @@ else:
     tier_css   = {"Strong Over": "green", "Lean Over": "yellow", "Lean Under": "orange", "Strong Under": "red", "Pass": "gray"}
     tier_emoji = {"Strong Over": "🟢", "Lean Over": "🟡", "Lean Under": "🟠", "Strong Under": "🔴", "Pass": "⚪"}
 
+    # Auto-detect results for pending picks in background
+    _auto_updated = False
+    for _i, _e in enumerate(st.session_state.tracker):
+        if _e.get("Result", "Pending") == "Pending":
+            _detected = auto_detect_result(_e)
+            if _detected:
+                st.session_state.tracker[_i]["Result"]        = _detected
+                st.session_state.tracker[_i]["auto_detected"] = True
+                if _e.get("id"):
+                    update_result_in_supabase(_e["id"], _detected)
+                _auto_updated = True
+
+    if _auto_updated:
+        st.rerun()
+
     # Win rate summary
     _hits    = sum(1 for e in st.session_state.tracker if e.get("Result") == "Hit")
     _misses  = sum(1 for e in st.session_state.tracker if e.get("Result") == "Miss")
@@ -4156,9 +4234,10 @@ else:
         css = tier_css.get(t, "gray")
         em  = tier_emoji.get(t, "⚪")
         col_card, col_remove = st.columns([11, 1])
-        _result     = entry.get("Result", "Pending")
+        _result       = entry.get("Result", "Pending")
         _result_color = {"Hit": "#22c55e", "Miss": "#ef4444", "Pending": "#475569"}.get(_result, "#475569")
         _result_emoji = {"Hit": "✅", "Miss": "❌", "Pending": "⏳"}.get(_result, "⏳")
+        _auto_tag     = "<span style='font-family:DM Mono;font-size:0.55rem;color:#475569;margin-left:6px;'>auto</span>" if entry.get("auto_detected") else ""
 
         with col_card:
             st.markdown(f"""
@@ -4167,7 +4246,7 @@ else:
                     <div class='verdict-label'>{entry["Line"]} · vs {entry["Opponent"]}</div>
                     <div style='font-size:1.1rem; font-weight:800; color:#f1f5f9;'>{entry["Player"]}</div>
                     <div style='font-family:DM Mono;font-size:0.7rem;color:{_result_color};margin-top:4px;'>
-                        {_result_emoji} {_result}
+                        {_result_emoji} {_result}{_auto_tag}
                     </div>
                 </div>
                 <div style='display:flex; gap:1.5rem; flex-wrap:wrap; align-items:center;'>
