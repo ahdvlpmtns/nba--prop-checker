@@ -815,57 +815,63 @@ def season_str_to_season(season_str: str) -> str:
 def get_h2h_logs(player_id: int, opp_abbr: str, season: str) -> pd.DataFrame:
     """
     Fetch full season logs and filter for games vs opp_abbr.
-    Returns DataFrame with same columns as nba_get_game_logs.
-    Looks at current + prior season for enough sample.
+    Hard 15s timeout per season, max 3 seasons.
     """
     empty = pd.DataFrame(columns=["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A"])
     if not opp_abbr:
         return empty
 
-    try:
-        from nba_api.library.http import NBAStatsHTTP
-        NBAStatsHTTP.nba_response.headers = {
-            "Host": "stats.nba.com",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            "Accept": "application/json, text/plain, */*",
-            "x-nba-stats-origin": "stats",
-            "x-nba-stats-token": "true",
-            "Referer": "https://www.nba.com/",
-            "Origin": "https://www.nba.com",
-            "Connection": "keep-alive",
-        }
-    except Exception:
-        pass
+    _HEADERS = {
+        "Host": "stats.nba.com",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "x-nba-stats-origin": "stats",
+        "x-nba-stats-token": "true",
+        "Referer": "https://www.nba.com/",
+        "Origin": "https://www.nba.com",
+    }
 
-    all_rows = []
-    # Check current + 2 prior seasons for enough H2H games
     try:
         start_year = int(season.split("-")[0])
     except Exception:
         start_year = 2025
 
-    for yr in [start_year, start_year - 1, start_year - 2]:
+    import concurrent.futures
+    all_rows = []
+
+    def _fetch_season(yr):
         try:
-            season_str = f"{yr}-{str(yr+1)[-2:]}"
-            df = playergamelog.PlayerGameLog(
-                player_id=player_id, season=season_str, timeout=45,
-            ).get_data_frames()[0]
-            df["GAME_DATE"] = pd.to_datetime(df["GAME_DATE"])
-            for c in ["MATCHUP","MIN","PTS","FGA","FTA","FG3A"]:
-                if c not in df.columns:
-                    df[c] = None
-            # Filter to games vs this opponent
-            mask = df["MATCHUP"].astype(str).str.contains(opp_abbr, na=False)
-            all_rows.append(df[mask][["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A"]])
+            from nba_api.library.http import NBAStatsHTTP
+            NBAStatsHTTP.nba_response.headers = _HEADERS
         except Exception:
-            time.sleep(2)
-            continue
+            pass
+        season_str = f"{yr}-{str(yr+1)[-2:]}"
+        df = playergamelog.PlayerGameLog(
+            player_id=player_id, season=season_str, timeout=12,
+        ).get_data_frames()[0]
+        df["GAME_DATE"] = pd.to_datetime(df["GAME_DATE"])
+        for c in ["MATCHUP","MIN","PTS","FGA","FTA","FG3A"]:
+            if c not in df.columns:
+                df[c] = None
+        mask = df["MATCHUP"].astype(str).str.contains(opp_abbr, na=False)
+        return df[mask][["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A"]]
+
+    # Fetch all 3 seasons in parallel with hard timeout
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:
+        futures = {ex.submit(_fetch_season, yr): yr
+                   for yr in [start_year, start_year - 1, start_year - 2]}
+        for future in concurrent.futures.as_completed(futures, timeout=20):
+            try:
+                df = future.result(timeout=15)
+                if not df.empty:
+                    all_rows.append(df)
+            except Exception:
+                pass
 
     if not all_rows:
         return empty
 
-    combined = pd.concat(all_rows).sort_values("GAME_DATE", ascending=False).reset_index(drop=True)
-    return combined
+    return pd.concat(all_rows).sort_values("GAME_DATE", ascending=False).reset_index(drop=True)
 
 
 def h2h_signal(h2h_df: pd.DataFrame, line: float, side: str) -> Tuple[str, Optional[float], int]:
