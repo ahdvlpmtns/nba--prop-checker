@@ -33,13 +33,13 @@ st.markdown("""
 ══════════════════════════════════════════ */
 
 :root {
-    --bg:      #040608;
-    --bg2:     #080c14;
-    --bg3:     #0c1220;
-    --bg4:     #101828;
-    --border:  #161f2e;
-    --border2: #1e2d42;
-    --border3: #243550;
+    --bg:      #07090f;
+    --bg2:     #0c1018;
+    --bg3:     #101624;
+    --bg4:     #141c2c;
+    --border:  #1e2840;
+    --border2: #263348;
+    --border3: #2e3d58;
     --orange:  #f97316;
     --orange2: #fb923c;
     --green:   #22c55e;
@@ -49,14 +49,13 @@ st.markdown("""
     --yellow:  #eab308;
     --blue:    #60a5fa;
     --purple:  #a78bfa;
-    --muted:   #3d5068;
-    --muted2:  #546880;
-    --text:    #e8edf5;
-    --text2:   #8fa3bc;
-    --text3:   #6b849e;
-    /* Glass effect */
-    --glass:   rgba(8,12,20,0.8);
-    --glass2:  rgba(12,18,32,0.6);
+    --muted:   #4a6080;
+    --muted2:  #647d98;
+    --text:    #edf2f8;
+    --text2:   #9db5cc;
+    --text3:   #7a95ae;
+    --glass:   rgba(12,16,24,0.8);
+    --glass2:  rgba(16,22,36,0.6);
 }
 
 /* ── Base ── */
@@ -76,7 +75,7 @@ html, body, [class*="css"] {
 }
 /* Deep background texture */
 [data-testid="stAppViewContainer"] {
-    background: radial-gradient(ellipse at 20% 0%, #0d1a2e 0%, #040608 50%) !important;
+    background: radial-gradient(ellipse at 20% 0%, #111e35 0%, #07090f 50%) !important;
 }
 [data-testid="stAppViewBlockContainer"] {
     background: transparent !important;
@@ -113,7 +112,7 @@ html, body, [class*="css"] {
 .pl-header {
     display: flex; align-items: center; justify-content: space-between;
     padding: 0.85rem 1.1rem; margin-bottom: 1rem;
-    background: linear-gradient(135deg, #080e1c 0%, #0a1220 60%, #080c18 100%);
+    background: linear-gradient(135deg, #0d1426 0%, #101828 60%, #0c1220 100%);
     border: 1px solid var(--border2);
     border-top: 1px solid var(--border3);
     border-radius: 18px;
@@ -223,7 +222,7 @@ button[data-testid="baseButton-primary"][key="tab_scanner"] {
 
 /* ── Stat cards ── */
 .stat-card {
-    background: linear-gradient(145deg, #0c1424 0%, #080d18 100%);
+    background: linear-gradient(145deg, #101828 0%, #0c1220 100%);
     border: 1px solid var(--border);
     border-top: 1px solid rgba(255,255,255,0.04);
     border-radius: 14px;
@@ -284,28 +283,28 @@ button[data-testid="baseButton-primary"][key="tab_scanner"] {
     background: linear-gradient(90deg, transparent, rgba(255,255,255,0.08), transparent);
 }
 .verdict-banner.green  {
-    background: linear-gradient(145deg, #031b0d 0%, #041508 60%, #02100a 100%);
+    background: linear-gradient(145deg, #051f0f 0%, #071a0c 60%, #041008 100%);
     border-color: #1a7a40;
     box-shadow: 0 0 0 1px rgba(34,197,94,0.06),
                 0 0 40px rgba(34,197,94,0.12),
                 0 8px 40px rgba(0,0,0,0.5);
 }
 .verdict-banner.yellow {
-    background: linear-gradient(145deg, #141000 0%, #0e0c00 60%, #0a0800 100%);
+    background: linear-gradient(145deg, #181200 0%, #120e00 60%, #0e0a00 100%);
     border-color: #92580a;
     box-shadow: 0 0 0 1px rgba(234,179,8,0.06),
                 0 0 40px rgba(234,179,8,0.12),
                 0 8px 40px rgba(0,0,0,0.5);
 }
 .verdict-banner.orange {
-    background: linear-gradient(145deg, #160900 0%, #0f0600 60%, #0c0400 100%);
+    background: linear-gradient(145deg, #1a0a00 0%, #130700 60%, #0f0500 100%);
     border-color: #a83a10;
     box-shadow: 0 0 0 1px rgba(249,115,22,0.06),
                 0 0 40px rgba(249,115,22,0.12),
                 0 8px 40px rgba(0,0,0,0.5);
 }
 .verdict-banner.red    {
-    background: linear-gradient(145deg, #140000 0%, #0e0000 60%, #0a0000 100%);
+    background: linear-gradient(145deg, #180202 0%, #120000 60%, #0e0000 100%);
     border-color: #a81b1b;
     box-shadow: 0 0 0 1px rgba(239,68,68,0.06),
                 0 0 40px rgba(239,68,68,0.12),
@@ -342,7 +341,7 @@ button[data-testid="baseButton-primary"][key="tab_scanner"] {
 
 /* ── AI box ── */
 .ai-box {
-    background: linear-gradient(145deg, #070d1e 0%, #060b18 60%, #050910 100%);
+    background: linear-gradient(145deg, #0b1428 0%, #091020 60%, #070d1a 100%);
     border: 1px solid #1a2d4a;
     border-top: 1px solid rgba(96,165,250,0.1);
     border-radius: 14px; padding: 1.25rem;
