@@ -553,12 +553,6 @@ for key, default in [
         st.session_state[key] = default
 
 # Load tracker from Supabase on first load
-if not st.session_state.supabase_loaded:
-    _sb_entries = load_tracker_from_supabase(st.session_state.session_id)
-    if _sb_entries:
-        st.session_state.tracker = _sb_entries
-    st.session_state.supabase_loaded = True
-
 # ─────────────────────────────────────────────
 # ─────────────────────────────────────────────
 # Data layer — ESPN (schedule) + nba_api (game logs)
@@ -2434,6 +2428,13 @@ def generate_ai_analysis(prompt: str) -> str:
 # ─────────────────────────────────────────────
 # UI — Header
 # ─────────────────────────────────────────────
+
+# ── Load tracker from Supabase on first run ──
+if not st.session_state.supabase_loaded:
+    _sb_entries = load_tracker_from_supabase(st.session_state.session_id)
+    if _sb_entries:
+        st.session_state.tracker = _sb_entries
+    st.session_state.supabase_loaded = True
 
 st.markdown("""
 <div class="pl-header">
