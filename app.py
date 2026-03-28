@@ -539,13 +539,25 @@ hr { border-color: var(--border) !important; }
 # Session state
 # ─────────────────────────────────────────────
 
+# Generate a unique session ID for this user session
+if "session_id" not in st.session_state:
+    import uuid
+    st.session_state.session_id = str(uuid.uuid4())
+
 for key, default in [
     ("logs", None), ("ai_analysis", None), ("ai_error", None),
     ("defense_data", None), ("tracker", []), ("active_tab", "player"),
-    ("recent_players", []),
+    ("recent_players", []), ("supabase_loaded", False),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
+
+# Load tracker from Supabase on first load
+if not st.session_state.supabase_loaded:
+    _sb_entries = load_tracker_from_supabase(st.session_state.session_id)
+    if _sb_entries:
+        st.session_state.tracker = _sb_entries
+    st.session_state.supabase_loaded = True
 
 # ─────────────────────────────────────────────
 # ─────────────────────────────────────────────
@@ -1178,6 +1190,144 @@ def espn_get_opp_pts_allowed(opp_abbr: str) -> Optional[float]:
         return None
     except Exception:
         return None
+
+# ── Supabase ──────────────────────────────────────────────────
+
+def get_supabase_client():
+    """Get Supabase client using credentials from Streamlit secrets."""
+    try:
+        url = st.secrets["SUPABASE_URL"]
+        key = st.secrets["SUPABASE_KEY"]
+        import requests as _req
+
+        class _SupabaseClient:
+            def __init__(self, url, key):
+                self.url  = url.rstrip("/")
+                self.key  = key
+                self.hdrs = {
+                    "apikey":        key,
+                    "Authorization": f"Bearer {key}",
+                    "Content-Type":  "application/json",
+                    "Prefer":        "return=representation",
+                }
+
+            def select(self, table, filters=None):
+                url = f"{self.url}/rest/v1/{table}?order=created_at.desc"
+                if filters:
+                    for k, v in filters.items():
+                        url += f"&{k}=eq.{v}"
+                r = _req.get(url, headers=self.hdrs, timeout=10)
+                return r.json() if r.ok else []
+
+            def insert(self, table, data):
+                r = _req.post(
+                    f"{self.url}/rest/v1/{table}",
+                    headers=self.hdrs, json=data, timeout=10
+                )
+                return r.json() if r.ok else None
+
+            def update(self, table, row_id, data):
+                r = _req.patch(
+                    f"{self.url}/rest/v1/{table}?id=eq.{row_id}",
+                    headers=self.hdrs, json=data, timeout=10
+                )
+                return r.ok
+
+            def delete(self, table, row_id):
+                r = _req.delete(
+                    f"{self.url}/rest/v1/{table}?id=eq.{row_id}",
+                    headers=self.hdrs, timeout=10
+                )
+                return r.ok
+
+            def delete_all(self, table, session_id):
+                r = _req.delete(
+                    f"{self.url}/rest/v1/{table}?session_id=eq.{session_id}",
+                    headers=self.hdrs, timeout=10
+                )
+                return r.ok
+
+        return _SupabaseClient(url, key)
+    except Exception:
+        return None
+
+
+def load_tracker_from_supabase(session_id: str) -> list:
+    """Load tracker entries for this session from Supabase."""
+    try:
+        sb = get_supabase_client()
+        if not sb:
+            return []
+        rows = sb.select("prop_tracker", {"session_id": session_id})
+        if not rows or not isinstance(rows, list):
+            return []
+        return [{
+            "id":          r.get("id"),
+            "Player":      r.get("player", ""),
+            "Line":        r.get("line", ""),
+            "Opponent":    r.get("opponent", "—"),
+            "Matchup":     r.get("matchup", ""),
+            "Venue":       r.get("venue", ""),
+            "Avg PTS":     r.get("avg_pts", 0),
+            "Hit Rate":    r.get("hit_rate", ""),
+            "Adjusted":    r.get("adjusted", ""),
+            "Consistency": r.get("consistency", ""),
+            "Verdict":     r.get("verdict", ""),
+            "Result":      r.get("result", "Pending"),
+        } for r in rows]
+    except Exception:
+        return []
+
+
+def save_to_supabase(session_id: str, entry: dict) -> str:
+    """Save a tracker entry to Supabase. Returns the new row id."""
+    try:
+        sb = get_supabase_client()
+        if not sb:
+            return None
+        row = {
+            "session_id":  session_id,
+            "player":      entry.get("Player", ""),
+            "line":        entry.get("Line", ""),
+            "opponent":    entry.get("Opponent", "—"),
+            "matchup":     entry.get("Matchup", ""),
+            "venue":       entry.get("Venue", ""),
+            "avg_pts":     float(entry.get("Avg PTS", 0)),
+            "hit_rate":    entry.get("Hit Rate", ""),
+            "adjusted":    entry.get("Adjusted", ""),
+            "consistency": entry.get("Consistency", ""),
+            "verdict":     entry.get("Verdict", ""),
+            "result":      entry.get("Result", "Pending"),
+        }
+        result = sb.insert("prop_tracker", row)
+        if result and isinstance(result, list) and len(result) > 0:
+            return result[0].get("id")
+        return None
+    except Exception:
+        return None
+
+
+def update_result_in_supabase(row_id: str, result: str) -> bool:
+    """Update the result (Hit/Miss/Pending) of a tracker entry."""
+    try:
+        sb = get_supabase_client()
+        if not sb:
+            return False
+        return sb.update("prop_tracker", row_id, {"result": result})
+    except Exception:
+        return False
+
+
+def delete_from_supabase(row_id: str) -> bool:
+    """Delete a tracker entry from Supabase."""
+    try:
+        sb = get_supabase_client()
+        if not sb:
+            return False
+        return sb.delete("prop_tracker", row_id)
+    except Exception:
+        return False
+
 
 # ── Injury status ─────────────────────────────────────────────
 
@@ -2963,15 +3113,22 @@ if fetch:
             st.session_state.logs = nba_get_game_logs(
                 player_id=player_id, season=season_str_clean, n=n_games
             )
-    except TimeoutError as e:
-        st.warning(
-            f"⏱️ NBA stats server is slow right now — please try again in a few seconds. "
-            f"This usually resolves on retry."
-        )
-        st.stop()
     except Exception as e:
         if not manual_mode:
-            st.error(f"Fetch failed: {repr(e)}")
+            st.markdown("""
+            <div style='background:#1c1005;border:1px solid #854d0e;border-radius:12px;
+                        padding:1rem 1.2rem;margin:0.5rem 0;'>
+                <div style='font-family:DM Mono;font-size:0.7rem;color:#f97316;
+                            font-weight:800;letter-spacing:0.08em;margin-bottom:6px;'>
+                    ⏱️ NBA STATS SERVER TIMEOUT
+                </div>
+                <div style='font-size:0.85rem;color:#94a3b8;line-height:1.6;'>
+                    stats.nba.com is slow during peak game hours (evenings ET).<br>
+                    <strong style='color:#f1f5f9;'>Click Analyze Prop again</strong> — 
+                    it usually works on the second try.
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
             st.stop()
         else:
             st.warning("Live fetch failed. Enter points manually.")
@@ -3931,13 +4088,26 @@ if st.session_state.logs is not None:
             "Adjusted":    f"{adjusted:.0%}",
             "Consistency": f"{consistency:.0%}",
             "Verdict":     tier,
+            "Result":      "Pending",
         }
         existing = [i for i, e in enumerate(st.session_state.tracker)
                     if e["Player"] == full_name and e["Line"] == f"{line} {side}"]
         if existing:
+            # Update existing entry
+            old_id = st.session_state.tracker[existing[0]].get("id")
+            entry["id"] = old_id
             st.session_state.tracker[existing[0]] = entry
+            if old_id:
+                delete_from_supabase(old_id)
+            new_id = save_to_supabase(st.session_state.session_id, entry)
+            if new_id:
+                st.session_state.tracker[existing[0]]["id"] = new_id
             st.success(f"Updated {full_name} in tracker.")
         else:
+            # Save to Supabase and store returned ID
+            new_id = save_to_supabase(st.session_state.session_id, entry)
+            if new_id:
+                entry["id"] = new_id
             st.session_state.tracker.append(entry)
             st.success(f"Added {full_name} to tracker!")
 
@@ -3960,35 +4130,84 @@ if not st.session_state.tracker:
 else:
     tier_css   = {"Strong Over": "green", "Lean Over": "yellow", "Lean Under": "orange", "Strong Under": "red", "Pass": "gray"}
     tier_emoji = {"Strong Over": "🟢", "Lean Over": "🟡", "Lean Under": "🟠", "Strong Under": "🔴", "Pass": "⚪"}
+
+    # Win rate summary
+    _hits    = sum(1 for e in st.session_state.tracker if e.get("Result") == "Hit")
+    _misses  = sum(1 for e in st.session_state.tracker if e.get("Result") == "Miss")
+    _pending = sum(1 for e in st.session_state.tracker if e.get("Result", "Pending") == "Pending")
+    _settled = _hits + _misses
+    _wr      = f"{_hits/_settled:.0%}" if _settled > 0 else "—"
+    _wr_color = "#22c55e" if _settled > 0 and _hits/_settled >= 0.6 else ("#ef4444" if _settled > 0 and _hits/_settled < 0.4 else "#eab308")
+
+    st.markdown(
+        f"<div style='display:flex;gap:1.5rem;flex-wrap:wrap;margin-bottom:0.75rem;"
+        f"font-family:DM Mono;font-size:0.7rem;'>"
+        f"<span style='color:{_wr_color};font-weight:800;'>Win Rate: {_wr}</span>"
+        f"<span style='color:#22c55e;'>✅ {_hits} Hit</span>"
+        f"<span style='color:#ef4444;'>❌ {_misses} Miss</span>"
+        f"<span style='color:#475569;'>⏳ {_pending} Pending</span>"
+        f"</div>",
+        unsafe_allow_html=True
+    )
+
     to_remove = None
     for i, entry in enumerate(st.session_state.tracker):
         t   = entry["Verdict"]
         css = tier_css.get(t, "gray")
         em  = tier_emoji.get(t, "⚪")
         col_card, col_remove = st.columns([11, 1])
+        _result     = entry.get("Result", "Pending")
+        _result_color = {"Hit": "#22c55e", "Miss": "#ef4444", "Pending": "#475569"}.get(_result, "#475569")
+        _result_emoji = {"Hit": "✅", "Miss": "❌", "Pending": "⏳"}.get(_result, "⏳")
+
         with col_card:
             st.markdown(f"""
             <div class='verdict-banner {css}' style='margin:0.3rem 0; padding:1rem 1.4rem;'>
                 <div>
                     <div class='verdict-label'>{entry["Line"]} · vs {entry["Opponent"]}</div>
                     <div style='font-size:1.1rem; font-weight:800; color:#f1f5f9;'>{entry["Player"]}</div>
+                    <div style='font-family:DM Mono;font-size:0.7rem;color:{_result_color};margin-top:4px;'>
+                        {_result_emoji} {_result}
+                    </div>
                 </div>
                 <div style='display:flex; gap:1.5rem; flex-wrap:wrap; align-items:center;'>
                     <div><div class='verdict-label'>Verdict</div><div class='verdict-tier {css}' style='font-size:1rem;'>{em} {t}</div></div>
-                    <div><div class='verdict-label'>Venue</div><div style='font-size:1rem; font-weight:700; color:#f1f5f9;'>{entry.get("Venue","—")}</div></div>
                     <div><div class='verdict-label'>Avg PTS</div><div style='font-size:1rem; font-weight:700; color:#f1f5f9;'>{entry["Avg PTS"]}</div></div>
-                    <div><div class='verdict-label'>Hit Rate</div><div style='font-size:1rem; font-weight:700; color:#f1f5f9;'>{entry["Hit Rate"]}</div></div>
                     <div><div class='verdict-label'>Adjusted</div><div style='font-size:1rem; font-weight:700; color:#f1f5f9;'>{entry["Adjusted"]}</div></div>
                     <div><div class='verdict-label'>Matchup</div><div style='font-size:1rem; font-weight:700; color:#f1f5f9;'>{entry["Matchup"]}</div></div>
                 </div>
             </div>
             """, unsafe_allow_html=True)
+
+            # Result logging buttons
+            _rc1, _rc2, _rc3 = st.columns(3)
+            with _rc1:
+                if st.button("✅ Hit", key=f"hit_{i}", use_container_width=True):
+                    st.session_state.tracker[i]["Result"] = "Hit"
+                    if entry.get("id"):
+                        update_result_in_supabase(entry["id"], "Hit")
+                    st.rerun()
+            with _rc2:
+                if st.button("❌ Miss", key=f"miss_{i}", use_container_width=True):
+                    st.session_state.tracker[i]["Result"] = "Miss"
+                    if entry.get("id"):
+                        update_result_in_supabase(entry["id"], "Miss")
+                    st.rerun()
+            with _rc3:
+                if st.button("⏳ Pending", key=f"pending_{i}", use_container_width=True):
+                    st.session_state.tracker[i]["Result"] = "Pending"
+                    if entry.get("id"):
+                        update_result_in_supabase(entry["id"], "Pending")
+                    st.rerun()
+
         with col_remove:
             st.markdown("<div style='margin-top:0.6rem;'></div>", unsafe_allow_html=True)
             if st.button("✕", key=f"remove_{i}", help="Remove"):
                 to_remove = i
     if to_remove is not None:
-        st.session_state.tracker.pop(to_remove)
+        _removed = st.session_state.tracker.pop(to_remove)
+        if _removed.get("id"):
+            delete_from_supabase(_removed["id"])
         st.rerun()
 
     tc1, tc2 = st.columns([1, 1])
@@ -3996,6 +4215,9 @@ else:
         tracker_df  = pd.DataFrame(st.session_state.tracker)
     with tc2:
         if st.button("🗑️  Clear All"):
+            _sb = get_supabase_client()
+            if _sb:
+                _sb.delete_all("prop_tracker", st.session_state.session_id)
             st.session_state.tracker = []
             st.rerun()
 
