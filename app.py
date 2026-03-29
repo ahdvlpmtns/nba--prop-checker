@@ -3689,10 +3689,12 @@ if st.session_state.logs is not None:
     if splits.get("home_games", 0) > 0 or splits.get("away_games", 0) > 0:
         st.markdown("<div class='section-header'>Home / Away Splits</div>", unsafe_allow_html=True)
         venue_color = "#22c55e" if tonight_venue == "Home" else "#60a5fa"
+        # Include opponent in the tonight badge
+        _opp_label = f" vs {opp_abbr}" if opp_abbr else ""
         venue_note_html = (
             f"<span style='background:{venue_color}22; color:{venue_color}; font-family:DM Mono; "
             f"font-size:0.7rem; padding:3px 10px; border-radius:999px; border:1px solid {venue_color}44; "
-            f"margin-left:8px;'>Tonight: {tonight_venue}</span>"
+            f"margin-left:8px;'>Tonight: {tonight_venue}{_opp_label}</span>"
         ) if tonight_venue else ""
 
         ha1, ha2 = st.columns(2)
