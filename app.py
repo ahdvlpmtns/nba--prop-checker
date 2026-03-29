@@ -2221,16 +2221,27 @@ def get_confidence_tier(adjusted: float, line_diff: float, consistency: float, s
         else:
             tier = "Pass"
 
-    # Consistency downgrade: only fires when edge is tight AND hit rate is not dominant
-    # If adjusted >= 65% with low consistency = player consistently BEATS the line
-    # (scores way above it every game) — that's a good signal, not a reason to downgrade
-    # Only downgrade when edge < 3pts AND hit rate < 65% — truly volatile player
-    edge_is_tight     = abs(line_diff) < 3.0
-    hit_rate_dominant = adjusted >= 0.65
-    low_consistency   = consistency < 0.35 and edge_is_tight and not hit_rate_dominant
+    # Consistency downgrade rules:
+    #
+    # Rule 1 — Extremely volatile (<= 20%) WITHOUT dominant hit rate:
+    #   Always downgrade. A player this unpredictable can't be trusted.
+    #   EXCEPTION: if hit rate >= 65%, they consistently beat the line
+    #   even if they land far above/below it — keep Strong verdict.
+    #
+    # Rule 2 — Low consistency (21-35%) with tight edge (< 3pts)
+    #   and weak hit rate (< 65%): downgrade. Too close to call.
 
-    if low_consistency:
-        if tier == "Strong Over":   tier = "Lean Over"
+    extremely_volatile = consistency <= 0.20
+    edge_is_tight      = abs(line_diff) < 3.0
+    # For extremely volatile players, require higher hit rate to keep Strong verdict
+    # 70%+ means player overwhelmingly beats the line even if inconsistently
+    hit_rate_dominant  = adjusted >= 0.70 if extremely_volatile else adjusted >= 0.65
+
+    if extremely_volatile and not hit_rate_dominant:
+        if tier == "Strong Over":    tier = "Lean Over"
+        elif tier == "Strong Under": tier = "Lean Under"
+    elif consistency < 0.35 and edge_is_tight and not hit_rate_dominant:
+        if tier == "Strong Over":    tier = "Lean Over"
         elif tier == "Strong Under": tier = "Lean Under"
 
     return tier
@@ -3905,7 +3916,14 @@ if st.session_state.logs is not None:
     )
     _adj_pct_str    = f"{_display_adj:.0%}"
     _cons_pct_str   = f"{consistency:.0%}"
-    _cons_word      = "Predictable" if consistency >= 0.5 else ("Variable" if consistency >= 0.35 else "Volatile")
+    if consistency >= 0.5:
+        _cons_word = "Predictable"
+    elif consistency >= 0.35:
+        _cons_word = "Variable"
+    elif consistency >= 0.20:
+        _cons_word = "Volatile"
+    else:
+        _cons_word = "⚠️ Extremely Volatile"
     _bar_style      = f"background:{_bar_color};height:6px;width:{_bar_w}%;border-radius:999px;box-shadow:0 0 6px {_bar_color}55;"
 
     # Ruler pip position: adjusted % mapped to 0-100 scale
@@ -4047,9 +4065,10 @@ if st.session_state.logs is not None:
             steps.append((key, val, adj, before, after, delta))
 
         # Consistency override check
-        edge_is_tight     = abs(line_diff) < 3.0
-        hit_rate_dominant = adjusted >= 0.65
-        low_cons = consistency < 0.35 and edge_is_tight and not hit_rate_dominant
+        extremely_volatile = consistency < 0.20
+        edge_is_tight      = abs(line_diff) < 3.0
+        hit_rate_dominant  = adjusted >= 0.65
+        low_cons = extremely_volatile or (consistency < 0.35 and edge_is_tight and not hit_rate_dominant)
         cons_override = low_cons and tier in ["Lean Over", "Lean Under"]
 
         # Render debug table
@@ -4132,7 +4151,9 @@ if st.session_state.logs is not None:
         # Final decision
         # Consistency override only matters when tier is Strong Over/Under
         override_relevant = tier in ["Strong Over", "Strong Under", "Lean Over", "Lean Under"]
-        if low_cons and override_relevant:
+        if consistency < 0.20 and override_relevant:
+            cons_note = f"Consistency {consistency:.0%} < 20% · Extremely volatile → downgrade always applied"
+        elif low_cons and override_relevant:
             cons_note = f"Consistency {consistency:.0%} < 35% · Edge {line_diff:+.1f} < 3pts → downgrade applied"
         elif consistency < 0.35 and hit_rate_dominant:
             cons_note = f"Consistency {consistency:.0%} < 35% but hit rate {adjusted:.0%} ≥ 65% → override skipped (dominates line)"
