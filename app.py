@@ -4207,6 +4207,49 @@ if st.session_state.logs is not None:
     )
     st.markdown(_verdict_html, unsafe_allow_html=True)
 
+    # ── How to read this verdict ──────────────────────────────────
+    with st.expander("💡  How to read this verdict"):
+        _hr_pct  = f"{adjusted:.0%}"
+        _edge_abs = abs(line_diff)
+        _edge_dir = "below" if line_diff < 0 else "above"
+        _side_word = "Under" if "Under" in tier else "Over"
+        _cons_word_tip = (
+            "very predictable — you can trust this signal"
+            if consistency >= 0.5 else
+            "somewhat variable — treat with moderate confidence"
+            if consistency >= 0.35 else
+            "volatile — player can go way above or below any night"
+            if consistency >= 0.20 else
+            "extremely volatile — even a strong signal can blow up"
+        )
+        st.markdown(f"""
+        <div style='font-family:DM Mono; font-size:0.75rem; line-height:1.9;
+                    color:#94a3b8; padding:0.25rem 0;'>
+
+        <div style='margin-bottom:0.6rem;'>
+        <span style='color:#f1f5f9; font-weight:700;'>Adjusted Hit Rate ({_hr_pct})</span><br>
+        In roughly <span style='color:#f97316; font-weight:700;'>{round(adjusted*10):.0f} out of 10</span> recent games
+        with similar conditions, {full_name.split()[0]} scored
+        {'<span style="color:#22c55e;font-weight:700;">under</span>' if _side_word=="Under" else '<span style="color:#22c55e;font-weight:700;">over</span>'}
+        {line} pts. This is the core verdict.
+        </div>
+
+        <div style='margin-bottom:0.6rem;'>
+        <span style='color:#f1f5f9; font-weight:700;'>Edge vs Line ({line_diff:+.1f})</span><br>
+        His scoring average is <span style='color:#f97316; font-weight:700;'>{_edge_abs:.1f} pts {_edge_dir}</span>
+        the line. A large edge means the hit rate is comfortable — not just squeaking by.
+        </div>
+
+        <div>
+        <span style='color:#f1f5f9; font-weight:700;'>Consistency ({consistency:.0%})</span><br>
+        His scoring is <span style='color:#f97316; font-weight:700;'>{_cons_word_tip}</span>.
+        Use this to size your bet — high consistency = bet confidently,
+        low consistency = bet smaller or skip.
+        </div>
+
+        </div>
+        """, unsafe_allow_html=True)
+
     with st.expander("🔬  Logic Debugger — step-by-step verdict breakdown"):
         # ── Step-by-step adjustment trace ────────────────────────────
         multipliers_map = {
