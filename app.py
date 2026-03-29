@@ -993,15 +993,83 @@ def detect_b2b(logs: pd.DataFrame, game_date: Optional[str]) -> str:
         return "Normal"
 
     try:
-        tonight = pd.to_datetime(game_date)
+        tonight   = pd.to_datetime(game_date)
         log_dates = pd.to_datetime(logs["GAME_DATE"], errors="coerce").dropna()
-        # Check if any logged game was yesterday
         yesterday = tonight - pd.Timedelta(days=1)
         if any(abs((d - yesterday).days) == 0 for d in log_dates):
             return "B2B"
         return "Normal"
     except Exception:
         return "Normal"
+
+
+def detect_rest_days(logs: pd.DataFrame, game_date: Optional[str]) -> str:
+    """
+    Returns rest days signal based on days since last game.
+    - 'B2B'      → 0 days rest (handled by detect_b2b)
+    - 'Short'    → 1 day rest (played 2 days ago)
+    - 'Normal'   → 2 days rest
+    - 'Rested'   → 3+ days rest → small scoring boost
+
+    Research shows players score ~2-3 pts more with 3+ days rest.
+    """
+    if game_date is None or logs is None or logs.empty:
+        return "Normal"
+
+    try:
+        tonight   = pd.to_datetime(game_date)
+        log_dates = pd.to_datetime(logs["GAME_DATE"], errors="coerce").dropna()
+        if log_dates.empty:
+            return "Normal"
+
+        last_game  = log_dates.max()
+        days_since = (tonight - last_game).days
+
+        if days_since <= 1:
+            return "B2B"      # handled by b2b signal
+        elif days_since == 2:
+            return "Short"    # 1 full day rest — slightly tired
+        elif days_since == 3:
+            return "Normal"   # 2 days rest — standard
+        else:
+            return "Rested"   # 3+ days rest — fresh legs
+    except Exception:
+        return "Normal"
+
+
+def minutes_adjusted_scoring(
+    avg_pts: float,
+    season_avg_min: Optional[float],
+    recent_avg_min: float,
+    line: float,
+    side: str,
+) -> str:
+    """
+    Adjusts the matchup/role signal based on minutes restriction.
+
+    If a player is playing significantly fewer minutes than their season average,
+    their expected scoring should scale down proportionally.
+
+    Returns an override signal: "Risk", "Okay", or None (no override needed).
+    """
+    if season_avg_min is None or season_avg_min < 10 or recent_avg_min < 5:
+        return None
+
+    minutes_ratio = recent_avg_min / season_avg_min
+
+    # Significant restriction: playing ≥20% fewer minutes than season avg
+    if minutes_ratio <= 0.80:
+        # Scale expected points by minutes ratio
+        expected_pts = avg_pts * minutes_ratio
+        edge_with_restriction = expected_pts - line
+
+        # If restriction pushes expected pts below line → Risk signal for Over
+        if side == "Over" and edge_with_restriction < -1.0:
+            return "Risk"
+        # If restriction pushes expected pts well below line → boost Under
+        elif side == "Under" and edge_with_restriction < -3.0:
+            return "Strong"
+    return None
 
 def season_str_to_int(season_str: str) -> int:
     """Convert '2025-26' -> 2025 for ESPN year param."""
@@ -2173,6 +2241,8 @@ def apply_adjustments(weighted: float, context: dict, side: str = "Over") -> flo
         "venue":    {"Boost": +0.04, "Neutral": 0.00, "Penalty": -0.05},
         "h2h":      {"Strong": +0.05, "Neutral": 0.00, "Risk": -0.06},
         "b2b":      {"Normal": 0.00, "B2B": -0.06},
+        # Rest days: 3+ days rest = small scoring boost
+        "rest":     {"Rested": +0.03, "Normal": 0.00, "Short": -0.02, "B2B": -0.06},
         "form":     {"Boost": +0.05, "Neutral": 0.00, "Penalty": -0.05},
         # Pace: fast game = more possessions = more scoring opportunities
         "pace":     {"Boost": +0.04, "Neutral": 0.00, "Penalty": -0.04},
@@ -2574,7 +2644,7 @@ CONTEXT:
 - Game script: {script_sel}
 - Venue split adjustment: {venue_adj or "Neutral"} (based on home/away hit rate differential)
 - H2H vs {opp_abbr}: {h2h_sig} signal — {h2h_count} games, avg {f"{h2h_avg:.1f}" if h2h_avg else "N/A"} pts
-- Schedule: {b2b_status}{"  — FATIGUE RISK, second night of back-to-back" if b2b_status == "B2B" else ""}
+- Schedule: {b2b_status}{"  — FATIGUE RISK, second night of back-to-back" if b2b_status == "B2B" else ""} · Rest: {rest_status}
 - Injury status: {_inj_status}{f" ({_inj_reason})" if _inj_reason else ""}
 - Usage spike: {f"YES — {', '.join(p['name'] for p in _spike_players)} out ({', '.join(str(p['minutes']) for p in _spike_players)} mpg)" if _spike_players else "None detected"}
 - Recent shooting (L3): 3PT% {f"{recent_3pt:.0%}" if recent_3pt is not None else "N/A"} · TS% {f"{recent_ts:.0%}" if recent_ts is not None else "N/A"} → {shoot_sig} signal
@@ -3432,6 +3502,10 @@ if st.session_state.logs is not None:
     h2h_df     = get_h2h_logs(player_id, opp_abbr, season_str_clean) if opp_abbr else pd.DataFrame()
     h2h_sig, h2h_avg, h2h_count = h2h_signal(h2h_df, line, side)
     b2b_status  = detect_b2b(logs, game_date)
+    rest_status = detect_rest_days(logs, game_date)
+    # If B2B, rest signal is redundant — use B2B
+    if b2b_status == "B2B":
+        rest_status = "B2B"
     season_avg     = nba_get_season_avg(player_id, season_str_clean)
     season_avg_min = nba_get_season_avg_min(player_id, season_str_clean)
     form_sig, form_diff = form_divergence_signal(sample_avg_pts, season_avg, line, side)
@@ -3596,34 +3670,28 @@ if st.session_state.logs is not None:
             </div>""", unsafe_allow_html=True)
 
     with hb2:
-        if b2b_status == "B2B":
-            st.markdown(f"""
-            <div class='stat-card' style='border-color:#991b1b; background:linear-gradient(135deg,#1c0505 0%,#111827 100%);'>
-                <div class='stat-label'>Schedule</div>
-                <div style='display:flex; align-items:center; gap:10px; margin-top:6px;'>
-                    <div style='font-size:1.5rem;'>😴</div>
-                    <div>
-                        <div style='font-size:1rem; font-weight:800; color:#ef4444;'>Back-to-Back</div>
-                        <div style='font-family:DM Mono; font-size:0.7rem; color:#ef4444; margin-top:2px;'>
-                            Fatigue penalty applied to verdict
-                        </div>
+        _rest_cfg = {
+            "B2B":    ("😴", "Back-to-Back",   "#ef4444", "#991b1b", "#1c0505", "Fatigue penalty applied"),
+            "Short":  ("🥱", "Short Rest",      "#f97316", "#9a3412", "#160800", "1 day rest — slight fatigue"),
+            "Normal": ("✅", "Normal Rest",     "#22c55e", "#166534", "#052e16", "No fatigue adjustment"),
+            "Rested": ("💪", "Well Rested",     "#22c55e", "#166534", "#052e16", "3+ days rest — boost applied"),
+        }
+        _ri, _rl, _rc, _rb, _rbg, _rsub = _rest_cfg.get(
+            rest_status, ("✅", "Normal Rest", "#22c55e", "#166534", "#052e16", "No fatigue adjustment")
+        )
+        st.markdown(f"""
+        <div class='stat-card' style='border-color:{_rb}; background:linear-gradient(135deg,{_rbg} 0%,#111827 100%);'>
+            <div class='stat-label'>Schedule & Rest</div>
+            <div style='display:flex; align-items:center; gap:10px; margin-top:6px;'>
+                <div style='font-size:1.5rem;'>{_ri}</div>
+                <div>
+                    <div style='font-size:1rem; font-weight:800; color:{_rc};'>{_rl}</div>
+                    <div style='font-family:DM Mono; font-size:0.7rem; color:#475569; margin-top:2px;'>
+                        {_rsub}
                     </div>
                 </div>
-            </div>""", unsafe_allow_html=True)
-        else:
-            st.markdown(f"""
-            <div class='stat-card' style='border-color:#166534; background:linear-gradient(135deg,#052e16 0%,#111827 100%);'>
-                <div class='stat-label'>Schedule</div>
-                <div style='display:flex; align-items:center; gap:10px; margin-top:6px;'>
-                    <div style='font-size:1.5rem;'>✅</div>
-                    <div>
-                        <div style='font-size:1rem; font-weight:800; color:#22c55e;'>Normal Rest</div>
-                        <div style='font-family:DM Mono; font-size:0.7rem; color:#475569; margin-top:2px;'>
-                            No fatigue adjustment
-                        </div>
-                    </div>
-                </div>
-            </div>""", unsafe_allow_html=True)
+            </div>
+        </div>""", unsafe_allow_html=True)
 
     with hb3:
         if season_avg is not None and form_diff is not None:
@@ -3807,9 +3875,26 @@ if st.session_state.logs is not None:
 
     venue_adj = venue_adjustment(splits, tonight_venue, side)
 
-    # Boost minutes/role if key teammate is out — more usage redistributes to player
-    _minutes_ctx = "Strong" if _spike_sig == "Boost" and minutes_sel != "Risk" else minutes_sel
-    _role_ctx    = "Strong" if _spike_sig == "Boost" and role_sel    != "Risk" else role_sel
+    # Minutes restriction override — scale down signals if player is on minutes limit
+    _min_override = minutes_adjusted_scoring(
+        sample_avg_pts, season_avg_min, avg_min, line, side
+    )
+
+    # Apply overrides in priority order:
+    # 1. Minutes restriction (hard cap on expectations)
+    # 2. Usage spike (boost if teammate out)
+    if _min_override == "Risk":
+        _minutes_ctx = "Risk"
+        _role_ctx    = "Risk"
+    elif _min_override == "Strong":
+        _minutes_ctx = "Strong"
+        _role_ctx    = "Strong"
+    elif _spike_sig == "Boost" and minutes_sel != "Risk":
+        _minutes_ctx = "Strong"
+        _role_ctx    = "Strong"
+    else:
+        _minutes_ctx = minutes_sel
+        _role_ctx    = role_sel
 
     context = {
         "minutes": _minutes_ctx,
@@ -3820,6 +3905,7 @@ if st.session_state.logs is not None:
         "venue":   venue_adj,
         "h2h":     h2h_sig,
         "b2b":     b2b_status,
+        "rest":    rest_status,
         "form":    form_sig,
         "pace":    pace_sig,
         "shoot":   shoot_sig,
@@ -4119,6 +4205,7 @@ if st.session_state.logs is not None:
             "venue":    {"Boost": +0.04, "Neutral": 0.00, "Penalty": -0.05},
             "h2h":      {"Strong": +0.05, "Neutral": 0.00, "Risk": -0.06},
             "b2b":      {"Normal": 0.00, "B2B": -0.06},
+            "rest":     {"Rested": +0.03, "Normal": 0.00, "Short": -0.02, "B2B": -0.06},
             "form":     {"Boost": +0.05, "Neutral": 0.00, "Penalty": -0.05},
             "pace":     {"Boost": +0.04, "Neutral": 0.00, "Penalty": -0.04},
             "shoot":    {"Boost": +0.05, "Neutral": 0.00, "Penalty": -0.05},
@@ -4132,6 +4219,7 @@ if st.session_state.logs is not None:
             "venue":   "Home/Away split",
             "h2h":     "H2H vs opponent",
             "b2b":     "Back-to-back rest",
+            "rest":    "Rest days",
             "form":    "Recent form vs season",
             "pace":    "Game pace",
             "shoot":   "Recent shooting",
