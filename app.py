@@ -812,7 +812,7 @@ def nba_get_game_logs(player_id: int, season: str, n: int = 10) -> pd.DataFrame:
     Hard 15s timeout per attempt, max 3 attempts, exponential backoff.
     Total max wait: ~45s before giving up cleanly.
     """
-    empty = pd.DataFrame(columns=["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A"])
+    empty = pd.DataFrame(columns=["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A","FG3M"])
 
     _HEADERS = {
         "Host": "stats.nba.com",
@@ -848,7 +848,10 @@ def nba_get_game_logs(player_id: int, season: str, n: int = 10) -> pd.DataFrame:
             for c in ["MATCHUP","MIN","PTS","FGA","FTA","FG3A"]:
                 if c not in df.columns:
                     df[c] = None
-            return df[["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A"]]
+            for c in ["FG3M"]:
+                if c not in df.columns:
+                    df[c] = 0
+            return df[["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A","FG3M"]]
         except concurrent.futures.TimeoutError:
             if attempt < 2:
                 time.sleep(2 ** attempt)  # 1s, 2s
@@ -898,7 +901,7 @@ def get_h2h_logs(player_id: int, opp_abbr: str, season: str) -> pd.DataFrame:
     Fetch full season logs and filter for games vs opp_abbr.
     Hard 15s timeout per season, max 3 seasons.
     """
-    empty = pd.DataFrame(columns=["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A"])
+    empty = pd.DataFrame(columns=["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A","FG3M"])
     if not opp_abbr:
         return empty
 
@@ -2171,6 +2174,8 @@ def apply_adjustments(weighted: float, context: dict, side: str = "Over") -> flo
         "form":     {"Boost": +0.05, "Neutral": 0.00, "Penalty": -0.05},
         # Pace: fast game = more possessions = more scoring opportunities
         "pace":     {"Boost": +0.04, "Neutral": 0.00, "Penalty": -0.04},
+        # Shooting efficiency: hot/cold streak over last 3 games
+        "shoot":    {"Boost": +0.05, "Neutral": 0.00, "Penalty": -0.05},
     }
     # For Under bets, flip every signal: high scoring hurts the Under, low scoring helps it
     _flip = -1.0 if side == "Under" else 1.0
@@ -2253,7 +2258,7 @@ def get_confidence_tier(adjusted: float, line_diff: float, consistency: float, s
 @st.cache_data(ttl=21600)
 def nba_get_full_season_logs(player_id: int, season: str) -> pd.DataFrame:
     """Fetch ALL games for a season (not capped at N)."""
-    empty = pd.DataFrame(columns=["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A"])
+    empty = pd.DataFrame(columns=["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A","FG3M"])
     try:
         from nba_api.library.http import NBAStatsHTTP
         NBAStatsHTTP.nba_response.headers = {
@@ -2401,6 +2406,67 @@ def backtest_summary(bt_df: pd.DataFrame) -> dict:
     return summary
 
 
+# ── Recent shooting efficiency signal ─────────────────────────
+
+def shooting_efficiency_signal(
+    logs: pd.DataFrame,
+    side: str,
+    n_recent: int = 3,
+) -> Tuple[str, Optional[float], Optional[float]]:
+    """
+    Detects if a player is on a hot or cold shooting streak.
+
+    Uses last 3 games 3PT% as the primary signal — three-point shooting
+    is the strongest short-term predictor of scoring output for perimeter players.
+    Also checks TS% (true shooting) for all players.
+
+    Returns (signal, recent_3pt_pct, recent_ts_pct)
+    signal: "Boost", "Penalty", "Neutral"
+    """
+    if logs is None or logs.empty or len(logs) < 2:
+        return "Neutral", None, None
+
+    try:
+        recent = logs.head(n_recent).copy()
+
+        # 3PT% over last N games
+        fga3  = pd.to_numeric(recent.get("FG3A", pd.Series(dtype=float)), errors="coerce").fillna(0)
+        fgm3  = pd.to_numeric(recent.get("FG3M", pd.Series(dtype=float)), errors="coerce").fillna(0)
+        total_3pa = fga3.sum()
+        total_3pm = fgm3.sum()
+        recent_3pt = (total_3pm / total_3pa) if total_3pa >= 3 else None
+
+        # TS% over last N games: pts / (2 * (FGA + 0.44 * FTA))
+        pts  = pd.to_numeric(recent.get("PTS",  pd.Series(dtype=float)), errors="coerce").fillna(0)
+        fga  = pd.to_numeric(recent.get("FGA",  pd.Series(dtype=float)), errors="coerce").fillna(0)
+        fta  = pd.to_numeric(recent.get("FTA",  pd.Series(dtype=float)), errors="coerce").fillna(0)
+        total_pts  = pts.sum()
+        total_fga  = fga.sum()
+        total_fta  = fta.sum()
+        denom = 2 * (total_fga + 0.44 * total_fta)
+        recent_ts  = (total_pts / denom) if denom > 0 else None
+
+        # Signal logic
+        signal = "Neutral"
+
+        # Hot shooting — boosts Over, hurts Under
+        if recent_3pt is not None and recent_3pt >= 0.42:
+            signal = "Boost" if side == "Over" else "Penalty"
+        elif recent_ts is not None and recent_ts >= 0.62:
+            signal = "Boost" if side == "Over" else "Penalty"
+
+        # Cold shooting — hurts Over, boosts Under
+        elif recent_3pt is not None and total_3pa >= 3 and recent_3pt <= 0.28:
+            signal = "Penalty" if side == "Over" else "Boost"
+        elif recent_ts is not None and recent_ts <= 0.46:
+            signal = "Penalty" if side == "Over" else "Boost"
+
+        return signal, recent_3pt, recent_ts
+
+    except Exception:
+        return "Neutral", None, None
+
+
 def flag_pill(label: str, flag: str) -> str:
     icon = {"up": "↑", "down": "↓", "flat": "→", "nodata": "—"}.get(flag, "—")
     css  = flag if flag in ["up", "down", "flat", "nodata"] else "nodata"
@@ -2509,6 +2575,7 @@ CONTEXT:
 - Schedule: {b2b_status}{"  — FATIGUE RISK, second night of back-to-back" if b2b_status == "B2B" else ""}
 - Injury status: {_inj_status}{f" ({_inj_reason})" if _inj_reason else ""}
 - Usage spike: {f"YES — {', '.join(p['name'] for p in _spike_players)} out ({', '.join(str(p['minutes']) for p in _spike_players)} mpg)" if _spike_players else "None detected"}
+- Recent shooting (L3): 3PT% {f"{recent_3pt:.0%}" if recent_3pt is not None else "N/A"} · TS% {f"{recent_ts:.0%}" if recent_ts is not None else "N/A"} → {shoot_sig} signal
 - Form: recent avg {sample_avg_pts:.1f} vs season avg {f"{season_avg:.1f}" if season_avg else "N/A"} ({f"{form_diff:+.1f} pts divergence" if form_diff else "N/A"}) — {form_sig} signal for {side}
 
 MODEL OUTPUT: {tier}
@@ -3376,6 +3443,7 @@ if st.session_state.logs is not None:
     except Exception:
         _spike_sig, _spike_players, _spike_html = "Neutral", [], ""
     pace_sig, player_pace, opp_pace = pace_adjustment(player_team, opp_abbr, side)
+    shoot_sig, recent_3pt, recent_ts = shooting_efficiency_signal(logs, side, n_recent=3)
 
     # Get last 3 games minutes for restriction check
     _last3_mins = (
@@ -3470,11 +3538,20 @@ if st.session_state.logs is not None:
     else:
         matchup_auto = "Neutral"
 
+    # Shooting efficiency pill
+    if recent_3pt is not None and recent_3pt > 0:
+        _3pt_str  = f"{recent_3pt:.0%}"
+        _3pt_flag = "up" if shoot_sig == "Boost" else ("down" if shoot_sig == "Penalty" else "flat")
+    else:
+        _3pt_str  = None
+        _3pt_flag = "nodata"
+
     # Trend flags
     st.markdown(f"""<div class='flag-row'>
         {flag_pill("MIN", min_flag)}
         {flag_pill("FGA", fga_flag)}
         {flag_pill("PTS", pts_flag)}
+        {flag_pill(f"3PT {_3pt_str}" if _3pt_str else "3PT", _3pt_flag) if _3pt_flag != "nodata" else ""}
     </div>""", unsafe_allow_html=True)
     st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
 
@@ -3740,6 +3817,7 @@ if st.session_state.logs is not None:
         "b2b":     b2b_status,
         "form":    form_sig,
         "pace":    pace_sig,
+        "shoot":   shoot_sig,
     }
 
     adjusted  = apply_adjustments(weighted_base, context, side)
@@ -4038,6 +4116,7 @@ if st.session_state.logs is not None:
             "b2b":      {"Normal": 0.00, "B2B": -0.06},
             "form":     {"Boost": +0.05, "Neutral": 0.00, "Penalty": -0.05},
             "pace":     {"Boost": +0.04, "Neutral": 0.00, "Penalty": -0.04},
+            "shoot":    {"Boost": +0.05, "Neutral": 0.00, "Penalty": -0.05},
         }
         signal_labels = {
             "minutes": "Minutes load",
@@ -4050,6 +4129,7 @@ if st.session_state.logs is not None:
             "b2b":     "Back-to-back rest",
             "form":    "Recent form vs season",
             "pace":    "Game pace",
+            "shoot":   "Recent shooting",
         }
 
         # Simulate the computation step by step (additive, side-aware)
