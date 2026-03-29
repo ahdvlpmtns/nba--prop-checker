@@ -364,15 +364,17 @@ button[data-testid="baseButton-primary"][key="tab_scanner"] {
 }
 
 /* ── Pills ── */
-.flag-row { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 0.5rem; }
+.flag-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 0.5rem; align-items: center; }
 .flag-pill {
-    font-family: 'DM Mono', monospace; font-size: 0.63rem;
-    padding: 3px 10px; border-radius: 999px; letter-spacing: 0.04em;
+    font-family: 'DM Mono', monospace; font-size: 0.65rem;
+    padding: 4px 12px; border-radius: 999px; letter-spacing: 0.04em;
+    display: inline-flex; align-items: center;
+    white-space: nowrap; line-height: 1.4;
     transition: opacity 0.15s;
 }
-.flag-pill.up     { background: rgba(5,46,22,0.8);  color: #4ade80;  border: 1px solid #166534; box-shadow: 0 0 8px rgba(34,197,94,0.1); }
-.flag-pill.down   { background: rgba(28,5,5,0.8);   color: #f87171;  border: 1px solid #991b1b; box-shadow: 0 0 8px rgba(239,68,68,0.1); }
-.flag-pill.flat   { background: var(--bg2); color: var(--text2); border: 1px solid var(--border); }
+.flag-pill.up     { background: #052e16; color: #4ade80; border: 1px solid #166534; }
+.flag-pill.down   { background: #1c0505; color: #f87171; border: 1px solid #991b1b; }
+.flag-pill.flat   { background: var(--bg2); color: var(--text2); border: 1px solid var(--border2); }
 .flag-pill.nodata { background: var(--bg2); color: var(--muted2); border: 1px solid var(--border); }
 
 /* ── Explainer box ── */
@@ -3538,21 +3540,22 @@ if st.session_state.logs is not None:
     else:
         matchup_auto = "Neutral"
 
-    # Shooting efficiency pill
+    # Pre-build all pills to avoid f-string rendering issues
+    _pill_min = flag_pill("MIN", min_flag)
+    _pill_fga = flag_pill("FGA", fga_flag)
+    _pill_pts = flag_pill("PTS", pts_flag)
     if recent_3pt is not None and recent_3pt > 0:
-        _3pt_str  = f"{recent_3pt:.0%}"
-        _3pt_flag = "up" if shoot_sig == "Boost" else ("down" if shoot_sig == "Penalty" else "flat")
+        _3pt_label = f"3PT {recent_3pt:.0%}"
+        _3pt_flag  = "up" if shoot_sig == "Boost" else ("down" if shoot_sig == "Penalty" else "flat")
+        _pill_3pt  = flag_pill(_3pt_label, _3pt_flag)
     else:
-        _3pt_str  = None
-        _3pt_flag = "nodata"
+        _pill_3pt  = ""
 
     # Trend flags
-    st.markdown(f"""<div class='flag-row'>
-        {flag_pill("MIN", min_flag)}
-        {flag_pill("FGA", fga_flag)}
-        {flag_pill("PTS", pts_flag)}
-        {flag_pill(f"3PT {_3pt_str}" if _3pt_str else "3PT", _3pt_flag) if _3pt_flag != "nodata" else ""}
-    </div>""", unsafe_allow_html=True)
+    st.markdown(
+        f"<div class='flag-row'>{_pill_min}{_pill_fga}{_pill_pts}{_pill_3pt}</div>",
+        unsafe_allow_html=True
+    )
     st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
 
     # Minutes restriction alert
