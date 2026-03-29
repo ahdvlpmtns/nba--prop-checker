@@ -3492,6 +3492,21 @@ if st.session_state.logs is not None:
     shots_suggest   = "High" if avg_fga >= 15 else ("Low" if avg_fga < 10 else "Medium")
     role_suggest    = suggest_bucket(avg_fga + 0.5 * avg_fta, 18, 12)
 
+    # ── Minutes restriction downgrade ─────────────────────────────
+    # If recent avg minutes is trending DOWN vs season avg, downgrade
+    # the minutes signal regardless of absolute value.
+    # A player dropping from 35→25 mins should NOT get "Strong" minutes.
+    if season_avg_min and season_avg_min >= 10:
+        _min_ratio = avg_min / season_avg_min
+        if _min_ratio <= 0.80:
+            # Significant restriction (≥20% drop) → always Risk
+            minutes_suggest = "Risk"
+            role_suggest    = "Risk"
+        elif _min_ratio <= 0.90 and minutes_suggest == "Strong":
+            # Moderate restriction (10-20% drop) → downgrade Strong → Okay
+            minutes_suggest = "Okay"
+            role_suggest    = "Okay" if role_suggest == "Strong" else role_suggest
+
     min_flag = trend_flag(logs["MIN"], n_games)
     fga_flag = trend_flag(logs["FGA"], n_games)
     pts_flag = trend_flag(logs["PTS"], n_games)
