@@ -3670,6 +3670,18 @@ if st.session_state.logs is not None:
             </div>""", unsafe_allow_html=True)
 
     with hb2:
+        # Last game info for context
+        _last_game_info = ""
+        if logs is not None and not logs.empty:
+            try:
+                _last_row  = logs.iloc[0]
+                _last_date = pd.to_datetime(_last_row["GAME_DATE"]).strftime("%b %d")
+                _last_matchup = str(_last_row.get("MATCHUP", "")).replace("vs.", "vs").replace("@", "@ ").strip()
+                _last_pts  = int(pd.to_numeric(_last_row.get("PTS", 0), errors="coerce"))
+                _last_game_info = f"Last: {_last_date} {_last_matchup} — {_last_pts} pts"
+            except Exception:
+                pass
+
         _rest_cfg = {
             "B2B":    ("😴", "Back-to-Back",   "#ef4444", "#991b1b", "#1c0505", "Fatigue penalty applied"),
             "Short":  ("🥱", "Short Rest",      "#f97316", "#9a3412", "#160800", "1 day rest — slight fatigue"),
@@ -3689,6 +3701,7 @@ if st.session_state.logs is not None:
                     <div style='font-family:DM Mono; font-size:0.7rem; color:#475569; margin-top:2px;'>
                         {_rsub}
                     </div>
+                    {f"<div style='font-family:DM Mono; font-size:0.65rem; color:#64748b; margin-top:4px;'>{_last_game_info}</div>" if _last_game_info else ""}
                 </div>
             </div>
         </div>""", unsafe_allow_html=True)
