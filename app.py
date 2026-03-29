@@ -886,7 +886,7 @@ def nba_get_player_team(player_id: int) -> Optional[str]:
     except Exception:
         pass
     try:
-        info = commonplayerinfo.CommonPlayerInfo(player_id=player_id, timeout=45).get_data_frames()[0]
+        info = commonplayerinfo.CommonPlayerInfo(player_id=player_id, timeout=12).get_data_frames()[0]
         return info["TEAM_ABBREVIATION"].iloc[0] if not info.empty else None
     except Exception:
         return None
@@ -1080,65 +1080,79 @@ def season_str_to_int(season_str: str) -> int:
 
 # ── Season average fetch + divergence signal ─────────────────────
 
-@st.cache_data(ttl=21600)
-def nba_get_season_avg(player_id: int, season: str) -> Optional[float]:
+@st.cache_data(ttl=21600, show_spinner=False)
+def nba_get_full_season_logs_cached(player_id: int, season: str) -> Optional[pd.DataFrame]:
     """
-    Fetch full season game log and return season avg pts.
-    Different from the L5/L10 sample — this is the full-season baseline.
+    Fetch full season game log ONCE and cache for 6 hours.
+    Both season avg pts and avg min derive from this single call.
+    Hard 18s timeout, 2 attempts max.
     """
-    try:
-        from nba_api.library.http import NBAStatsHTTP
-        NBAStatsHTTP.nba_response.headers = {
-            "Host": "stats.nba.com",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            "Accept": "application/json, text/plain, */*",
-            "x-nba-stats-origin": "stats",
-            "x-nba-stats-token": "true",
-            "Referer": "https://www.nba.com/",
-            "Origin": "https://www.nba.com",
-            "Connection": "keep-alive",
-        }
-    except Exception:
-        pass
-    for attempt in range(3):
+    _HEADERS = {
+        "Host": "stats.nba.com",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "x-nba-stats-origin": "stats",
+        "x-nba-stats-token": "true",
+        "Referer": "https://www.nba.com/",
+        "Origin": "https://www.nba.com",
+    }
+    for attempt in range(2):
         try:
-            df = playergamelog.PlayerGameLog(
-                player_id=player_id, season=season, timeout=45,
-            ).get_data_frames()[0]
-            pts = pd.to_numeric(df["PTS"], errors="coerce").dropna()
-            return round(float(pts.mean()), 1) if len(pts) >= 5 else None
+            from nba_api.library.http import NBAStatsHTTP
+            NBAStatsHTTP.nba_response.headers = _HEADERS
         except Exception:
-            if attempt < 2:
-                time.sleep(3 * (attempt + 1))
+            pass
+        try:
+            import concurrent.futures
+            def _fetch():
+                return playergamelog.PlayerGameLog(
+                    player_id=player_id, season=season, timeout=15,
+                ).get_data_frames()[0]
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                future = ex.submit(_fetch)
+                df = future.result(timeout=18)
+            if df is not None and not df.empty:
+                return df
+        except Exception:
+            if attempt < 1:
+                time.sleep(2)
     return None
 
 
-@st.cache_data(ttl=21600)
-def nba_get_season_avg_min(player_id: int, season: str) -> Optional[float]:
-    """Fetch full season average minutes per game."""
-    try:
-        from nba_api.library.http import NBAStatsHTTP
-        NBAStatsHTTP.nba_response.headers = {
-            "Host": "stats.nba.com",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "application/json, text/plain, */*",
-            "x-nba-stats-origin": "stats",
-            "x-nba-stats-token": "true",
-            "Referer": "https://www.nba.com/",
-            "Origin": "https://www.nba.com",
-        }
-    except Exception:
-        pass
-    for attempt in range(3):
-        try:
-            df = playergamelog.PlayerGameLog(
-                player_id=player_id, season=season, timeout=45,
-            ).get_data_frames()[0]
-            mins = pd.to_numeric(df["MIN"], errors="coerce").dropna()
-            return round(float(mins.mean()), 1) if len(mins) >= 5 else None
-        except Exception:
-            if attempt < 2:
-                time.sleep(3 * (attempt + 1))
+def nba_get_season_avg(player_id: int, season: str, logs_l10: pd.DataFrame = None) -> Optional[float]:
+    """
+    Get season avg pts. Uses cached full season log.
+    Falls back to L10 sample if API is slow — still useful for form divergence.
+    """
+    # Fast path: use already-fetched L10 as approximation if full season unavailable
+    df = nba_get_full_season_logs_cached(player_id, season)
+    if df is not None:
+        pts = pd.to_numeric(df["PTS"], errors="coerce").dropna()
+        if len(pts) >= 5:
+            return round(float(pts.mean()), 1)
+    # Fallback to L10 sample
+    if logs_l10 is not None and not logs_l10.empty:
+        pts = pd.to_numeric(logs_l10["PTS"], errors="coerce").dropna()
+        if len(pts) >= 3:
+            return round(float(pts.mean()), 1)
+    return None
+
+
+def nba_get_season_avg_min(player_id: int, season: str, logs_l10: pd.DataFrame = None) -> Optional[float]:
+    """
+    Get season avg minutes. Uses cached full season log.
+    Falls back to L10 sample if API is slow.
+    """
+    df = nba_get_full_season_logs_cached(player_id, season)
+    if df is not None:
+        mins = pd.to_numeric(df["MIN"], errors="coerce").dropna()
+        if len(mins) >= 5:
+            return round(float(mins.mean()), 1)
+    # Fallback to L10 sample
+    if logs_l10 is not None and not logs_l10.empty:
+        mins = pd.to_numeric(logs_l10["MIN"], errors="coerce").dropna()
+        if len(mins) >= 3:
+            return round(float(mins.mean()), 1)
     return None
 
 
@@ -2928,7 +2942,7 @@ if _mode == "🎯  Slate Scanner":
                     _b2b       = detect_b2b(_logs, _gd)
                     _h2hdf     = get_h2h_logs(_nid, _opp, _season) if _opp else pd.DataFrame()
                     _hsig, _, _= h2h_signal(_h2hdf, _ln, "Over")
-                    _savg      = nba_get_season_avg(_nid, _season)
+                    _savg      = nba_get_season_avg(_nid, _season, logs_l10=_logs)
                     _fsig, _   = form_divergence_signal(_avgp, _savg, _ln, "Over")
                     _ctx = {
                         "minutes": suggest_bucket(_avgm, 32, 26),
@@ -3151,7 +3165,7 @@ with st.expander("⚡  Quick Entry — analyze multiple props at once"):
                 _qb2b  = detect_b2b(_qlogs, _qgd)
                 _qh2h  = get_h2h_logs(_qnid, _qopp, _season_qe) if _qopp else pd.DataFrame()
                 _qhsig, _, _ = h2h_signal(_qh2h, _qln, _qside)
-                _qsavg = nba_get_season_avg(_qnid, _season_qe)
+                _qsavg = nba_get_season_avg(_qnid, _season_qe, logs_l10=_qlogs)
                 _qfsig, _ = form_divergence_signal(_qavgp, _qsavg, _qln, _qside)
                 _qctx  = {
                     "minutes": suggest_bucket(_qavgm, 32, 26),
@@ -3506,8 +3520,9 @@ if st.session_state.logs is not None:
     # If B2B, rest signal is redundant — use B2B
     if b2b_status == "B2B":
         rest_status = "B2B"
-    season_avg     = nba_get_season_avg(player_id, season_str_clean)
-    season_avg_min = nba_get_season_avg_min(player_id, season_str_clean)
+    # Both derived from one cached full-season fetch — fast after first load
+    season_avg     = nba_get_season_avg(player_id, season_str_clean, logs_l10=logs)
+    season_avg_min = nba_get_season_avg_min(player_id, season_str_clean, logs_l10=logs)
     form_sig, form_diff = form_divergence_signal(sample_avg_pts, season_avg, line, side)
 
     # Usage spike — uses pre-warmed cache so runs fast
