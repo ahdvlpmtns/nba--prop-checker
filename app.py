@@ -11,6 +11,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+import requests
 from nba_api.stats.static import players, teams
 from nba_api.stats.endpoints import (
     playergamelog, scoreboardv2, commonteamroster,
@@ -118,6 +119,59 @@ def get_player_team(player_id: int) -> Optional[str]:
         info = commonplayerinfo.CommonPlayerInfo(player_id=player_id, timeout=15).get_data_frames()[0]
         return info["TEAM_ABBREVIATION"].iloc[0] if not info.empty else None
     except Exception: return None
+
+@st.cache_data(ttl=900)
+def get_injury_report() -> list:
+    """
+    Fetch the NBA official injury report.
+    Returns a list of dicts with keys: player, team, status, reason.
+    Uses the NBA stats API injury report endpoint directly via requests.
+    Falls back to an empty list if unavailable.
+    """
+    url = "https://stats.nba.com/js/data/players/injuries_.json"
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Referer": "https://www.nba.com",
+        "Origin": "https://www.nba.com",
+    }
+    try:
+        resp = requests.get(url, headers=headers, timeout=10)
+        if resp.status_code != 200:
+            return []
+        data = resp.json()
+        injuries = []
+        # Format: list of player injury objects
+        for item in data.get("injuries", []):
+            injuries.append({
+                "player":  item.get("displayName") or item.get("name", ""),
+                "team":    item.get("team", ""),
+                "status":  item.get("status", ""),
+                "reason":  item.get("reason", ""),
+            })
+        return injuries
+    except Exception:
+        return []
+
+
+def check_player_injury(full_name: str, injury_report: list) -> Optional[dict]:
+    """Check if a specific player appears on the injury report."""
+    name_lower = full_name.lower().strip()
+    for entry in injury_report:
+        if name_lower in entry["player"].lower():
+            return entry
+    return None
+
+
+def get_team_injury_flags(player_team: str, injury_report: list, exclude_name: str) -> list:
+    """Get injury flags for teammates (excluding the player being analyzed)."""
+    flags = []
+    exclude_lower = exclude_name.lower().strip()
+    for entry in injury_report:
+        if entry["team"] == player_team and exclude_lower not in entry["player"].lower():
+            if entry["status"].lower() in ["out", "doubtful", "questionable"]:
+                flags.append(entry)
+    return flags[:3]  # show max 3 teammates
+
 
 @st.cache_data(ttl=300)
 def get_next_opponent(player_team: Optional[str]) -> Tuple[Optional[str], Optional[str], bool]:
@@ -348,7 +402,7 @@ def build_analysis_prompt(
     min_flag, fga_flag, pts_flag,
     minutes_sel, role_sel, shots_sel, matchup_sel, script_sel,
     opp_abbr, opp_pts, league_avg,
-    splits=None, tonight_venue=None, venue_applied=False, is_b2b=False,
+    splits=None, tonight_venue=None, venue_applied=False, is_b2b=False, player_injury=None,
 ) -> str:
     game_rows = []
     for _, row in logs.iterrows():
@@ -391,6 +445,7 @@ CONTEXT:
 - Matchup: {matchup_sel} (auto-detected){defense_note}
 - Game script: {script_sel}
 - Back-to-back: {"YES — second night of B2B, expect reduced scoring" if is_b2b else "No"}
+- Injury status: {player_injury["status"] + " — " + player_injury["reason"] if player_injury else "Not on injury report"}
 
 MODEL OUTPUT: {tier}
 
@@ -511,6 +566,11 @@ if st.session_state.logs is not None:
 
     matchup_auto, opp_pts, league_avg = classify_matchup(opp_abbr, season)
 
+    # Fetch injury report
+    injury_report   = get_injury_report()
+    player_injury   = check_player_injury(full_name, injury_report)
+    teammate_flags  = get_team_injury_flags(player_team or "", injury_report, full_name)
+
     # Detect tonight's venue
     tonight_venue = None
     try:
@@ -564,6 +624,34 @@ if st.session_state.logs is not None:
         </div>""", unsafe_allow_html=True)
     else:
         matchup_auto = "Neutral"
+
+    # ── Injury flags ──────────────────────────────────────────────────────────
+    if player_injury:
+        status = player_injury["status"]
+        reason = player_injury["reason"]
+        status_color = {"Out": "#ef4444", "Doubtful": "#f97316", "Questionable": "#eab308"}.get(status, "#94a3b8")
+        status_bg    = {"Out": "#1c0505", "Doubtful": "#1c1005", "Questionable": "#1c1a05"}.get(status, "#0f172a")
+        status_border = {"Out": "#991b1b", "Doubtful": "#9a3412", "Questionable": "#854d0e"}.get(status, "#1e293b")
+        st.markdown(f"""
+        <div style='background:{status_bg}; border:1px solid {status_border}; border-radius:10px;
+                    padding:0.6rem 1.1rem; margin:0.5rem 0; display:flex; align-items:center; gap:10px;'>
+            <span style='font-size:1rem;'>🚨</span>
+            <div>
+                <span style='font-family:DM Mono; font-size:0.7rem; color:{status_color}; font-weight:600; letter-spacing:0.05em;'>{status.upper()} — {full_name}</span>
+                <span style='font-family:DM Mono; font-size:0.7rem; color:#94a3b8; margin-left:8px;'>{reason}</span>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    if teammate_flags:
+        names = " · ".join([f"{e['player']} ({e['status']})" for e in teammate_flags])
+        st.markdown(f"""
+        <div style='background:#0f172a; border:1px solid #1e293b; border-radius:10px;
+                    padding:0.5rem 1.1rem; margin:0.25rem 0;'>
+            <span style='font-family:DM Mono; font-size:0.65rem; color:#475569; letter-spacing:0.1em; text-transform:uppercase;'>Teammate injuries: </span>
+            <span style='font-family:DM Mono; font-size:0.65rem; color:#94a3b8;'>{names}</span>
+        </div>
+        """, unsafe_allow_html=True)
 
     # Back-to-back warning
     if is_b2b:
@@ -672,6 +760,19 @@ if st.session_state.logs is not None:
     if is_b2b:
         margin   = adjusted - 0.5
         adjusted = round(max(0.0, min(1.0, 0.5 + margin * 0.92)), 4)
+    # Injury status penalty
+    if player_injury:
+        status = player_injury["status"].lower()
+        if status == "out":
+            # Player is listed as out — force Pass
+            adjusted = 0.5
+        elif status == "doubtful":
+            margin   = adjusted - 0.5
+            adjusted = round(max(0.0, min(1.0, 0.5 + margin * 0.75)), 4)
+        elif status == "questionable":
+            margin   = adjusted - 0.5
+            adjusted = round(max(0.0, min(1.0, 0.5 + margin * 0.88)), 4)
+
     line_diff  = sample_avg_pts - line
     tier = get_confidence_tier(adjusted, line_diff, consistency)
 
@@ -734,7 +835,7 @@ if st.session_state.logs is not None:
                             minutes_sel=minutes_sel, role_sel=role_sel, shots_sel=shots_sel,
                             matchup_sel=matchup_sel, script_sel=script_sel,
                             opp_abbr=opp_abbr, opp_pts=opp_pts, league_avg=league_avg,
-                            splits=splits, tonight_venue=tonight_venue, venue_applied=venue_applied, is_b2b=is_b2b,
+                            splits=splits, tonight_venue=tonight_venue, venue_applied=venue_applied, is_b2b=is_b2b, player_injury=player_injury,
                         )
                         st.session_state.ai_analysis = generate_ai_analysis(prompt)
                         st.session_state.ai_error    = None
