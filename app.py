@@ -3444,36 +3444,28 @@ if not fetch and st.session_state.logs is None:
 if fetch:
     st.markdown("""
     <style>
-    @keyframes bar-grow {
-        0%   { width: 0%; }
-        20%  { width: 25%; }
-        50%  { width: 55%; }
-        80%  { width: 75%; }
-        95%  { width: 90%; }
-        100% { width: 95%; }
-    }
-    @keyframes dot-pulse {
-        0%, 80%, 100% { opacity: 0.2; transform: scale(0.8); }
-        40%            { opacity: 1;   transform: scale(1.0); }
+    @keyframes shimmer-bar {
+        0%   { background-position: -200% center; }
+        100% { background-position: 200% center; }
     }
     .analyze-loader {
         background: linear-gradient(145deg, #0c1424, #080d18);
         border: 1px solid #1e2840;
         border-radius: 16px;
-        padding: 1.5rem 1.75rem;
+        padding: 1.25rem 1.5rem;
         margin: 0.5rem 0 1rem 0;
         animation: fadeUp 0.3s ease both;
     }
     .loader-title {
         font-family: 'Syne', sans-serif;
-        font-size: 1rem;
+        font-size: 0.95rem;
         font-weight: 700;
         color: #edf2f8;
-        margin-bottom: 4px;
+        margin-bottom: 3px;
     }
     .loader-sub {
         font-family: 'DM Mono', monospace;
-        font-size: 0.65rem;
+        font-size: 0.62rem;
         color: #4a6080;
         letter-spacing: 0.08em;
         margin-bottom: 1rem;
@@ -3483,64 +3475,25 @@ if fetch:
         border-radius: 999px;
         height: 4px;
         overflow: hidden;
-        margin-bottom: 1rem;
     }
     .loader-bar-fill {
         height: 100%;
+        width: 100%;
         border-radius: 999px;
-        background: linear-gradient(90deg, #c2410c, #f97316, #fb923c);
-        animation: bar-grow 8s cubic-bezier(0.1, 0.4, 0.6, 1) forwards;
-        box-shadow: 0 0 8px rgba(249,115,22,0.5);
+        background: linear-gradient(
+            90deg,
+            #c2410c 0%, #f97316 30%, #fb923c 50%, #f97316 70%, #c2410c 100%
+        );
+        background-size: 200% auto;
+        animation: shimmer-bar 1.5s linear infinite;
+        box-shadow: 0 0 8px rgba(249,115,22,0.4);
     }
-    .loader-steps {
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-    }
-    .loader-step {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        font-family: 'DM Mono', monospace;
-        font-size: 0.68rem;
-        color: #4a6080;
-    }
-    .loader-step.active { color: #9db5cc; }
-    .loader-dot {
-        width: 6px; height: 6px;
-        border-radius: 50%;
-        background: #1e2840;
-        flex-shrink: 0;
-    }
-    .loader-step.active .loader-dot {
-        background: #f97316;
-        box-shadow: 0 0 6px rgba(249,115,22,0.6);
-        animation: dot-pulse 1.2s ease-in-out infinite;
-    }
-    .loader-step.done .loader-dot {
-        background: #22c55e;
-    }
-    .loader-step.done { color: #647d98; }
     </style>
     <div class="analyze-loader">
         <div class="loader-title">🔍 Analyzing prop...</div>
-        <div class="loader-sub">Fetching NBA data · This takes 5–15 seconds during peak hours</div>
+        <div class="loader-sub">Fetching NBA data · May take 5–15 sec during peak hours</div>
         <div class="loader-bar-bg">
             <div class="loader-bar-fill"></div>
-        </div>
-        <div class="loader-steps">
-            <div class="loader-step active">
-                <div class="loader-dot"></div>Fetching game logs from NBA.com
-            </div>
-            <div class="loader-step active">
-                <div class="loader-dot"></div>Loading opponent defense data
-            </div>
-            <div class="loader-step active">
-                <div class="loader-dot"></div>Running 12-signal model
-            </div>
-            <div class="loader-step active">
-                <div class="loader-dot"></div>Calculating verdict
-            </div>
         </div>
     </div>
     """, unsafe_allow_html=True)
