@@ -1244,11 +1244,12 @@ def form_divergence_signal(
 # ── Next game / schedule ──────────────────────
 
 @st.cache_data(ttl=300)
+@st.cache_data(ttl=300, show_spinner=False)
 def espn_get_next_game(team_abbr: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """
     Find next upcoming game for a team using ESPN scoreboard.
     Returns (opp_abbr, game_date_str, venue).
-    Skips completed games.
+    Skips completed games. Handles ESPN abbreviation mismatches.
     """
     if not team_abbr:
         return None, None, None
@@ -1260,6 +1261,20 @@ def espn_get_next_game(team_abbr: str) -> Tuple[Optional[str], Optional[str], Op
     except Exception:
         today = datetime.today().date()
 
+    # ESPN uses different abbreviations — build reverse lookup
+    # so GSW→GS, SAS→SA, NYK→NY, etc.
+    _ESPN_REVERSE = {
+        "GSW": "GS", "SAS": "SA", "NYK": "NY", "NOP": "NO",
+        "UTA": "UTAH", "PHX": "PHX", "MEM": "MEM", "OKC": "OKC",
+    }
+    # Candidates to match against — try normalized and ESPN variants
+    _candidates = {team_abbr, _ESPN_REVERSE.get(team_abbr, team_abbr)}
+
+    def _team_matches(abbr: str) -> bool:
+        return (abbr == team_abbr or
+                _norm_team_abbr(abbr) == team_abbr or
+                abbr in _candidates)
+
     for offset in range(10):
         check    = today + timedelta(days=offset)
         date_str = check.strftime("%Y%m%d")
@@ -1267,28 +1282,34 @@ def espn_get_next_game(team_abbr: str) -> Tuple[Optional[str], Optional[str], Op
             data   = espn_get(f"{ESPN_SITE}/scoreboard", params={"dates": date_str})
             events = data.get("events", [])
             for ev in events:
-                comps = ev.get("competitions", [{}])[0]
+                comps       = ev.get("competitions", [{}])[0]
                 competitors = comps.get("competitors", [])
-                teams_in_game = {c.get("team", {}).get("abbreviation", ""): c for c in competitors}
 
-                if team_abbr not in teams_in_game:
-                    continue
-
-                # Skip if final
+                # Skip if final/completed
                 status = ev.get("status", {}).get("type", {}).get("name", "")
                 if "final" in status.lower() or "complete" in status.lower():
                     continue
 
-                # Find opponent
-                opp = next((c for abbr, c in teams_in_game.items() if abbr != team_abbr), None)
-                if not opp:
+                # Find our team using fuzzy abbreviation match
+                my_comp = next(
+                    (c for c in competitors
+                     if _team_matches(c.get("team", {}).get("abbreviation", ""))),
+                    None
+                )
+                if not my_comp:
                     continue
-                opp_abbr_found = opp.get("team", {}).get("abbreviation", "")
 
-                # Home or away
-                my_side   = teams_in_game[team_abbr]
-                home_away = "Home" if my_side.get("homeAway", "") == "home" else "Away"
-                game_date_str = check.strftime("%b %d, %Y")
+                # Find opponent
+                opp_comp = next(
+                    (c for c in competitors if c is not my_comp), None
+                )
+                if not opp_comp:
+                    continue
+
+                opp_abbr_raw   = opp_comp.get("team", {}).get("abbreviation", "")
+                opp_abbr_found = _norm_team_abbr(opp_abbr_raw)
+                home_away      = "Home" if my_comp.get("homeAway", "") == "home" else "Away"
+                game_date_str  = check.strftime("%b %d, %Y")
 
                 return opp_abbr_found, game_date_str, home_away
         except Exception:
