@@ -3444,57 +3444,85 @@ if not fetch and st.session_state.logs is None:
 if fetch:
     st.markdown("""
     <style>
-    @keyframes shimmer-bar {
-        0%   { background-position: -200% center; }
-        100% { background-position: 200% center; }
+    @keyframes ball-bounce {
+        0%   { transform: translateY(0px);   animation-timing-function: ease-in; }
+        45%  { transform: translateY(36px);  animation-timing-function: ease-out; }
+        55%  { transform: translateY(36px);  animation-timing-function: ease-in; }
+        100% { transform: translateY(0px);   animation-timing-function: ease-out; }
     }
-    .analyze-loader {
+    @keyframes shadow-pulse {
+        0%   { transform: scaleX(1);   opacity: 0.4; }
+        45%  { transform: scaleX(1.5); opacity: 0.15; }
+        55%  { transform: scaleX(1.5); opacity: 0.15; }
+        100% { transform: scaleX(1);   opacity: 0.4; }
+    }
+    @keyframes txt-fade {
+        0%, 100% { opacity: 0.5; }
+        50%       { opacity: 1.0; }
+    }
+    .bb-loader {
         background: linear-gradient(145deg, #0c1424, #080d18);
         border: 1px solid #1e2840;
         border-radius: 16px;
-        padding: 1.25rem 1.5rem;
+        padding: 1.75rem 1.5rem 1.5rem 1.5rem;
         margin: 0.5rem 0 1rem 0;
         animation: fadeUp 0.3s ease both;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0;
     }
-    .loader-title {
+    .bb-court {
+        position: relative;
+        width: 60px;
+        height: 70px;
+        display: flex;
+        align-items: flex-start;
+        justify-content: center;
+    }
+    .bb-ball {
+        font-size: 2rem;
+        line-height: 1;
+        animation: ball-bounce 0.65s cubic-bezier(0.33,0,0.66,1) infinite;
+        filter: drop-shadow(0 2px 6px rgba(249,115,22,0.4));
+    }
+    .bb-shadow {
+        position: absolute;
+        bottom: 0;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 28px;
+        height: 6px;
+        border-radius: 50%;
+        background: rgba(249,115,22,0.25);
+        animation: shadow-pulse 0.65s cubic-bezier(0.33,0,0.66,1) infinite;
+        filter: blur(3px);
+    }
+    .bb-title {
         font-family: 'Syne', sans-serif;
         font-size: 0.95rem;
         font-weight: 700;
         color: #edf2f8;
-        margin-bottom: 3px;
+        margin-top: 0.6rem;
+        text-align: center;
     }
-    .loader-sub {
+    .bb-sub {
         font-family: 'DM Mono', monospace;
-        font-size: 0.62rem;
+        font-size: 0.6rem;
         color: #4a6080;
-        letter-spacing: 0.08em;
-        margin-bottom: 1rem;
-    }
-    .loader-bar-bg {
-        background: #161f2e;
-        border-radius: 999px;
-        height: 4px;
-        overflow: hidden;
-    }
-    .loader-bar-fill {
-        height: 100%;
-        width: 100%;
-        border-radius: 999px;
-        background: linear-gradient(
-            90deg,
-            #c2410c 0%, #f97316 30%, #fb923c 50%, #f97316 70%, #c2410c 100%
-        );
-        background-size: 200% auto;
-        animation: shimmer-bar 1.5s linear infinite;
-        box-shadow: 0 0 8px rgba(249,115,22,0.4);
+        letter-spacing: 0.1em;
+        text-align: center;
+        margin-top: 4px;
+        animation: txt-fade 2s ease-in-out infinite;
     }
     </style>
-    <div class="analyze-loader">
-        <div class="loader-title">🔍 Analyzing prop...</div>
-        <div class="loader-sub">Fetching NBA data · May take 5–15 sec during peak hours</div>
-        <div class="loader-bar-bg">
-            <div class="loader-bar-fill"></div>
+    <div class="bb-loader">
+        <div class="bb-court">
+            <div class="bb-ball">🏀</div>
+            <div class="bb-shadow"></div>
         </div>
+        <div class="bb-title">Analyzing prop...</div>
+        <div class="bb-sub">FETCHING NBA DATA · MAY TAKE 5–15 SEC AT PEAK HOURS</div>
     </div>
     """, unsafe_allow_html=True)
 
