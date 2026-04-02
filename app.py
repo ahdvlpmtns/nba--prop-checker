@@ -646,6 +646,17 @@ for key, default in [
 from nba_api.stats.static import players as nba_players
 from nba_api.stats.endpoints import playergamelog, commonplayerinfo
 
+# ── Cache date key — forces daily reset at midnight ET ────────
+def _cache_date() -> str:
+    """Returns today's date in ET — used to bust caches at midnight."""
+    try:
+        import pytz
+        et = pytz.timezone("America/New_York")
+        return datetime.now(et).strftime("%Y-%m-%d")
+    except Exception:
+        return datetime.now().strftime("%Y-%m-%d")
+
+
 ESPN_SITE = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba"
 
 ESPN_HEADERS = {
@@ -653,7 +664,7 @@ ESPN_HEADERS = {
     "Accept": "application/json",
 }
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False)
 def espn_get_cached(url: str) -> dict:
     """Cached version for parameterless ESPN calls."""
     for attempt in range(3):
@@ -692,8 +703,8 @@ NBA_TEAM_IDS = [
     16,17,18,19,20,21,22,23,24,25,26,27,28,29,30
 ]
 
-@st.cache_data(ttl=3600)
-def espn_get_all_players() -> List[dict]:
+@st.cache_data(ttl=21600, show_spinner=False)
+def espn_get_all_players(_date: str = None) -> List[dict]:
     """
     Load all active NBA players by fetching each team roster from ESPN.
     Returns list of {id, full_name, team_abbr}.
@@ -722,7 +733,7 @@ def espn_get_all_players() -> List[dict]:
 def espn_search_players(query: str) -> List[dict]:
     """Search loaded player list by name query."""
     query_norm = normalize_name(query)
-    all_players = espn_get_all_players()
+    all_players = espn_get_all_players(_date=_cache_date())
     matches = [
         p for p in all_players
         if query_norm in normalize_name(p["full_name"])
@@ -732,7 +743,7 @@ def espn_search_players(query: str) -> List[dict]:
 def find_player(player_name: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """Returns (espn_player_id, full_name, team_abbreviation)."""
     name_norm = normalize_name(player_name)
-    all_players = espn_get_all_players()
+    all_players = espn_get_all_players(_date=_cache_date())
     # exact match first
     for p in all_players:
         if normalize_name(p["full_name"]) == name_norm:
@@ -754,7 +765,7 @@ def normalize_name(s: str) -> str:
     s = "".join(c for c in s if unicodedata.category(c) != "Mn")
     return re.sub(r"\s+", " ", s.strip().lower())
 
-@st.cache_data(ttl=86400)
+@st.cache_data(ttl=86400, show_spinner=False)
 def nba_find_player(player_name: str) -> Tuple[Optional[int], Optional[str]]:
     """
     Find player ID from nba_api static list.
@@ -807,8 +818,8 @@ def nba_find_player(player_name: str) -> Tuple[Optional[int], Optional[str]]:
 
     return None, None
 
-@st.cache_data(ttl=1800)
-def nba_get_game_logs(player_id: int, season: str, n: int = 10) -> pd.DataFrame:
+@st.cache_data(ttl=14400, show_spinner=False)
+def nba_get_game_logs(player_id: int, season: str, n: int = 10, _date: str = None) -> pd.DataFrame:
     """
     Fetch last N game logs using nba_api playergamelog.
     Hard 15s timeout per attempt, max 3 attempts, exponential backoff.
@@ -869,7 +880,7 @@ def nba_get_game_logs(player_id: int, season: str, n: int = 10) -> pd.DataFrame:
                 raise
     return empty
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=21600, show_spinner=False)
 def nba_get_player_team(player_id: int) -> Optional[str]:
     """Get player current team abbreviation."""
     try:
@@ -897,8 +908,8 @@ def season_str_to_season(season_str: str) -> str:
 
 # ── H2H vs opponent ───────────────────────────
 
-@st.cache_data(ttl=3600)
-def get_h2h_logs(player_id: int, opp_abbr: str, season: str) -> pd.DataFrame:
+@st.cache_data(ttl=43200, show_spinner=False)
+def get_h2h_logs(player_id: int, opp_abbr: str, season: str, _date: str = None) -> pd.DataFrame:
     """
     Fetch full season logs and filter for games vs opp_abbr.
     Hard 15s timeout per season, max 3 seasons.
@@ -1080,8 +1091,8 @@ def season_str_to_int(season_str: str) -> int:
 
 # ── Season average fetch + divergence signal ─────────────────────
 
-@st.cache_data(ttl=21600, show_spinner=False)
-def nba_get_full_season_logs_cached(player_id: int, season: str) -> Optional[pd.DataFrame]:
+@st.cache_data(ttl=86400, show_spinner=False)
+def nba_get_full_season_logs_cached(player_id: int, season: str, _date: str = None) -> Optional[pd.DataFrame]:
     """
     Fetch full season game log ONCE and cache for 6 hours.
     Both season avg pts and avg min derive from this single call.
@@ -1243,8 +1254,7 @@ def form_divergence_signal(
 
 # ── Next game / schedule ──────────────────────
 
-@st.cache_data(ttl=300)
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=1800, show_spinner=False)
 def espn_get_next_game(team_abbr: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """
     Find next upcoming game for a team using ESPN scoreboard.
@@ -1319,8 +1329,8 @@ def espn_get_next_game(team_abbr: str) -> Tuple[Optional[str], Optional[str], Op
 
 # ── Opponent defense rating ───────────────────
 
-@st.cache_data(ttl=3600)
-def espn_get_opp_pts_allowed(opp_abbr: str) -> Optional[float]:
+@st.cache_data(ttl=21600, show_spinner=False)
+def espn_get_opp_pts_allowed(opp_abbr: str, _date: str = None) -> Optional[float]:
     """
     Calculate pts allowed per game by averaging opponent scores
     from the team's last 15 completed games via ESPN scoreboard.
@@ -1554,7 +1564,7 @@ def auto_detect_result(entry: dict) -> Optional[str]:
         et  = pytz.timezone("America/New_York")
         now = datetime.now(et)
 
-        logs = nba_get_game_logs(nba_id, "2025-26", n=1)
+        logs = nba_get_game_logs(nba_id, "2025-26", n=1, _date=_cache_date())
         if logs.empty:
             return None
 
@@ -1583,7 +1593,7 @@ def auto_detect_result(entry: dict) -> Optional[str]:
 
 # ── Injury status ─────────────────────────────────────────────
 
-@st.cache_data(ttl=300)  # refresh every 5 mins — injury status can change fast
+@st.cache_data(ttl=300, show_spinner=False)  # refresh every 5 mins — injury status can change fast
 def get_player_injury_status(player_name: str) -> Tuple[str, str]:
     """
     Fetch current NBA injury status for a player.
@@ -1636,7 +1646,7 @@ def get_player_injury_status(player_name: str) -> Tuple[str, str]:
     # More reliable — fetches per team roster injury data
     try:
         # Find the player's ESPN team first
-        all_players = espn_get_all_players()
+        all_players = espn_get_all_players(_date=_cache_date())
         ep = next((p for p in all_players if normalize_name(p["full_name"]) == norm), None)
         if ep:
             team_id = None
@@ -1819,8 +1829,8 @@ def get_team_injury_report(team_abbr: str) -> list:
     return results
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def get_teammate_minutes(team_abbr: str, season: str = "2025-26") -> dict:
+@st.cache_data(ttl=21600, show_spinner=False)
+def get_teammate_minutes(team_abbr: str, season: str = "2025-26", _date: str = None) -> dict:
     """
     Returns dict of {normalized_player_name: avg_minutes} for all players on a team.
     Uses ESPN athlete stats endpoint which returns per-game averages.
@@ -1937,7 +1947,7 @@ def detect_usage_spike(
         return "Neutral", [], ""
 
     # Pre-fetch all ESPN players once
-    all_players = espn_get_all_players()
+    all_players = espn_get_all_players(_date=_cache_date())
 
     def _check_teammate(norm_name_mins):
         norm_name, mins = norm_name_mins
@@ -2034,14 +2044,14 @@ def injury_alert_html(status: str, reason: str) -> str:
     return html, block_verdict
 
 
-@st.cache_data(ttl=1800, show_spinner=False)
-def classify_matchup_espn(opp_abbr: Optional[str]) -> Tuple[str, Optional[float], str]:
+@st.cache_data(ttl=21600, show_spinner=False)
+def classify_matchup_espn(opp_abbr: Optional[str], _date: str = None) -> Tuple[str, Optional[float], str]:
     """Classify opponent defense quality using ESPN team stats."""
     league_avg = 114.5
     if not opp_abbr:
         return "Neutral", None, str(league_avg)
 
-    opp_pts = espn_get_opp_pts_allowed(opp_abbr)
+    opp_pts = espn_get_opp_pts_allowed(opp_abbr, _date=_cache_date())
 
     if opp_pts is None:
         return "Neutral", None, str(league_avg)
@@ -2066,7 +2076,7 @@ _NBA_PACE_2526 = {
     "SAC": 105.6, "SAS": 104.2, "TOR": 104.0, "UTA": 105.1, "WAS": 106.2,
 }
 
-@st.cache_data(ttl=86400)
+@st.cache_data(ttl=86400, show_spinner=False)
 def get_team_pace(team_abbr: str) -> Optional[float]:
     """
     Return team pace (possessions per game) for 2025-26.
@@ -2362,7 +2372,7 @@ def get_confidence_tier(adjusted: float, line_diff: float, consistency: float, s
 # Backtesting engine
 # ─────────────────────────────────────────────
 
-@st.cache_data(ttl=21600)
+@st.cache_data(ttl=86400, show_spinner=False)
 def nba_get_full_season_logs(player_id: int, season: str) -> pd.DataFrame:
     """Fetch ALL games for a season (not capped at N)."""
     empty = pd.DataFrame(columns=["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A","FG3M"])
@@ -2935,7 +2945,7 @@ if _mode == "🎯  Slate Scanner":
                     _nid, _fn = nba_find_player(_prop["player_name"])
                     if not _nid:
                         return None
-                    _logs = nba_get_game_logs(_nid, _season, n=10)
+                    _logs = nba_get_game_logs(_nid, _season, n=10, _date=_cache_date())
                     if _logs.empty:
                         return None
                     _ln   = _prop["line"]
@@ -2953,7 +2963,7 @@ if _mode == "🎯  Slate Scanner":
                     _avgm = pd.to_numeric(_logs["MIN"], errors="coerce").dropna().mean()
                     _avgf = pd.to_numeric(_logs["FGA"], errors="coerce").dropna().mean()
                     _avgt = pd.to_numeric(_logs["FTA"], errors="coerce").dropna().mean()
-                    _ep   = next((p for p in espn_get_all_players()
+                    _ep   = next((p for p in espn_get_all_players(_date=_cache_date())
                                   if normalize_name(p["full_name"]) == normalize_name(_fn)), None)
                     _team = _ep["team_abbr"] if _ep else None
                     _opp, _gd, _ven = espn_get_next_game(_team) if _team else (None, None, None)
@@ -2961,7 +2971,7 @@ if _mode == "🎯  Slate Scanner":
                     _sp        = home_away_split(_logs, _ln, "Over", _team)
                     _vadj      = venue_adjustment(_sp, _ven, "Over")
                     _b2b       = detect_b2b(_logs, _gd)
-                    _h2hdf     = get_h2h_logs(_nid, _opp, _season) if _opp else pd.DataFrame()
+                    _h2hdf     = get_h2h_logs(_nid, _opp, _season, _date=_cache_date()) if _opp else pd.DataFrame()
                     _hsig, _, _= h2h_signal(_h2hdf, _ln, "Over")
                     _savg      = nba_get_season_avg(_nid, _season, logs_l10=_logs)
                     _fsig, _   = form_divergence_signal(_avgp, _savg, _ln, "Over")
@@ -3164,7 +3174,7 @@ with st.expander("⚡  Quick Entry — analyze multiple props at once"):
                 _qnid, _qfn = nba_find_player(_qrow["player"])
                 if not _qnid:
                     continue
-                _qlogs = nba_get_game_logs(_qnid, _season_qe, n=10)
+                _qlogs = nba_get_game_logs(_qnid, _season_qe, n=10, _date=_cache_date())
                 if _qlogs.empty:
                     continue
                 _qln   = _qrow["line"]
@@ -3176,7 +3186,7 @@ with st.expander("⚡  Quick Entry — analyze multiple props at once"):
                 _qavgf = pd.to_numeric(_qlogs["FGA"], errors="coerce").dropna().mean()
                 _qavgt = pd.to_numeric(_qlogs["FTA"], errors="coerce").dropna().mean()
                 _qld   = _qavgp - _qln
-                _qep   = next((p for p in espn_get_all_players()
+                _qep   = next((p for p in espn_get_all_players(_date=_cache_date())
                                if normalize_name(p["full_name"]) == normalize_name(_qfn)), None)
                 _qteam = _qep["team_abbr"] if _qep else None
                 _qopp, _qgd, _qven = espn_get_next_game(_qteam) if _qteam else (None, None, None)
@@ -3184,7 +3194,7 @@ with st.expander("⚡  Quick Entry — analyze multiple props at once"):
                 _qsp   = home_away_split(_qlogs, _qln, _qside, _qteam)
                 _qvadj = venue_adjustment(_qsp, _qven, _qside)
                 _qb2b  = detect_b2b(_qlogs, _qgd)
-                _qh2h  = get_h2h_logs(_qnid, _qopp, _season_qe) if _qopp else pd.DataFrame()
+                _qh2h  = get_h2h_logs(_qnid, _qopp, _season_qe, _date=_cache_date()) if _qopp else pd.DataFrame()
                 _qhsig, _, _ = h2h_signal(_qh2h, _qln, _qside)
                 _qsavg = nba_get_season_avg(_qnid, _season_qe, logs_l10=_qlogs)
                 _qfsig, _ = form_divergence_signal(_qavgp, _qsavg, _qln, _qside)
@@ -3252,7 +3262,7 @@ st.markdown("<div class='section-header'>Player & Prop</div>", unsafe_allow_html
 # Load player list
 with st.spinner("Loading players..."):
     try:
-        all_players_list = espn_get_all_players()
+        all_players_list = espn_get_all_players(_date=_cache_date())
         # Build both full names AND common aliases for fuzzy matching
         _raw_names = [p["full_name"] for p in all_players_list]
 
@@ -3388,7 +3398,7 @@ if not selected_player:
 # Look up player: nba_api for ID/logs, ESPN roster for team
 nba_id, full_name = nba_find_player(selected_player)
 # ESPN player lookup for team abbr (already loaded in roster)
-espn_player = next((p for p in espn_get_all_players() if normalize_name(p["full_name"]) == normalize_name(selected_player)), None)
+espn_player = next((p for p in espn_get_all_players(_date=_cache_date()) if normalize_name(p["full_name"]) == normalize_name(selected_player)), None)
 player_team = _norm_team_abbr(espn_player["team_abbr"]) if espn_player else None
 
 # Pre-fetch teammate minutes in background thread so it doesn't block button render
@@ -3533,17 +3543,34 @@ if st.session_state.logs is not None:
         elif " @ " in str(latest_matchup):
             opp_abbr = latest_matchup.split(" @ ")[1].strip()
 
-    matchup_auto, opp_pts, league_avg = classify_matchup_espn(opp_abbr)
+    # ── Fire slow calls in parallel ──────────────────────────────
+    import concurrent.futures as _cf
+    with _cf.ThreadPoolExecutor(max_workers=3) as _pool:
+        _f_matchup = _pool.submit(classify_matchup_espn, opp_abbr)
+        _f_h2h     = _pool.submit(get_h2h_logs, player_id, opp_abbr, season_str_clean) if opp_abbr else None
+        _f_season  = _pool.submit(nba_get_full_season_logs_cached, player_id, season_str_clean)
 
-    # ── H2H + B2B ────────────────────────────
-    h2h_df     = get_h2h_logs(player_id, opp_abbr, season_str_clean) if opp_abbr else pd.DataFrame()
+        try:
+            matchup_auto, opp_pts, league_avg = _f_matchup.result(timeout=10)
+        except Exception:
+            matchup_auto, opp_pts, league_avg = "Neutral", None, "114.5"
+
+        try:
+            h2h_df = _f_h2h.result(timeout=22) if _f_h2h else pd.DataFrame()
+        except Exception:
+            h2h_df = pd.DataFrame()
+
+        # season logs result is stored in cache — both avg functions use it
+        try:
+            _f_season.result(timeout=20)
+        except Exception:
+            pass
+
     h2h_sig, h2h_avg, h2h_count = h2h_signal(h2h_df, line, side)
     b2b_status  = detect_b2b(logs, game_date)
     rest_status = detect_rest_days(logs, game_date)
-    # If B2B, rest signal is redundant — use B2B
     if b2b_status == "B2B":
         rest_status = "B2B"
-    # Both derived from one cached full-season fetch — fast after first load
     season_avg     = nba_get_season_avg(player_id, season_str_clean, logs_l10=logs)
     season_avg_min = nba_get_season_avg_min(player_id, season_str_clean, logs_l10=logs)
 
@@ -3562,7 +3589,7 @@ if st.session_state.logs is not None:
     form_sig, form_diff = form_divergence_signal(sample_avg_pts, season_avg, line, side)
 
     # Usage spike — uses pre-warmed cache so runs fast
-    _teammate_mins = get_teammate_minutes(player_team) if player_team else {}
+    _teammate_mins = get_teammate_minutes(player_team, _date=_cache_date()) if player_team else {}
     try:
         _spike_sig, _spike_players, _spike_html = detect_usage_spike(
             selected_player, player_team, side, _teammate_mins
