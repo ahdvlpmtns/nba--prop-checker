@@ -3659,12 +3659,22 @@ if fetch:
         _recent.insert(0, selected_player)
         st.session_state.recent_players = _recent[:5]
     try:
-        with st.spinner("Fetching game logs..."):
-            # Always fetch n=10 and slice — avoids 3 separate cache entries (5/10/15)
-            _all_logs = nba_get_game_logs(
-                player_id=player_id, season=season_str_clean, n=15, _date=_cache_date()
-            )
-            st.session_state.logs = _all_logs.head(n_games) if _all_logs is not None and not _all_logs.empty else _all_logs
+        _status_ph = st.empty()
+        _status_ph.markdown("""
+        <div style='font-family:JetBrains Mono,monospace;font-size:0.7rem;
+                    color:#555;padding:0.5rem 0;letter-spacing:0.1em;'>
+            ⏳ FETCHING GAME LOGS...
+        </div>""", unsafe_allow_html=True)
+        # Always fetch n=15 and slice — one cache entry per player per day
+        _all_logs = nba_get_game_logs(
+            player_id=player_id, season=season_str_clean, n=15, _date=_cache_date()
+        )
+        st.session_state.logs = _all_logs.head(n_games) if _all_logs is not None and not _all_logs.empty else _all_logs
+        _status_ph.markdown("""
+        <div style='font-family:JetBrains Mono,monospace;font-size:0.7rem;
+                    color:#555;padding:0.5rem 0;letter-spacing:0.1em;'>
+            ⏳ LOADING MATCHUP + CONTEXT DATA...
+        </div>""", unsafe_allow_html=True)
     except Exception as e:
         if not manual_mode:
             st.markdown("""
@@ -3772,6 +3782,7 @@ if st.session_state.logs is not None:
         except Exception:
             pass
 
+    _status_ph.empty()  # clear loading message — results are about to render
     h2h_sig, h2h_avg, h2h_count = h2h_signal(h2h_df, line, side)
     b2b_status  = detect_b2b(logs, game_date)
     rest_status = detect_rest_days(logs, game_date)
