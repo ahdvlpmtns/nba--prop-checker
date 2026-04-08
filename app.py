@@ -3553,6 +3553,7 @@ if _inj_html:
         )
 
 fetch = st.button("🔍  Analyze Prop")
+_status_ph = st.empty()  # persistent status placeholder across fetch + parallel block
 st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
 
 if not fetch and st.session_state.logs is None:
@@ -3659,7 +3660,6 @@ if fetch:
         _recent.insert(0, selected_player)
         st.session_state.recent_players = _recent[:5]
     try:
-        _status_ph = st.empty()
         _status_ph.markdown("""
         <div style='font-family:JetBrains Mono,monospace;font-size:0.7rem;
                     color:#555;padding:0.5rem 0;letter-spacing:0.1em;'>
