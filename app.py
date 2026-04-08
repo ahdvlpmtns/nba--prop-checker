@@ -821,63 +821,77 @@ def nba_find_player(player_name: str) -> Tuple[Optional[int], Optional[str]]:
 @st.cache_data(ttl=14400, show_spinner=False)
 def nba_get_game_logs(player_id: int, season: str, n: int = 10, _date: str = None) -> pd.DataFrame:
     """
-    Fetch last N game logs using nba_api playergamelog.
-    Hard 15s timeout per attempt, max 3 attempts, exponential backoff.
-    Total max wait: ~45s before giving up cleanly.
+    Fetch game logs directly via NBA stats REST API using requests.
+    Much faster than nba_api library — single call, 12s hard timeout, 2 attempts.
     """
     empty = pd.DataFrame(columns=["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A","FG3M"])
 
+    _URL = "https://stats.nba.com/stats/playergamelog"
     _HEADERS = {
         "Host": "stats.nba.com",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
         "x-nba-stats-origin": "stats",
         "x-nba-stats-token": "true",
         "Referer": "https://www.nba.com/",
         "Origin": "https://www.nba.com",
         "Connection": "keep-alive",
     }
+    _PARAMS = {
+        "PlayerID": player_id,
+        "Season": season,
+        "SeasonType": "Regular Season",
+        "LeagueID": "00",
+    }
 
-    def _fetch():
+    import requests as _req
+    for attempt in range(2):
         try:
-            from nba_api.library.http import NBAStatsHTTP
-            NBAStatsHTTP.nba_response.headers = _HEADERS
-        except Exception:
-            pass
-        return playergamelog.PlayerGameLog(
-            player_id=player_id, season=season, timeout=15,
-        ).get_data_frames()[0]
+            r = _req.get(_URL, headers=_HEADERS, params=_PARAMS, timeout=12)
+            r.raise_for_status()
+            data = r.json()
 
-    import concurrent.futures
-    for attempt in range(3):
-        try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-                future = ex.submit(_fetch)
-                df = future.result(timeout=18)  # hard wall-clock timeout
+            headers = data["resultSets"][0]["headers"]
+            rows    = data["resultSets"][0]["rowSet"]
+            if not rows:
+                return empty
 
+            df = pd.DataFrame(rows, columns=headers)
             df["GAME_DATE"] = pd.to_datetime(df["GAME_DATE"])
             df = df.sort_values("GAME_DATE", ascending=False).head(n).copy()
+
             for c in ["MATCHUP","MIN","PTS","FGA","FTA","FG3A"]:
                 if c not in df.columns:
                     df[c] = None
             for c in ["FG3M"]:
                 if c not in df.columns:
                     df[c] = 0
+
             return df[["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A","FG3M"]]
-        except concurrent.futures.TimeoutError:
-            if attempt < 2:
-                time.sleep(2 ** attempt)  # 1s, 2s
+
+        except Exception:
+            if attempt == 0:
+                time.sleep(1)
             else:
-                raise TimeoutError(
-                    f"NBA stats API timed out after 3 attempts for player {player_id}. "
-                    f"Try again in a few seconds."
-                )
-        except Exception as e:
-            if attempt < 2:
-                time.sleep(2 ** attempt)
-            else:
-                raise
+                # Final fallback — try nba_api library
+                try:
+                    import concurrent.futures
+                    def _fetch():
+                        return playergamelog.PlayerGameLog(
+                            player_id=player_id, season=season, timeout=10,
+                        ).get_data_frames()[0]
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                        df = ex.submit(_fetch).result(timeout=12)
+                    df["GAME_DATE"] = pd.to_datetime(df["GAME_DATE"])
+                    df = df.sort_values("GAME_DATE", ascending=False).head(n).copy()
+                    for c in ["FG3M"]:
+                        if c not in df.columns: df[c] = 0
+                    return df[["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A","FG3M"]]
+                except Exception:
+                    pass
+
     return empty
 
 @st.cache_data(ttl=21600, show_spinner=False)
@@ -1094,39 +1108,40 @@ def season_str_to_int(season_str: str) -> int:
 @st.cache_data(ttl=86400, show_spinner=False)
 def nba_get_full_season_logs_cached(player_id: int, season: str, _date: str = None) -> Optional[pd.DataFrame]:
     """
-    Fetch full season game log ONCE and cache for 6 hours.
-    Both season avg pts and avg min derive from this single call.
-    Hard 18s timeout, 2 attempts max.
+    Fetch full season game log via direct REST API. Cached 24hrs.
+    Used for season avg pts and avg min calculations.
     """
+    _URL = "https://stats.nba.com/stats/playergamelog"
     _HEADERS = {
         "Host": "stats.nba.com",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
         "x-nba-stats-origin": "stats",
         "x-nba-stats-token": "true",
         "Referer": "https://www.nba.com/",
         "Origin": "https://www.nba.com",
+        "Connection": "keep-alive",
     }
+    import requests as _req
     for attempt in range(2):
         try:
-            from nba_api.library.http import NBAStatsHTTP
-            NBAStatsHTTP.nba_response.headers = _HEADERS
+            r = _req.get(_URL, headers=_HEADERS, params={
+                "PlayerID": player_id,
+                "Season": season,
+                "SeasonType": "Regular Season",
+                "LeagueID": "00",
+            }, timeout=12)
+            r.raise_for_status()
+            data    = r.json()
+            headers = data["resultSets"][0]["headers"]
+            rows    = data["resultSets"][0]["rowSet"]
+            if rows:
+                return pd.DataFrame(rows, columns=headers)
         except Exception:
-            pass
-        try:
-            import concurrent.futures
-            def _fetch():
-                return playergamelog.PlayerGameLog(
-                    player_id=player_id, season=season, timeout=15,
-                ).get_data_frames()[0]
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-                future = ex.submit(_fetch)
-                df = future.result(timeout=18)
-            if df is not None and not df.empty:
-                return df
-        except Exception:
-            if attempt < 1:
-                time.sleep(2)
+            if attempt == 0:
+                time.sleep(1)
     return None
 
 
@@ -2711,12 +2726,61 @@ def generate_ai_analysis(prompt: str) -> str:
 # UI — Header
 # ─────────────────────────────────────────────
 
+# ── Pre-warm cache from tonight's PrizePicks slate ───────────
+def _prewarm_cache():
+    """
+    Silently pre-fetch game logs for tonight's PrizePicks NBA players.
+    Runs once per day as a background daemon thread.
+    After this runs, any player on tonight's slate loads instantly.
+    """
+    try:
+        import requests as _req
+        r = _req.get(
+            "https://api.prizepicks.com/projections",
+            params={"league_id": "7", "per_page": "250", "single_stat": "true"},
+            headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+            timeout=10,
+        )
+        if not r.ok:
+            return
+        data = r.json()
+        included = data.get("included", [])
+        player_names = list({
+            p.get("attributes", {}).get("name", "")
+            for p in included
+            if p.get("type") == "new_player"
+            and p.get("attributes", {}).get("name")
+        })
+        if not player_names:
+            return
+        import concurrent.futures as _cf
+        _date = _cache_date()
+        def _warm(name):
+            try:
+                nba_id, _ = nba_find_player(name)
+                if nba_id:
+                    nba_get_game_logs(nba_id, "2025-26", n=10, _date=_date)
+                    nba_get_full_season_logs_cached(nba_id, "2025-26", _date=_date)
+            except Exception:
+                pass
+        with _cf.ThreadPoolExecutor(max_workers=5) as ex:
+            ex.map(_warm, player_names[:40])
+    except Exception:
+        pass
+
+
 # ── Load tracker from Supabase on first run ──
 if not st.session_state.supabase_loaded:
     _sb_entries = load_tracker_from_supabase(st.session_state.session_id)
     if _sb_entries:
         st.session_state.tracker = _sb_entries
     st.session_state.supabase_loaded = True
+
+# ── Trigger pre-warm once per day per session ─────────────────
+if st.session_state.get("prewarm_date") != _cache_date():
+    st.session_state.prewarm_date = _cache_date()
+    import threading as _t
+    _t.Thread(target=_prewarm_cache, daemon=True).start()
 
 st.markdown("""
 <div class="pl-header">
