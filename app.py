@@ -2209,17 +2209,51 @@ def weighted_hit_rate(df: pd.DataFrame, line: float, side: str) -> float:
 
 def consistency_score(df: pd.DataFrame, line: float) -> float:
     """
-    % of games where pts landed within 3 of the line.
-    NOTE: this measures clustering around the line, not reliability.
-    A player averaging 38 on a 24.5 line will score near 0% here
-    not because they're volatile, but because they always blow past it.
-    Use line_diff alongside this to interpret correctly.
+    Measures how predictable a player is relative to their OWN average,
+    scaled by their distance from the line.
+
+    Logic:
+    - If a player averages 14 on a 5.5 line (edge = +8.5), their scores
+      don't need to be near the line to be consistent — they need to be
+      near THEIR OWN average. A player who reliably scores 12-18 is
+      highly consistent against a 5.5 line.
+    - We use coefficient of variation (std/mean) normalized to 0-1.
+    - Then boost consistency when the player's average is far from the line
+      because large-edge props have more margin for error.
+
+    Returns 0.0 (extremely volatile) to 1.0 (perfectly predictable).
     """
     pts = pd.to_numeric(df["PTS"], errors="coerce").dropna()
     if len(pts) == 0:
         return 0.5
-    within_3 = (abs(pts - line) <= 3).sum()
-    return float(within_3 / len(pts))
+
+    avg = pts.mean()
+    std = pts.std()
+
+    if avg <= 0:
+        return 0.1
+
+    # Coefficient of variation — lower = more consistent
+    cv = std / avg  # typically 0.2 (very consistent) to 1.0+ (volatile)
+
+    # Base consistency score from CV (inverted — low CV = high consistency)
+    # CV of 0.2 → 0.9, CV of 0.5 → 0.6, CV of 1.0 → 0.1
+    base = max(0.05, min(0.95, 1.0 - (cv * 0.8)))
+
+    # Edge bonus: if avg is far from line, small score variance doesn't matter much
+    # A player averaging 14 on a 5.5 line can drop to 8 and still hit
+    edge = abs(avg - line)
+    if edge >= 8:
+        # Very large edge — boost consistency, player would need catastrophic game to miss
+        edge_boost = 0.20
+    elif edge >= 5:
+        edge_boost = 0.12
+    elif edge >= 3:
+        edge_boost = 0.06
+    else:
+        edge_boost = 0.0
+
+    return min(0.95, base + edge_boost)
 
 def home_away_split(df: pd.DataFrame, line: float, side: str, player_team: Optional[str]) -> dict:
     result = {"home_rate": None, "away_rate": None, "home_games": 0, "away_games": 0, "home_avg": None, "away_avg": None}
