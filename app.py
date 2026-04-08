@@ -43,9 +43,9 @@ st.markdown("""
     --border2:  #333333;
 
     /* Electric accent — neon lime on near-black */
-    --accent:   #c8f135;
-    --accent2:  #a8d120;
-    --accent3:  #e8ff6a;
+    --accent:   #a3e635;
+    --accent2:  #84cc16;
+    --accent3:  #bef264;
 
     /* Signal colors */
     --green:    #00e676;
@@ -2851,8 +2851,8 @@ st.markdown("""
 
 with st.sidebar:
     st.markdown("""
-    <div style='padding:0.5rem 0 1rem 0; border-bottom:2px solid #c8f135; margin-bottom:1rem;'>
-        <div style='font-family:Barlow Condensed,sans-serif; font-size:1.3rem; font-weight:900; color:#f0f0f0; letter-spacing:-0.5px; text-transform:uppercase; margin-bottom:2px;'>Prop<span style="color:#c8f135;">Lens</span></div>
+    <div style='padding:0.5rem 0 1rem 0; border-bottom:2px solid #a3e635; margin-bottom:1rem;'>
+        <div style='font-family:Barlow Condensed,sans-serif; font-size:1.3rem; font-weight:900; color:#f0f0f0; letter-spacing:-0.5px; text-transform:uppercase; margin-bottom:2px;'>Prop<span style="color:#a3e635;">Lens</span></div>
         <div style='font-family:JetBrains Mono,monospace; font-size:0.55rem; color:#555; letter-spacing:0.18em; text-transform:uppercase;'>NBA Prop Analyzer</div>
     </div>
     """, unsafe_allow_html=True)
@@ -2921,29 +2921,45 @@ for _k in ["scanner_results", "scanner_error"]:
     if _k not in st.session_state:
         st.session_state[_k] = None
 
-# ── Underline tab switcher ──────────────────────────────────
+# ── Tab switcher ────────────────────────────────────────────
+_p_active = st.session_state.active_tab == "player"
+_s_active = st.session_state.active_tab == "scanner"
+
+st.markdown(f"""
+<style>
+/* Force equal height and width on tab buttons */
+div[data-testid="stHorizontalBlock"] div[data-testid="stButton"] button {{
+    height: 44px !important;
+    min-height: 44px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    clip-path: none !important;
+    border-radius: 0 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.12em !important;
+    font-size: 0.78rem !important;
+}}
+</style>
+""", unsafe_allow_html=True)
+
 _ul_c1, _ul_c2, _ul_c3 = st.columns([1, 1, 3])
 with _ul_c1:
-    _p_active = st.session_state.active_tab == "player"
-    if st.button("Player Prop", key="tab_player", use_container_width=True):
+    if st.button("Player Prop", key="tab_player", use_container_width=True,
+                 type="primary" if _p_active else "secondary"):
         st.session_state.active_tab = "player"
         st.rerun()
 with _ul_c2:
-    _s_active = st.session_state.active_tab == "scanner"
-    if st.button("Slate Scanner", key="tab_scanner", use_container_width=True):
+    if st.button("Slate Scanner", key="tab_scanner", use_container_width=True,
+                 type="primary" if _s_active else "secondary"):
         st.session_state.active_tab = "scanner"
         st.rerun()
 
-# Underline indicator — rendered separately so it doesn't affect button layout
-_p_active = st.session_state.active_tab == "player"
-_s_active = st.session_state.active_tab == "scanner"
+# Underline bar
 st.markdown(f"""
-<style>
-button[data-testid="baseButton-secondary"][kind="secondary"]:has(+ *) {{ display:none; }}
-</style>
-<div class="ul-tab-bar">
+<div class="ul-tab-bar" style="position:relative; margin-top:-4px;">
     <div class="ul-tab-underline" style="
-        width: calc(50% / 4);
+        width: 50%;
         transform: translateX({'0%' if _p_active else '100%'});
     "></div>
 </div>
