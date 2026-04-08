@@ -1573,7 +1573,9 @@ def auto_detect_result(entry: dict) -> Optional[str]:
         et  = pytz.timezone("America/New_York")
         now = datetime.now(et)
 
-        logs = nba_get_game_logs(nba_id, "2025-26", n=1, _date=_cache_date())
+        # Reuse the n=15 cache — just take head(1)
+        _det_logs = nba_get_game_logs(nba_id, "2025-26", n=15, _date=_cache_date())
+        logs = _det_logs.head(1) if _det_logs is not None and not _det_logs.empty else _det_logs
         if logs.empty:
             return None
 
@@ -2787,7 +2789,7 @@ def _prewarm_cache():
             try:
                 nba_id, _ = nba_find_player(name)
                 if nba_id:
-                    nba_get_game_logs(nba_id, "2025-26", n=10, _date=_date)
+                    nba_get_game_logs(nba_id, "2025-26", n=15, _date=_date)
                     nba_get_full_season_logs_cached(nba_id, "2025-26", _date=_date)
             except Exception:
                 pass
@@ -3061,7 +3063,7 @@ if _mode == "🎯  Slate Scanner":
                     _nid, _fn = nba_find_player(_prop["player_name"])
                     if not _nid:
                         return None
-                    _logs = nba_get_game_logs(_nid, _season, n=10, _date=_cache_date())
+                    _logs = nba_get_game_logs(_nid, _season, n=15, _date=_cache_date())
                     if _logs.empty:
                         return None
                     _ln   = _prop["line"]
@@ -3290,7 +3292,7 @@ with st.expander("⚡  Quick Entry — analyze multiple props at once"):
                 _qnid, _qfn = nba_find_player(_qrow["player"])
                 if not _qnid:
                     continue
-                _qlogs = nba_get_game_logs(_qnid, _season_qe, n=10, _date=_cache_date())
+                _qlogs = nba_get_game_logs(_qnid, _season_qe, n=15, _date=_cache_date())
                 if _qlogs.empty:
                     continue
                 _qln   = _qrow["line"]
@@ -3658,9 +3660,11 @@ if fetch:
         st.session_state.recent_players = _recent[:5]
     try:
         with st.spinner("Fetching game logs..."):
-            st.session_state.logs = nba_get_game_logs(
-                player_id=player_id, season=season_str_clean, n=n_games
+            # Always fetch n=10 and slice — avoids 3 separate cache entries (5/10/15)
+            _all_logs = nba_get_game_logs(
+                player_id=player_id, season=season_str_clean, n=15, _date=_cache_date()
             )
+            st.session_state.logs = _all_logs.head(n_games) if _all_logs is not None and not _all_logs.empty else _all_logs
     except Exception as e:
         if not manual_mode:
             st.markdown("""
