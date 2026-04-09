@@ -2687,14 +2687,22 @@ def get_playoff_picture(team_abbr: str) -> dict:
                 return {"status":"out","label":"🔴 Out of Race","color":"#ef4444","seed":seed,"wins":int(wins),"losses":int(losses),"gb":gb}
         return None
 
-    # Try two ESPN endpoints
-    urls = [
-        "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/standings",
-        "https://site.api.espn.com/apis/v2/sports/basketball/nba/standings",
+    # ESPN standings — /apis/v2/ is correct for standings (not /apis/site/v2/)
+    # Try with and without season param
+    import requests as _req
+    urls_params = [
+        ("https://site.api.espn.com/apis/v2/sports/basketball/nba/standings", {"season": "2026"}),
+        ("https://site.api.espn.com/apis/v2/sports/basketball/nba/standings", {}),
+        ("https://site.api.espn.com/apis/site/v2/sports/basketball/nba/standings", {"season": "2026"}),
     ]
-    for url in urls:
+    for url, params in urls_params:
         try:
-            data = espn_get(url)
+            r = _req.get(url, params=params,
+                        headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
+                        timeout=8)
+            if not r.ok:
+                continue
+            data = r.json()
             if not data:
                 continue
             # Structure 1: children → standings → entries
@@ -2703,10 +2711,15 @@ def get_playoff_picture(team_abbr: str) -> dict:
                 result = _parse_entries(entries)
                 if result:
                     return result
-            # Structure 2: entries at top level
+            # Structure 2: direct entries
             result = _parse_entries(data.get("entries", []))
             if result:
                 return result
+            # Structure 3: groups
+            for group in data.get("groups", []):
+                result = _parse_entries(group.get("entries", []))
+                if result:
+                    return result
         except Exception:
             continue
     return {}
