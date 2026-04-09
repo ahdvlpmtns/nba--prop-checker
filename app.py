@@ -2653,71 +2653,62 @@ def filter_blowouts(df: pd.DataFrame, threshold: int = 15) -> tuple:
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_playoff_picture(team_abbr: str) -> dict:
     """
-    Fetches NBA standings from ESPN scoreboard standings endpoint.
-    Uses the same espn_get infrastructure as the rest of the app.
+    Fetches NBA standings from ESPN. Tries multiple endpoints.
     """
     if not team_abbr:
         return {}
-    try:
-        # Use ESPN's working standings endpoint — same base URL as rest of app
-        data = espn_get(
-            "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/standings"
-        )
-        if not data:
-            return {}
 
-        children = data.get("children", [])
-        for conf in children:
-            entries = conf.get("standings", {}).get("entries", [])
-            for entry in entries:
-                abbr = entry.get("team", {}).get("abbreviation", "")
-                if _norm_team_abbr(abbr) != _norm_team_abbr(team_abbr):
-                    continue
+    def _parse_entries(entries):
+        for entry in entries:
+            abbr = entry.get("team", {}).get("abbreviation", "")
+            if _norm_team_abbr(abbr) != _norm_team_abbr(team_abbr):
+                continue
+            stats = {s["name"]: s.get("value", s.get("displayValue", ""))
+                     for s in entry.get("stats", [])}
+            wins   = float(stats.get("wins", 0) or 0)
+            losses = float(stats.get("losses", 0) or 0)
+            gb     = stats.get("gamesBehind", stats.get("differential", "—"))
+            seed   = int(float(stats.get("playoffSeed", stats.get("seed", 0)) or 0))
+            note   = str(entry.get("note", ""))
+            clinched   = any(x in note.lower() for x in ["clinched", "x -", "x-", "- x"])
+            eliminated = any(x in note.lower() for x in ["eliminated", "e -", "- e"])
 
-                stats = {s["name"]: s.get("value", s.get("displayValue", ""))
-                         for s in entry.get("stats", [])}
+            if eliminated:
+                return {"status":"eliminated","label":"🔴 Eliminated","color":"#ef4444","seed":seed,"wins":int(wins),"losses":int(losses),"gb":gb}
+            elif clinched and seed <= 2:
+                return {"status":"locked","label":f"🏆 #{seed} Seed Locked","color":"#a3e635","seed":seed,"wins":int(wins),"losses":int(losses),"gb":gb}
+            elif clinched:
+                return {"status":"clinched","label":f"✅ Clinched (#{seed})","color":"#22c55e","seed":seed,"wins":int(wins),"losses":int(losses),"gb":gb}
+            elif seed <= 6:
+                return {"status":"contending","label":f"🟡 #{seed} Seed · {gb} GB","color":"#eab308","seed":seed,"wins":int(wins),"losses":int(losses),"gb":gb}
+            elif seed <= 10:
+                return {"status":"bubble","label":f"⚠️ Play-In ({seed}th) · {gb} GB","color":"#f97316","seed":seed,"wins":int(wins),"losses":int(losses),"gb":gb}
+            else:
+                return {"status":"out","label":"🔴 Out of Race","color":"#ef4444","seed":seed,"wins":int(wins),"losses":int(losses),"gb":gb}
+        return None
 
-                wins   = float(stats.get("wins", 0) or 0)
-                losses = float(stats.get("losses", 0) or 0)
-                gb     = stats.get("gamesBehind", "—")
-                seed   = int(float(stats.get("playoffSeed", 0) or 0))
-                note   = str(entry.get("note", ""))
-
-                clinched   = "clinched"   in note.lower() or "x -" in note.lower() or "x-" in note.lower()
-                eliminated = "eliminated" in note.lower() or "e -" in note.lower()
-
-                if eliminated:
-                    status = "eliminated"
-                    label  = "🔴 Eliminated"
-                    color  = "#ef4444"
-                elif clinched and seed <= 2:
-                    status = "locked"
-                    label  = f"🏆 #{seed} Seed Locked"
-                    color  = "#a3e635"
-                elif clinched:
-                    status = "clinched"
-                    label  = f"✅ Clinched (#{seed} Seed)"
-                    color  = "#22c55e"
-                elif seed <= 6:
-                    status = "contending"
-                    label  = f"🟡 #{seed} Seed · {gb} GB"
-                    color  = "#eab308"
-                elif seed <= 10:
-                    status = "bubble"
-                    label  = f"⚠️ Play-In ({seed}th) · {gb} GB"
-                    color  = "#f97316"
-                else:
-                    status = "out"
-                    label  = "🔴 Out of Race"
-                    color  = "#ef4444"
-
-                return {
-                    "status": status, "label": label, "color": color,
-                    "seed": seed, "wins": int(wins), "losses": int(losses),
-                    "gb": gb, "note": note,
-                }
-    except Exception:
-        pass
+    # Try two ESPN endpoints
+    urls = [
+        "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/standings",
+        "https://site.api.espn.com/apis/v2/sports/basketball/nba/standings",
+    ]
+    for url in urls:
+        try:
+            data = espn_get(url)
+            if not data:
+                continue
+            # Structure 1: children → standings → entries
+            for conf in data.get("children", []):
+                entries = conf.get("standings", {}).get("entries", [])
+                result = _parse_entries(entries)
+                if result:
+                    return result
+            # Structure 2: entries at top level
+            result = _parse_entries(data.get("entries", []))
+            if result:
+                return result
+        except Exception:
+            continue
     return {}
 
 
