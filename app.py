@@ -4941,12 +4941,12 @@ if st.session_state.logs is not None:
         }.get(tier, "⚪")
         _opp_str    = f"vs {opp_abbr}" if opp_abbr else ""
         _venue_str  = f"({tonight_venue})" if tonight_venue else ""
-        # Playoff line — always show if available
+        # Playoff line — use already-fetched data
         _playoff_str = ""
         if _playoff and _playoff.get("label"):
-            _pl_label = _playoff.get("label", "")
-            _load_risk = _playoff.get("status") in ("locked", "eliminated")
-            _playoff_str = f"\n{_pl_label}" + (" · ⚠️ Load mgmt risk" if _load_risk else "")
+            _share_pl_label = _playoff.get("label", "")
+            _share_pl_risk  = _playoff.get("status", "") in ("locked", "eliminated")
+            _playoff_str = f"\n{_share_pl_label}" + (" · ⚠️ Load mgmt risk" if _share_pl_risk else "")
         _blowout_str = f"\n🚫 {_blowout_count} blowout game{'s' if _blowout_count > 1 else ''} excluded" if _blowout_count > 0 else ""
 
         _share_text = (
@@ -4964,16 +4964,9 @@ if st.session_state.logs is not None:
 
         if st.session_state.get("show_share"):
             st.markdown(
-                f"<div style='background:#111;border:1px solid #2a2a2a;"
-                f"border-left:3px solid #a3e635;"
-                f"padding:0.75rem 1rem;margin-top:0.4rem;'>"
-                f"<div style='font-family:JetBrains Mono,monospace;font-size:0.55rem;"
-                f"color:#555;letter-spacing:0.15em;margin-bottom:8px;'>"
-                f"COPY & PASTE INTO GROUP CHAT</div>"
-                f"<pre style='font-family:JetBrains Mono,monospace;font-size:0.72rem;"
-                f"color:#a3e635;white-space:pre-wrap;margin:0;line-height:1.6;'>"
-                f"{_share_text}</pre>"
-                f"</div>",
+                "<div style='font-family:JetBrains Mono,monospace;font-size:0.55rem;"
+                "color:#555;letter-spacing:0.15em;margin:0.5rem 0 0.25rem 0;'>"
+                "TAP TO COPY ↓</div>",
                 unsafe_allow_html=True
             )
             st.code(_share_text, language=None)
