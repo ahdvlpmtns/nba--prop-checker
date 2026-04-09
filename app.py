@@ -4208,6 +4208,7 @@ if fetch:
     st.session_state.ai_analysis = None
     st.session_state.ai_error    = None
     st.session_state.show_share  = False
+    st.session_state.logs        = None  # clear stale logs before fresh fetch
     # Save to recent players (max 5, no duplicates)
     if selected_player:
         _recent = st.session_state.recent_players
