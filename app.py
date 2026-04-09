@@ -2814,15 +2814,6 @@ st.markdown("""
         <div class="pl-ticker-dot"></div>
         <span>LIVE · NBA 2025-26</span>
     </div>
-    <div class="pl-ticker-item">
-        <span>12 SIGNALS</span>
-    </div>
-    <div class="pl-ticker-item">
-        <span>PRIZEPICKS LINES</span>
-    </div>
-    <div class="pl-ticker-item">
-        <span>POWERED BY NBA.COM</span>
-    </div>
 </div>
 """, unsafe_allow_html=True)
 
