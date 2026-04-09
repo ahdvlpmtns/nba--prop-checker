@@ -816,9 +816,8 @@ def nba_find_player(player_name: str) -> Tuple[Optional[int], Optional[str]]:
 @st.cache_data(ttl=14400, show_spinner=False)
 def nba_get_game_logs(player_id: int, season: str, n: int = 10, _date: str = None) -> pd.DataFrame:
     """
-    Fetch game logs using nba_api with a hard wall-clock timeout.
-    Uses browser-like headers to avoid NBA stats rate limiting.
-    2 attempts, 15s each, no sleep between — total max ~30s.
+    Fetch game logs via direct REST call to stats.nba.com.
+    Falls back to nba_api library if REST fails.
     """
     empty = pd.DataFrame(columns=["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A","FG3M","PLUS_MINUS","WL"])
 
@@ -827,47 +826,82 @@ def nba_get_game_logs(player_id: int, season: str, n: int = 10, _date: str = Non
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
         "x-nba-stats-origin": "stats",
         "x-nba-stats-token": "true",
         "Referer": "https://www.nba.com/",
         "Origin": "https://www.nba.com",
         "Connection": "keep-alive",
+        "Sec-Fetch-Site": "same-site",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Dest": "empty",
     }
 
-    def _fetch():
-        try:
-            from nba_api.library.http import NBAStatsHTTP
-            NBAStatsHTTP.nba_response.headers = _HEADERS
-        except Exception:
-            pass
-        return playergamelog.PlayerGameLog(
-            player_id=player_id, season=season, timeout=15,
-        ).get_data_frames()[0]
+    def _process(df):
+        if df is None or df.empty:
+            return None
+        df["GAME_DATE"] = pd.to_datetime(df["GAME_DATE"])
+        df = df.sort_values("GAME_DATE", ascending=False).head(n).copy()
+        for c in ["MATCHUP","MIN","PTS","FGA","FTA","FG3A"]:
+            if c not in df.columns: df[c] = None
+        for c in ["FG3M"]:
+            if c not in df.columns: df[c] = 0
+        for c in ["PLUS_MINUS","WL"]:
+            if c not in df.columns: df[c] = None
+        return df[["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A","FG3M","PLUS_MINUS","WL"]]
 
+    import requests as _req
     import concurrent.futures
+
+    # Method 1: Direct REST API
     for attempt in range(2):
         try:
+            r = _req.get(
+                "https://stats.nba.com/stats/playergamelog",
+                headers=_HEADERS,
+                params={
+                    "PlayerID": player_id,
+                    "Season": season,
+                    "SeasonType": "Regular Season",
+                    "LeagueID": "00",
+                },
+                timeout=15,
+            )
+            if r.status_code == 200:
+                data = r.json()
+                headers_list = data["resultSets"][0]["headers"]
+                rows = data["resultSets"][0]["rowSet"]
+                if rows:
+                    df = pd.DataFrame(rows, columns=headers_list)
+                    result = _process(df)
+                    if result is not None:
+                        return result
+        except Exception:
+            pass
+        if attempt == 0:
+            time.sleep(1)
+
+    # Method 2: nba_api library fallback
+    for attempt in range(2):
+        try:
+            def _fetch():
+                try:
+                    from nba_api.library.http import NBAStatsHTTP
+                    NBAStatsHTTP.nba_response.headers = _HEADERS
+                except Exception:
+                    pass
+                return playergamelog.PlayerGameLog(
+                    player_id=player_id, season=season, timeout=15,
+                ).get_data_frames()[0]
+
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-                df = ex.submit(_fetch).result(timeout=15)
-
-            if df is None or df.empty:
-                continue
-
-            df["GAME_DATE"] = pd.to_datetime(df["GAME_DATE"])
-            df = df.sort_values("GAME_DATE", ascending=False).head(n).copy()
-            for c in ["MATCHUP","MIN","PTS","FGA","FTA","FG3A"]:
-                if c not in df.columns:
-                    df[c] = None
-            for c in ["FG3M"]:
-                if c not in df.columns:
-                    df[c] = 0
-            for c in ["PLUS_MINUS", "WL"]:
-                if c not in df.columns:
-                    df[c] = None
-            return df[["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A","FG3M","PLUS_MINUS","WL"]]
+                df = ex.submit(_fetch).result(timeout=18)
+            result = _process(df)
+            if result is not None:
+                return result
         except Exception:
             if attempt == 0:
-                time.sleep(1)
+                time.sleep(2)
 
     return empty
 
