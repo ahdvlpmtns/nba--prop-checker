@@ -2653,31 +2653,23 @@ def filter_blowouts(df: pd.DataFrame, threshold: int = 15) -> tuple:
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_playoff_picture(team_abbr: str) -> dict:
     """
-    Fetches current NBA standings from ESPN to determine playoff picture.
-    Returns dict with: clinched, eliminated, seeding_locked, games_back, seed, status_label
+    Fetches NBA standings from ESPN scoreboard standings endpoint.
+    Uses the same espn_get infrastructure as the rest of the app.
     """
     if not team_abbr:
         return {}
     try:
-        import requests as _req
-        import pytz
-        et = pytz.timezone("America/New_York")
-
-        # Get current date for season context
-        today = datetime.now(et)
-        season_year = 2025  # update each season
-
-        # ESPN standings endpoint
-        url = f"https://site.api.espn.com/apis/v2/sports/basketball/nba/standings"
-        r = _req.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=8)
-        if not r.ok:
+        # Use ESPN's working standings endpoint — same base URL as rest of app
+        data = espn_get(
+            "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/standings"
+        )
+        if not data:
             return {}
 
-        data = r.json()
         children = data.get("children", [])
-
         for conf in children:
-            for entry in conf.get("standings", {}).get("entries", []):
+            entries = conf.get("standings", {}).get("entries", [])
+            for entry in entries:
                 abbr = entry.get("team", {}).get("abbreviation", "")
                 if _norm_team_abbr(abbr) != _norm_team_abbr(team_abbr):
                     continue
@@ -2688,17 +2680,11 @@ def get_playoff_picture(team_abbr: str) -> dict:
                 wins   = float(stats.get("wins", 0) or 0)
                 losses = float(stats.get("losses", 0) or 0)
                 gb     = stats.get("gamesBehind", "—")
-                seed   = int(stats.get("playoffSeed", 0) or 0)
-                pct    = wins / (wins + losses) if (wins + losses) > 0 else 0
+                seed   = int(float(stats.get("playoffSeed", 0) or 0))
+                note   = str(entry.get("note", ""))
 
-                # Determine status
-                clinched    = "clinched" in str(entry.get("note", "")).lower()
-                eliminated  = "eliminated" in str(entry.get("note", "")).lower()
-                note        = str(entry.get("note", ""))
-
-                # Seeding locked heuristic — in top 6, clinched, or late season
-                games_played = wins + losses
-                seeding_locked = clinched and seed <= 6
+                clinched   = "clinched"   in note.lower() or "x -" in note.lower() or "x-" in note.lower()
+                eliminated = "eliminated" in note.lower() or "e -" in note.lower()
 
                 if eliminated:
                     status = "eliminated"
@@ -2710,7 +2696,7 @@ def get_playoff_picture(team_abbr: str) -> dict:
                     color  = "#a3e635"
                 elif clinched:
                     status = "clinched"
-                    label  = f"✅ Playoff Clinched (#{seed})"
+                    label  = f"✅ Clinched (#{seed} Seed)"
                     color  = "#22c55e"
                 elif seed <= 6:
                     status = "contending"
@@ -2721,19 +2707,14 @@ def get_playoff_picture(team_abbr: str) -> dict:
                     label  = f"⚠️ Play-In ({seed}th) · {gb} GB"
                     color  = "#f97316"
                 else:
-                    status = "eliminated"
-                    label  = "🔴 Out of Playoff Race"
+                    status = "out"
+                    label  = "🔴 Out of Race"
                     color  = "#ef4444"
 
                 return {
-                    "status": status,
-                    "label":  label,
-                    "color":  color,
-                    "seed":   seed,
-                    "wins":   int(wins),
-                    "losses": int(losses),
-                    "gb":     gb,
-                    "note":   note,
+                    "status": status, "label": label, "color": color,
+                    "seed": seed, "wins": int(wins), "losses": int(losses),
+                    "gb": gb, "note": note,
                 }
     except Exception:
         pass
@@ -4951,9 +4932,12 @@ if st.session_state.logs is not None:
         }.get(tier, "⚪")
         _opp_str    = f"vs {opp_abbr}" if opp_abbr else ""
         _venue_str  = f"({tonight_venue})" if tonight_venue else ""
+        # Playoff line — always show if available
         _playoff_str = ""
-        if _playoff and _playoff.get("status") in ("locked", "eliminated"):
-            _playoff_str = f"\n⚠️ Load mgmt risk — {_playoff.get('label','')}"
+        if _playoff and _playoff.get("label"):
+            _pl_label = _playoff.get("label", "")
+            _load_risk = _playoff.get("status") in ("locked", "eliminated")
+            _playoff_str = f"\n{_pl_label}" + (" · ⚠️ Load mgmt risk" if _load_risk else "")
         _blowout_str = f"\n🚫 {_blowout_count} blowout game{'s' if _blowout_count > 1 else ''} excluded" if _blowout_count > 0 else ""
 
         _share_text = (
