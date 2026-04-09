@@ -815,76 +815,55 @@ def nba_find_player(player_name: str) -> Tuple[Optional[int], Optional[str]]:
 @st.cache_data(ttl=14400, show_spinner=False)
 def nba_get_game_logs(player_id: int, season: str, n: int = 10, _date: str = None) -> pd.DataFrame:
     """
-    Fetch game logs directly via NBA stats REST API using requests.
-    Much faster than nba_api library — single call, 12s hard timeout, 2 attempts.
+    Fetch game logs using nba_api with a hard wall-clock timeout.
+    Uses browser-like headers to avoid NBA stats rate limiting.
+    2 attempts, 15s each, no sleep between — total max ~30s.
     """
     empty = pd.DataFrame(columns=["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A","FG3M"])
 
-    _URL = "https://stats.nba.com/stats/playergamelog"
     _HEADERS = {
         "Host": "stats.nba.com",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
         "x-nba-stats-origin": "stats",
         "x-nba-stats-token": "true",
         "Referer": "https://www.nba.com/",
         "Origin": "https://www.nba.com",
         "Connection": "keep-alive",
     }
-    _PARAMS = {
-        "PlayerID": player_id,
-        "Season": season,
-        "SeasonType": "Regular Season",
-        "LeagueID": "00",
-    }
 
-    import requests as _req
+    def _fetch():
+        try:
+            from nba_api.library.http import NBAStatsHTTP
+            NBAStatsHTTP.nba_response.headers = _HEADERS
+        except Exception:
+            pass
+        return playergamelog.PlayerGameLog(
+            player_id=player_id, season=season, timeout=15,
+        ).get_data_frames()[0]
+
+    import concurrent.futures
     for attempt in range(2):
         try:
-            r = _req.get(_URL, headers=_HEADERS, params=_PARAMS, timeout=12)
-            r.raise_for_status()
-            data = r.json()
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                df = ex.submit(_fetch).result(timeout=15)
 
-            headers = data["resultSets"][0]["headers"]
-            rows    = data["resultSets"][0]["rowSet"]
-            if not rows:
-                return empty
+            if df is None or df.empty:
+                continue
 
-            df = pd.DataFrame(rows, columns=headers)
             df["GAME_DATE"] = pd.to_datetime(df["GAME_DATE"])
             df = df.sort_values("GAME_DATE", ascending=False).head(n).copy()
-
             for c in ["MATCHUP","MIN","PTS","FGA","FTA","FG3A"]:
                 if c not in df.columns:
                     df[c] = None
             for c in ["FG3M"]:
                 if c not in df.columns:
                     df[c] = 0
-
             return df[["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A","FG3M"]]
-
         except Exception:
             if attempt == 0:
                 time.sleep(1)
-            else:
-                # Final fallback — try nba_api library
-                try:
-                    import concurrent.futures
-                    def _fetch():
-                        return playergamelog.PlayerGameLog(
-                            player_id=player_id, season=season, timeout=10,
-                        ).get_data_frames()[0]
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-                        df = ex.submit(_fetch).result(timeout=12)
-                    df["GAME_DATE"] = pd.to_datetime(df["GAME_DATE"])
-                    df = df.sort_values("GAME_DATE", ascending=False).head(n).copy()
-                    for c in ["FG3M"]:
-                        if c not in df.columns: df[c] = 0
-                    return df[["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A","FG3M"]]
-                except Exception:
-                    pass
 
     return empty
 
@@ -3716,14 +3695,21 @@ if st.session_state.logs is not None:
     logs = st.session_state.logs
 
     if logs.empty:
-        with st.expander("🛠️ ESPN debug — raw response"):
-            err = getattr(nba_get_game_logs, "_last_error", "unknown error")
-            raw = {}
-            st.write("Top-level keys:", list(raw.keys()) if raw else "empty")
-            st.write("Error:", err or "none")
-            if raw:
-                st.json({k: v for k, v in list(raw.items())[:3]})
-        st.warning("No game log data found. Expand debug above to diagnose.")
+        st.markdown("""
+        <div style='background:#1c0505;border:1px solid #991b1b;border-radius:8px;
+                    padding:1rem 1.2rem;margin:0.5rem 0;'>
+            <div style='font-family:JetBrains Mono,monospace;font-size:0.7rem;
+                        color:#ef4444;font-weight:700;letter-spacing:0.08em;margin-bottom:6px;'>
+                ⚠️ NO GAME LOG DATA FOUND
+            </div>
+            <div style='font-size:0.85rem;color:#94a3b8;line-height:1.6;'>
+                stats.nba.com returned no data for this player.<br>
+                This usually means the player hasn't played yet this season,
+                or the NBA API is temporarily unavailable.<br>
+                <strong style='color:#f1f5f9;'>Try clicking Analyze Prop again.</strong>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
         st.stop()
 
     # ── Core stats ────────────────────────────
