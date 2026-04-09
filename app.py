@@ -819,7 +819,7 @@ def nba_get_game_logs(player_id: int, season: str, n: int = 10, _date: str = Non
     Uses browser-like headers to avoid NBA stats rate limiting.
     2 attempts, 15s each, no sleep between — total max ~30s.
     """
-    empty = pd.DataFrame(columns=["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A","FG3M"])
+    empty = pd.DataFrame(columns=["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A","FG3M","PLUS_MINUS","WL"])
 
     _HEADERS = {
         "Host": "stats.nba.com",
@@ -860,7 +860,10 @@ def nba_get_game_logs(player_id: int, season: str, n: int = 10, _date: str = Non
             for c in ["FG3M"]:
                 if c not in df.columns:
                     df[c] = 0
-            return df[["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A","FG3M"]]
+            for c in ["PLUS_MINUS", "WL"]:
+                if c not in df.columns:
+                    df[c] = None
+            return df[["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A","FG3M","PLUS_MINUS","WL"]]
         except Exception:
             if attempt == 0:
                 time.sleep(1)
@@ -2608,6 +2611,135 @@ def shooting_efficiency_signal(
         return "Neutral", None, None
 
 
+# ── Blowout filter ────────────────────────────────────────────
+
+def filter_blowouts(df: pd.DataFrame, threshold: int = 15) -> tuple:
+    """
+    Remove blowout games (margin ≥ threshold in either direction).
+    Returns (filtered_df, blowout_count, blowout_games).
+    Uses PLUS_MINUS column — positive = player's team won by that margin.
+    """
+    if df is None or df.empty:
+        return df, 0, []
+
+    if "PLUS_MINUS" not in df.columns:
+        return df, 0, []
+
+    pm = pd.to_numeric(df["PLUS_MINUS"], errors="coerce")
+    blowout_mask = pm.abs() >= threshold
+    blowout_count = int(blowout_mask.sum())
+
+    if blowout_count == 0:
+        return df, 0, []
+
+    blowout_games = []
+    for _, row in df[blowout_mask].iterrows():
+        try:
+            date = pd.to_datetime(row["GAME_DATE"]).strftime("%b %d")
+            matchup = str(row.get("MATCHUP", "")).replace("vs.", "vs").strip()
+            margin = int(pd.to_numeric(row["PLUS_MINUS"], errors="coerce"))
+            pts = int(pd.to_numeric(row["PTS"], errors="coerce"))
+            direction = f"+{margin}" if margin > 0 else str(margin)
+            blowout_games.append(f"{date} {matchup} ({direction} pts, scored {pts})")
+        except Exception:
+            pass
+
+    filtered = df[~blowout_mask].copy()
+    return filtered, blowout_count, blowout_games
+
+
+# ── Playoff picture context ────────────────────────────────────
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_playoff_picture(team_abbr: str) -> dict:
+    """
+    Fetches current NBA standings from ESPN to determine playoff picture.
+    Returns dict with: clinched, eliminated, seeding_locked, games_back, seed, status_label
+    """
+    if not team_abbr:
+        return {}
+    try:
+        import requests as _req
+        import pytz
+        et = pytz.timezone("America/New_York")
+
+        # Get current date for season context
+        today = datetime.now(et)
+        season_year = 2025  # update each season
+
+        # ESPN standings endpoint
+        url = f"https://site.api.espn.com/apis/v2/sports/basketball/nba/standings"
+        r = _req.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=8)
+        if not r.ok:
+            return {}
+
+        data = r.json()
+        children = data.get("children", [])
+
+        for conf in children:
+            for entry in conf.get("standings", {}).get("entries", []):
+                abbr = entry.get("team", {}).get("abbreviation", "")
+                if _norm_team_abbr(abbr) != _norm_team_abbr(team_abbr):
+                    continue
+
+                stats = {s["name"]: s.get("value", s.get("displayValue", ""))
+                         for s in entry.get("stats", [])}
+
+                wins   = float(stats.get("wins", 0) or 0)
+                losses = float(stats.get("losses", 0) or 0)
+                gb     = stats.get("gamesBehind", "—")
+                seed   = int(stats.get("playoffSeed", 0) or 0)
+                pct    = wins / (wins + losses) if (wins + losses) > 0 else 0
+
+                # Determine status
+                clinched    = "clinched" in str(entry.get("note", "")).lower()
+                eliminated  = "eliminated" in str(entry.get("note", "")).lower()
+                note        = str(entry.get("note", ""))
+
+                # Seeding locked heuristic — in top 6, clinched, or late season
+                games_played = wins + losses
+                seeding_locked = clinched and seed <= 6
+
+                if eliminated:
+                    status = "eliminated"
+                    label  = "🔴 Eliminated"
+                    color  = "#ef4444"
+                elif clinched and seed <= 2:
+                    status = "locked"
+                    label  = f"🏆 #{seed} Seed Locked"
+                    color  = "#a3e635"
+                elif clinched:
+                    status = "clinched"
+                    label  = f"✅ Playoff Clinched (#{seed})"
+                    color  = "#22c55e"
+                elif seed <= 6:
+                    status = "contending"
+                    label  = f"🟡 #{seed} Seed · {gb} GB"
+                    color  = "#eab308"
+                elif seed <= 10:
+                    status = "bubble"
+                    label  = f"⚠️ Play-In ({seed}th) · {gb} GB"
+                    color  = "#f97316"
+                else:
+                    status = "eliminated"
+                    label  = "🔴 Out of Playoff Race"
+                    color  = "#ef4444"
+
+                return {
+                    "status": status,
+                    "label":  label,
+                    "color":  color,
+                    "seed":   seed,
+                    "wins":   int(wins),
+                    "losses": int(losses),
+                    "gb":     gb,
+                    "note":   note,
+                }
+    except Exception:
+        pass
+    return {}
+
+
 def flag_pill(label: str, flag: str) -> str:
     icon = {"up": "↑", "down": "↓", "flat": "→", "nodata": "—"}.get(flag, "—")
     css  = flag if flag in ["up", "down", "flat", "nodata"] else "nodata"
@@ -3703,6 +3835,17 @@ if st.session_state.logs is not None:
         """, unsafe_allow_html=True)
         st.stop()
 
+    # ── Blowout filter ───────────────────────
+    logs_raw = logs.copy()  # keep raw for game log display
+    logs_filtered, _blowout_count, _blowout_games = filter_blowouts(logs, threshold=15)
+    # Use filtered logs for all calculations if enough games remain
+    if len(logs_filtered) >= 4:
+        logs = logs_filtered
+    else:
+        logs_filtered = logs_raw  # not enough games after filter, use all
+        _blowout_count = 0
+        _blowout_games = []
+
     # ── Core stats ────────────────────────────
     baseline       = hit_rate(logs, line, side)
     weighted_base  = weighted_hit_rate(logs, line, side)
@@ -3738,10 +3881,11 @@ if st.session_state.logs is not None:
 
     # ── Fire slow calls in parallel ──────────────────────────────
     import concurrent.futures as _cf
-    with _cf.ThreadPoolExecutor(max_workers=3) as _pool:
-        _f_matchup = _pool.submit(classify_matchup_espn, opp_abbr)
-        _f_h2h     = _pool.submit(get_h2h_logs, player_id, opp_abbr, season_str_clean) if opp_abbr else None
-        _f_season  = _pool.submit(nba_get_full_season_logs_cached, player_id, season_str_clean)
+    with _cf.ThreadPoolExecutor(max_workers=4) as _pool:
+        _f_matchup  = _pool.submit(classify_matchup_espn, opp_abbr)
+        _f_h2h      = _pool.submit(get_h2h_logs, player_id, opp_abbr, season_str_clean) if opp_abbr else None
+        _f_season   = _pool.submit(nba_get_full_season_logs_cached, player_id, season_str_clean)
+        _f_playoff  = _pool.submit(get_playoff_picture, player_team) if player_team else None
 
         try:
             matchup_auto, opp_pts, league_avg = _f_matchup.result(timeout=10)
@@ -3753,11 +3897,15 @@ if st.session_state.logs is not None:
         except Exception:
             h2h_df = pd.DataFrame()
 
-        # season logs result is stored in cache — both avg functions use it
         try:
             _f_season.result(timeout=20)
         except Exception:
             pass
+
+        try:
+            _playoff = _f_playoff.result(timeout=8) if _f_playoff else {}
+        except Exception:
+            _playoff = {}
 
     _status_ph.empty()  # clear loading message — results are about to render
     h2h_sig, h2h_avg, h2h_count = h2h_signal(h2h_df, line, side)
@@ -3904,6 +4052,23 @@ if st.session_state.logs is not None:
     )
     st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
 
+    # Blowout filter alert
+    if _blowout_count > 0:
+        _bl_games_str = " · ".join(_blowout_games[:3])
+        st.markdown(
+            f"<div style='background:#0d0d1a;border:1px solid #2e2e5a;"
+            f"border-left:3px solid #a3e635;"
+            f"padding:0.6rem 0.9rem;margin-bottom:0.4rem;'>"
+            f"<span style='font-family:JetBrains Mono,monospace;font-size:0.6rem;"
+            f"color:#a3e635;font-weight:700;letter-spacing:0.1em;'>"
+            f"BLOWOUT FILTER ACTIVE</span>"
+            f"<span style='font-family:JetBrains Mono,monospace;font-size:0.6rem;"
+            f"color:#555;'> · {_blowout_count} game{'s' if _blowout_count > 1 else ''} "
+            f"excluded (±15pt margin) — {_bl_games_str}</span>"
+            f"</div>",
+            unsafe_allow_html=True
+        )
+
     # Minutes restriction alert
     if _min_alert_html:
         st.markdown(_min_alert_html, unsafe_allow_html=True)
@@ -4038,9 +4203,37 @@ if st.session_state.logs is not None:
                 <div style='color:#475569;font-size:0.85rem;margin-top:8px;'>Pace data loading...</div>
             </div>""", unsafe_allow_html=True)
 
-    # ── Home/Away splits ──────────────────────
+    # ── Playoff context ──────────────────────────────────────────
+    if _playoff:
+        _pl_status = _playoff.get("status", "")
+        _pl_label  = _playoff.get("label", "")
+        _pl_color  = _playoff.get("color", "#555")
+        _pl_w      = _playoff.get("wins", 0)
+        _pl_l      = _playoff.get("losses", 0)
+        _pl_note   = _playoff.get("note", "")
+
+        # Load management risk is high when seeding is locked or eliminated
+        _load_mgmt_risk = _pl_status in ("locked", "eliminated")
+        _load_note = " · ⚠️ Load management risk — team has little to play for" if _load_mgmt_risk else ""
+
+        st.markdown(
+            f"<div style='background:#0d0d0d;border:1px solid #2a2a2a;"
+            f"border-left:3px solid {_pl_color};"
+            f"padding:0.65rem 1rem;margin-bottom:0.4rem;"
+            f"display:flex;align-items:center;gap:12px;'>"
+            f"<div style='flex:1;'>"
+            f"<div style='font-family:JetBrains Mono,monospace;font-size:0.55rem;"
+            f"color:#555;letter-spacing:0.15em;margin-bottom:3px;'>PLAYOFF PICTURE</div>"
+            f"<div style='font-family:Barlow Condensed,sans-serif;font-size:1rem;"
+            f"font-weight:700;color:{_pl_color};'>{_pl_label}</div>"
+            f"<div style='font-family:JetBrains Mono,monospace;font-size:0.6rem;"
+            f"color:#555;margin-top:2px;'>{_pl_w}W–{_pl_l}L{_load_note}</div>"
+            f"</div></div>",
+            unsafe_allow_html=True
+        )
+
+    st.markdown("<div class='section-header'>Home / Away Splits</div>", unsafe_allow_html=True)
     if splits.get("home_games", 0) > 0 or splits.get("away_games", 0) > 0:
-        st.markdown("<div class='section-header'>Home / Away Splits</div>", unsafe_allow_html=True)
         venue_color = "#22c55e" if tonight_venue == "Home" else "#60a5fa"
         # Include opponent in the tonight badge
         _opp_label = f" vs {opp_abbr}" if opp_abbr else ""
