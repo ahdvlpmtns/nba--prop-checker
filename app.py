@@ -3036,6 +3036,366 @@ for _k in ["scanner_results", "scanner_error"]:
     if _k not in st.session_state:
         st.session_state[_k] = None
 
+# ═══════════════════════════════════════════════════════
+# MLB MODE
+# ═══════════════════════════════════════════════════════
+
+if st.session_state.active_sport == "mlb":
+
+    # ── MLB Data Functions ─────────────────────────────
+
+    @st.cache_data(ttl=14400, show_spinner=False)
+    def mlb_get_pitcher_logs(player_name: str, n: int = 10) -> pd.DataFrame:
+        """
+        Fetch pitcher game logs from MLB Stats API.
+        Returns last N starts with K, IP, outs recorded.
+        """
+        empty = pd.DataFrame(columns=["DATE","OPP","IP","OUTS","K","BB","ER","RESULT"])
+        try:
+            import requests as _req
+
+            # Search for player
+            search = _req.get(
+                "https://statsapi.mlb.com/api/v1/people/search",
+                params={"names": player_name, "sportIds": 1},
+                timeout=8
+            )
+            if not search.ok:
+                return empty
+            people = search.json().get("people", [])
+            if not people:
+                return empty
+
+            # Find pitcher
+            pitcher = next(
+                (p for p in people if p.get("primaryPosition", {}).get("code") == "1"),
+                people[0]
+            )
+            pid = pitcher["id"]
+
+            # Get game logs
+            import datetime
+            season = datetime.datetime.now().year
+            logs_r = _req.get(
+                f"https://statsapi.mlb.com/api/v1/people/{pid}/stats",
+                params={
+                    "stats": "gameLog",
+                    "group": "pitching",
+                    "season": season,
+                    "gameType": "R",
+                    "limit": n + 5,
+                },
+                timeout=10
+            )
+            if not logs_r.ok:
+                return empty
+
+            splits = logs_r.json().get("stats", [{}])[0].get("splits", [])
+            if not splits:
+                return empty
+
+            rows = []
+            for s in splits[:n]:
+                stat = s.get("stat", {})
+                game = s.get("game", {})
+                team = s.get("opponent", {}).get("abbreviation", "?")
+                date = s.get("date", "")[:10]
+
+                ip_str = str(stat.get("inningsPitched", "0"))
+                try:
+                    ip_parts = ip_str.split(".")
+                    full_inn = int(ip_parts[0])
+                    partial  = int(ip_parts[1]) if len(ip_parts) > 1 else 0
+                    outs = full_inn * 3 + partial
+                except Exception:
+                    outs = 0
+
+                rows.append({
+                    "DATE":   date,
+                    "OPP":    team,
+                    "IP":     ip_str,
+                    "OUTS":   outs,
+                    "K":      int(stat.get("strikeOuts", 0)),
+                    "BB":     int(stat.get("baseOnBalls", 0)),
+                    "ER":     int(stat.get("earnedRuns", 0)),
+                    "RESULT": stat.get("note", ""),
+                })
+
+            df = pd.DataFrame(rows)
+            df["DATE"] = pd.to_datetime(df["DATE"])
+            return df.sort_values("DATE", ascending=False).reset_index(drop=True)
+
+        except Exception:
+            return empty
+
+
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def mlb_get_opp_k_rate(opp_abbr: str) -> Optional[float]:
+        """Get opposing team's strikeout rate (K%) vs RHP this season."""
+        try:
+            import requests as _req
+            # MLB team ID lookup
+            teams_r = _req.get(
+                "https://statsapi.mlb.com/api/v1/teams",
+                params={"sportId": 1, "season": 2026},
+                timeout=8
+            )
+            if not teams_r.ok:
+                return None
+            teams = teams_r.json().get("teams", [])
+            team = next(
+                (t for t in teams
+                 if t.get("abbreviation", "").upper() == opp_abbr.upper()),
+                None
+            )
+            if not team:
+                return None
+
+            tid = team["id"]
+            stats_r = _req.get(
+                f"https://statsapi.mlb.com/api/v1/teams/{tid}/stats",
+                params={"stats": "season", "group": "hitting", "season": 2026},
+                timeout=8
+            )
+            if not stats_r.ok:
+                return None
+
+            stat = stats_r.json().get("stats", [{}])[0].get("splits", [{}])[0].get("stat", {})
+            ab  = int(stat.get("atBats", 0))
+            k   = int(stat.get("strikeOuts", 0))
+            return round(k / ab, 3) if ab > 0 else None
+
+        except Exception:
+            return None
+
+
+    # ── Park factors (2026 — higher = more run scoring) ──────────
+    _MLB_PARK_FACTORS = {
+        "COL": 1.30, "CIN": 1.10, "BOS": 1.08, "PHI": 1.06,
+        "TEX": 1.05, "NYY": 1.04, "CHC": 1.03, "HOU": 1.02,
+        "ATL": 1.01, "MIL": 1.01, "STL": 1.00, "LAD": 0.99,
+        "NYM": 0.99, "TOR": 0.98, "DET": 0.98, "MIN": 0.97,
+        "CLE": 0.97, "ARI": 0.97, "BAL": 0.97, "KCR": 0.96,
+        "PIT": 0.96, "TBR": 0.96, "CHW": 0.95, "SEA": 0.95,
+        "SFG": 0.94, "MIA": 0.94, "LAA": 0.94, "WSN": 0.93,
+        "OAK": 0.93, "SDP": 0.92,
+    }
+
+    def mlb_park_signal(home_team: str) -> str:
+        """Returns Boost/Neutral/Penalty based on park factor for strikeouts."""
+        # Lower run-scoring parks tend to have more Ks (pitchers' parks)
+        pf = _MLB_PARK_FACTORS.get(home_team, 1.00)
+        if pf <= 0.95:   return "Boost"    # pitcher's park → more Ks
+        elif pf >= 1.06: return "Penalty"  # hitter's park → fewer Ks
+        return "Neutral"
+
+    def mlb_weighted_hit_rate(logs: pd.DataFrame, line: float, stat: str, side: str) -> float:
+        """Weighted hit rate for MLB — same logic as NBA."""
+        vals = pd.to_numeric(logs[stat], errors="coerce").dropna().reset_index(drop=True)
+        n = len(vals)
+        if n == 0:
+            return 0.0
+        weights = [n - i for i in range(n)]
+        total_w = sum(weights)
+        if side == "Over":
+            hits = sum(w for v, w in zip(vals, weights) if v >= line)
+        else:
+            hits = sum(w for v, w in zip(vals, weights) if v <= line)
+        return hits / total_w
+
+    def mlb_apply_adjustments(weighted: float, opp_k_pct: Optional[float], park_sig: str, side: str) -> float:
+        """Apply MLB-specific context adjustments."""
+        adj = weighted
+
+        # Opponent K% signal (league avg ~22%)
+        if opp_k_pct is not None:
+            if opp_k_pct >= 0.26:   # high K team = easy matchup for pitcher
+                delta = +0.06 if side == "Over" else -0.06
+            elif opp_k_pct <= 0.18: # low K team = tough matchup
+                delta = -0.06 if side == "Over" else +0.06
+            else:
+                delta = 0.0
+            adj += delta
+
+        # Park factor
+        park_map = {"Boost": +0.04, "Neutral": 0.0, "Penalty": -0.04}
+        adj += park_map.get(park_sig, 0.0) * (1 if side == "Over" else -1)
+
+        return max(0.05, min(0.95, adj))
+
+    def mlb_get_verdict(adjusted: float, edge: float, side: str) -> str:
+        if side == "Over":
+            if adjusted >= 0.64 and edge >= 1.0:  return "Strong Over"
+            if adjusted >= 0.55 and edge > 0:     return "Lean Over"
+        else:
+            if adjusted >= 0.64 and edge <= -1.0: return "Strong Under"
+            if adjusted >= 0.55 and edge < 0:     return "Lean Under"
+        return "Pass"
+
+    # ── MLB UI ────────────────────────────────────────────────────
+    st.markdown("<div class='section-header'>⚾ MLB Pitcher Prop Analyzer</div>", unsafe_allow_html=True)
+
+    mlb_c1, mlb_c2, mlb_c3, mlb_c4 = st.columns([2.5, 1, 1, 1])
+
+    with mlb_c1:
+        mlb_pitcher = st.selectbox(
+            "Pitcher — type name",
+            options=[""] + [
+                "Gerrit Cole", "Zack Wheeler", "Spencer Strider", "Blake Snell",
+                "Corbin Burnes", "Logan Webb", "Pablo Lopez", "Framber Valdez",
+                "Dylan Cease", "Chris Sale", "Sonny Gray", "Max Fried",
+                "Shota Imanaga", "Kevin Gausman", "Tarik Skubal", "Freddy Peralta",
+                "MacKenzie Gore", "Bryce Miller", "Hunter Brown", "Yusei Kikuchi",
+            ],
+            format_func=lambda x: "— select a pitcher —" if x == "" else x,
+            key="mlb_pitcher_sel"
+        )
+
+    with mlb_c2:
+        mlb_prop = st.selectbox(
+            "Prop Type",
+            options=["Strikeouts", "Outs Recorded"],
+            key="mlb_prop_type"
+        )
+
+    with mlb_c3:
+        mlb_line = st.number_input(
+            "Line",
+            min_value=0.5, max_value=30.0,
+            value=5.5, step=0.5,
+            key="mlb_line"
+        )
+
+    with mlb_c4:
+        mlb_side = st.selectbox("Over / Under", ["Over", "Under"], key="mlb_side")
+
+    mlb_opp = st.text_input("Opposing Team (abbr)", placeholder="e.g. NYY, BOS, LAD", key="mlb_opp").upper().strip()
+    mlb_home = st.text_input("Home Team (abbr, for park factor)", placeholder="e.g. COL, SDP", key="mlb_home").upper().strip()
+
+    mlb_fetch = st.button("⚾  Analyze Pitcher Prop", key="mlb_analyze")
+
+    if not mlb_pitcher:
+        st.markdown(
+            "<div style='color:#555;font-family:JetBrains Mono,monospace;font-size:0.75rem;"
+            "margin-top:0.5rem;'>↑ Select a pitcher to get started.</div>",
+            unsafe_allow_html=True
+        )
+
+    if mlb_fetch and mlb_pitcher:
+        _mlb_stat = "K" if mlb_prop == "Strikeouts" else "OUTS"
+        _mlb_stat_label = "K" if mlb_prop == "Strikeouts" else "Outs"
+
+        with st.spinner(f"Fetching {mlb_pitcher} game logs..."):
+            mlb_logs = mlb_get_pitcher_logs(mlb_pitcher, n=10)
+
+        if mlb_logs.empty:
+            st.error("Could not fetch pitcher data. Check the name and try again.")
+        else:
+            # Core stats
+            vals        = pd.to_numeric(mlb_logs[_mlb_stat], errors="coerce").dropna()
+            avg_val     = vals.mean()
+            edge        = avg_val - mlb_line
+            weighted    = mlb_weighted_hit_rate(mlb_logs, mlb_line, _mlb_stat, mlb_side)
+            opp_k_pct   = mlb_get_opp_k_rate(mlb_opp) if mlb_opp else None
+            park_sig    = mlb_park_signal(mlb_home) if mlb_home else "Neutral"
+            adjusted    = mlb_apply_adjustments(weighted, opp_k_pct, park_sig, mlb_side)
+            tier        = mlb_get_verdict(adjusted, edge, mlb_side)
+
+            # Consistency
+            std = vals.std()
+            cv  = std / avg_val if avg_val > 0 else 1.0
+            consistency = max(0.1, min(0.95, 1.0 - cv * 0.8))
+
+            # ── Stat cards
+            st.markdown("<div class='section-header'>Key Stats</div>", unsafe_allow_html=True)
+            mc1, mc2, mc3, mc4 = st.columns(4)
+
+            tier_css = {
+                "Strong Over": "green", "Lean Over": "yellow",
+                "Strong Under": "red", "Lean Under": "orange", "Pass": "gray"
+            }
+            css = tier_css.get(tier, "gray")
+
+            with mc1:
+                _avg_color = "green" if edge > 0 and mlb_side == "Over" else ("red" if edge < 0 and mlb_side == "Under" else "orange")
+                st.markdown(f"""
+                <div class='stat-card'>
+                    <div class='stat-label'>Avg {_mlb_stat_label} (L10)</div>
+                    <div class='stat-value {_avg_color}'>{avg_val:.1f}</div>
+                    <div class='stat-hint'>Line is {mlb_line} · edge {edge:+.1f}</div>
+                </div>""", unsafe_allow_html=True)
+            with mc2:
+                hr_color = "green" if weighted >= 0.64 else ("yellow" if weighted >= 0.55 else "red")
+                st.markdown(f"""
+                <div class='stat-card'>
+                    <div class='stat-label'>Weighted Hit Rate</div>
+                    <div class='stat-value {hr_color}'>{weighted:.0%}</div>
+                    <div class='stat-hint'>Last 10 starts weighted</div>
+                </div>""", unsafe_allow_html=True)
+            with mc3:
+                cons_color = "green" if consistency >= 0.5 else ("yellow" if consistency >= 0.35 else "red")
+                st.markdown(f"""
+                <div class='stat-card'>
+                    <div class='stat-label'>Consistency</div>
+                    <div class='stat-value {cons_color}'>{consistency:.0%}</div>
+                    <div class='stat-hint'>Score variance relative to avg</div>
+                </div>""", unsafe_allow_html=True)
+            with mc4:
+                park_color = "green" if park_sig == "Boost" else ("red" if park_sig == "Penalty" else "orange")
+                opp_str = f"Opp K%: {opp_k_pct:.0%}" if opp_k_pct else "Opp K%: N/A"
+                st.markdown(f"""
+                <div class='stat-card'>
+                    <div class='stat-label'>Context</div>
+                    <div class='stat-value {park_color}'>{park_sig}</div>
+                    <div class='stat-hint'>Park factor · {opp_str}</div>
+                </div>""", unsafe_allow_html=True)
+
+            # ── Game log
+            st.markdown("<div class='section-header'>Last 10 Starts</div>", unsafe_allow_html=True)
+            _display_logs = mlb_logs.copy()
+            _display_logs["HIT"] = _display_logs[_mlb_stat].apply(
+                lambda x: "✅" if (mlb_side == "Over" and float(x) >= mlb_line) or
+                                   (mlb_side == "Under" and float(x) <= mlb_line) else "❌"
+            )
+            _display_logs["DATE"] = _display_logs["DATE"].dt.strftime("%b %d")
+            st.dataframe(
+                _display_logs[["DATE","OPP","IP","K","OUTS","BB","ER","HIT"]],
+                use_container_width=True, hide_index=True
+            )
+
+            # ── Verdict
+            tier_emoji = {
+                "Strong Over": "🟢", "Lean Over": "🟡",
+                "Strong Under": "🔴", "Lean Under": "🟠", "Pass": "⚪"
+            }
+            _cons_label = "Predictable" if consistency >= 0.5 else ("Variable" if consistency >= 0.35 else "Volatile")
+            _edge_label = "Large" if abs(edge) >= 3 else ("Solid" if abs(edge) >= 1.5 else "Marginal")
+
+            _mlb_verdict_html = (
+                f"<div class='verdict-banner {css}'>"
+                f"<div>"
+                f"<div class='verdict-label'>{mlb_pitcher} · {mlb_line} {_mlb_stat_label} · {mlb_side}</div>"
+                f"<div class='verdict-tier {css}'>{tier_emoji.get(tier,'⚪')} {tier}</div>"
+                f"</div>"
+                f"<div style='display:flex;gap:2rem;flex-wrap:wrap;align-items:flex-start;'>"
+                f"<div><div class='verdict-label'>Adjusted Hit Rate</div>"
+                f"<div style='font-size:1.4rem;font-weight:800;color:#f0f0f0;'>{adjusted:.0%}</div></div>"
+                f"<div><div class='verdict-label'>Edge vs Line</div>"
+                f"<div style='font-size:1.4rem;font-weight:800;color:#f0f0f0;'>{edge:+.1f}</div>"
+                f"<div style='font-family:JetBrains Mono,monospace;font-size:0.6rem;color:#555;'>{_edge_label} edge</div></div>"
+                f"<div><div class='verdict-label'>Consistency</div>"
+                f"<div style='font-size:1.4rem;font-weight:800;color:#f0f0f0;'>{consistency:.0%}</div>"
+                f"<div style='font-family:JetBrains Mono,monospace;font-size:0.6rem;color:#555;'>{_cons_label}</div></div>"
+                f"</div>"
+                f"</div>"
+            )
+            st.markdown("<div class='section-header'>Verdict</div>", unsafe_allow_html=True)
+            st.markdown(_mlb_verdict_html, unsafe_allow_html=True)
+
+    st.stop()
+
+
+
 # ── NBA Mode guard — stop here if MLB selected ───────────────
 if st.session_state.active_sport != "nba":
     st.stop()
@@ -5163,364 +5523,6 @@ else:
             st.session_state.tracker = []
             st.rerun()
 
-
-# ═══════════════════════════════════════════════════════
-# MLB MODE
-# ═══════════════════════════════════════════════════════
-
-if st.session_state.active_sport == "mlb":
-
-    # ── MLB Data Functions ─────────────────────────────
-
-    @st.cache_data(ttl=14400, show_spinner=False)
-    def mlb_get_pitcher_logs(player_name: str, n: int = 10) -> pd.DataFrame:
-        """
-        Fetch pitcher game logs from MLB Stats API.
-        Returns last N starts with K, IP, outs recorded.
-        """
-        empty = pd.DataFrame(columns=["DATE","OPP","IP","OUTS","K","BB","ER","RESULT"])
-        try:
-            import requests as _req
-
-            # Search for player
-            search = _req.get(
-                "https://statsapi.mlb.com/api/v1/people/search",
-                params={"names": player_name, "sportIds": 1},
-                timeout=8
-            )
-            if not search.ok:
-                return empty
-            people = search.json().get("people", [])
-            if not people:
-                return empty
-
-            # Find pitcher
-            pitcher = next(
-                (p for p in people if p.get("primaryPosition", {}).get("code") == "1"),
-                people[0]
-            )
-            pid = pitcher["id"]
-
-            # Get game logs
-            import datetime
-            season = datetime.datetime.now().year
-            logs_r = _req.get(
-                f"https://statsapi.mlb.com/api/v1/people/{pid}/stats",
-                params={
-                    "stats": "gameLog",
-                    "group": "pitching",
-                    "season": season,
-                    "gameType": "R",
-                    "limit": n + 5,
-                },
-                timeout=10
-            )
-            if not logs_r.ok:
-                return empty
-
-            splits = logs_r.json().get("stats", [{}])[0].get("splits", [])
-            if not splits:
-                return empty
-
-            rows = []
-            for s in splits[:n]:
-                stat = s.get("stat", {})
-                game = s.get("game", {})
-                team = s.get("opponent", {}).get("abbreviation", "?")
-                date = s.get("date", "")[:10]
-
-                ip_str = str(stat.get("inningsPitched", "0"))
-                try:
-                    ip_parts = ip_str.split(".")
-                    full_inn = int(ip_parts[0])
-                    partial  = int(ip_parts[1]) if len(ip_parts) > 1 else 0
-                    outs = full_inn * 3 + partial
-                except Exception:
-                    outs = 0
-
-                rows.append({
-                    "DATE":   date,
-                    "OPP":    team,
-                    "IP":     ip_str,
-                    "OUTS":   outs,
-                    "K":      int(stat.get("strikeOuts", 0)),
-                    "BB":     int(stat.get("baseOnBalls", 0)),
-                    "ER":     int(stat.get("earnedRuns", 0)),
-                    "RESULT": stat.get("note", ""),
-                })
-
-            df = pd.DataFrame(rows)
-            df["DATE"] = pd.to_datetime(df["DATE"])
-            return df.sort_values("DATE", ascending=False).reset_index(drop=True)
-
-        except Exception:
-            return empty
-
-
-    @st.cache_data(ttl=3600, show_spinner=False)
-    def mlb_get_opp_k_rate(opp_abbr: str) -> Optional[float]:
-        """Get opposing team's strikeout rate (K%) vs RHP this season."""
-        try:
-            import requests as _req
-            # MLB team ID lookup
-            teams_r = _req.get(
-                "https://statsapi.mlb.com/api/v1/teams",
-                params={"sportId": 1, "season": 2026},
-                timeout=8
-            )
-            if not teams_r.ok:
-                return None
-            teams = teams_r.json().get("teams", [])
-            team = next(
-                (t for t in teams
-                 if t.get("abbreviation", "").upper() == opp_abbr.upper()),
-                None
-            )
-            if not team:
-                return None
-
-            tid = team["id"]
-            stats_r = _req.get(
-                f"https://statsapi.mlb.com/api/v1/teams/{tid}/stats",
-                params={"stats": "season", "group": "hitting", "season": 2026},
-                timeout=8
-            )
-            if not stats_r.ok:
-                return None
-
-            stat = stats_r.json().get("stats", [{}])[0].get("splits", [{}])[0].get("stat", {})
-            ab  = int(stat.get("atBats", 0))
-            k   = int(stat.get("strikeOuts", 0))
-            return round(k / ab, 3) if ab > 0 else None
-
-        except Exception:
-            return None
-
-
-    # ── Park factors (2026 — higher = more run scoring) ──────────
-    _MLB_PARK_FACTORS = {
-        "COL": 1.30, "CIN": 1.10, "BOS": 1.08, "PHI": 1.06,
-        "TEX": 1.05, "NYY": 1.04, "CHC": 1.03, "HOU": 1.02,
-        "ATL": 1.01, "MIL": 1.01, "STL": 1.00, "LAD": 0.99,
-        "NYM": 0.99, "TOR": 0.98, "DET": 0.98, "MIN": 0.97,
-        "CLE": 0.97, "ARI": 0.97, "BAL": 0.97, "KCR": 0.96,
-        "PIT": 0.96, "TBR": 0.96, "CHW": 0.95, "SEA": 0.95,
-        "SFG": 0.94, "MIA": 0.94, "LAA": 0.94, "WSN": 0.93,
-        "OAK": 0.93, "SDP": 0.92,
-    }
-
-    def mlb_park_signal(home_team: str) -> str:
-        """Returns Boost/Neutral/Penalty based on park factor for strikeouts."""
-        # Lower run-scoring parks tend to have more Ks (pitchers' parks)
-        pf = _MLB_PARK_FACTORS.get(home_team, 1.00)
-        if pf <= 0.95:   return "Boost"    # pitcher's park → more Ks
-        elif pf >= 1.06: return "Penalty"  # hitter's park → fewer Ks
-        return "Neutral"
-
-    def mlb_weighted_hit_rate(logs: pd.DataFrame, line: float, stat: str, side: str) -> float:
-        """Weighted hit rate for MLB — same logic as NBA."""
-        vals = pd.to_numeric(logs[stat], errors="coerce").dropna().reset_index(drop=True)
-        n = len(vals)
-        if n == 0:
-            return 0.0
-        weights = [n - i for i in range(n)]
-        total_w = sum(weights)
-        if side == "Over":
-            hits = sum(w for v, w in zip(vals, weights) if v >= line)
-        else:
-            hits = sum(w for v, w in zip(vals, weights) if v <= line)
-        return hits / total_w
-
-    def mlb_apply_adjustments(weighted: float, opp_k_pct: Optional[float], park_sig: str, side: str) -> float:
-        """Apply MLB-specific context adjustments."""
-        adj = weighted
-
-        # Opponent K% signal (league avg ~22%)
-        if opp_k_pct is not None:
-            if opp_k_pct >= 0.26:   # high K team = easy matchup for pitcher
-                delta = +0.06 if side == "Over" else -0.06
-            elif opp_k_pct <= 0.18: # low K team = tough matchup
-                delta = -0.06 if side == "Over" else +0.06
-            else:
-                delta = 0.0
-            adj += delta
-
-        # Park factor
-        park_map = {"Boost": +0.04, "Neutral": 0.0, "Penalty": -0.04}
-        adj += park_map.get(park_sig, 0.0) * (1 if side == "Over" else -1)
-
-        return max(0.05, min(0.95, adj))
-
-    def mlb_get_verdict(adjusted: float, edge: float, side: str) -> str:
-        if side == "Over":
-            if adjusted >= 0.64 and edge >= 1.0:  return "Strong Over"
-            if adjusted >= 0.55 and edge > 0:     return "Lean Over"
-        else:
-            if adjusted >= 0.64 and edge <= -1.0: return "Strong Under"
-            if adjusted >= 0.55 and edge < 0:     return "Lean Under"
-        return "Pass"
-
-    # ── MLB UI ────────────────────────────────────────────────────
-    st.markdown("<div class='section-header'>⚾ MLB Pitcher Prop Analyzer</div>", unsafe_allow_html=True)
-
-    mlb_c1, mlb_c2, mlb_c3, mlb_c4 = st.columns([2.5, 1, 1, 1])
-
-    with mlb_c1:
-        mlb_pitcher = st.selectbox(
-            "Pitcher — type name",
-            options=[""] + [
-                "Gerrit Cole", "Zack Wheeler", "Spencer Strider", "Blake Snell",
-                "Corbin Burnes", "Logan Webb", "Pablo Lopez", "Framber Valdez",
-                "Dylan Cease", "Chris Sale", "Sonny Gray", "Max Fried",
-                "Shota Imanaga", "Kevin Gausman", "Tarik Skubal", "Freddy Peralta",
-                "MacKenzie Gore", "Bryce Miller", "Hunter Brown", "Yusei Kikuchi",
-            ],
-            format_func=lambda x: "— select a pitcher —" if x == "" else x,
-            key="mlb_pitcher_sel"
-        )
-
-    with mlb_c2:
-        mlb_prop = st.selectbox(
-            "Prop Type",
-            options=["Strikeouts", "Outs Recorded"],
-            key="mlb_prop_type"
-        )
-
-    with mlb_c3:
-        mlb_line = st.number_input(
-            "Line",
-            min_value=0.5, max_value=30.0,
-            value=5.5, step=0.5,
-            key="mlb_line"
-        )
-
-    with mlb_c4:
-        mlb_side = st.selectbox("Over / Under", ["Over", "Under"], key="mlb_side")
-
-    mlb_opp = st.text_input("Opposing Team (abbr)", placeholder="e.g. NYY, BOS, LAD", key="mlb_opp").upper().strip()
-    mlb_home = st.text_input("Home Team (abbr, for park factor)", placeholder="e.g. COL, SDP", key="mlb_home").upper().strip()
-
-    mlb_fetch = st.button("⚾  Analyze Pitcher Prop", key="mlb_analyze")
-
-    if not mlb_pitcher:
-        st.markdown(
-            "<div style='color:#555;font-family:JetBrains Mono,monospace;font-size:0.75rem;"
-            "margin-top:0.5rem;'>↑ Select a pitcher to get started.</div>",
-            unsafe_allow_html=True
-        )
-
-    if mlb_fetch and mlb_pitcher:
-        _mlb_stat = "K" if mlb_prop == "Strikeouts" else "OUTS"
-        _mlb_stat_label = "K" if mlb_prop == "Strikeouts" else "Outs"
-
-        with st.spinner(f"Fetching {mlb_pitcher} game logs..."):
-            mlb_logs = mlb_get_pitcher_logs(mlb_pitcher, n=10)
-
-        if mlb_logs.empty:
-            st.error("Could not fetch pitcher data. Check the name and try again.")
-        else:
-            # Core stats
-            vals        = pd.to_numeric(mlb_logs[_mlb_stat], errors="coerce").dropna()
-            avg_val     = vals.mean()
-            edge        = avg_val - mlb_line
-            weighted    = mlb_weighted_hit_rate(mlb_logs, mlb_line, _mlb_stat, mlb_side)
-            opp_k_pct   = mlb_get_opp_k_rate(mlb_opp) if mlb_opp else None
-            park_sig    = mlb_park_signal(mlb_home) if mlb_home else "Neutral"
-            adjusted    = mlb_apply_adjustments(weighted, opp_k_pct, park_sig, mlb_side)
-            tier        = mlb_get_verdict(adjusted, edge, mlb_side)
-
-            # Consistency
-            std = vals.std()
-            cv  = std / avg_val if avg_val > 0 else 1.0
-            consistency = max(0.1, min(0.95, 1.0 - cv * 0.8))
-
-            # ── Stat cards
-            st.markdown("<div class='section-header'>Key Stats</div>", unsafe_allow_html=True)
-            mc1, mc2, mc3, mc4 = st.columns(4)
-
-            tier_css = {
-                "Strong Over": "green", "Lean Over": "yellow",
-                "Strong Under": "red", "Lean Under": "orange", "Pass": "gray"
-            }
-            css = tier_css.get(tier, "gray")
-
-            with mc1:
-                _avg_color = "green" if edge > 0 and mlb_side == "Over" else ("red" if edge < 0 and mlb_side == "Under" else "orange")
-                st.markdown(f"""
-                <div class='stat-card'>
-                    <div class='stat-label'>Avg {_mlb_stat_label} (L10)</div>
-                    <div class='stat-value {_avg_color}'>{avg_val:.1f}</div>
-                    <div class='stat-hint'>Line is {mlb_line} · edge {edge:+.1f}</div>
-                </div>""", unsafe_allow_html=True)
-            with mc2:
-                hr_color = "green" if weighted >= 0.64 else ("yellow" if weighted >= 0.55 else "red")
-                st.markdown(f"""
-                <div class='stat-card'>
-                    <div class='stat-label'>Weighted Hit Rate</div>
-                    <div class='stat-value {hr_color}'>{weighted:.0%}</div>
-                    <div class='stat-hint'>Last 10 starts weighted</div>
-                </div>""", unsafe_allow_html=True)
-            with mc3:
-                cons_color = "green" if consistency >= 0.5 else ("yellow" if consistency >= 0.35 else "red")
-                st.markdown(f"""
-                <div class='stat-card'>
-                    <div class='stat-label'>Consistency</div>
-                    <div class='stat-value {cons_color}'>{consistency:.0%}</div>
-                    <div class='stat-hint'>Score variance relative to avg</div>
-                </div>""", unsafe_allow_html=True)
-            with mc4:
-                park_color = "green" if park_sig == "Boost" else ("red" if park_sig == "Penalty" else "orange")
-                opp_str = f"Opp K%: {opp_k_pct:.0%}" if opp_k_pct else "Opp K%: N/A"
-                st.markdown(f"""
-                <div class='stat-card'>
-                    <div class='stat-label'>Context</div>
-                    <div class='stat-value {park_color}'>{park_sig}</div>
-                    <div class='stat-hint'>Park factor · {opp_str}</div>
-                </div>""", unsafe_allow_html=True)
-
-            # ── Game log
-            st.markdown("<div class='section-header'>Last 10 Starts</div>", unsafe_allow_html=True)
-            _display_logs = mlb_logs.copy()
-            _display_logs["HIT"] = _display_logs[_mlb_stat].apply(
-                lambda x: "✅" if (mlb_side == "Over" and float(x) >= mlb_line) or
-                                   (mlb_side == "Under" and float(x) <= mlb_line) else "❌"
-            )
-            _display_logs["DATE"] = _display_logs["DATE"].dt.strftime("%b %d")
-            st.dataframe(
-                _display_logs[["DATE","OPP","IP","K","OUTS","BB","ER","HIT"]],
-                use_container_width=True, hide_index=True
-            )
-
-            # ── Verdict
-            tier_emoji = {
-                "Strong Over": "🟢", "Lean Over": "🟡",
-                "Strong Under": "🔴", "Lean Under": "🟠", "Pass": "⚪"
-            }
-            _cons_label = "Predictable" if consistency >= 0.5 else ("Variable" if consistency >= 0.35 else "Volatile")
-            _edge_label = "Large" if abs(edge) >= 3 else ("Solid" if abs(edge) >= 1.5 else "Marginal")
-
-            _mlb_verdict_html = (
-                f"<div class='verdict-banner {css}'>"
-                f"<div>"
-                f"<div class='verdict-label'>{mlb_pitcher} · {mlb_line} {_mlb_stat_label} · {mlb_side}</div>"
-                f"<div class='verdict-tier {css}'>{tier_emoji.get(tier,'⚪')} {tier}</div>"
-                f"</div>"
-                f"<div style='display:flex;gap:2rem;flex-wrap:wrap;align-items:flex-start;'>"
-                f"<div><div class='verdict-label'>Adjusted Hit Rate</div>"
-                f"<div style='font-size:1.4rem;font-weight:800;color:#f0f0f0;'>{adjusted:.0%}</div></div>"
-                f"<div><div class='verdict-label'>Edge vs Line</div>"
-                f"<div style='font-size:1.4rem;font-weight:800;color:#f0f0f0;'>{edge:+.1f}</div>"
-                f"<div style='font-family:JetBrains Mono,monospace;font-size:0.6rem;color:#555;'>{_edge_label} edge</div></div>"
-                f"<div><div class='verdict-label'>Consistency</div>"
-                f"<div style='font-size:1.4rem;font-weight:800;color:#f0f0f0;'>{consistency:.0%}</div>"
-                f"<div style='font-family:JetBrains Mono,monospace;font-size:0.6rem;color:#555;'>{_cons_label}</div></div>"
-                f"</div>"
-                f"</div>"
-            )
-            st.markdown("<div class='section-header'>Verdict</div>", unsafe_allow_html=True)
-            st.markdown(_mlb_verdict_html, unsafe_allow_html=True)
-
-    st.stop()
 
 
 st.markdown("<div style='margin-top:3rem; font-family:DM Mono; font-size:0.65rem; color:#334155; text-align:center;'>PropLens — For educational purposes only. Not financial or betting advice.</div>", unsafe_allow_html=True)
