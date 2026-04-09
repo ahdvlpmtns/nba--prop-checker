@@ -853,6 +853,16 @@ def nba_get_game_logs(player_id: int, season: str, n: int = 10, _date: str = Non
     import requests as _req
     import concurrent.futures
 
+    # Method 0: Check Supabase cache first — instant if another user fetched today
+    try:
+        _cached = get_cached_logs_from_supabase(player_id, season)
+        if _cached is not None and not _cached.empty:
+            result = _process(_cached)
+            if result is not None:
+                return result
+    except Exception:
+        pass
+
     # Method 1: Direct REST API
     for attempt in range(2):
         try:
@@ -875,6 +885,11 @@ def nba_get_game_logs(player_id: int, season: str, n: int = 10, _date: str = Non
                     df = pd.DataFrame(rows, columns=headers_list)
                     result = _process(df)
                     if result is not None:
+                        # Save to Supabase for other users today
+                        try:
+                            save_logs_to_supabase(player_id, season, result)
+                        except Exception:
+                            pass
                         return result
         except Exception:
             pass
@@ -898,6 +913,10 @@ def nba_get_game_logs(player_id: int, season: str, n: int = 10, _date: str = Non
                 df = ex.submit(_fetch).result(timeout=18)
             result = _process(df)
             if result is not None:
+                try:
+                    save_logs_to_supabase(player_id, season, result)
+                except Exception:
+                    pass
                 return result
         except Exception:
             if attempt == 0:
@@ -1475,6 +1494,51 @@ def get_supabase_client():
         return _SupabaseClient(url, key)
     except Exception:
         return None
+
+
+def get_cached_logs_from_supabase(player_id: int, season: str) -> Optional[pd.DataFrame]:
+    """Check Supabase for today's already-fetched game logs. Returns df or None."""
+    try:
+        sb = get_supabase_client()
+        if not sb:
+            return None
+        import requests as _req
+        url = f"{sb.url}/rest/v1/game_logs_cache"
+        params = f"?player_id=eq.{player_id}&season=eq.{season}&fetch_date=eq.{_cache_date()}"
+        r = _req.get(url + params, headers={**sb.hdrs, "Prefer": "return=representation"}, timeout=5)
+        if not r.ok:
+            return None
+        rows = r.json()
+        if not rows:
+            return None
+        import json
+        data = json.loads(rows[0]["logs_json"])
+        df = pd.DataFrame(data)
+        df["GAME_DATE"] = pd.to_datetime(df["GAME_DATE"])
+        return df
+    except Exception:
+        return None
+
+
+def save_logs_to_supabase(player_id: int, season: str, df: pd.DataFrame) -> bool:
+    """Save today's game logs to Supabase for fast retrieval by other users."""
+    try:
+        sb = get_supabase_client()
+        if not sb:
+            return False
+        import json, requests as _req
+        logs_json = df.to_json(orient="records", date_format="iso")
+        url = f"{sb.url}/rest/v1/game_logs_cache"
+        # Upsert — update if exists, insert if not
+        r = _req.post(url, headers={**sb.hdrs, "Prefer": "resolution=merge-duplicates"}, json={
+            "player_id":  player_id,
+            "season":     season,
+            "fetch_date": _cache_date(),
+            "logs_json":  logs_json,
+        }, timeout=5)
+        return r.ok
+    except Exception:
+        return False
 
 
 def load_tracker_from_supabase(session_id: str) -> list:
