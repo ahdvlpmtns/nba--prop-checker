@@ -4618,30 +4618,35 @@ if st.session_state.logs is not None:
     st.markdown(_verdict_html, unsafe_allow_html=True)
 
     # ── Playoff picture — right under verdict ─────────────────────
-    if _playoff:
-        _pl_status = _playoff.get("status", "")
-        _pl_label  = _playoff.get("label", "")
-        _pl_color  = _playoff.get("color", "#555")
-        _pl_w      = _playoff.get("wins", 0)
-        _pl_l      = _playoff.get("losses", 0)
-        _load_mgmt_risk = _pl_status in ("locked", "eliminated")
-        _load_note = "  ·  ⚠️ Load management risk" if _load_mgmt_risk else ""
-        st.markdown(
-            f"<div style='background:#111;border:1px solid #2a2a2a;"
-            f"border-left:3px solid {_pl_color};"
-            f"padding:0.55rem 1rem;margin-top:-0.5rem;margin-bottom:0.5rem;"
-            f"display:flex;align-items:center;justify-content:space-between;'>"
-            f"<div style='display:flex;align-items:center;gap:10px;'>"
-            f"<div style='font-family:JetBrains Mono,monospace;font-size:0.55rem;"
-            f"color:#555;letter-spacing:0.15em;'>PLAYOFF PICTURE</div>"
-            f"<div style='font-family:Barlow Condensed,sans-serif;font-size:0.95rem;"
-            f"font-weight:700;color:{_pl_color};'>{_pl_label}</div>"
-            f"</div>"
-            f"<div style='font-family:JetBrains Mono,monospace;font-size:0.58rem;"
-            f"color:#555;'>{_pl_w}W–{_pl_l}L{_load_note}</div>"
-            f"</div>",
-            unsafe_allow_html=True
-        )
+    # Debug: always show something so we can confirm display works
+    _pl_status = _playoff.get("status", "") if _playoff else ""
+    _pl_label  = _playoff.get("label",  "") if _playoff else ""
+    _pl_color  = _playoff.get("color",  "#555555") if _playoff else "#555555"
+    _pl_w      = _playoff.get("wins",   0) if _playoff else 0
+    _pl_l      = _playoff.get("losses", 0) if _playoff else 0
+    _load_mgmt_risk = _pl_status in ("locked", "eliminated")
+    _load_note = "  ·  ⚠️ Load management risk" if _load_mgmt_risk else ""
+
+    # Show if we have data OR show a debug fallback
+    _pl_display_label = _pl_label if _pl_label else f"standings unavailable · {player_team or '?'}"
+    _pl_display_color = _pl_color if _pl_label else "#333"
+
+    st.markdown(
+        f"<div style='background:#111;border:1px solid #2a2a2a;"
+        f"border-left:3px solid {_pl_display_color};"
+        f"padding:0.55rem 1rem;margin-top:-0.5rem;margin-bottom:0.5rem;"
+        f"display:flex;align-items:center;justify-content:space-between;'>"
+        f"<div style='display:flex;align-items:center;gap:10px;'>"
+        f"<div style='font-family:JetBrains Mono,monospace;font-size:0.55rem;"
+        f"color:#555;letter-spacing:0.15em;'>PLAYOFF PICTURE</div>"
+        f"<div style='font-family:Barlow Condensed,sans-serif;font-size:0.95rem;"
+        f"font-weight:700;color:{_pl_display_color};'>{_pl_display_label}</div>"
+        f"</div>"
+        f"<div style='font-family:JetBrains Mono,monospace;font-size:0.58rem;"
+        f"color:#555;'>{f'{_pl_w}W–{_pl_l}L' if _pl_w else ''}{_load_note}</div>"
+        f"</div>",
+        unsafe_allow_html=True
+    )
 
     # ── How to read this verdict ──────────────────────────────────
     with st.expander("💡  How to read this verdict"):
