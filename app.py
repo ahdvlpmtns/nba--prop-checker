@@ -3269,8 +3269,85 @@ if st.session_state.active_sport == "mlb":
     with mlb_c4:
         mlb_side = st.selectbox("Over / Under", ["Over", "Under"], key="mlb_side")
 
-    mlb_opp = st.text_input("Opposing Team (abbr)", placeholder="e.g. NYY, BOS, LAD", key="mlb_opp").upper().strip()
-    mlb_home = st.text_input("Home Team (abbr, for park factor)", placeholder="e.g. COL, SDP", key="mlb_home").upper().strip()
+    @st.cache_data(ttl=1800, show_spinner=False)
+    def mlb_get_tonight_game(pitcher_name: str) -> dict:
+        """
+        Auto-detect tonight's game for a pitcher from MLB schedule API.
+        Returns {opp, home_team, venue, game_date} or {}
+        """
+        try:
+            import requests as _req, datetime, pytz
+            et = pytz.timezone("America/New_York")
+            today = datetime.datetime.now(et).strftime("%Y-%m-%d")
+
+            # Get today's schedule
+            sched = _req.get(
+                "https://statsapi.mlb.com/api/v1/schedule",
+                params={
+                    "sportId": 1,
+                    "date": today,
+                    "hydrate": "probablePitcher,team",
+                },
+                timeout=8
+            )
+            if not sched.ok:
+                return {}
+
+            games = []
+            for date in sched.json().get("dates", []):
+                games.extend(date.get("games", []))
+
+            _norm = lambda s: s.lower().replace("-", " ").replace(".", "").strip()
+            _pitcher_norm = _norm(pitcher_name)
+
+            for game in games:
+                for side in ["home", "away"]:
+                    prob = game.get("teams", {}).get(side, {}).get("probablePitcher", {})
+                    pname = prob.get("fullName", "") or prob.get("lastName", "")
+                    if not pname:
+                        continue
+                    if _pitcher_norm in _norm(pname) or _norm(pname) in _pitcher_norm:
+                        # Found the game
+                        home = game["teams"]["home"]["team"]["abbreviation"]
+                        away = game["teams"]["away"]["team"]["abbreviation"]
+                        opp  = away if side == "home" else home
+                        venue = game.get("venue", {}).get("name", "")
+                        return {
+                            "opp":       opp,
+                            "home_team": home,
+                            "away_team": away,
+                            "pitcher_side": side,
+                            "venue":     venue,
+                            "game_date": today,
+                        }
+        except Exception:
+            pass
+        return {}
+
+    # Auto-detect tonight's game for selected pitcher
+    _tonight = mlb_get_tonight_game(mlb_pitcher) if mlb_pitcher else {}
+    mlb_opp       = _tonight.get("opp", "")
+    mlb_home      = _tonight.get("home_team", "")
+    mlb_venue_str = _tonight.get("venue", "")
+    mlb_game_side = _tonight.get("pitcher_side", "")
+
+    if mlb_pitcher and _tonight:
+        _opp_display = f"vs {mlb_opp} · {mlb_venue_str} · {'Home' if mlb_game_side == 'home' else 'Away'}"
+        st.markdown(
+            f"<div style='background:#111;border:1px solid #2a2a2a;border-left:3px solid #a3e635;"
+            f"padding:0.5rem 1rem;margin-bottom:0.5rem;font-family:JetBrains Mono,monospace;"
+            f"font-size:0.68rem;color:#a3e635;'>"
+            f"🎯 TONIGHT: {_opp_display}</div>",
+            unsafe_allow_html=True
+        )
+    elif mlb_pitcher:
+        st.markdown(
+            "<div style='background:#111;border:1px solid #2a2a2a;border-left:3px solid #555;"
+            "padding:0.5rem 1rem;margin-bottom:0.5rem;font-family:JetBrains Mono,monospace;"
+            "font-size:0.68rem;color:#555;'>"
+            "⚠️ No game found for tonight — pitcher may be resting or on off day</div>",
+            unsafe_allow_html=True
+        )
 
     mlb_fetch = st.button("⚾  Analyze Pitcher Prop", key="mlb_analyze")
 
@@ -3296,8 +3373,9 @@ if st.session_state.active_sport == "mlb":
             avg_val     = vals.mean()
             edge        = avg_val - mlb_line
             weighted    = mlb_weighted_hit_rate(mlb_logs, mlb_line, _mlb_stat, mlb_side)
-            opp_k_pct   = mlb_get_opp_k_rate(mlb_opp) if mlb_opp else None
-            park_sig    = mlb_park_signal(mlb_home) if mlb_home else "Neutral"
+            opp_k_pct = mlb_get_opp_k_rate(mlb_opp) if mlb_opp else None
+            # Home park = always the home team's park (auto-detected from schedule)
+            park_sig  = mlb_park_signal(mlb_home) if mlb_home else "Neutral"
             adjusted    = mlb_apply_adjustments(weighted, opp_k_pct, park_sig, mlb_side)
             tier        = mlb_get_verdict(adjusted, edge, mlb_side)
 
