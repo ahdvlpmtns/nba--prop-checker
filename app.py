@@ -857,14 +857,16 @@ def nba_get_game_logs(player_id: int, season: str, n: int = 10, _date: str = Non
     import concurrent.futures
     _HEADERS = {
         "Host": "stats.nba.com",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
         "x-nba-stats-origin": "stats",
         "x-nba-stats-token": "true",
         "Referer": "https://www.nba.com/",
         "Origin": "https://www.nba.com",
+        "Connection": "keep-alive",
     }
-    for attempt in range(2):
+    for attempt in range(3):
         try:
             def _fetch():
                 try:
@@ -873,18 +875,18 @@ def nba_get_game_logs(player_id: int, season: str, n: int = 10, _date: str = Non
                 except Exception:
                     pass
                 return playergamelog.PlayerGameLog(
-                    player_id=player_id, season=season, timeout=15,
+                    player_id=player_id, season=season, timeout=20,
                 ).get_data_frames()[0]
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-                df = ex.submit(_fetch).result(timeout=18)
+                df = ex.submit(_fetch).result(timeout=22)
             result = _process(df)
             if result is not None:
                 _save(result)
                 return result
         except Exception:
-            if attempt == 0:
-                time.sleep(2)
+            if attempt < 2:
+                time.sleep(2 * (attempt + 1))
 
     return empty
 
@@ -4357,16 +4359,21 @@ if st.session_state.logs is not None:
                     padding:1rem 1.2rem;margin:0.5rem 0;'>
             <div style='font-family:JetBrains Mono,monospace;font-size:0.7rem;
                         color:#ef4444;font-weight:700;letter-spacing:0.08em;margin-bottom:6px;'>
-                ⚠️ NO GAME LOG DATA FOUND
+                ⚠️ NBA STATS SERVER SLOW
             </div>
             <div style='font-size:0.85rem;color:#94a3b8;line-height:1.6;'>
-                stats.nba.com returned no data for this player.<br>
-                This usually means the player hasn't played yet this season,
-                or the NBA API is temporarily unavailable.<br>
-                <strong style='color:#f1f5f9;'>Try clicking Analyze Prop again.</strong>
+                stats.nba.com didn't respond in time.<br>
+                This is common during peak hours (evenings ET).<br>
+                <strong style='color:#f1f5f9;'>Click the button below to try again — usually works on 2nd attempt.</strong>
             </div>
         </div>
         """, unsafe_allow_html=True)
+        if st.button("🔄  Try Again", use_container_width=True):
+            # Clear all caches for this player and retry
+            nba_get_game_logs.clear()
+            nba_get_full_season_logs_cached.clear()
+            st.session_state.logs = None
+            st.rerun()
         st.stop()
 
     # ── Blowout filter ───────────────────────
