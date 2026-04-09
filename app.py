@@ -624,7 +624,7 @@ if "session_id" not in st.session_state:
 for key, default in [
     ("logs", None), ("ai_analysis", None), ("ai_error", None),
     ("defense_data", None), ("tracker", []), ("active_tab", "player"),
-    ("recent_players", []), ("supabase_loaded", False),
+    ("recent_players", []), ("supabase_loaded", False), ("show_share", False),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -3754,6 +3754,7 @@ if fetch:
 if fetch:
     st.session_state.ai_analysis = None
     st.session_state.ai_error    = None
+    st.session_state.show_share  = False
     # Save to recent players (max 5, no duplicates)
     if selected_player:
         _recent = st.session_state.recent_players
@@ -4939,41 +4940,86 @@ if st.session_state.logs is not None:
                         st.session_state.ai_error = repr(e)
                         st.session_state.ai_analysis = None
 
-    # ── Add to Tracker ───────────────────────
-    if st.button("➕  Add to Prop Tracker"):
-        entry = {
-            "Player":      full_name,
-            "Line":        f"{line} {side}",
-            "Opponent":    opp_abbr or "—",
-            "Matchup":     matchup_sel,
-            "Venue":       f"{tonight_venue or '?'} ({venue_adj})",
-            "Avg PTS":     round(sample_avg_pts, 1),
-            "Hit Rate":    f"{weighted_base:.0%}",
-            "Adjusted":    f"{adjusted:.0%}",
-            "Consistency": f"{consistency:.0%}",
-            "Verdict":     tier,
-            "Result":      "Pending",
-        }
-        existing = [i for i, e in enumerate(st.session_state.tracker)
-                    if e["Player"] == full_name and e["Line"] == f"{line} {side}"]
-        if existing:
-            # Update existing entry
-            old_id = st.session_state.tracker[existing[0]].get("id")
-            entry["id"] = old_id
-            st.session_state.tracker[existing[0]] = entry
-            if old_id:
-                delete_from_supabase(old_id)
-            new_id = save_to_supabase(st.session_state.session_id, entry)
-            if new_id:
-                st.session_state.tracker[existing[0]]["id"] = new_id
-            st.success(f"Updated {full_name} in tracker.")
-        else:
-            # Save to Supabase and store returned ID
-            new_id = save_to_supabase(st.session_state.session_id, entry)
-            if new_id:
-                entry["id"] = new_id
-            st.session_state.tracker.append(entry)
-            st.success(f"Added {full_name} to tracker!")
+    # ── Share + Add to Tracker ───────────────
+    _share_col, _tracker_col = st.columns(2)
+
+    with _share_col:
+        # Build share text
+        _tier_emoji = {
+            "Strong Over":  "🟢", "Lean Over":   "🟡",
+            "Strong Under": "🔴", "Lean Under":  "🟠", "Pass": "⚪"
+        }.get(tier, "⚪")
+        _opp_str    = f"vs {opp_abbr}" if opp_abbr else ""
+        _venue_str  = f"({tonight_venue})" if tonight_venue else ""
+        _playoff_str = ""
+        if _playoff and _playoff.get("status") in ("locked", "eliminated"):
+            _playoff_str = f"\n⚠️ Load mgmt risk — {_playoff.get('label','')}"
+        _blowout_str = f"\n🚫 {_blowout_count} blowout game{'s' if _blowout_count > 1 else ''} excluded" if _blowout_count > 0 else ""
+
+        _share_text = (
+            f"{_tier_emoji} {tier.upper()} — {full_name}\n"
+            f"📊 {line} pts {side} {_opp_str} {_venue_str}\n"
+            f"Hit Rate: {adjusted:.0%} · Edge: {line_diff:+.1f} · Consistency: {consistency:.0%}"
+            f"{_blowout_str}"
+            f"{_playoff_str}\n"
+            f"🏀 PropLens v4.0"
+        ).strip()
+
+        # Display share box with copy instruction
+        if st.button("📤  Share Pick", use_container_width=True):
+            st.session_state.show_share = True
+
+        if st.session_state.get("show_share"):
+            st.markdown(
+                f"<div style='background:#111;border:1px solid #2a2a2a;"
+                f"border-left:3px solid #a3e635;"
+                f"padding:0.75rem 1rem;margin-top:0.4rem;'>"
+                f"<div style='font-family:JetBrains Mono,monospace;font-size:0.55rem;"
+                f"color:#555;letter-spacing:0.15em;margin-bottom:8px;'>"
+                f"COPY & PASTE INTO GROUP CHAT</div>"
+                f"<pre style='font-family:JetBrains Mono,monospace;font-size:0.72rem;"
+                f"color:#a3e635;white-space:pre-wrap;margin:0;line-height:1.6;'>"
+                f"{_share_text}</pre>"
+                f"</div>",
+                unsafe_allow_html=True
+            )
+            st.code(_share_text, language=None)
+
+    with _tracker_col:
+        if st.button("➕  Add to Prop Tracker", use_container_width=True):
+                    entry = {
+                        "Player":      full_name,
+                        "Line":        f"{line} {side}",
+                        "Opponent":    opp_abbr or "—",
+                        "Matchup":     matchup_sel,
+                        "Venue":       f"{tonight_venue or '?'} ({venue_adj})",
+                        "Avg PTS":     round(sample_avg_pts, 1),
+                        "Hit Rate":    f"{weighted_base:.0%}",
+                        "Adjusted":    f"{adjusted:.0%}",
+                        "Consistency": f"{consistency:.0%}",
+                        "Verdict":     tier,
+                        "Result":      "Pending",
+                    }
+                    existing = [i for i, e in enumerate(st.session_state.tracker)
+                                if e["Player"] == full_name and e["Line"] == f"{line} {side}"]
+                    if existing:
+                        # Update existing entry
+                        old_id = st.session_state.tracker[existing[0]].get("id")
+                        entry["id"] = old_id
+                        st.session_state.tracker[existing[0]] = entry
+                        if old_id:
+                            delete_from_supabase(old_id)
+                        new_id = save_to_supabase(st.session_state.session_id, entry)
+                        if new_id:
+                            st.session_state.tracker[existing[0]]["id"] = new_id
+                        st.success(f"Updated {full_name} in tracker.")
+                    else:
+                        # Save to Supabase and store returned ID
+                        new_id = save_to_supabase(st.session_state.session_id, entry)
+                        if new_id:
+                            entry["id"] = new_id
+                        st.session_state.tracker.append(entry)
+                        st.success(f"Added {full_name} to tracker!")
 
 # ─────────────────────────────────────────────
 # Prop Tracker
