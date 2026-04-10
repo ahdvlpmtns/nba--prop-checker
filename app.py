@@ -3760,12 +3760,24 @@ if _mode == "🎯  Slate Scanner":
                     }
                     _adj  = apply_adjustments(_wb, _ctx, "Over")
                     _tier = get_confidence_tier(_adj, _ld, _cons, "Over")
+
+                    # ── Confidence score 0-100 ────────────────────────
+                    # Weighted blend of 4 signals
+                    _score_adj  = min(_adj, 0.95) * 45          # hit rate    45pts max
+                    _score_edge = min(abs(_ld) / 8, 1.0) * 25   # edge        25pts max
+                    _score_cons = _cons * 20                     # consistency 20pts max
+                    _score_mq   = {"Weak": 10, "Neutral": 5, "Strong": 0}.get(_mq, 5)  # tough matchup penalty
+                    _conf_score = int(_score_adj + _score_edge + _score_cons + _score_mq)
+                    _conf_score = max(0, min(99, _conf_score))
+
                     return {
                         "Player": _fn, "Line": _ln, "Avg PTS": round(_avgp, 1),
                         "Edge": round(_ld, 1), "Weighted HR": f"{_wb:.0%}",
                         "Adjusted": f"{_adj:.0%}", "Matchup": _mq,
                         "B2B": _b2b, "Form": _fsig, "Venue": _ven or "?",
                         "Tier": _tier, "_adj_raw": _adj,
+                        "_conf": _conf_score,
+                        "_nid": _nid, "_line": _ln,
                         "_team": _norm_team_abbr(_team) if _team else "",
                         "_opp":  _norm_team_abbr(_opp)  if _opp  else "",
                     }
@@ -3794,7 +3806,7 @@ if _mode == "🎯  Slate Scanner":
             _status.empty()
             st.session_state.scanner_results = sorted(
                 _results,
-                key=lambda x: -x["_adj_raw"] if "Over" in x["Tier"] else x["_adj_raw"]
+                key=lambda x: -x.get("_conf", 0)
             )
             st.session_state["scanner_day_label"] = _day_sel
 
@@ -3825,8 +3837,8 @@ if _mode == "🎯  Slate Scanner":
         else:
             _show = _deduped
 
-        # Sort by adjusted hit rate descending
-        _show = sorted(_show, key=lambda r: r.get("_adj", 0), reverse=True)
+        # Sort by confidence score descending
+        _show = sorted(_show, key=lambda r: r.get("_conf", 0), reverse=True)
 
         _tc = {"Strong Over":"green","Lean Over":"yellow","Lean Under":"orange","Strong Under":"red","Pass":"gray"}
         _te = {"Strong Over":"🟢","Lean Over":"🟡","Lean Under":"🟠","Strong Under":"🔴","Pass":"⚪"}
@@ -3883,33 +3895,55 @@ if _mode == "🎯  Slate Scanner":
                 f"{_filter_label.upper()} · SORTED BY HIT RATE</div>",
                 unsafe_allow_html=True
             )
-            for _r in _show:
-                _t  = _r["Tier"]
-                _cs = _tc.get(_t, "gray")
-                _em = _te.get(_t, "⚪")
-                _ec = "#22c55e" if _r["Edge"] > 0 else "#ef4444"
-                st.markdown(f"""
-                <div class='verdict-banner {_cs}' style='margin:0.4rem 0;padding:1rem 1.4rem;'>
-                    <div>
-                        <div class='verdict-label'>{_r["Line"]} pts Over · PrizePicks</div>
-                        <div style='font-size:1.1rem;font-weight:800;color:#f1f5f9;'>{_r["Player"]}</div>
-                        <div style='font-family:DM Mono;font-size:0.68rem;color:#475569;margin-top:4px;'>
-                            {_r["Venue"]} · {_r["Matchup"]} defense · {_r["B2B"]} · Form: {_r["Form"]}
+            for _ri, _r in enumerate(_show):
+                _t    = _r["Tier"]
+                _cs   = _tc.get(_t, "gray")
+                _em   = _te.get(_t, "⚪")
+                _ec   = "#22c55e" if _r["Edge"] > 0 else "#ef4444"
+                _conf = _r.get("_conf", 0)
+                # Confidence color
+                _cc   = "#a3e635" if _conf >= 80 else ("#eab308" if _conf >= 65 else "#f97316")
+
+                _card_col, _btn_col = st.columns([5, 1])
+                with _card_col:
+                    st.markdown(f"""
+                    <div class='verdict-banner {_cs}' style='margin:0.4rem 0;padding:1rem 1.4rem;'>
+                        <div>
+                            <div class='verdict-label'>{_r["Line"]} pts Over · PrizePicks</div>
+                            <div style='font-size:1.1rem;font-weight:800;color:#f1f5f9;'>{_r["Player"]}</div>
+                            <div style='font-family:JetBrains Mono,monospace;font-size:0.65rem;color:#555;margin-top:4px;'>
+                                {_r["Venue"]} · {_r["Matchup"]} defense · {_r["B2B"]} · Form: {_r["Form"]}
+                            </div>
                         </div>
-                    </div>
-                    <div style='display:flex;gap:1.5rem;flex-wrap:wrap;align-items:center;'>
-                        <div><div class='verdict-label'>Tier</div>
-                             <div class='verdict-tier {_cs}' style='font-size:1rem;'>{_em} {_t}</div></div>
-                        <div><div class='verdict-label'>Avg PTS</div>
-                             <div style='font-size:1rem;font-weight:700;color:#f1f5f9;'>{_r["Avg PTS"]}</div></div>
-                        <div><div class='verdict-label'>Edge</div>
-                             <div style='font-size:1rem;font-weight:700;color:{_ec};'>{_r["Edge"]:+.1f}</div></div>
-                        <div><div class='verdict-label'>Hit Rate</div>
-                             <div style='font-size:1rem;font-weight:700;color:#f1f5f9;'>{_r["Weighted HR"]}</div></div>
-                        <div><div class='verdict-label'>Adjusted</div>
-                             <div style='font-size:1rem;font-weight:700;color:#f1f5f9;'>{_r["Adjusted"]}</div></div>
-                    </div>
-                </div>""", unsafe_allow_html=True)
+                        <div style='display:flex;gap:1.5rem;flex-wrap:wrap;align-items:center;'>
+                            <div>
+                                <div class='verdict-label'>Confidence</div>
+                                <div style='font-family:Barlow Condensed,sans-serif;font-size:1.6rem;
+                                            font-weight:900;color:{_cc};line-height:1;'>{_conf}</div>
+                                <div style='font-family:JetBrains Mono,monospace;font-size:0.55rem;color:#555;'>/100</div>
+                            </div>
+                            <div><div class='verdict-label'>Adjusted HR</div>
+                                 <div style='font-size:1rem;font-weight:700;color:#f1f5f9;'>{_r["Adjusted"]}</div></div>
+                            <div><div class='verdict-label'>Edge</div>
+                                 <div style='font-size:1rem;font-weight:700;color:{_ec};'>{_r["Edge"]:+.1f}</div></div>
+                            <div><div class='verdict-label'>Avg PTS</div>
+                                 <div style='font-size:1rem;font-weight:700;color:#f1f5f9;'>{_r["Avg PTS"]}</div></div>
+                        </div>
+                    </div>""", unsafe_allow_html=True)
+
+                with _btn_col:
+                    st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
+                    if st.button("Full Analysis →", key=f"drill_{_ri}_{_r['Player']}", use_container_width=True):
+                        # Pre-fill player prop form and switch tab
+                        st.session_state.active_tab       = "player"
+                        st.session_state.player_key       = st.session_state.get("player_key", 0) + 1
+                        st.session_state._recent_pick     = _r["Player"]
+                        st.session_state._drilldown_line  = float(_r["Line"])
+                        st.session_state._drilldown_side  = "Over"
+                        st.session_state.logs             = None
+                        st.session_state.ai_analysis      = None
+                        st.session_state._drilldown_fetch = True
+                        st.rerun()
 
 
 
@@ -4158,16 +4192,21 @@ with col_a:
                 st.rerun()
 
 with col_b:
+    _dd_line = st.session_state.pop("_drilldown_line", None)
     line = st.number_input(
         "Points Line",
         min_value=0.5,
         max_value=80.0,
-        value=24.5,
+        value=float(_dd_line) if _dd_line else 24.5,
         step=0.5,
         format="%.1f",
     )
 with col_c:
-    side = st.selectbox("Over / Under", ["Over", "Under"])
+    _dd_side = st.session_state.pop("_drilldown_side", None)
+    side = st.selectbox(
+        "Over / Under", ["Over", "Under"],
+        index=0 if not _dd_side or _dd_side == "Over" else 1,
+    )
 with col_d:
     n_games = st.selectbox("Sample", [5, 10, 15], index=1)
 with col_e:
@@ -4244,7 +4283,9 @@ if _inj_html:
             f"Check the latest injury report before betting."
         )
 
-fetch = st.button("🔍  Analyze Prop")
+# Auto-trigger if coming from scanner drill-down
+_drilldown_fetch = st.session_state.pop("_drilldown_fetch", False)
+fetch = st.button("🔍  Analyze Prop") or _drilldown_fetch
 _status_ph = st.empty()  # persistent status placeholder across fetch + parallel block
 st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
 
