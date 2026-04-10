@@ -3762,13 +3762,13 @@ if _mode == "🎯  Slate Scanner":
                     _tier = get_confidence_tier(_adj, _ld, _cons, "Over")
 
                     # ── Confidence score 0-100 ────────────────────────
-                    # Weighted blend of 4 signals
-                    _score_adj  = min(_adj, 0.95) * 45          # hit rate    45pts max
-                    _score_edge = min(abs(_ld) / 8, 1.0) * 25   # edge        25pts max
-                    _score_cons = _cons * 20                     # consistency 20pts max
-                    _score_mq   = {"Weak": 10, "Neutral": 5, "Strong": 0}.get(_mq, 5)  # tough matchup penalty
-                    _conf_score = int(_score_adj + _score_edge + _score_cons + _score_mq)
-                    _conf_score = max(0, min(99, _conf_score))
+                    # Hit rate dominates (65pts) — 80%=36, 90%=57, 95%=65
+                    _score_adj  = max(0, min((_adj - 0.50) / 0.45, 1.0) * 65)
+                    # Edge (25pts) — +3.5=12, +6=21, +7+=25
+                    _score_edge = min(abs(_ld) / 7.0, 1.0) * 25
+                    # Consistency bonus (10pts) — rewards predictable players
+                    _score_cons = _cons * 10
+                    _conf_score = min(99, int(_score_adj + _score_edge + _score_cons))
 
                     return {
                         "Player": _fn, "Line": _ln, "Avg PTS": round(_avgp, 1),
