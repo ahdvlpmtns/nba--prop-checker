@@ -3803,12 +3803,30 @@ if _mode == "🎯  Slate Scanner":
 
     if st.session_state.scanner_results is not None:
         _res = st.session_state.scanner_results
+
+        # ── Deduplicate by player name — keep highest adjusted hit rate ──
+        _seen_players = {}
+        for _r in _res:
+            _pname = _r.get("Player", "")
+            _adj   = float(str(_r.get("Adjusted", "0")).replace("%","")) / 100                      if "%" in str(_r.get("Adjusted",""))                      else float(_r.get("Adjusted", 0))
+            if _pname not in _seen_players or _adj > _seen_players[_pname]["_adj"]:
+                _r["_adj"] = _adj
+                _seen_players[_pname] = _r
+        _deduped = list(_seen_players.values())
+
+        # ── Apply filter ──────────────────────────────────────────────
         if _filter == "Strong Only":
-            _show = [r for r in _res if r["Tier"] in ("Strong Over", "Strong Under")]
+            # Strong Over only, 80%+ adjusted hit rate
+            _show = [r for r in _deduped
+                     if r["Tier"] == "Strong Over"
+                     and r.get("_adj", 0) >= 0.80]
         elif _filter == "Strong + Lean":
-            _show = [r for r in _res if "Strong" in r["Tier"] or "Lean" in r["Tier"]]
+            _show = [r for r in _deduped if "Strong" in r["Tier"] or "Lean" in r["Tier"]]
         else:
-            _show = _res
+            _show = _deduped
+
+        # Sort by adjusted hit rate descending
+        _show = sorted(_show, key=lambda r: r.get("_adj", 0), reverse=True)
 
         _tc = {"Strong Over":"green","Lean Over":"yellow","Lean Under":"orange","Strong Under":"red","Pass":"gray"}
         _te = {"Strong Over":"🟢","Lean Over":"🟡","Lean Under":"🟠","Strong Under":"🔴","Pass":"⚪"}
@@ -3845,10 +3863,26 @@ if _mode == "🎯  Slate Scanner":
                 )
 
         if not _show:
-            st.info("No results match the filter. Try 'Strong + Lean' or 'All results'.")
+            _no_res_msg = (
+                "No Strong Overs with 80%+ hit rate found on today's slate. "
+                "Try 'Strong + Lean' to see more results."
+            ) if _filter == "Strong Only" else "No results match the filter."
+            st.markdown(
+                f"<div style='background:#111;border:1px solid #2a2a2a;border-left:3px solid #555;"
+                f"padding:0.75rem 1rem;font-family:JetBrains Mono,monospace;font-size:0.72rem;color:#555;'>"
+                f"{_no_res_msg}</div>",
+                unsafe_allow_html=True
+            )
         else:
             _day_label = st.session_state.get("scanner_day_label", "Today")
-            st.markdown(f"<div style='font-family:DM Mono;font-size:0.72rem;color:#475569;margin-bottom:1rem;'>Showing {len(_show)} results for {_day_label} · sorted by confidence</div>", unsafe_allow_html=True)
+            _filter_label = " · Strong Over ≥80% only" if _filter == "Strong Only" else ""
+            st.markdown(
+                f"<div style='font-family:JetBrains Mono,monospace;font-size:0.65rem;"
+                f"color:#555;margin-bottom:0.75rem;letter-spacing:0.08em;'>"
+                f"{len(_show)} RESULT{'S' if len(_show) != 1 else ''} · {_day_label.upper()}"
+                f"{_filter_label.upper()} · SORTED BY HIT RATE</div>",
+                unsafe_allow_html=True
+            )
             for _r in _show:
                 _t  = _r["Tier"]
                 _cs = _tc.get(_t, "gray")
