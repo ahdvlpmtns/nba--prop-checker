@@ -813,14 +813,8 @@ def nba_find_player(player_name: str) -> Tuple[Optional[int], Optional[str]]:
 
     return None, None
 
-@st.cache_data(ttl=14400, show_spinner=False)
-def nba_get_game_logs(player_id: int, season: str, n: int = 10, _date: str = None) -> pd.DataFrame:
-    """
-    Fetch game logs. Priority order:
-    1. Supabase cache (instant — shared across all users)
-    2. nba_api library
-    3. nba_api library fallback
-    """
+def _nba_get_game_logs_uncached(player_id: int, season: str, n: int = 10, _date: str = None) -> pd.DataFrame:
+    """Internal uncached fetch — called by the cached wrapper below."""
     empty = pd.DataFrame(columns=["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A","FG3M","PLUS_MINUS","WL"])
 
     def _process(df):
@@ -889,6 +883,34 @@ def nba_get_game_logs(player_id: int, season: str, n: int = 10, _date: str = Non
                 time.sleep(2 * (attempt + 1))
 
     return empty
+
+@st.cache_data(ttl=14400, show_spinner=False)
+def nba_get_game_logs(player_id: int, season: str, n: int = 10, _date: str = None) -> pd.DataFrame:
+    """
+    Cached wrapper — only caches successful (non-empty) results.
+    Falls back to uncached fetch on every call if cache misses.
+    """
+    # Check Supabase first — fastest path
+    try:
+        _cached = get_cached_logs_from_supabase(player_id, season)
+        if _cached is not None and not _cached.empty:
+            _df = _cached.copy()
+            _df["GAME_DATE"] = pd.to_datetime(_df["GAME_DATE"])
+            _df = _df.sort_values("GAME_DATE", ascending=False).head(n).reset_index(drop=True)
+            for c in ["MATCHUP","MIN","PTS","FGA","FTA","FG3A"]:
+                if c not in _df.columns: _df[c] = None
+            for c in ["FG3M"]:
+                if c not in _df.columns: _df[c] = 0
+            for c in ["PLUS_MINUS","WL"]:
+                if c not in _df.columns: _df[c] = None
+            return _df[["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A","FG3M","PLUS_MINUS","WL"]]
+    except Exception:
+        pass
+    # Hit NBA API — result gets cached by st.cache_data only if non-empty
+    result = _nba_get_game_logs_uncached(player_id, season, n, _date)
+    if result is None or result.empty:
+        raise RuntimeError("NBA API returned no data — do not cache this failure")
+    return result
 
 @st.cache_data(ttl=21600, show_spinner=False)
 def nba_get_player_team(player_id: int) -> Optional[str]:
@@ -4304,10 +4326,13 @@ if fetch:
             ⏳ FETCHING GAME LOGS...
         </div>""", unsafe_allow_html=True)
         # Always fetch n=15 and slice — one cache entry per player per day
-        _all_logs = nba_get_game_logs(
-            player_id=player_id, season=season_str_clean, n=15, _date=_cache_date()
-        )
-        st.session_state.logs = _all_logs.head(n_games) if _all_logs is not None and not _all_logs.empty else _all_logs
+        try:
+            _all_logs = nba_get_game_logs(
+                player_id=player_id, season=season_str_clean, n=15, _date=_cache_date()
+            )
+        except RuntimeError:
+            _all_logs = None  # NBA API failed — don't cache, show retry
+        st.session_state.logs = _all_logs.head(n_games) if _all_logs is not None and not getattr(_all_logs, "empty", True) else None
         _status_ph.markdown("""
         <div style='font-family:JetBrains Mono,monospace;font-size:0.7rem;
                     color:#555;padding:0.5rem 0;letter-spacing:0.1em;'>
