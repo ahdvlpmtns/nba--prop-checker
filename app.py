@@ -3910,7 +3910,15 @@ if _mode == "🎯  Slate Scanner":
                     <div class='verdict-banner {_cs}' style='margin:0.4rem 0;padding:1rem 1.4rem;'>
                         <div>
                             <div class='verdict-label'>{_r["Line"]} pts Over · PrizePicks</div>
-                            <div style='font-size:1.1rem;font-weight:800;color:#f1f5f9;'>{_r["Player"]}</div>
+                            <div style='display:flex;align-items:center;gap:8px;'>
+                                <div style='font-size:1.1rem;font-weight:800;color:#f1f5f9;'>{_r["Player"]}</div>
+                                <div style='font-family:JetBrains Mono,monospace;font-size:0.65rem;
+                                            color:#a3e635;background:#111;border:1px solid #2a2a2a;
+                                            padding:1px 7px;letter-spacing:0.08em;'>
+                                    {_r.get("_team","?")}</div>
+                                <div style='font-family:JetBrains Mono,monospace;font-size:0.65rem;color:#555;'>
+                                    vs {_r.get("_opp","?")}</div>
+                            </div>
                             <div style='font-family:JetBrains Mono,monospace;font-size:0.65rem;color:#555;margin-top:4px;'>
                                 {_r["Venue"]} · {_r["Matchup"]} defense · {_r["B2B"]} · Form: {_r["Form"]}
                             </div>
@@ -4192,7 +4200,7 @@ with col_a:
                 st.rerun()
 
 with col_b:
-    _dd_line = st.session_state.pop("_drilldown_line", None)
+    _dd_line = st.session_state.get("_drilldown_line", None)
     line = st.number_input(
         "Points Line",
         min_value=0.5,
@@ -4202,7 +4210,7 @@ with col_b:
         format="%.1f",
     )
 with col_c:
-    _dd_side = st.session_state.pop("_drilldown_side", None)
+    _dd_side = st.session_state.get("_drilldown_side", None)
     side = st.selectbox(
         "Over / Under", ["Over", "Under"],
         index=0 if not _dd_side or _dd_side == "Over" else 1,
@@ -4284,7 +4292,12 @@ if _inj_html:
         )
 
 # Auto-trigger if coming from scanner drill-down
-_drilldown_fetch = st.session_state.pop("_drilldown_fetch", False)
+_drilldown_fetch = st.session_state.get("_drilldown_fetch", False)
+if _drilldown_fetch:
+    # Clear drilldown state so it doesn't re-trigger on next rerun
+    st.session_state.pop("_drilldown_fetch", None)
+    st.session_state.pop("_drilldown_line", None)
+    st.session_state.pop("_drilldown_side", None)
 fetch = st.button("🔍  Analyze Prop") or _drilldown_fetch
 _status_ph = st.empty()  # persistent status placeholder across fetch + parallel block
 st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
