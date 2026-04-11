@@ -3330,12 +3330,16 @@ if st.session_state.active_sport == "mlb":
             for d in sched.json().get("dates",[]): games.extend(d.get("games",[]))
             _norm = lambda s: s.lower().replace("-"," ").replace(".","").strip()
             _pn   = _norm(pitcher_name)
+            _parts = [p for p in _pn.split() if len(p) > 2]
             for game in games:
                 for side in ["home","away"]:
                     prob  = game.get("teams",{}).get(side,{}).get("probablePitcher",{})
                     pname = prob.get("fullName","") or prob.get("lastName","")
                     if not pname: continue
-                    if _pn in _norm(pname) or _norm(pname) in _pn:
+                    _pname_norm = _norm(pname)
+                    # Match if full name, last name, or any significant part matches
+                    if (_pn in _pname_norm or _pname_norm in _pn or
+                        any(p in _pname_norm for p in _parts)):
                         home = game["teams"]["home"]["team"]["abbreviation"]
                         away = game["teams"]["away"]["team"]["abbreviation"]
                         opp  = away if side=="home" else home
@@ -3577,6 +3581,9 @@ if st.session_state.active_sport == "mlb":
                     _edge  = _avg - _ln
                     _whr   = mlb_weighted_hr(_logs, _ln, "K", "Over")
                     _tonight_g = mlb_get_tonight_game(_pname)
+                    # Fallback: try last name if full name fails
+                    if not _tonight_g and " " in _pname:
+                        _tonight_g = mlb_get_tonight_game(_pname.split()[-1])
                     _opp   = _tonight_g.get("opp","")
                     _home  = _tonight_g.get("home_team","")
                     _okpct = mlb_get_opp_k_rate(_opp) if _opp else None
@@ -3585,9 +3592,10 @@ if st.session_state.active_sport == "mlb":
                     _tier  = mlb_verdict(_adj, _edge, "Over")
                     _cv    = _vals.std()/_avg if _avg>0 else 1.0
                     _cons  = max(0.1, min(0.95, 1.0-_cv*0.8))
+                    # MLB: hit rate dominates — edge is less reliable predictor
                     _sc    = min(99, int(
-                        max(0, min((_adj-0.50)/0.45,1.0)*65) +
-                        min(abs(_edge)/7.0,1.0)*25 +
+                        max(0, min((_adj-0.50)/0.45,1.0)*80) +
+                        min(abs(_edge)/10.0,1.0)*10 +
                         _cons*10
                     ))
                     return {
