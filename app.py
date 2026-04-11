@@ -3348,6 +3348,31 @@ if st.session_state.active_sport == "mlb":
         except Exception: pass
         return {}
 
+    @st.cache_data(ttl=1800, show_spinner=False)
+    def _mlb_get_opp_from_team(team_abbr: str) -> str:
+        """Get tonight's opponent for a team by abbreviation."""
+        try:
+            import requests as _req, datetime, pytz
+            et    = pytz.timezone("America/New_York")
+            today = datetime.datetime.now(et).strftime("%Y-%m-%d")
+            r = _req.get(
+                "https://statsapi.mlb.com/api/v1/schedule",
+                params={"sportId": 1, "date": today, "hydrate": "team"},
+                timeout=8
+            )
+            if not r.ok: return ""
+            for d in r.json().get("dates", []):
+                for game in d.get("games", []):
+                    home = game["teams"]["home"]["team"].get("abbreviation","")
+                    away = game["teams"]["away"]["team"].get("abbreviation","")
+                    if home.upper() == team_abbr.upper():
+                        return away
+                    if away.upper() == team_abbr.upper():
+                        return home
+        except Exception:
+            pass
+        return ""
+
     def mlb_weighted_hr(logs, line, stat, side):
         vals = pd.to_numeric(logs[stat], errors="coerce").dropna().reset_index(drop=True)
         n = len(vals)
@@ -3581,11 +3606,18 @@ if st.session_state.active_sport == "mlb":
                     _edge  = _avg - _ln
                     _whr   = mlb_weighted_hr(_logs, _ln, "K", "Over")
                     _tonight_g = mlb_get_tonight_game(_pname)
-                    # Fallback: try last name if full name fails
+                    # Fallback: try last name only
                     if not _tonight_g and " " in _pname:
                         _tonight_g = mlb_get_tonight_game(_pname.split()[-1])
+                    # Fallback: try first + last without middle
+                    if not _tonight_g and len(_pname.split()) > 2:
+                        _short = _pname.split()[0] + " " + _pname.split()[-1]
+                        _tonight_g = mlb_get_tonight_game(_short)
                     _opp   = _tonight_g.get("opp","")
                     _home  = _tonight_g.get("home_team","")
+                    # If still no opp, try to look up by team abbr from PrizePicks
+                    if not _opp and _prop.get("team"):
+                        _opp = _mlb_get_opp_from_team(_prop["team"])
                     _okpct = mlb_get_opp_k_rate(_opp) if _opp else None
                     _psig  = mlb_park_signal(_home) if _home else "Neutral"
                     _adj   = mlb_apply_adj(_whr, _okpct, _psig, "Over")
@@ -3640,7 +3672,13 @@ if st.session_state.active_sport == "mlb":
         st.error(st.session_state.mlb_scanner_error)
 
     if st.session_state.mlb_scanner_results is not None:
-        _mres_all = st.session_state.mlb_scanner_results
+        # Deduplicate by pitcher — keep highest confidence entry
+        _seen = {}
+        for _r in st.session_state.mlb_scanner_results:
+            _pn = _r.get("Pitcher","")
+            if _pn not in _seen or _r.get("_conf",0) > _seen[_pn].get("_conf",0):
+                _seen[_pn] = _r
+        _mres_all = sorted(_seen.values(), key=lambda x: -x.get("_conf",0))
 
         if _mlb_filter == "Strong Only":
             _mshow = [r for r in _mres_all if r["Tier"]=="Strong Over" and r.get("_adj_raw",0)>=0.80]
