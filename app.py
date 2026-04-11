@@ -3318,34 +3318,59 @@ if st.session_state.active_sport == "mlb":
         except Exception: return None
 
     @st.cache_data(ttl=1800, show_spinner=False)
+    @st.cache_data(ttl=900, show_spinner=False)
     def mlb_get_tonight_game(pitcher_name: str) -> dict:
+        """Find tonight's game for a pitcher. Tries multiple name formats."""
+        import requests as _req, datetime, pytz
         try:
-            import requests as _req, datetime, pytz
             et    = pytz.timezone("America/New_York")
             today = datetime.datetime.now(et).strftime("%Y-%m-%d")
-            sched = _req.get("https://statsapi.mlb.com/api/v1/schedule",
-                params={"sportId":1,"date":today,"hydrate":"probablePitcher,team"}, timeout=8)
+            sched = _req.get(
+                "https://statsapi.mlb.com/api/v1/schedule",
+                params={"sportId":1,"date":today,"hydrate":"probablePitcher,team,venue"},
+                timeout=10
+            )
             if not sched.ok: return {}
             games = []
             for d in sched.json().get("dates",[]): games.extend(d.get("games",[]))
-            _norm = lambda s: s.lower().replace("-"," ").replace(".","").strip()
-            _pn   = _norm(pitcher_name)
-            _parts = [p for p in _pn.split() if len(p) > 2]
+
+            _norm  = lambda s: s.lower().replace("-"," ").replace(".","").strip()
+            _pn    = _norm(pitcher_name)
+            _parts = [p for p in _pn.split() if len(p) > 3]
+            _last  = _pn.split()[-1] if _pn.split() else _pn
+
+            def _build_result(game, side):
+                home = game["teams"]["home"]["team"]["abbreviation"]
+                away = game["teams"]["away"]["team"]["abbreviation"]
+                opp  = away if side=="home" else home
+                home_team = home
+                venue= game.get("venue",{}).get("name","")
+                return {
+                    "opp":opp,"home_team":home_team,"away_team":away,
+                    "pitcher_side":side,"venue":venue,"game_date":today,
+                    "pitcher_team": home if side=="home" else away
+                }
+
+            # Pass 1: exact last name match
             for game in games:
                 for side in ["home","away"]:
                     prob  = game.get("teams",{}).get(side,{}).get("probablePitcher",{})
-                    pname = prob.get("fullName","") or prob.get("lastName","")
+                    pname = _norm(prob.get("fullName","") or prob.get("lastName",""))
                     if not pname: continue
-                    _pname_norm = _norm(pname)
-                    # Match if full name, last name, or any significant part matches
-                    if (_pn in _pname_norm or _pname_norm in _pn or
-                        any(p in _pname_norm for p in _parts)):
-                        home = game["teams"]["home"]["team"]["abbreviation"]
-                        away = game["teams"]["away"]["team"]["abbreviation"]
-                        opp  = away if side=="home" else home
-                        return {"opp":opp,"home_team":home,"away_team":away,
-                                "pitcher_side":side,"venue":game.get("venue",{}).get("name",""),"game_date":today}
-        except Exception: pass
+                    if _last == pname.split()[-1]:
+                        return _build_result(game, side)
+
+            # Pass 2: any significant name part
+            for game in games:
+                for side in ["home","away"]:
+                    prob  = game.get("teams",{}).get(side,{}).get("probablePitcher",{})
+                    pname = _norm(prob.get("fullName","") or "")
+                    if not pname: continue
+                    if any(p in pname for p in _parts):
+                        return _build_result(game, side)
+
+        except Exception:
+            pass
         return {}
 
     @st.cache_data(ttl=1800, show_spinner=False)
@@ -3456,25 +3481,101 @@ if st.session_state.active_sport == "mlb":
     if mlb_fetch and mlb_pitcher:
         _stat = "K" if mlb_prop=="Strikeouts" else "OUTS"
         _lbl  = "K" if mlb_prop=="Strikeouts" else "Outs"
-        with st.spinner(f"Fetching {mlb_pitcher} game logs..."):
-            mlb_logs = mlb_get_pitcher_logs(mlb_pitcher, n=10)
+
+        _mlb_ph = st.empty()
+        _mlb_ph.markdown("<div style='font-family:JetBrains Mono,monospace;font-size:0.7rem;"
+                         "color:#555;padding:0.5rem 0;'>⏳ FETCHING GAME LOGS...</div>",
+                         unsafe_allow_html=True)
+        mlb_logs = mlb_get_pitcher_logs(mlb_pitcher, n=10)
+
+        _mlb_ph.markdown("<div style='font-family:JetBrains Mono,monospace;font-size:0.7rem;"
+                         "color:#555;padding:0.5rem 0;'>⏳ LOADING MATCHUP + CONTEXT...</div>",
+                         unsafe_allow_html=True)
+
         if mlb_logs.empty:
+            _mlb_ph.empty()
             st.error("Could not fetch pitcher data. Check the name and try again.")
         else:
-            vals    = pd.to_numeric(mlb_logs[_stat],errors="coerce").dropna()
-            avg_val = vals.mean(); edge = avg_val-mlb_line
-            whr     = mlb_weighted_hr(mlb_logs,mlb_line,_stat,mlb_side)
-            okpct   = mlb_get_opp_k_rate(mlb_opp) if mlb_opp else None
-            psig    = mlb_park_signal(mlb_home) if mlb_home else "Neutral"
-            adj     = mlb_apply_adj(whr,okpct,psig,mlb_side)
-            tier    = mlb_verdict(adj,edge,mlb_side)
-            cv      = vals.std()/avg_val if avg_val>0 else 1.0
-            cons    = max(0.1,min(0.95,1.0-cv*0.8))
-            _sc     = min(99,int(max(0,min((adj-0.50)/0.45,1.0)*65)+min(abs(edge)/7.0,1.0)*25+cons*10))
-            _cc     = "#3b82f6" if _sc>=80 else ("#eab308" if _sc>=65 else "#f97316")
-            css     = {"Strong Over":"green","Lean Over":"yellow","Strong Under":"red","Lean Under":"orange","Pass":"gray"}.get(tier,"gray")
+            vals    = pd.to_numeric(mlb_logs[_stat], errors="coerce").dropna()
+            avg_val = vals.mean()
+            edge    = avg_val - mlb_line
 
-            st.markdown("<div class='section-header'>Key Stats</div>",unsafe_allow_html=True)
+            # ── Signal 1: Weighted hit rate
+            whr = mlb_weighted_hr(mlb_logs, mlb_line, _stat, mlb_side)
+
+            # ── Signal 2: Opponent K% (from tonight's game)
+            okpct = mlb_get_opp_k_rate(mlb_opp) if mlb_opp else None
+
+            # ── Signal 3: Park factor
+            psig = mlb_park_signal(mlb_home) if mlb_home else "Neutral"
+
+            # ── Signal 4: Home/Away split from logs
+            _home_logs = mlb_logs[mlb_logs.get("HOME", pd.Series([True]*len(mlb_logs))).astype(bool)] if "HOME" in mlb_logs.columns else mlb_logs
+            _away_logs = mlb_logs[~mlb_logs.get("HOME", pd.Series([True]*len(mlb_logs))).astype(bool)] if "HOME" in mlb_logs.columns else pd.DataFrame()
+            _ha_adj = 0.0
+            if len(_home_logs) >= 3 and len(_away_logs) >= 3:
+                _home_avg = pd.to_numeric(_home_logs[_stat], errors="coerce").dropna().mean()
+                _away_avg = pd.to_numeric(_away_logs[_stat], errors="coerce").dropna().mean()
+                _ha_diff  = _home_avg - _away_avg
+                _is_home  = _tonight.get("pitcher_side","") == "home"
+                if abs(_ha_diff) >= 1.0:
+                    _ha_adj = 0.04 if (_is_home and _ha_diff > 0) or (not _is_home and _ha_diff < 0) else -0.04
+
+            # ── Signal 5: Recent form — L3 vs L10
+            _l3_avg = pd.to_numeric(mlb_logs.head(3)[_stat], errors="coerce").dropna().mean()
+            _form_diff = _l3_avg - avg_val if not pd.isna(_l3_avg) else 0
+            _form_adj = 0.0
+            if _form_diff >= 1.5:   _form_adj = +0.04   # trending up
+            elif _form_diff <= -1.5: _form_adj = -0.04  # trending down
+
+            # ── Signal 6: Rest days
+            _rest_adj = 0.0
+            if len(mlb_logs) >= 2 and "DATE" in mlb_logs.columns:
+                try:
+                    _last_start = pd.to_datetime(mlb_logs.iloc[0]["DATE"])
+                    _rest_days  = (pd.Timestamp.now() - _last_start).days
+                    if _rest_days <= 3:   _rest_adj = -0.03  # short rest
+                    elif _rest_days >= 7: _rest_adj = +0.02  # extra rest
+                except Exception:
+                    pass
+
+            # ── Apply all adjustments
+            adj = mlb_apply_adj(whr, okpct, psig, mlb_side)
+            adj = max(0.05, min(0.95, adj + _ha_adj + _form_adj + _rest_adj))
+            tier = mlb_verdict(adj, edge, mlb_side)
+
+            # Consistency
+            cv   = vals.std()/avg_val if avg_val>0 else 1.0
+            cons = max(0.1, min(0.95, 1.0 - cv*0.8))
+
+            # Confidence — hit rate dominant, edge matters less in MLB
+            _sc = min(99, int(
+                max(0, min((adj-0.50)/0.45, 1.0)*70) +
+                min(abs(edge)/8.0, 1.0)*15 +
+                cons*10 +
+                (5 if okpct is not None else 0)  # bonus for having opponent data
+            ))
+            _cc  = "#3b82f6" if _sc>=80 else ("#eab308" if _sc>=65 else "#f97316")
+            css  = {"Strong Over":"green","Lean Over":"yellow","Strong Under":"red","Lean Under":"orange","Pass":"gray"}.get(tier,"gray")
+
+            _mlb_ph.empty()
+
+            # ── Signal summary pills
+            _pills = []
+            if okpct is not None:
+                _opp_lbl = "High-K opp" if okpct>=0.26 else ("Low-K opp" if okpct<=0.18 else "Avg-K opp")
+                _opp_flag = "up" if okpct>=0.26 else ("down" if okpct<=0.18 else "flat")
+                _pills.append(f"<span class='flag-pill {_opp_flag}'>{_opp_lbl} {okpct:.0%}</span>")
+            _pills.append(f"<span class='flag-pill {"up" if psig=="Boost" else "down" if psig=="Penalty" else "flat"}'>{psig} park</span>")
+            if _form_adj > 0:  _pills.append("<span class='flag-pill up'>Form ↑ trending</span>")
+            if _form_adj < 0:  _pills.append("<span class='flag-pill down'>Form ↓ trending</span>")
+            if _rest_adj < 0:  _pills.append("<span class='flag-pill down'>Short rest</span>")
+            if _rest_adj > 0:  _pills.append("<span class='flag-pill up'>Extra rest</span>")
+            _is_home_txt = _tonight.get("pitcher_side","")
+            if _is_home_txt:
+                _pills.append(f"<span class='flag-pill flat'>{'Home' if _is_home_txt=='home' else 'Away'} start</span>")
+
+            st.markdown("<div class='section-header'>Key Stats</div>", unsafe_allow_html=True)
             _c1,_c2,_c3,_c4 = st.columns(4)
             with _c1:
                 _ac="green" if (edge>0 and mlb_side=="Over") or (edge<0 and mlb_side=="Under") else "red"
@@ -3492,9 +3593,15 @@ if st.session_state.active_sport == "mlb":
                             f"<div class='stat-value {cc2}'>{cons:.0%}</div>"
                             f"<div class='stat-hint'>Start variance</div></div>",unsafe_allow_html=True)
             with _c4:
+                _opp_str = f"vs {mlb_opp}" if mlb_opp else "Opp: TBD"
                 st.markdown(f"<div class='stat-card'><div class='stat-label'>Confidence</div>"
                             f"<div class='stat-value' style='color:{_cc};'>{_sc}</div>"
-                            f"<div class='stat-hint'>{psig} park · {'K%:'+f'{okpct:.0%}' if okpct else 'K%: N/A'}</div></div>",unsafe_allow_html=True)
+                            f"<div class='stat-hint'>{_opp_str} · {psig} park</div></div>",unsafe_allow_html=True)
+
+            # Signal pills
+            if _pills:
+                st.markdown(f"<div class='flag-row'>{''.join(_pills)}</div>", unsafe_allow_html=True)
+                st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
 
             st.markdown("<div class='section-header'>Last 10 Starts</div>",unsafe_allow_html=True)
             _d = mlb_logs.copy()
@@ -3580,24 +3687,38 @@ if st.session_state.active_sport == "mlb":
                 if _st: _all_stat_types.add(_st)
             st.session_state["mlb_debug_stat_types"] = sorted(_all_stat_types)
 
-            _K_TYPES = {"strikeouts","strikeout","pitcher strikeouts","pitcher strikeout",
-                        "strike outs","strike out","ks","k's","pitching strikeouts"}
+            # Pull ALL MLB props — filter to pitchers by position or stat type
+            _PITCHER_STATS = {
+                "strikeouts","strikeout","pitcher strikeouts","pitcher strikeout",
+                "strike outs","strike out","ks","k's","pitching strikeouts",
+                "pitching outs","outs recorded","innings pitched",
+            }
+            _seen_pitchers = set()
             for _proj in _mdata.get("data",[]):
                 _a     = _proj.get("attributes",{})
                 _stype = _a.get("stat_type","").lower().strip()
-                if _stype not in _K_TYPES and "strikeout" not in _stype and "strike out" not in _stype:
-                    continue
-                _ln = _a.get("line_score")
+                _ln    = _a.get("line_score")
                 if not _ln: continue
                 _pid = _proj.get("relationships",{}).get("new_player",{}).get("data",{}).get("id")
                 _pi  = _mpmap.get(_pid,{})
-                if _pi.get("name"):
-                    _mlb_slate.append({
-                        "pitcher":   _pi["name"],
-                        "team":      _pi.get("team",""),
-                        "line":      float(_ln),
-                        "stat_type": _stype,
-                    })
+                _pname = _pi.get("name","")
+                _pos   = _pi.get("position","").upper()
+                if not _pname: continue
+                # Include if it's a strikeout/pitcher stat OR if position is SP/RP/P
+                _is_k_stat = ("strikeout" in _stype or "strike out" in _stype or
+                              _stype in _PITCHER_STATS)
+                _is_pitcher = _pos in ("SP","RP","P","PITCHER","LHP","RHP")
+                if not (_is_k_stat or _is_pitcher):
+                    continue
+                if _pname in _seen_pitchers:
+                    continue
+                _seen_pitchers.add(_pname)
+                _mlb_slate.append({
+                    "pitcher":   _pname,
+                    "team":      _pi.get("team",""),
+                    "line":      float(_ln),
+                    "stat_type": _stype,
+                })
         except Exception as _me:
             st.session_state.mlb_scanner_error = f"Could not fetch slate: {_me}"
 
