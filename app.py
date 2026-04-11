@@ -3212,15 +3212,47 @@ if st.session_state.active_sport == "mlb":
         try:
             import requests as _req
 
-            # Search for player
-            search = _req.get(
-                "https://statsapi.mlb.com/api/v1/people/search",
-                params={"names": player_name, "sportIds": 1},
-                timeout=8
-            )
-            if not search.ok:
-                return empty
-            people = search.json().get("people", [])
+            # Search for player — try multiple name variants
+            _search_names = [player_name]
+            # Handle common alternate spellings
+            _alt_map = {
+                "Emmet Sheehan":  "Emmett Sheehan",
+                "Emmett Sheehan": "Emmet Sheehan",
+                "Shohei Ohtani":  "Shohei Ohtani",
+            }
+            if player_name in _alt_map:
+                _search_names.append(_alt_map[player_name])
+
+            people = []
+            for _sname in _search_names:
+                search = _req.get(
+                    "https://statsapi.mlb.com/api/v1/people/search",
+                    params={"names": _sname, "sportIds": 1},
+                    timeout=8
+                )
+                if search.ok:
+                    people = search.json().get("people", [])
+                    if people:
+                        break
+                # Also try last name only
+                _last = _sname.split()[-1]
+                search2 = _req.get(
+                    "https://statsapi.mlb.com/api/v1/people/search",
+                    params={"names": _last, "sportIds": 1},
+                    timeout=8
+                )
+                if search2.ok:
+                    _res2 = search2.json().get("people", [])
+                    # Filter to match first name too
+                    _first = _sname.split()[0].lower()
+                    _matched = [p for p in _res2 if _first in p.get("fullName","").lower()]
+                    if _matched:
+                        people = _matched
+                        break
+                    elif _res2:
+                        people = _res2
+                        break
+
             if not people:
                 return empty
 
@@ -3319,8 +3351,12 @@ if st.session_state.active_sport == "mlb":
 
     @st.cache_data(ttl=1800, show_spinner=False)
     @st.cache_data(ttl=900, show_spinner=False)
-    def mlb_get_tonight_game(pitcher_name: str) -> dict:
-        """Find tonight's game for a pitcher. Tries multiple name formats."""
+    def mlb_get_tonight_game(pitcher_name: str, team_abbr: str = "") -> dict:
+        """
+        Find tonight's game for a pitcher.
+        Primary: match by team abbreviation (from PrizePicks).
+        Fallback: match by pitcher name in probable pitchers.
+        """
         import requests as _req, datetime, pytz
         try:
             et    = pytz.timezone("America/New_York")
@@ -3334,40 +3370,34 @@ if st.session_state.active_sport == "mlb":
             games = []
             for d in sched.json().get("dates",[]): games.extend(d.get("games",[]))
 
+            def _build(game, side):
+                home  = game["teams"]["home"]["team"]["abbreviation"]
+                away  = game["teams"]["away"]["team"]["abbreviation"]
+                opp   = away if side=="home" else home
+                venue = game.get("venue",{}).get("name","")
+                return {"opp":opp,"home_team":home,"away_team":away,
+                        "pitcher_side":side,"venue":venue,"game_date":today,
+                        "pitcher_team":home if side=="home" else away}
+
+            # Pass 1: match by team abbreviation (most reliable)
+            if team_abbr:
+                for game in games:
+                    for side in ["home","away"]:
+                        abbr = game["teams"][side]["team"].get("abbreviation","")
+                        if abbr.upper() == team_abbr.upper():
+                            return _build(game, side)
+
+            # Pass 2: match by probable pitcher last name
             _norm  = lambda s: s.lower().replace("-"," ").replace(".","").strip()
-            _pn    = _norm(pitcher_name)
-            _parts = [p for p in _pn.split() if len(p) > 3]
-            _last  = _pn.split()[-1] if _pn.split() else _pn
-
-            def _build_result(game, side):
-                home = game["teams"]["home"]["team"]["abbreviation"]
-                away = game["teams"]["away"]["team"]["abbreviation"]
-                opp  = away if side=="home" else home
-                home_team = home
-                venue= game.get("venue",{}).get("name","")
-                return {
-                    "opp":opp,"home_team":home_team,"away_team":away,
-                    "pitcher_side":side,"venue":venue,"game_date":today,
-                    "pitcher_team": home if side=="home" else away
-                }
-
-            # Pass 1: exact last name match
+            _last  = _norm(pitcher_name).split()[-1] if pitcher_name else ""
+            _parts = [p for p in _norm(pitcher_name).split() if len(p) > 3]
             for game in games:
                 for side in ["home","away"]:
                     prob  = game.get("teams",{}).get(side,{}).get("probablePitcher",{})
                     pname = _norm(prob.get("fullName","") or prob.get("lastName",""))
                     if not pname: continue
-                    if _last == pname.split()[-1]:
-                        return _build_result(game, side)
-
-            # Pass 2: any significant name part
-            for game in games:
-                for side in ["home","away"]:
-                    prob  = game.get("teams",{}).get(side,{}).get("probablePitcher",{})
-                    pname = _norm(prob.get("fullName","") or "")
-                    if not pname: continue
-                    if any(p in pname for p in _parts):
-                        return _build_result(game, side)
+                    if (_last and _last == pname.split()[-1]) or any(p in pname for p in _parts):
+                        return _build(game, side)
 
         except Exception:
             pass
@@ -3433,16 +3463,73 @@ if st.session_state.active_sport == "mlb":
     st.markdown("<div class='section-header'>⚾ MLB Pitcher Prop Analyzer</div>", unsafe_allow_html=True)
 
     _mlb_pitchers = sorted([
-        "Gerrit Cole","Zack Wheeler","Spencer Strider","Blake Snell",
-        "Corbin Burnes","Logan Webb","Pablo Lopez","Framber Valdez",
-        "Dylan Cease","Chris Sale","Sonny Gray","Max Fried",
-        "Shota Imanaga","Kevin Gausman","Tarik Skubal","Freddy Peralta",
-        "MacKenzie Gore","Bryce Miller","Hunter Brown","Yusei Kikuchi",
-        "Lucas Giolito","Shane Bieber","Sandy Alcantara","Max Scherzer",
-        "Justin Verlander","Zac Gallen","Merrill Kelly","Brandon Pfaadt",
-        "George Kirby","Luis Castillo","Chris Bassitt","Paul Skenes",
-        "Kodai Senga","Yoshinobu Yamamoto","Bobby Miller","Dustin May",
+        # Dodgers
+        "Yoshinobu Yamamoto","Tyler Glasnow","Shohei Ohtani","Roki Sasaki","Emmet Sheehan",
+        # Yankees
+        "Gerrit Cole","Carlos Rodon","Luis Gil","Clarke Schmidt","Will Warren",
+        # Phillies
+        "Zack Wheeler","Aaron Nola","Cristopher Sanchez","Jesus Luzardo",
+        # Braves
+        "Spencer Strider","Max Fried","Charlie Morton","Reynaldo Lopez",
+        # Cubs
+        "Shota Imanaga","Justin Steele","Kyle Hendricks","Jameson Taillon",
+        # Mariners
+        "Luis Castillo","George Kirby","Logan Gilbert","Bryan Woo","Bryce Miller",
+        # Brewers
+        "Corbin Burnes","Freddy Peralta","Colin Rea","Jacob Misiorowski",
+        # Giants
+        "Logan Webb","Blake Snell","Keaton Winn","Hayden Birdsong",
+        # Astros
+        "Framber Valdez","Hunter Brown","Ronel Blanco","Spencer Arrighetti",
+        # Cardinals
+        "Sonny Gray","Miles Mikolas","Lance Lynn","Matthew Liberatore",
+        # Pirates
+        "Paul Skenes","Mitch Keller","Marco Gonzales","Bubba Chandler",
+        # Twins
+        "Pablo Lopez","Joe Ryan","Bailey Ober","David Festa",
+        # Rangers
+        "Nathan Eovaldi","Andrew Heaney","Michael Lorenzen","Dane Dunning",
+        # Red Sox
+        "Garrett Crochet","Tanner Houck","Kutter Crawford","Quinn Priester",
+        # Padres
+        "Dylan Cease","Yu Darvish","Randy Vasquez","Michael King",
+        # Guardians
+        "Shane Bieber","Tanner Bibee","Gavin Williams","Matthew Boyd",
+        # Tigers
+        "Tarik Skubal","Casey Mize","Jackson Jobe","Keider Montero",
+        # Mets
+        "Kodai Senga","Sean Manaea","Clay Holmes","Frankie Montas",
+        # Marlins
+        "Sandy Alcantara","Braxton Garrett","Cal Quantrill","Trevor Rogers",
+        # Dbacks
+        "Zac Gallen","Merrill Kelly","Brandon Pfaadt","Ryne Nelson",
+        # White Sox
+        "Garrett Crochet","Chris Flexen","Jonathan Cannon","Davis Martin",
+        # Athletics
+        "JP Sears","Ross Stripling","Joey Estes","Mitch Spence",
+        # Blue Jays
+        "Kevin Gausman","Chris Bassitt","Bowden Francis","Yariel Rodriguez",
+        # Orioles
+        "Corbin Burnes","Kyle Bradish","Grayson Rodriguez","Trevor Rogers",
+        # Nationals
+        "MacKenzie Gore","Patrick Corbin","Jake Irvin","Mitchell Parker",
+        # Reds
+        "Hunter Greene","Andrew Abbott","Nick Lodolo","Rhett Lowder",
+        # Rockies
+        "Kyle Freeland","Austin Gomber","Ryan Feltner","Cal Quantrill",
+        # Angels
+        "Tyler Anderson","Patrick Sandoval","Griffin Canning","Reid Detmers",
+        # Royals
+        "Seth Lugo","Cole Ragans","Michael Wacha","Brady Singer",
+        # Cubs additional
+        "Kyle Hendricks",
+        # Additional notable arms
+        "Max Scherzer","Justin Verlander","Chris Sale","Yusei Kikuchi",
+        "Lucas Giolito","Bobby Miller","Dustin May","Michael Lorenzen",
+        "Cam Schlittler","Will Warren",
     ])
+    # Deduplicate
+    _mlb_pitchers = sorted(set(_mlb_pitchers))
 
     _mc1,_mc2,_mc3,_mc4 = st.columns([2.5,1,1,1])
     with _mc1:
@@ -3467,10 +3554,22 @@ if st.session_state.active_sport == "mlb":
                     f"padding:0.5rem 1rem;margin-bottom:0.5rem;font-family:JetBrains Mono,monospace;"
                     f"font-size:0.68rem;color:#3b82f6;'>🎯 TONIGHT: {_od}</div>",unsafe_allow_html=True)
     elif mlb_pitcher:
-        st.markdown("<div style='background:#111;border:1px solid #1e2a3a;border-left:3px solid #555;"
-                    "padding:0.5rem 1rem;margin-bottom:0.5rem;font-family:JetBrains Mono,monospace;"
-                    "font-size:0.68rem;color:#555;'>⚠️ No game found for tonight — pitcher may not be starting</div>",
-                    unsafe_allow_html=True)
+        # Try to figure out next start from recent logs
+        _last_date = None
+        try:
+            _tmp_logs = mlb_get_pitcher_logs(mlb_pitcher, n=1)
+            if not _tmp_logs.empty:
+                _last_date = pd.to_datetime(_tmp_logs.iloc[0]["DATE"]).strftime("%b %d")
+        except Exception:
+            pass
+        _last_str = f" · Last start: {_last_date}" if _last_date else ""
+        st.markdown(
+            f"<div style='background:#111;border:1px solid #1e2a3a;border-left:3px solid #f97316;"
+            f"padding:0.5rem 1rem;margin-bottom:0.5rem;font-family:JetBrains Mono,monospace;"
+            f"font-size:0.68rem;color:#f97316;'>⚠️ No game found for today — {mlb_pitcher} may not be scheduled to pitch{_last_str}."
+            f" Park + opponent signals will be unavailable.</div>",
+            unsafe_allow_html=True
+        )
 
     mlb_fetch = st.button("⚾  Analyze Pitcher Prop", key="mlb_analyze")
 
