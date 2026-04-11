@@ -6,3 +6,5 @@ groq
 nba_api
 pytz
 nbainjuries
+lxml
+html5lib
