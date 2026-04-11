@@ -3241,564 +3241,96 @@ if st.session_state.active_sport == "mlb":
             return empty
 
 
-    @st.cache_data(ttl=3600, show_spinner=False)
-    def mlb_get_opp_k_rate(opp_abbr: str) -> Optional[float]:
-        """Get opposing team's strikeout rate (K%) vs RHP this season."""
-        try:
-            import requests as _req
-            # MLB team ID lookup
-            teams_r = _req.get(
-                "https://statsapi.mlb.com/api/v1/teams",
-                params={"sportId": 1, "season": 2026},
-                timeout=8
-            )
-            if not teams_r.ok:
-                return None
-            teams = teams_r.json().get("teams", [])
-            team = next(
-                (t for t in teams
-                 if t.get("abbreviation", "").upper() == opp_abbr.upper()),
-                None
-            )
-            if not team:
-                return None
 
-            tid = team["id"]
-            stats_r = _req.get(
-                f"https://statsapi.mlb.com/api/v1/teams/{tid}/stats",
-                params={"stats": "season", "group": "hitting", "season": 2026},
-                timeout=8
-            )
-            if not stats_r.ok:
-                return None
+    _AF_KEY = st.secrets.get("API_FOOTBALL_KEY", "")
+    _AF_HDRS = {"x-apisports-key": _AF_KEY}
+    _AF_BASE = "https://v3.football.api-sports.io"
 
-            stat = stats_r.json().get("stats", [{}])[0].get("splits", [{}])[0].get("stat", {})
-            ab  = int(stat.get("atBats", 0))
-            k   = int(stat.get("strikeOuts", 0))
-            return round(k / ab, 3) if ab > 0 else None
-
-        except Exception:
-            return None
-
-
-    # ── Park factors (2026 — higher = more run scoring) ──────────
-    _MLB_PARK_FACTORS = {
-        "COL": 1.30, "CIN": 1.10, "BOS": 1.08, "PHI": 1.06,
-        "TEX": 1.05, "NYY": 1.04, "CHC": 1.03, "HOU": 1.02,
-        "ATL": 1.01, "MIL": 1.01, "STL": 1.00, "LAD": 0.99,
-        "NYM": 0.99, "TOR": 0.98, "DET": 0.98, "MIN": 0.97,
-        "CLE": 0.97, "ARI": 0.97, "BAL": 0.97, "KCR": 0.96,
-        "PIT": 0.96, "TBR": 0.96, "CHW": 0.95, "SEA": 0.95,
-        "SFG": 0.94, "MIA": 0.94, "LAA": 0.94, "WSN": 0.93,
-        "OAK": 0.93, "SDP": 0.92,
+    _LEAGUE_IDS = {
+        "Premier League": 39, "Champions League": 2,
+        "La Liga": 140, "Bundesliga": 78,
+        "Serie A": 135, "Ligue 1": 61,
     }
 
-    def mlb_park_signal(home_team: str) -> str:
-        """Returns Boost/Neutral/Penalty based on park factor for strikeouts."""
-        # Lower run-scoring parks tend to have more Ks (pitchers' parks)
-        pf = _MLB_PARK_FACTORS.get(home_team, 1.00)
-        if pf <= 0.95:   return "Boost"    # pitcher's park → more Ks
-        elif pf >= 1.06: return "Penalty"  # hitter's park → fewer Ks
-        return "Neutral"
-
-    def mlb_weighted_hit_rate(logs: pd.DataFrame, line: float, stat: str, side: str) -> float:
-        """Weighted hit rate for MLB — same logic as NBA."""
-        vals = pd.to_numeric(logs[stat], errors="coerce").dropna().reset_index(drop=True)
-        n = len(vals)
-        if n == 0:
-            return 0.0
-        weights = [n - i for i in range(n)]
-        total_w = sum(weights)
-        if side == "Over":
-            hits = sum(w for v, w in zip(vals, weights) if v >= line)
-        else:
-            hits = sum(w for v, w in zip(vals, weights) if v <= line)
-        return hits / total_w
-
-    def mlb_apply_adjustments(weighted: float, opp_k_pct: Optional[float], park_sig: str, side: str) -> float:
-        """Apply MLB-specific context adjustments."""
-        adj = weighted
-
-        # Opponent K% signal (league avg ~22%)
-        if opp_k_pct is not None:
-            if opp_k_pct >= 0.26:   # high K team = easy matchup for pitcher
-                delta = +0.06 if side == "Over" else -0.06
-            elif opp_k_pct <= 0.18: # low K team = tough matchup
-                delta = -0.06 if side == "Over" else +0.06
-            else:
-                delta = 0.0
-            adj += delta
-
-        # Park factor
-        park_map = {"Boost": +0.04, "Neutral": 0.0, "Penalty": -0.04}
-        adj += park_map.get(park_sig, 0.0) * (1 if side == "Over" else -1)
-
-        return max(0.05, min(0.95, adj))
-
-    def mlb_get_verdict(adjusted: float, edge: float, side: str) -> str:
-        if side == "Over":
-            if adjusted >= 0.64 and edge >= 1.0:  return "Strong Over"
-            if adjusted >= 0.55 and edge > 0:     return "Lean Over"
-        else:
-            if adjusted >= 0.64 and edge <= -1.0: return "Strong Under"
-            if adjusted >= 0.55 and edge < 0:     return "Lean Under"
-        return "Pass"
-
-    # ── MLB UI ────────────────────────────────────────────────────
-    st.markdown("<div class='section-header'>⚾ MLB Pitcher Prop Analyzer</div>", unsafe_allow_html=True)
-
-    mlb_c1, mlb_c2, mlb_c3, mlb_c4 = st.columns([2.5, 1, 1, 1])
-
-    with mlb_c1:
-        mlb_pitcher = st.selectbox(
-            "Pitcher — type name",
-            options=[""] + [
-                "Gerrit Cole", "Zack Wheeler", "Spencer Strider", "Blake Snell",
-                "Corbin Burnes", "Logan Webb", "Pablo Lopez", "Framber Valdez",
-                "Dylan Cease", "Chris Sale", "Sonny Gray", "Max Fried",
-                "Shota Imanaga", "Kevin Gausman", "Tarik Skubal", "Freddy Peralta",
-                "MacKenzie Gore", "Bryce Miller", "Hunter Brown", "Yusei Kikuchi",
-            ],
-            format_func=lambda x: "— select a pitcher —" if x == "" else x,
-            key="mlb_pitcher_sel"
-        )
-
-    with mlb_c2:
-        mlb_prop = st.selectbox(
-            "Prop Type",
-            options=["Strikeouts", "Outs Recorded"],
-            key="mlb_prop_type"
-        )
-
-    with mlb_c3:
-        mlb_line = st.number_input(
-            "Line",
-            min_value=0.5, max_value=30.0,
-            value=5.5, step=0.5,
-            key="mlb_line"
-        )
-
-    with mlb_c4:
-        mlb_side = st.selectbox("Over / Under", ["Over", "Under"], key="mlb_side")
-
-    @st.cache_data(ttl=1800, show_spinner=False)
-    def mlb_get_tonight_game(pitcher_name: str) -> dict:
-        """
-        Auto-detect tonight's game for a pitcher from MLB schedule API.
-        Returns {opp, home_team, venue, game_date} or {}
-        """
-        try:
-            import requests as _req, datetime, pytz
-            et = pytz.timezone("America/New_York")
-            today = datetime.datetime.now(et).strftime("%Y-%m-%d")
-
-            # Get today's schedule
-            sched = _req.get(
-                "https://statsapi.mlb.com/api/v1/schedule",
-                params={
-                    "sportId": 1,
-                    "date": today,
-                    "hydrate": "probablePitcher,team",
-                },
-                timeout=8
-            )
-            if not sched.ok:
-                return {}
-
-            games = []
-            for date in sched.json().get("dates", []):
-                games.extend(date.get("games", []))
-
-            _norm = lambda s: s.lower().replace("-", " ").replace(".", "").strip()
-            _pitcher_norm = _norm(pitcher_name)
-
-            for game in games:
-                for side in ["home", "away"]:
-                    prob = game.get("teams", {}).get(side, {}).get("probablePitcher", {})
-                    pname = prob.get("fullName", "") or prob.get("lastName", "")
-                    if not pname:
-                        continue
-                    if _pitcher_norm in _norm(pname) or _norm(pname) in _pitcher_norm:
-                        # Found the game
-                        home = game["teams"]["home"]["team"]["abbreviation"]
-                        away = game["teams"]["away"]["team"]["abbreviation"]
-                        opp  = away if side == "home" else home
-                        venue = game.get("venue", {}).get("name", "")
-                        return {
-                            "opp":       opp,
-                            "home_team": home,
-                            "away_team": away,
-                            "pitcher_side": side,
-                            "venue":     venue,
-                            "game_date": today,
-                        }
-        except Exception:
-            pass
-        return {}
-
-    # Auto-detect tonight's game for selected pitcher
-    _tonight = mlb_get_tonight_game(mlb_pitcher) if mlb_pitcher else {}
-    mlb_opp       = _tonight.get("opp", "")
-    mlb_home      = _tonight.get("home_team", "")
-    mlb_venue_str = _tonight.get("venue", "")
-    mlb_game_side = _tonight.get("pitcher_side", "")
-
-    if mlb_pitcher and _tonight:
-        _opp_display = f"vs {mlb_opp} · {mlb_venue_str} · {'Home' if mlb_game_side == 'home' else 'Away'}"
-        st.markdown(
-            f"<div style='background:#111;border:1px solid #2a2a2a;border-left:3px solid #a3e635;"
-            f"padding:0.5rem 1rem;margin-bottom:0.5rem;font-family:JetBrains Mono,monospace;"
-            f"font-size:0.68rem;color:#a3e635;'>"
-            f"🎯 TONIGHT: {_opp_display}</div>",
-            unsafe_allow_html=True
-        )
-    elif mlb_pitcher:
-        st.markdown(
-            "<div style='background:#111;border:1px solid #2a2a2a;border-left:3px solid #555;"
-            "padding:0.5rem 1rem;margin-bottom:0.5rem;font-family:JetBrains Mono,monospace;"
-            "font-size:0.68rem;color:#555;'>"
-            "⚠️ No game found for tonight — pitcher may be resting or on off day</div>",
-            unsafe_allow_html=True
-        )
-
-    mlb_fetch = st.button("⚾  Analyze Pitcher Prop", key="mlb_analyze")
-
-    if not mlb_pitcher:
-        st.markdown(
-            "<div style='color:#555;font-family:JetBrains Mono,monospace;font-size:0.75rem;"
-            "margin-top:0.5rem;'>↑ Select a pitcher to get started.</div>",
-            unsafe_allow_html=True
-        )
-
-    if mlb_fetch and mlb_pitcher:
-        _mlb_stat = "K" if mlb_prop == "Strikeouts" else "OUTS"
-        _mlb_stat_label = "K" if mlb_prop == "Strikeouts" else "Outs"
-
-        with st.spinner(f"Fetching {mlb_pitcher} game logs..."):
-            mlb_logs = mlb_get_pitcher_logs(mlb_pitcher, n=10)
-
-        if mlb_logs.empty:
-            st.error("Could not fetch pitcher data. Check the name and try again.")
-        else:
-            # Core stats
-            vals        = pd.to_numeric(mlb_logs[_mlb_stat], errors="coerce").dropna()
-            avg_val     = vals.mean()
-            edge        = avg_val - mlb_line
-            weighted    = mlb_weighted_hit_rate(mlb_logs, mlb_line, _mlb_stat, mlb_side)
-            opp_k_pct = mlb_get_opp_k_rate(mlb_opp) if mlb_opp else None
-            # Home park = always the home team's park (auto-detected from schedule)
-            park_sig  = mlb_park_signal(mlb_home) if mlb_home else "Neutral"
-            adjusted    = mlb_apply_adjustments(weighted, opp_k_pct, park_sig, mlb_side)
-            tier        = mlb_get_verdict(adjusted, edge, mlb_side)
-
-            # Consistency
-            std = vals.std()
-            cv  = std / avg_val if avg_val > 0 else 1.0
-            consistency = max(0.1, min(0.95, 1.0 - cv * 0.8))
-
-            # ── Stat cards
-            st.markdown("<div class='section-header'>Key Stats</div>", unsafe_allow_html=True)
-            mc1, mc2, mc3, mc4 = st.columns(4)
-
-            tier_css = {
-                "Strong Over": "green", "Lean Over": "yellow",
-                "Strong Under": "red", "Lean Under": "orange", "Pass": "gray"
-            }
-            css = tier_css.get(tier, "gray")
-
-            with mc1:
-                _avg_color = "green" if edge > 0 and mlb_side == "Over" else ("red" if edge < 0 and mlb_side == "Under" else "orange")
-                st.markdown(f"""
-                <div class='stat-card'>
-                    <div class='stat-label'>Avg {_mlb_stat_label} (L10)</div>
-                    <div class='stat-value {_avg_color}'>{avg_val:.1f}</div>
-                    <div class='stat-hint'>Line is {mlb_line} · edge {edge:+.1f}</div>
-                </div>""", unsafe_allow_html=True)
-            with mc2:
-                hr_color = "green" if weighted >= 0.64 else ("yellow" if weighted >= 0.55 else "red")
-                st.markdown(f"""
-                <div class='stat-card'>
-                    <div class='stat-label'>Weighted Hit Rate</div>
-                    <div class='stat-value {hr_color}'>{weighted:.0%}</div>
-                    <div class='stat-hint'>Last 10 starts weighted</div>
-                </div>""", unsafe_allow_html=True)
-            with mc3:
-                cons_color = "green" if consistency >= 0.5 else ("yellow" if consistency >= 0.35 else "red")
-                st.markdown(f"""
-                <div class='stat-card'>
-                    <div class='stat-label'>Consistency</div>
-                    <div class='stat-value {cons_color}'>{consistency:.0%}</div>
-                    <div class='stat-hint'>Score variance relative to avg</div>
-                </div>""", unsafe_allow_html=True)
-            with mc4:
-                park_color = "green" if park_sig == "Boost" else ("red" if park_sig == "Penalty" else "orange")
-                opp_str = f"Opp K%: {opp_k_pct:.0%}" if opp_k_pct else "Opp K%: N/A"
-                st.markdown(f"""
-                <div class='stat-card'>
-                    <div class='stat-label'>Context</div>
-                    <div class='stat-value {park_color}'>{park_sig}</div>
-                    <div class='stat-hint'>Park factor · {opp_str}</div>
-                </div>""", unsafe_allow_html=True)
-
-            # ── Game log
-            st.markdown("<div class='section-header'>Last 10 Starts</div>", unsafe_allow_html=True)
-            _display_logs = mlb_logs.copy()
-            _display_logs["HIT"] = _display_logs[_mlb_stat].apply(
-                lambda x: "✅" if (mlb_side == "Over" and float(x) >= mlb_line) or
-                                   (mlb_side == "Under" and float(x) <= mlb_line) else "❌"
-            )
-            _display_logs["DATE"] = _display_logs["DATE"].dt.strftime("%b %d")
-            st.dataframe(
-                _display_logs[["DATE","OPP","IP","K","OUTS","BB","ER","HIT"]],
-                use_container_width=True, hide_index=True
-            )
-
-            # ── Verdict
-            tier_emoji = {
-                "Strong Over": "🟢", "Lean Over": "🟡",
-                "Strong Under": "🔴", "Lean Under": "🟠", "Pass": "⚪"
-            }
-            _cons_label = "Predictable" if consistency >= 0.5 else ("Variable" if consistency >= 0.35 else "Volatile")
-            _edge_label = "Large" if abs(edge) >= 3 else ("Solid" if abs(edge) >= 1.5 else "Marginal")
-
-            _mlb_verdict_html = (
-                f"<div class='verdict-banner {css}'>"
-                f"<div>"
-                f"<div class='verdict-label'>{mlb_pitcher} · {mlb_line} {_mlb_stat_label} · {mlb_side}</div>"
-                f"<div class='verdict-tier {css}'>{tier_emoji.get(tier,'⚪')} {tier}</div>"
-                f"</div>"
-                f"<div style='display:flex;gap:2rem;flex-wrap:wrap;align-items:flex-start;'>"
-                f"<div><div class='verdict-label'>Adjusted Hit Rate</div>"
-                f"<div style='font-size:1.4rem;font-weight:800;color:#f0f0f0;'>{adjusted:.0%}</div></div>"
-                f"<div><div class='verdict-label'>Edge vs Line</div>"
-                f"<div style='font-size:1.4rem;font-weight:800;color:#f0f0f0;'>{edge:+.1f}</div>"
-                f"<div style='font-family:JetBrains Mono,monospace;font-size:0.6rem;color:#555;'>{_edge_label} edge</div></div>"
-                f"<div><div class='verdict-label'>Consistency</div>"
-                f"<div style='font-size:1.4rem;font-weight:800;color:#f0f0f0;'>{consistency:.0%}</div>"
-                f"<div style='font-family:JetBrains Mono,monospace;font-size:0.6rem;color:#555;'>{_cons_label}</div></div>"
-                f"</div>"
-                f"</div>"
-            )
-            st.markdown("<div class='section-header'>Verdict</div>", unsafe_allow_html=True)
-            st.markdown(_mlb_verdict_html, unsafe_allow_html=True)
-
-    st.stop()
-
-
-# ═══════════════════════════════════════════════════════
-# SOCCER MODE
-# ═══════════════════════════════════════════════════════
-
-if st.session_state.active_sport == "soccer":
-
-    # ── Soccer Data Functions ──────────────────────────
-
-    _FD_KEY = st.secrets.get("FOOTBALL_DATA_KEY", "")
-    _FD_HEADERS = {"X-Auth-Token": _FD_KEY}
-
-    # Competition IDs on football-data.org
-    _COMPETITIONS = {
-        "Premier League":     "PL",
-        "Champions League":   "CL",
-        "La Liga":            "PD",
-        "Bundesliga":         "BL1",
-        "Serie A":            "SA",
-        "Ligue 1":            "FL1",
-    }
-
-    @st.cache_data(ttl=1800, show_spinner=False)
-    def soccer_get_fixtures(comp_id: str) -> list:
-        """Get today + next 3 days fixtures for a competition."""
-        try:
-            import requests as _req, datetime, pytz
-            et = pytz.timezone("America/New_York")
-            today = datetime.datetime.now(et)
-            date_from = today.strftime("%Y-%m-%d")
-            date_to   = (today + datetime.timedelta(days=3)).strftime("%Y-%m-%d")
-            r = _req.get(
-                f"https://api.football-data.org/v4/competitions/{comp_id}/matches",
-                headers=_FD_HEADERS,
-                params={"dateFrom": date_from, "dateTo": date_to, "status": "SCHEDULED,LIVE"},
-                timeout=8,
-            )
-            if not r.ok:
-                return []
-            matches = r.json().get("matches", [])
-            return matches
-        except Exception:
-            return []
-
     @st.cache_data(ttl=3600, show_spinner=False)
-    def soccer_get_player_stats(player_name: str, comp_id: str) -> pd.DataFrame:
-        """
-        Fetch player pass stats from football-data.org.
-        Returns DataFrame with DATE, OPP, PASSES, MINS columns.
-        """
+    def soccer_find_player(name: str, league_id: int) -> Optional[dict]:
+        """Find player by name via API-Football direct API."""
+        import requests as _req
+        for params in [
+            {"search": name, "league": league_id, "season": 2025},
+            {"search": name, "season": 2025},
+        ]:
+            try:
+                r = _req.get(
+                    f"{_AF_BASE}/players",
+                    headers=_AF_HDRS, params=params, timeout=10,
+                )
+                if r.ok:
+                    res = r.json().get("response", [])
+                    if res:
+                        return res[0]
+            except Exception:
+                continue
+        return None
+
+    @st.cache_data(ttl=14400, show_spinner=False)
+    def soccer_get_pass_logs(player_id: int, league_id: int, _date: str = None) -> pd.DataFrame:
+        """Fetch per-match passing stats via API-Football direct API."""
+        import requests as _req
         empty = pd.DataFrame(columns=["DATE","OPP","PASSES","MINS","HOME"])
         try:
-            import requests as _req
-            # Search for player
+            # Get last 10 finished fixtures for this league
             r = _req.get(
-                "https://api.football-data.org/v4/persons",
-                headers=_FD_HEADERS,
-                params={"name": player_name, "limit": 5},
-                timeout=8,
+                f"{_AF_BASE}/fixtures",
+                headers=_AF_HDRS,
+                params={"league": league_id, "season": 2025, "last": 10, "status": "FT"},
+                timeout=10,
             )
             if not r.ok:
                 return empty
-            persons = r.json().get("persons", [])
-            if not persons:
-                return empty
 
-            pid = persons[0]["id"]
-
-            # Get matches this season
-            r2 = _req.get(
-                f"https://api.football-data.org/v4/persons/{pid}/matches",
-                headers=_FD_HEADERS,
-                params={"competitions": comp_id, "limit": 15, "status": "FINISHED"},
-                timeout=10,
-            )
-            if not r2.ok:
-                return empty
-
-            matches = r2.json().get("matches", [])
-            if not matches:
-                return empty
-
+            fixtures = r.json().get("response", [])
             rows = []
-            for m in matches:
-                home_team = m.get("homeTeam", {}).get("shortName", "?")
-                away_team = m.get("awayTeam", {}).get("shortName", "?")
 
-                # Find player in this match stats
-                for side in ["homeTeam", "awayTeam"]:
-                    lineup = m.get(side, {})
-                    is_home = side == "homeTeam"
+            for fix in fixtures:
+                fid     = fix["fixture"]["id"]
+                date    = fix["fixture"]["date"][:10]
+                home_nm = fix["teams"]["home"]["name"]
+                away_nm = fix["teams"]["away"]["name"]
 
-                    # Check if player is in this team's lineup
-                    opp = away_team if is_home else home_team
-
-                    # Try to get passes from match stats
-                    stats = m.get("stats", {})
-                    passes = None
-                    mins   = m.get("minutesPlayed", 90)
-
-                    # football-data.org basic tier doesn't have per-player passes
-                    # Use team possession as proxy signal
-                    # Full player stats require premium tier
-                    # We'll work with what's available
-                    rows.append({
-                        "DATE":   m.get("utcDate", "")[:10],
-                        "OPP":    opp,
-                        "PASSES": passes,
-                        "MINS":   mins,
-                        "HOME":   is_home,
-                    })
-                    break
-
-            df = pd.DataFrame(rows)
-            df["DATE"] = pd.to_datetime(df["DATE"])
-            return df.sort_values("DATE", ascending=False).reset_index(drop=True)
-
-        except Exception:
-            return empty
-
-    @st.cache_data(ttl=1800, show_spinner=False)
-    def soccer_get_player_passes(player_name: str, comp_id: str) -> pd.DataFrame:
-        """
-        Get player passing stats via FBref as backup.
-        Uses requests to scrape basic stats table.
-        """
-        empty = pd.DataFrame(columns=["DATE","OPP","PASSES","MINS","HOME"])
-        try:
-            import requests as _req, re
-            # Search FBref for player
-            search_r = _req.get(
-                "https://fbref.com/search/search.fcgi",
-                params={"search": player_name, "cat": "players"},
-                headers={"User-Agent": "Mozilla/5.0"},
-                timeout=10,
-                allow_redirects=True,
-            )
-            if not search_r.ok:
-                return empty
-
-            # Parse passing stats from match logs
-            # FBref URL pattern for passing match logs
-            from urllib.parse import urljoin
-            import re as _re
-
-            # Find player page URL
-            _match = _re.search(r'href="(/en/players/[^/]+/matchlogs/[^"]+passing[^"]*)"', search_r.text)
-            if not _match:
-                # Try direct player search
-                _pmatch = _re.search(r'href="(/en/players/[^"]+)".*?' + re.escape(player_name[:8]),
-                                     search_r.text, re.IGNORECASE)
-                if not _pmatch:
-                    return empty
-                player_url = "https://fbref.com" + _pmatch.group(1)
-                # Build passing log URL
-                _pid_match = _re.search(r'/players/([a-f0-9]+)/', player_url)
-                if not _pid_match:
-                    return empty
-                _pid = _pid_match.group(1)
-                pass_url = f"https://fbref.com/en/players/{_pid}/matchlogs/passing"
-            else:
-                pass_url = "https://fbref.com" + _match.group(1)
-
-            pass_r = _req.get(
-                pass_url,
-                headers={"User-Agent": "Mozilla/5.0"},
-                timeout=12,
-            )
-            if not pass_r.ok:
-                return empty
-
-            # Parse HTML table
-            tables = pd.read_html(pass_r.text)
-            df = None
-            for t in tables:
-                if "Att" in t.columns or "Passes Attempted" in str(t.columns.tolist()):
-                    df = t
-                    break
-
-            if df is None or df.empty:
-                return empty
-
-            # Clean up columns
-            df.columns = [str(c).strip() for c in df.columns]
-            _pass_col = next((c for c in df.columns if c in ("Att", "Passes Attempted", "Pass Att")), None)
-            _date_col = next((c for c in df.columns if "Date" in c), None)
-            _opp_col  = next((c for c in df.columns if "Opponent" in c or "Opp" in c), None)
-            _min_col  = next((c for c in df.columns if "Min" in c), None)
-            _venue_col = next((c for c in df.columns if "Venue" in c), None)
-
-            if not _pass_col or not _date_col:
-                return empty
-
-            rows = []
-            for _, row in df.iterrows():
-                try:
-                    passes = pd.to_numeric(row[_pass_col], errors="coerce")
-                    if pd.isna(passes):
-                        continue
-                    rows.append({
-                        "DATE":   str(row[_date_col]),
-                        "OPP":    str(row[_opp_col]) if _opp_col else "?",
-                        "PASSES": int(passes),
-                        "MINS":   int(pd.to_numeric(row[_min_col], errors="coerce") or 90) if _min_col else 90,
-                        "HOME":   str(row[_venue_col]).strip().lower() == "home" if _venue_col else True,
-                    })
-                except Exception:
+                ps_r = _req.get(
+                    f"{_AF_BASE}/fixtures/players",
+                    headers=_AF_HDRS,
+                    params={"fixture": fid},
+                    timeout=8,
+                )
+                if not ps_r.ok:
                     continue
 
-            result = pd.DataFrame(rows).head(15)
-            result["DATE"] = pd.to_datetime(result["DATE"], errors="coerce")
-            return result.dropna(subset=["DATE"]).sort_values("DATE", ascending=False).reset_index(drop=True)
+                for td in ps_r.json().get("response", []):
+                    is_home = td["team"]["name"] == home_nm
+                    opp     = away_nm if is_home else home_nm
+                    for ps in td.get("players", []):
+                        if ps["player"]["id"] != player_id:
+                            continue
+                        st_ = ps["statistics"][0] if ps.get("statistics") else {}
+                        passes = st_.get("passes", {}).get("total")
+                        mins   = st_.get("games", {}).get("minutes") or 0
+                        if passes is not None and int(mins) > 20:
+                            rows.append({
+                                "DATE":   date, "OPP": opp,
+                                "PASSES": int(passes),
+                                "MINS":   int(mins), "HOME": is_home,
+                            })
 
+            if not rows:
+                return empty
+            df = pd.DataFrame(rows)
+            df["DATE"] = pd.to_datetime(df["DATE"])
+            return df.sort_values("DATE", ascending=False).head(15).reset_index(drop=True)
         except Exception:
             return empty
+
 
     def soccer_weighted_hr(logs: pd.DataFrame, line: float, side: str) -> float:
         vals = pd.to_numeric(logs["PASSES"], errors="coerce").dropna().reset_index(drop=True)
@@ -3874,8 +3406,6 @@ if st.session_state.active_sport == "soccer":
     with _soc_c5:
         soc_venue = st.selectbox("Tonight's Venue", ["Home", "Away"], key="soc_venue")
 
-    soc_fetch = st.button("⚽  Analyze Passes Prop", key="soc_analyze")
-
     if not soc_player:
         st.markdown(
             "<div style='color:#555;font-family:JetBrains Mono,monospace;font-size:0.75rem;"
@@ -3883,26 +3413,42 @@ if st.session_state.active_sport == "soccer":
             unsafe_allow_html=True
         )
 
+    soc_fetch = st.button("⚽  Analyze Passes Prop", key="soc_analyze")
+
     if soc_fetch and soc_player:
-        _comp_id = _COMPETITIONS[soc_comp]
-        _is_home = soc_venue == "Home"
+        _league_id = _LEAGUE_IDS[soc_comp]
+        _is_home   = soc_venue == "Home"
 
-        with st.spinner(f"Fetching {soc_player} passing logs..."):
-            soc_logs = soccer_get_player_passes(soc_player, _comp_id)
+        with st.spinner(f"Finding {soc_player}..."):
+            _soc_player_data = soccer_find_player(soc_player, _league_id)
 
-        if soc_logs.empty:
-            st.markdown("""
-            <div style='background:#1c0505;border:1px solid #991b1b;padding:1rem;margin:0.5rem 0;'>
-                <div style='font-family:JetBrains Mono,monospace;font-size:0.7rem;
-                            color:#ef4444;font-weight:700;margin-bottom:6px;'>
-                    ⚠️ NO PASSING DATA FOUND
-                </div>
-                <div style='font-size:0.85rem;color:#94a3b8;line-height:1.6;'>
-                    Check the player name spelling and try again.<br>
-                    Player must have appeared in this competition this season.
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+        if not _soc_player_data:
+            st.markdown(
+                f"<div style='background:#1c0505;border:1px solid #991b1b;padding:1rem;margin:0.5rem 0;'>"
+                f"<div style='font-family:JetBrains Mono,monospace;font-size:0.7rem;"
+                f"color:#ef4444;font-weight:700;margin-bottom:6px;'>⚠️ PLAYER NOT FOUND</div>"
+                f"<div style='font-size:0.85rem;color:#94a3b8;'>Check spelling and try again. "
+                f"Player must have appeared in {soc_comp} this season.</div></div>",
+                unsafe_allow_html=True
+            )
+        else:
+            _soc_pid  = _soc_player_data["player"]["id"]
+            _soc_name = _soc_player_data["player"]["name"]
+
+            with st.spinner(f"Fetching {_soc_name} passing logs..."):
+                soc_logs = soccer_get_pass_logs(_soc_pid, _league_id, _date=_cache_date())
+
+        if not _soc_player_data:
+            pass
+        elif soc_logs.empty:
+            st.markdown(
+                "<div style='background:#1c0505;border:1px solid #991b1b;padding:1rem;margin:0.5rem 0;'>"
+                "<div style='font-family:JetBrains Mono,monospace;font-size:0.7rem;"
+                "color:#ef4444;font-weight:700;margin-bottom:6px;'>⚠️ NO PASSING DATA</div>"
+                "<div style='font-size:0.85rem;color:#94a3b8;'>No match data found. "
+                "Player may not have appeared in recent fixtures.</div></div>",
+                unsafe_allow_html=True
+            )
         else:
             # Core stats
             vals      = pd.to_numeric(soc_logs["PASSES"], errors="coerce").dropna()
