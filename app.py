@@ -3257,6 +3257,42 @@ if st.session_state.active_sport == "soccer":
         "La Liga": 140, "Bundesliga": 78,
         "Serie A": 135, "Ligue 1": 61,
     }
+    # football-data.org competition codes for squad lookup
+    _FD_COMP_CODES = {
+        "Premier League": "PL",  "Champions League": "CL",
+        "La Liga": "PD",         "Bundesliga": "BL1",
+        "Serie A": "SA",         "Ligue 1": "FL1",
+    }
+
+    @st.cache_data(ttl=86400, show_spinner=False)
+    def soccer_get_all_players(comp_code: str) -> list:
+        """
+        Fetch all squad players for a competition from football-data.org.
+        Uses the already-available FOOTBALL_DATA_KEY — zero API-Football quota used.
+        Cached 24hrs. Returns sorted list of player name strings.
+        """
+        import requests as _req
+        names = []
+        try:
+            # Get all teams in this competition
+            r = _req.get(
+                f"https://api.football-data.org/v4/competitions/{comp_code}/teams",
+                headers=_FD_HEADERS,
+                params={"season": 2024},
+                timeout=10,
+            )
+            if not r.ok:
+                return names
+            teams = r.json().get("teams", [])
+            for team in teams:
+                squad = team.get("squad", [])
+                for player in squad:
+                    name = player.get("name", "")
+                    if name:
+                        names.append(name)
+        except Exception:
+            pass
+        return sorted(set(names))
 
     @st.cache_data(ttl=3600, show_spinner=False)
     def soccer_find_player(name: str, league_id: int) -> Optional[dict]:
@@ -3389,18 +3425,85 @@ if st.session_state.active_sport == "soccer":
     st.markdown("<div class='section-header'>⚽ Soccer Passes Attempted Analyzer</div>",
                 unsafe_allow_html=True)
 
+    # ── Player lists per competition ─────────────────────────────
+    _SOC_PLAYERS = {
+        "Premier League": [
+            "Mohamed Salah", "Erling Haaland", "Kevin De Bruyne", "Bukayo Saka",
+            "Martin Odegaard", "Bruno Fernandes", "Rodri", "Phil Foden",
+            "Trent Alexander-Arnold", "Virgil van Dijk", "Declan Rice",
+            "Cole Palmer", "Nicolas Jackson", "Alexander Isak", "Anthony Gordon",
+            "Ollie Watkins", "Emile Smith Rowe", "Son Heung-min", "James Maddison",
+            "Dejan Kulusevski", "Pedro Porro", "Eberechi Eze", "Michael Olise",
+            "Jarrod Bowen", "Lucas Paqueta", "Joao Pedro", "Facundo Buonanotte",
+            "Bernardo Silva", "John Stones", "Ruben Dias", "Kyle Walker",
+        ],
+        "Champions League": [
+            "Kylian Mbappe", "Vinicius Junior", "Jude Bellingham", "Lamine Yamal",
+            "Pedri", "Gavi", "Rodri", "Toni Kroos", "Federico Valverde",
+            "Robert Lewandowski", "Harry Kane", "Jamal Musiala", "Leroy Sane",
+            "Raphinha", "Dani Olmo", "Florian Wirtz", "Granit Xhaka",
+            "Victor Osimhen", "Khvicha Kvaratskhelia", "Stanislav Lobotka",
+            "Phil Foden", "Kevin De Bruyne", "Erling Haaland", "Bukayo Saka",
+            "Antoine Griezmann", "Alvaro Morata", "Marcus Rashford", "Bruno Fernandes",
+        ],
+        "La Liga": [
+            "Kylian Mbappe", "Vinicius Junior", "Jude Bellingham", "Lamine Yamal",
+            "Pedri", "Gavi", "Federico Valverde", "Toni Kroos", "Dani Carvajal",
+            "Robert Lewandowski", "Raphinha", "Dani Olmo", "Ferran Torres",
+            "Antoine Griezmann", "Alvaro Morata", "Jan Oblak", "Stefan Savic",
+            "Iago Aspas", "Artem Dovbyk", "Borja Iglesias", "Ayoze Perez",
+        ],
+        "Bundesliga": [
+            "Harry Kane", "Jamal Musiala", "Leroy Sane", "Serge Gnabry",
+            "Florian Wirtz", "Granit Xhaka", "Jonas Hofmann", "Victor Boniface",
+            "Xabi Alonso", "Alejandro Grimaldo", "Patrik Schick", "Loris Karius",
+            "Christopher Nkunku", "Timo Werner", "Loris Openda", "Benjamin Sesko",
+        ],
+        "Serie A": [
+            "Victor Osimhen", "Khvicha Kvaratskhelia", "Stanislav Lobotka",
+            "Lautaro Martinez", "Marcus Thuram", "Nicolo Barella", "Hakan Calhanoglu",
+            "Romelu Lukaku", "Paulo Dybala", "Lorenzo Pellegrini", "Dusan Vlahovic",
+            "Federico Chiesa", "Adrien Rabiot", "Gleison Bremer", "Leandro Paredes",
+            "Rafael Leao", "Theo Hernandez", "Olivier Giroud", "Tijjani Reijnders",
+        ],
+        "Ligue 1": [
+            "Ousmane Dembele", "Randal Kolo Muani", "Warren Zaire-Emery",
+            "Vitinha", "Marquinhos", "Achraf Hakimi", "Gianluigi Donnarumma",
+            "Alexandre Lacazette", "Nicolas Tagliafico", "Rayan Cherki",
+            "Jonathan David", "Bafode Diallo", "Benjamin Andre",
+        ],
+    }
+
     _soc_c1, _soc_c2 = st.columns([2, 1])
-    with _soc_c1:
-        soc_player = st.text_input(
-            "Player Name",
-            placeholder="e.g. Kevin De Bruyne, Rodri, Bellingham",
-            key="soc_player"
-        )
     with _soc_c2:
         soc_comp = st.selectbox(
             "Competition",
             options=list(_LEAGUE_IDS.keys()),
             key="soc_comp"
+        )
+    with _soc_c1:
+        _soc_league_id = _LEAGUE_IDS[soc_comp]
+        _soc_comp_code  = _FD_COMP_CODES[soc_comp]
+        # Load live player list from football-data.org — free, cached 24hrs
+        # Zero API-Football quota used for player names
+        _soc_api_players = soccer_get_all_players(_soc_comp_code)
+        # Merge with hardcoded list as fallback
+        _soc_hardcoded   = _SOC_PLAYERS.get(soc_comp, [])
+        _soc_player_list = sorted(set(_soc_api_players + _soc_hardcoded)) if _soc_api_players else sorted(_soc_hardcoded)
+
+        if not _soc_player_list:
+            st.markdown(
+                "<div style='font-family:JetBrains Mono,monospace;font-size:0.65rem;"
+                "color:#555;margin-top:4px;'>Loading players... add API_FOOTBALL_KEY to secrets.</div>",
+                unsafe_allow_html=True
+            )
+            _soc_player_list = _soc_hardcoded
+
+        soc_player = st.selectbox(
+            f"Player — type to search ({len(_soc_player_list)} players)",
+            options=[""] + _soc_player_list,
+            format_func=lambda x: "— search by name —" if x == "" else x,
+            key="soc_player"
         )
 
     _soc_c3, _soc_c4, _soc_c5 = st.columns([1, 1, 1])
