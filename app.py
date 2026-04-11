@@ -3041,7 +3041,7 @@ st.markdown("""
 # ─────────────────────────────────────────────
 # Sport Switcher
 # ─────────────────────────────────────────────
-_sp1, _sp2, _sp3 = st.columns([1, 1, 3])
+_sp1, _sp2, _sp3, _sp4 = st.columns([1, 1, 1, 2])
 with _sp1:
     if st.button(
         "🏀  NBA",
@@ -3059,6 +3059,15 @@ with _sp2:
         type="primary" if st.session_state.active_sport == "mlb" else "secondary"
     ):
         st.session_state.active_sport = "mlb"
+        st.rerun()
+with _sp3:
+    if st.button(
+        "⚽  Soccer",
+        key="sport_soccer",
+        use_container_width=True,
+        type="primary" if st.session_state.active_sport == "soccer" else "secondary"
+    ):
+        st.session_state.active_sport = "soccer"
         st.rerun()
 
 st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
@@ -3576,8 +3585,432 @@ if st.session_state.active_sport == "mlb":
     st.stop()
 
 
+# ═══════════════════════════════════════════════════════
+# SOCCER MODE
+# ═══════════════════════════════════════════════════════
 
-# ── NBA Mode guard — stop here if MLB selected ───────────────
+if st.session_state.active_sport == "soccer":
+
+    # ── Soccer Data Functions ──────────────────────────
+
+    _FD_KEY = st.secrets.get("FOOTBALL_DATA_KEY", "")
+    _FD_HEADERS = {"X-Auth-Token": _FD_KEY}
+
+    # Competition IDs on football-data.org
+    _COMPETITIONS = {
+        "Premier League":     "PL",
+        "Champions League":   "CL",
+        "La Liga":            "PD",
+        "Bundesliga":         "BL1",
+        "Serie A":            "SA",
+        "Ligue 1":            "FL1",
+    }
+
+    @st.cache_data(ttl=1800, show_spinner=False)
+    def soccer_get_fixtures(comp_id: str) -> list:
+        """Get today + next 3 days fixtures for a competition."""
+        try:
+            import requests as _req, datetime, pytz
+            et = pytz.timezone("America/New_York")
+            today = datetime.datetime.now(et)
+            date_from = today.strftime("%Y-%m-%d")
+            date_to   = (today + datetime.timedelta(days=3)).strftime("%Y-%m-%d")
+            r = _req.get(
+                f"https://api.football-data.org/v4/competitions/{comp_id}/matches",
+                headers=_FD_HEADERS,
+                params={"dateFrom": date_from, "dateTo": date_to, "status": "SCHEDULED,LIVE"},
+                timeout=8,
+            )
+            if not r.ok:
+                return []
+            matches = r.json().get("matches", [])
+            return matches
+        except Exception:
+            return []
+
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def soccer_get_player_stats(player_name: str, comp_id: str) -> pd.DataFrame:
+        """
+        Fetch player pass stats from football-data.org.
+        Returns DataFrame with DATE, OPP, PASSES, MINS columns.
+        """
+        empty = pd.DataFrame(columns=["DATE","OPP","PASSES","MINS","HOME"])
+        try:
+            import requests as _req
+            # Search for player
+            r = _req.get(
+                "https://api.football-data.org/v4/persons",
+                headers=_FD_HEADERS,
+                params={"name": player_name, "limit": 5},
+                timeout=8,
+            )
+            if not r.ok:
+                return empty
+            persons = r.json().get("persons", [])
+            if not persons:
+                return empty
+
+            pid = persons[0]["id"]
+
+            # Get matches this season
+            r2 = _req.get(
+                f"https://api.football-data.org/v4/persons/{pid}/matches",
+                headers=_FD_HEADERS,
+                params={"competitions": comp_id, "limit": 15, "status": "FINISHED"},
+                timeout=10,
+            )
+            if not r2.ok:
+                return empty
+
+            matches = r2.json().get("matches", [])
+            if not matches:
+                return empty
+
+            rows = []
+            for m in matches:
+                home_team = m.get("homeTeam", {}).get("shortName", "?")
+                away_team = m.get("awayTeam", {}).get("shortName", "?")
+
+                # Find player in this match stats
+                for side in ["homeTeam", "awayTeam"]:
+                    lineup = m.get(side, {})
+                    is_home = side == "homeTeam"
+
+                    # Check if player is in this team's lineup
+                    opp = away_team if is_home else home_team
+
+                    # Try to get passes from match stats
+                    stats = m.get("stats", {})
+                    passes = None
+                    mins   = m.get("minutesPlayed", 90)
+
+                    # football-data.org basic tier doesn't have per-player passes
+                    # Use team possession as proxy signal
+                    # Full player stats require premium tier
+                    # We'll work with what's available
+                    rows.append({
+                        "DATE":   m.get("utcDate", "")[:10],
+                        "OPP":    opp,
+                        "PASSES": passes,
+                        "MINS":   mins,
+                        "HOME":   is_home,
+                    })
+                    break
+
+            df = pd.DataFrame(rows)
+            df["DATE"] = pd.to_datetime(df["DATE"])
+            return df.sort_values("DATE", ascending=False).reset_index(drop=True)
+
+        except Exception:
+            return empty
+
+    @st.cache_data(ttl=1800, show_spinner=False)
+    def soccer_get_player_passes(player_name: str, comp_id: str) -> pd.DataFrame:
+        """
+        Get player passing stats via FBref as backup.
+        Uses requests to scrape basic stats table.
+        """
+        empty = pd.DataFrame(columns=["DATE","OPP","PASSES","MINS","HOME"])
+        try:
+            import requests as _req, re
+            # Search FBref for player
+            search_r = _req.get(
+                "https://fbref.com/search/search.fcgi",
+                params={"search": player_name, "cat": "players"},
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=10,
+                allow_redirects=True,
+            )
+            if not search_r.ok:
+                return empty
+
+            # Parse passing stats from match logs
+            # FBref URL pattern for passing match logs
+            from urllib.parse import urljoin
+            import re as _re
+
+            # Find player page URL
+            _match = _re.search(r'href="(/en/players/[^/]+/matchlogs/[^"]+passing[^"]*)"', search_r.text)
+            if not _match:
+                # Try direct player search
+                _pmatch = _re.search(r'href="(/en/players/[^"]+)".*?' + re.escape(player_name[:8]),
+                                     search_r.text, re.IGNORECASE)
+                if not _pmatch:
+                    return empty
+                player_url = "https://fbref.com" + _pmatch.group(1)
+                # Build passing log URL
+                _pid_match = _re.search(r'/players/([a-f0-9]+)/', player_url)
+                if not _pid_match:
+                    return empty
+                _pid = _pid_match.group(1)
+                pass_url = f"https://fbref.com/en/players/{_pid}/matchlogs/passing"
+            else:
+                pass_url = "https://fbref.com" + _match.group(1)
+
+            pass_r = _req.get(
+                pass_url,
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=12,
+            )
+            if not pass_r.ok:
+                return empty
+
+            # Parse HTML table
+            tables = pd.read_html(pass_r.text)
+            df = None
+            for t in tables:
+                if "Att" in t.columns or "Passes Attempted" in str(t.columns.tolist()):
+                    df = t
+                    break
+
+            if df is None or df.empty:
+                return empty
+
+            # Clean up columns
+            df.columns = [str(c).strip() for c in df.columns]
+            _pass_col = next((c for c in df.columns if c in ("Att", "Passes Attempted", "Pass Att")), None)
+            _date_col = next((c for c in df.columns if "Date" in c), None)
+            _opp_col  = next((c for c in df.columns if "Opponent" in c or "Opp" in c), None)
+            _min_col  = next((c for c in df.columns if "Min" in c), None)
+            _venue_col = next((c for c in df.columns if "Venue" in c), None)
+
+            if not _pass_col or not _date_col:
+                return empty
+
+            rows = []
+            for _, row in df.iterrows():
+                try:
+                    passes = pd.to_numeric(row[_pass_col], errors="coerce")
+                    if pd.isna(passes):
+                        continue
+                    rows.append({
+                        "DATE":   str(row[_date_col]),
+                        "OPP":    str(row[_opp_col]) if _opp_col else "?",
+                        "PASSES": int(passes),
+                        "MINS":   int(pd.to_numeric(row[_min_col], errors="coerce") or 90) if _min_col else 90,
+                        "HOME":   str(row[_venue_col]).strip().lower() == "home" if _venue_col else True,
+                    })
+                except Exception:
+                    continue
+
+            result = pd.DataFrame(rows).head(15)
+            result["DATE"] = pd.to_datetime(result["DATE"], errors="coerce")
+            return result.dropna(subset=["DATE"]).sort_values("DATE", ascending=False).reset_index(drop=True)
+
+        except Exception:
+            return empty
+
+    def soccer_weighted_hr(logs: pd.DataFrame, line: float, side: str) -> float:
+        vals = pd.to_numeric(logs["PASSES"], errors="coerce").dropna().reset_index(drop=True)
+        n = len(vals)
+        if n == 0: return 0.0
+        weights = [n - i for i in range(n)]
+        total_w = sum(weights)
+        hits = sum(w for v, w in zip(vals, weights)
+                   if (v >= line if side == "Over" else v <= line))
+        return hits / total_w
+
+    def soccer_consistency(logs: pd.DataFrame) -> float:
+        vals = pd.to_numeric(logs["PASSES"], errors="coerce").dropna()
+        if len(vals) < 2: return 0.5
+        avg = vals.mean()
+        if avg <= 0: return 0.1
+        cv = vals.std() / avg
+        return max(0.1, min(0.95, 1.0 - cv * 0.8))
+
+    def soccer_home_signal(logs: pd.DataFrame, line: float, side: str, is_home: bool) -> float:
+        """Home/Away split adjustment."""
+        if "HOME" not in logs.columns or len(logs) < 6:
+            return 0.0
+        home_logs = logs[logs["HOME"] == True]
+        away_logs = logs[logs["HOME"] == False]
+        if len(home_logs) < 2 or len(away_logs) < 2:
+            return 0.0
+        home_avg = pd.to_numeric(home_logs["PASSES"], errors="coerce").dropna().mean()
+        away_avg = pd.to_numeric(away_logs["PASSES"], errors="coerce").dropna().mean()
+        diff = home_avg - away_avg
+        if is_home and diff > 5:   return +0.05
+        if not is_home and diff > 5: return -0.05
+        return 0.0
+
+    def soccer_apply_adjustments(weighted: float, home_adj: float, side: str) -> float:
+        adj = weighted + (home_adj if side == "Over" else -home_adj)
+        return max(0.05, min(0.95, adj))
+
+    def soccer_get_verdict(adjusted: float, edge: float, side: str) -> str:
+        if side == "Over":
+            if adjusted >= 0.64 and edge >= 3.0: return "Strong Over"
+            if adjusted >= 0.55 and edge > 0:   return "Lean Over"
+        else:
+            if adjusted >= 0.64 and edge <= -3.0: return "Strong Under"
+            if adjusted >= 0.55 and edge < 0:     return "Lean Under"
+        return "Pass"
+
+    # ── Soccer UI ─────────────────────────────────────────────
+
+    st.markdown("<div class='section-header'>⚽ Soccer Passes Attempted Analyzer</div>",
+                unsafe_allow_html=True)
+
+    _soc_c1, _soc_c2 = st.columns([2, 1])
+    with _soc_c1:
+        soc_player = st.text_input(
+            "Player Name",
+            placeholder="e.g. Kevin De Bruyne, Rodri, Bellingham",
+            key="soc_player"
+        )
+    with _soc_c2:
+        soc_comp = st.selectbox(
+            "Competition",
+            options=list(_COMPETITIONS.keys()),
+            key="soc_comp"
+        )
+
+    _soc_c3, _soc_c4, _soc_c5 = st.columns([1, 1, 1])
+    with _soc_c3:
+        soc_line = st.number_input("Passes Line", min_value=10.0, max_value=150.0,
+                                    value=55.5, step=0.5, key="soc_line")
+    with _soc_c4:
+        soc_side = st.selectbox("Over / Under", ["Over", "Under"], key="soc_side")
+    with _soc_c5:
+        soc_venue = st.selectbox("Tonight's Venue", ["Home", "Away"], key="soc_venue")
+
+    soc_fetch = st.button("⚽  Analyze Passes Prop", key="soc_analyze")
+
+    if not soc_player:
+        st.markdown(
+            "<div style='color:#555;font-family:JetBrains Mono,monospace;font-size:0.75rem;"
+            "margin-top:0.5rem;'>↑ Enter a player name to get started.</div>",
+            unsafe_allow_html=True
+        )
+
+    if soc_fetch and soc_player:
+        _comp_id = _COMPETITIONS[soc_comp]
+        _is_home = soc_venue == "Home"
+
+        with st.spinner(f"Fetching {soc_player} passing logs..."):
+            soc_logs = soccer_get_player_passes(soc_player, _comp_id)
+
+        if soc_logs.empty:
+            st.markdown("""
+            <div style='background:#1c0505;border:1px solid #991b1b;padding:1rem;margin:0.5rem 0;'>
+                <div style='font-family:JetBrains Mono,monospace;font-size:0.7rem;
+                            color:#ef4444;font-weight:700;margin-bottom:6px;'>
+                    ⚠️ NO PASSING DATA FOUND
+                </div>
+                <div style='font-size:0.85rem;color:#94a3b8;line-height:1.6;'>
+                    Check the player name spelling and try again.<br>
+                    Player must have appeared in this competition this season.
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            # Core stats
+            vals      = pd.to_numeric(soc_logs["PASSES"], errors="coerce").dropna()
+            avg_pass  = vals.mean()
+            edge      = avg_pass - soc_line
+            weighted  = soccer_weighted_hr(soc_logs, soc_line, soc_side)
+            home_adj  = soccer_home_signal(soc_logs, soc_line, soc_side, _is_home)
+            adjusted  = soccer_apply_adjustments(weighted, home_adj, soc_side)
+            cons      = soccer_consistency(soc_logs)
+            tier      = soccer_get_verdict(adjusted, edge, soc_side)
+
+            # Confidence score — same formula as NBA/MLB
+            _s_adj  = max(0, min((adjusted - 0.50) / 0.45, 1.0) * 65)
+            _s_edge = min(abs(edge) / 15.0, 1.0) * 25  # scale to 15 passes for soccer
+            _s_cons = cons * 10
+            _soc_conf = min(99, int(_s_adj + _s_edge + _s_cons))
+
+            # Stat cards
+            st.markdown("<div class='section-header'>Key Stats</div>", unsafe_allow_html=True)
+            sc1, sc2, sc3, sc4 = st.columns(4)
+
+            tier_css = {
+                "Strong Over": "green", "Lean Over": "yellow",
+                "Strong Under": "red",  "Lean Under": "orange", "Pass": "gray"
+            }
+            css = tier_css.get(tier, "gray")
+            _cc = "#a3e635" if _soc_conf >= 80 else ("#eab308" if _soc_conf >= 65 else "#f97316")
+
+            with sc1:
+                _avg_color = "green" if (edge > 0 and soc_side == "Over") or (edge < 0 and soc_side == "Under") else "red"
+                st.markdown(f"""
+                <div class='stat-card'>
+                    <div class='stat-label'>Avg Passes (L{len(vals)})</div>
+                    <div class='stat-value {_avg_color}'>{avg_pass:.1f}</div>
+                    <div class='stat-hint'>Line {soc_line} · edge {edge:+.1f}</div>
+                </div>""", unsafe_allow_html=True)
+            with sc2:
+                hr_color = "green" if weighted >= 0.64 else ("yellow" if weighted >= 0.55 else "red")
+                st.markdown(f"""
+                <div class='stat-card'>
+                    <div class='stat-label'>Weighted Hit Rate</div>
+                    <div class='stat-value {hr_color}'>{weighted:.0%}</div>
+                    <div class='stat-hint'>Recency-weighted</div>
+                </div>""", unsafe_allow_html=True)
+            with sc3:
+                cons_color = "green" if cons >= 0.5 else ("yellow" if cons >= 0.35 else "red")
+                st.markdown(f"""
+                <div class='stat-card'>
+                    <div class='stat-label'>Consistency</div>
+                    <div class='stat-value {cons_color}'>{cons:.0%}</div>
+                    <div class='stat-hint'>Pass volume variance</div>
+                </div>""", unsafe_allow_html=True)
+            with sc4:
+                venue_note = "Home boost" if _is_home and home_adj > 0 else ("Away dip" if not _is_home and home_adj < 0 else "Neutral")
+                st.markdown(f"""
+                <div class='stat-card'>
+                    <div class='stat-label'>Confidence</div>
+                    <div class='stat-value' style='color:{_cc};'>{_soc_conf}</div>
+                    <div class='stat-hint'>{venue_note} · {soc_venue}</div>
+                </div>""", unsafe_allow_html=True)
+
+            # Game log
+            st.markdown("<div class='section-header'>Recent Matches</div>", unsafe_allow_html=True)
+            _disp = soc_logs.copy()
+            _disp["HIT"] = _disp["PASSES"].apply(
+                lambda x: "✅" if (soc_side == "Over" and float(x) >= soc_line) or
+                                   (soc_side == "Under" and float(x) <= soc_line) else "❌"
+            )
+            _disp["DATE"] = _disp["DATE"].dt.strftime("%b %d")
+            _disp["HOME"] = _disp["HOME"].apply(lambda x: "Home" if x else "Away")
+            st.dataframe(
+                _disp[["DATE","OPP","PASSES","MINS","HOME","HIT"]],
+                use_container_width=True, hide_index=True
+            )
+
+            # Verdict
+            tier_emoji = {
+                "Strong Over": "🟢", "Lean Over": "🟡",
+                "Strong Under": "🔴", "Lean Under": "🟠", "Pass": "⚪"
+            }
+            _cons_label = "Predictable" if cons >= 0.5 else ("Variable" if cons >= 0.35 else "Volatile")
+            _soc_verdict_html = (
+                f"<div class='verdict-banner {css}'>"
+                f"<div>"
+                f"<div class='verdict-label'>{soc_player} · {soc_line} Passes · {soc_side} · {soc_comp}</div>"
+                f"<div class='verdict-tier {css}'>{tier_emoji.get(tier,'⚪')} {tier}</div>"
+                f"</div>"
+                f"<div style='display:flex;gap:2rem;flex-wrap:wrap;align-items:flex-start;'>"
+                f"<div><div class='verdict-label'>Confidence</div>"
+                f"<div style='font-family:Barlow Condensed,sans-serif;font-size:1.8rem;"
+                f"font-weight:900;color:{_cc};'>{_soc_conf}</div>"
+                f"<div style='font-family:JetBrains Mono,monospace;font-size:0.55rem;color:#555;'>/100</div></div>"
+                f"<div><div class='verdict-label'>Adjusted Hit Rate</div>"
+                f"<div style='font-size:1.4rem;font-weight:800;color:#f0f0f0;'>{adjusted:.0%}</div></div>"
+                f"<div><div class='verdict-label'>Edge vs Line</div>"
+                f"<div style='font-size:1.4rem;font-weight:800;color:#f0f0f0;'>{edge:+.1f}</div></div>"
+                f"<div><div class='verdict-label'>Consistency</div>"
+                f"<div style='font-size:1.4rem;font-weight:800;color:#f0f0f0;'>{cons:.0%}</div>"
+                f"<div style='font-family:JetBrains Mono,monospace;font-size:0.6rem;color:#555;'>{_cons_label}</div></div>"
+                f"</div></div>"
+            )
+            st.markdown("<div class='section-header'>Verdict</div>", unsafe_allow_html=True)
+            st.markdown(_soc_verdict_html, unsafe_allow_html=True)
+
+    st.stop()
+
+
+# ── NBA Mode guard — stop here if MLB or Soccer selected ─────
 if st.session_state.active_sport != "nba":
     st.stop()
 
