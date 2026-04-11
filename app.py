@@ -3212,46 +3212,52 @@ if st.session_state.active_sport == "mlb":
         try:
             import requests as _req
 
-            # Search for player — try multiple name variants
-            _search_names = [player_name]
-            # Handle common alternate spellings
-            _alt_map = {
-                "Emmet Sheehan":  "Emmett Sheehan",
-                "Emmett Sheehan": "Emmet Sheehan",
-                "Shohei Ohtani":  "Shohei Ohtani",
-            }
-            if player_name in _alt_map:
-                _search_names.append(_alt_map[player_name])
+            # Step 1: Get all active MLB players (much more reliable than people/search)
+            _norm_name = lambda s: s.lower().strip()
+            _target = _norm_name(player_name)
+            _parts  = [p for p in _target.split() if len(p) > 2]
+            _last   = _target.split()[-1]
 
             people = []
-            for _sname in _search_names:
-                search = _req.get(
+
+            # Try all-players endpoint first
+            _all_r = _req.get(
+                "https://statsapi.mlb.com/api/v1/sports/1/players",
+                params={"season": datetime.datetime.now().year, "gameType": "R"},
+                timeout=10
+            )
+            if _all_r.ok:
+                _all   = _all_r.json().get("people", [])
+                # Exact full name match first
+                people = [p for p in _all if _norm_name(p.get("fullName","")) == _target]
+                # Last name exact match
+                if not people:
+                    people = [p for p in _all if _norm_name(p.get("fullName","")).split()[-1] == _last]
+                # Partial match — all parts present
+                if not people:
+                    people = [p for p in _all if all(pt in _norm_name(p.get("fullName","")) for pt in _parts)]
+
+            # Fallback: old search endpoint
+            if not people:
+                _s = _req.get(
                     "https://statsapi.mlb.com/api/v1/people/search",
-                    params={"names": _sname, "sportIds": 1},
+                    params={"names": player_name, "sportIds": 1},
                     timeout=8
                 )
-                if search.ok:
-                    people = search.json().get("people", [])
-                    if people:
-                        break
-                # Also try last name only
-                _last = _sname.split()[-1]
-                search2 = _req.get(
+                if _s.ok:
+                    people = _s.json().get("people", [])
+
+            # Last resort: search by last name only
+            if not people:
+                _s2 = _req.get(
                     "https://statsapi.mlb.com/api/v1/people/search",
                     params={"names": _last, "sportIds": 1},
                     timeout=8
                 )
-                if search2.ok:
-                    _res2 = search2.json().get("people", [])
-                    # Filter to match first name too
-                    _first = _sname.split()[0].lower()
-                    _matched = [p for p in _res2 if _first in p.get("fullName","").lower()]
-                    if _matched:
-                        people = _matched
-                        break
-                    elif _res2:
-                        people = _res2
-                        break
+                if _s2.ok:
+                    _res2 = _s2.json().get("people", [])
+                    _first = _target.split()[0]
+                    people = [p for p in _res2 if _first in _norm_name(p.get("fullName",""))] or _res2
 
             if not people:
                 return empty
