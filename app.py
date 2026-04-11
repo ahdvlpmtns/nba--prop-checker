@@ -3296,23 +3296,55 @@ if st.session_state.active_sport == "soccer":
 
     @st.cache_data(ttl=3600, show_spinner=False)
     def soccer_find_player(name: str, league_id: int) -> Optional[dict]:
-        """Find player by name via API-Football direct API."""
+        """
+        Find player by name via API-Football.
+        Tries multiple search strategies — full name, last name, first name.
+        """
         import requests as _req
-        for params in [
-            {"search": name, "league": league_id, "season": 2025},
-            {"search": name, "season": 2025},
-        ]:
-            try:
-                r = _req.get(
-                    f"{_AF_BASE}/players",
-                    headers=_AF_HDRS, params=params, timeout=10,
-                )
-                if r.ok:
+
+        # Build search variants
+        parts = name.strip().split()
+        searches = [
+            name,                          # "Lamine Yamal"
+            parts[-1] if parts else name,  # "Yamal"
+            parts[0] if parts else name,   # "Lamine"
+        ]
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_searches = [s for s in searches if not (s in seen or seen.add(s))]
+
+        for search_term in unique_searches:
+            for params in [
+                {"search": search_term, "league": league_id, "season": 2025},
+                {"search": search_term, "season": 2025},
+            ]:
+                try:
+                    r = _req.get(
+                        f"{_AF_BASE}/players",
+                        headers=_AF_HDRS, params=params, timeout=10,
+                    )
+                    if not r.ok:
+                        continue
                     res = r.json().get("response", [])
-                    if res:
-                        return res[0]
-            except Exception:
-                continue
+                    if not res:
+                        continue
+                    # Try to find best name match
+                    _norm = lambda s: s.lower().strip()
+                    _name_norm = _norm(name)
+                    # Exact match first
+                    for p in res:
+                        pname = p.get("player", {}).get("name", "")
+                        if _norm(pname) == _name_norm:
+                            return p
+                    # Partial match — any part of search name in player name
+                    for p in res:
+                        pname = _norm(p.get("player", {}).get("name", ""))
+                        if any(_norm(part) in pname for part in parts if len(part) > 3):
+                            return p
+                    # Return first result as fallback
+                    return res[0]
+                except Exception:
+                    continue
         return None
 
     @st.cache_data(ttl=14400, show_spinner=False)
@@ -3536,10 +3568,32 @@ if st.session_state.active_sport == "soccer":
                 f"<div style='background:#1c0505;border:1px solid #991b1b;padding:1rem;margin:0.5rem 0;'>"
                 f"<div style='font-family:JetBrains Mono,monospace;font-size:0.7rem;"
                 f"color:#ef4444;font-weight:700;margin-bottom:6px;'>⚠️ PLAYER NOT FOUND</div>"
-                f"<div style='font-size:0.85rem;color:#94a3b8;'>Check spelling and try again. "
-                f"Player must have appeared in {soc_comp} this season.</div></div>",
+                f"<div style='font-size:0.85rem;color:#94a3b8;'>"
+                f"API-Football could not find <strong>{soc_player}</strong> in {soc_comp}.<br>"
+                f"This may mean the player name format differs from what API-Football expects, "
+                f"or the API key is not set correctly.</div></div>",
                 unsafe_allow_html=True
             )
+            # Debug expander
+            with st.expander("🛠️ Debug — check API response"):
+                try:
+                    import requests as _dbg
+                    _dbg_r = _dbg.get(
+                        f"{_AF_BASE}/players",
+                        headers=_AF_HDRS,
+                        params={"search": soc_player.split()[-1], "season": 2025},
+                        timeout=10,
+                    )
+                    st.write("Status:", _dbg_r.status_code)
+                    st.write("Search term used:", soc_player.split()[-1])
+                    _dbg_data = _dbg_r.json()
+                    st.write("Results count:", len(_dbg_data.get("response", [])))
+                    if _dbg_data.get("response"):
+                        st.write("First result:", _dbg_data["response"][0].get("player", {}))
+                    else:
+                        st.write("Raw response:", _dbg_data)
+                except Exception as _dbg_e:
+                    st.write("Debug error:", str(_dbg_e))
         else:
             _soc_pid  = _soc_player_data["player"]["id"]
             _soc_name = _soc_player_data["player"]["name"]
