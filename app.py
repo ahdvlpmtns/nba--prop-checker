@@ -3548,55 +3548,60 @@ if st.session_state.active_sport == "mlb":
         st.session_state.mlb_scanner_error   = None
         _mlb_results = []
 
-        with st.spinner("Fetching MLB PrizePicks slate..."):
-            try:
-                import requests as _mreq
-                _mr = _mreq.get(
-                    "https://api.prizepicks.com/projections",
-                    params={"league_id": 2, "per_page": 250, "single_stat": "true"},
-                    headers={"User-Agent":"Mozilla/5.0","Accept":"application/json",
-                             "Referer":"https://prizepicks.com/"},
-                    timeout=15
-                )
-                _mdata = _mr.json()
-                _mpmap = {}
-                for _item in _mdata.get("included",[]):
-                    if _item.get("type") == "new_player":
-                        _a = _item.get("attributes",{})
-                        _mpmap[_item["id"]] = {
-                            "name": _a.get("display_name", _a.get("name","")),
-                            "team": _a.get("team_abbreviation",""),
-                            "position": _a.get("position",""),
-                        }
-                # Debug — collect all unique stat types to see what PrizePicks returns
-                _all_stat_types = set()
-                for _proj in _mdata.get("data",[]):
-                    _st = _proj.get("attributes",{}).get("stat_type","")
-                    if _st: _all_stat_types.add(_st)
-                st.session_state["mlb_debug_stat_types"] = sorted(_all_stat_types)
+        _mlb_status = st.empty()
+        _mlb_status.markdown(
+            "<div style='font-family:JetBrains Mono,monospace;font-size:0.7rem;"
+            "color:#555;padding:0.5rem 0;'>⏳ FETCHING MLB SLATE FROM PRIZEPICKS...</div>",
+            unsafe_allow_html=True
+        )
+        _mlb_slate = []
+        try:
+            import requests as _mreq
+            _mr = _mreq.get(
+                "https://api.prizepicks.com/projections",
+                params={"league_id": 2, "per_page": 250, "single_stat": "true"},
+                headers={"User-Agent":"Mozilla/5.0","Accept":"application/json",
+                         "Referer":"https://prizepicks.com/"},
+                timeout=15
+            )
+            _mdata = _mr.json()
+            _mpmap = {}
+            for _item in _mdata.get("included",[]):
+                if _item.get("type") == "new_player":
+                    _a = _item.get("attributes",{})
+                    _mpmap[_item["id"]] = {
+                        "name": _a.get("display_name", _a.get("name","")),
+                        "team": _a.get("team_abbreviation",""),
+                    }
+            # Collect all stat types for debug
+            _all_stat_types = set()
+            for _proj in _mdata.get("data",[]):
+                _st = _proj.get("attributes",{}).get("stat_type","")
+                if _st: _all_stat_types.add(_st)
+            st.session_state["mlb_debug_stat_types"] = sorted(_all_stat_types)
 
-                _mlb_slate = []
-                _K_TYPES = {"strikeouts","strikeout","pitcher strikeouts","pitcher strikeout",
-                            "strike outs","strike out","ks","k's","pitching strikeouts"}
-                for _proj in _mdata.get("data",[]):
-                    _a     = _proj.get("attributes",{})
-                    _stype = _a.get("stat_type","").lower().strip()
-                    if _stype not in _K_TYPES and "strikeout" not in _stype and "strike out" not in _stype:
-                        continue
-                    _ln = _a.get("line_score")
-                    if not _ln: continue
-                    _pid = _proj.get("relationships",{}).get("new_player",{}).get("data",{}).get("id")
-                    _pi  = _mpmap.get(_pid,{})
-                    if _pi.get("name"):
-                        _mlb_slate.append({
-                            "pitcher": _pi["name"],
-                            "team":    _pi.get("team",""),
-                            "line":    float(_ln),
-                            "stat_type": _stype,
-                        })
-            except Exception as _me:
-                st.session_state.mlb_scanner_error = f"Could not fetch slate: {_me}"
-                _mlb_slate = []
+            _K_TYPES = {"strikeouts","strikeout","pitcher strikeouts","pitcher strikeout",
+                        "strike outs","strike out","ks","k's","pitching strikeouts"}
+            for _proj in _mdata.get("data",[]):
+                _a     = _proj.get("attributes",{})
+                _stype = _a.get("stat_type","").lower().strip()
+                if _stype not in _K_TYPES and "strikeout" not in _stype and "strike out" not in _stype:
+                    continue
+                _ln = _a.get("line_score")
+                if not _ln: continue
+                _pid = _proj.get("relationships",{}).get("new_player",{}).get("data",{}).get("id")
+                _pi  = _mpmap.get(_pid,{})
+                if _pi.get("name"):
+                    _mlb_slate.append({
+                        "pitcher":   _pi["name"],
+                        "team":      _pi.get("team",""),
+                        "line":      float(_ln),
+                        "stat_type": _stype,
+                    })
+        except Exception as _me:
+            st.session_state.mlb_scanner_error = f"Could not fetch slate: {_me}"
+
+        _mlb_status.empty()
 
         if _mlb_slate:
             _mprog = st.progress(0)
