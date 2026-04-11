@@ -3490,6 +3490,216 @@ if st.session_state.active_sport == "mlb":
                 f"<div style='font-family:JetBrains Mono,monospace;font-size:0.6rem;color:#555;'>{_cl}</div></div>"
                 f"</div></div>",unsafe_allow_html=True)
 
+    # ── MLB Slate Scanner ────────────────────────────────────
+    st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
+    st.markdown("<div class='section-header'>⚾ MLB Pitcher Slate Scanner</div>", unsafe_allow_html=True)
+    st.markdown("""
+    <div class='explainer'>
+        Pulls tonight's pitcher strikeout props from PrizePicks and runs each through the model.
+        <strong>Strong Only</strong> shows pitchers with 80%+ adjusted hit rate.
+    </div>
+    """, unsafe_allow_html=True)
+
+    _ms1, _ms2, _ms3 = st.columns([1, 1, 2])
+    with _ms1:
+        _mlb_scan_run = st.button("🔍  Scan MLB Slate", key="mlb_scan_run")
+    with _ms2:
+        _mlb_filter = st.selectbox(
+            "Show", ["Strong Only", "Strong + Lean", "All results"],
+            key="mlb_scan_filter", label_visibility="collapsed"
+        )
+
+    if "mlb_scanner_results" not in st.session_state:
+        st.session_state.mlb_scanner_results = None
+    if "mlb_scanner_error" not in st.session_state:
+        st.session_state.mlb_scanner_error = None
+
+    if _mlb_scan_run:
+        st.session_state.mlb_scanner_results = None
+        st.session_state.mlb_scanner_error   = None
+        _mlb_results = []
+
+        with st.spinner("Fetching MLB PrizePicks slate..."):
+            try:
+                import requests as _mreq
+                _mr = _mreq.get(
+                    "https://api.prizepicks.com/projections",
+                    params={"league_id": 2, "per_page": 250, "single_stat": "true"},
+                    headers={"User-Agent":"Mozilla/5.0","Accept":"application/json",
+                             "Referer":"https://prizepicks.com/"},
+                    timeout=15
+                )
+                _mdata = _mr.json()
+                _mpmap = {}
+                for _item in _mdata.get("included",[]):
+                    if _item.get("type") == "new_player":
+                        _a = _item.get("attributes",{})
+                        _mpmap[_item["id"]] = {
+                            "name": _a.get("display_name", _a.get("name","")),
+                            "team": _a.get("team_abbreviation",""),
+                            "position": _a.get("position",""),
+                        }
+                _mlb_slate = []
+                for _proj in _mdata.get("data",[]):
+                    _a   = _proj.get("attributes",{})
+                    _stype = _a.get("stat_type","").lower()
+                    if "strikeout" not in _stype and "strike out" not in _stype:
+                        continue
+                    _ln = _a.get("line_score")
+                    if not _ln: continue
+                    _pid = _proj.get("relationships",{}).get("new_player",{}).get("data",{}).get("id")
+                    _pi  = _mpmap.get(_pid,{})
+                    if _pi.get("name"):
+                        _mlb_slate.append({
+                            "pitcher": _pi["name"],
+                            "team":    _pi.get("team",""),
+                            "line":    float(_ln),
+                        })
+            except Exception as _me:
+                st.session_state.mlb_scanner_error = f"Could not fetch slate: {_me}"
+                _mlb_slate = []
+
+        if _mlb_slate:
+            _mprog = st.progress(0)
+            _mstat = st.empty()
+
+            def _analyze_mlb_prop(_prop):
+                try:
+                    _pname = _prop["pitcher"]
+                    _ln    = _prop["line"]
+                    _logs  = mlb_get_pitcher_logs(_pname, n=10)
+                    if _logs.empty or len(_logs) < 3:
+                        return None
+                    _vals  = pd.to_numeric(_logs["K"], errors="coerce").dropna()
+                    if len(_vals) < 3:
+                        return None
+                    _avg   = _vals.mean()
+                    _edge  = _avg - _ln
+                    _whr   = mlb_weighted_hr(_logs, _ln, "K", "Over")
+                    _tonight_g = mlb_get_tonight_game(_pname)
+                    _opp   = _tonight_g.get("opp","")
+                    _home  = _tonight_g.get("home_team","")
+                    _okpct = mlb_get_opp_k_rate(_opp) if _opp else None
+                    _psig  = mlb_park_signal(_home) if _home else "Neutral"
+                    _adj   = mlb_apply_adj(_whr, _okpct, _psig, "Over")
+                    _tier  = mlb_verdict(_adj, _edge, "Over")
+                    _cv    = _vals.std()/_avg if _avg>0 else 1.0
+                    _cons  = max(0.1, min(0.95, 1.0-_cv*0.8))
+                    _sc    = min(99, int(
+                        max(0, min((_adj-0.50)/0.45,1.0)*65) +
+                        min(abs(_edge)/7.0,1.0)*25 +
+                        _cons*10
+                    ))
+                    return {
+                        "Pitcher":    _pname,
+                        "Team":       _prop.get("team",""),
+                        "Opp":        _opp or "?",
+                        "Line":       _ln,
+                        "Avg K":      round(_avg,1),
+                        "Edge":       round(_edge,1),
+                        "Hit Rate":   f"{_whr:.0%}",
+                        "Adjusted":   f"{_adj:.0%}",
+                        "Park":       _psig,
+                        "Tier":       _tier,
+                        "_adj_raw":   _adj,
+                        "_conf":      _sc,
+                    }
+                except Exception:
+                    return None
+
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            _mfutures = {}
+            with ThreadPoolExecutor(max_workers=4) as _mex:
+                for _mp in _mlb_slate:
+                    _mf = _mex.submit(_analyze_mlb_prop, _mp)
+                    _mfutures[_mf] = _mp["pitcher"]
+                _mdone = 0
+                for _mf in as_completed(_mfutures):
+                    _mdone += 1
+                    _mprog.progress(_mdone/len(_mlb_slate))
+                    _mstat.text(f"Analyzed {_mdone}/{len(_mlb_slate)} pitchers...")
+                    _mres = _mf.result()
+                    if _mres:
+                        _mlb_results.append(_mres)
+
+            _mprog.empty()
+            _mstat.empty()
+            st.session_state.mlb_scanner_results = sorted(
+                _mlb_results, key=lambda x: -x.get("_conf",0)
+            )
+
+    if st.session_state.mlb_scanner_error:
+        st.error(st.session_state.mlb_scanner_error)
+
+    if st.session_state.mlb_scanner_results is not None:
+        _mres_all = st.session_state.mlb_scanner_results
+
+        if _mlb_filter == "Strong Only":
+            _mshow = [r for r in _mres_all if r["Tier"]=="Strong Over" and r.get("_adj_raw",0)>=0.80]
+        elif _mlb_filter == "Strong + Lean":
+            _mshow = [r for r in _mres_all if "Strong" in r["Tier"] or "Lean" in r["Tier"]]
+        else:
+            _mshow = _mres_all
+
+        _mtc = {"Strong Over":"green","Lean Over":"yellow","Lean Under":"orange","Strong Under":"red","Pass":"gray"}
+        _mte = {"Strong Over":"🟢","Lean Over":"🟡","Lean Under":"🟠","Strong Under":"🔴","Pass":"⚪"}
+
+        if not _mshow:
+            st.markdown(
+                f"<div style='background:#111;border:1px solid #1e2a3a;border-left:3px solid #555;"
+                f"padding:0.75rem 1rem;font-family:JetBrains Mono,monospace;font-size:0.72rem;color:#555;'>"
+                f"No {'Strong Overs with 80%+' if _mlb_filter=='Strong Only' else 'matching'} results on tonight's MLB slate.</div>",
+                unsafe_allow_html=True
+            )
+        else:
+            st.markdown(
+                f"<div style='font-family:JetBrains Mono,monospace;font-size:0.65rem;"
+                f"color:#555;margin-bottom:0.75rem;letter-spacing:0.08em;'>"
+                f"{len(_mshow)} PITCHER{'S' if len(_mshow)!=1 else ''} · STRIKEOUT PROPS · SORTED BY CONFIDENCE</div>",
+                unsafe_allow_html=True
+            )
+            for _mi, _mr in enumerate(_mshow):
+                _mt   = _mr["Tier"]
+                _mcs  = _mtc.get(_mt,"gray")
+                _mem  = _mte.get(_mt,"⚪")
+                _mec  = "#00e676" if _mr["Edge"]>0 else "#ff3d57"
+                _mconf= _mr.get("_conf",0)
+                _mcc  = "#3b82f6" if _mconf>=80 else ("#eab308" if _mconf>=65 else "#f97316")
+
+                st.markdown(f"""
+                <div class='verdict-banner {_mcs}' style='margin:0.4rem 0;padding:1rem 1.4rem;'>
+                    <div>
+                        <div class='verdict-label'>{_mr["Line"]} K Over · PrizePicks</div>
+                        <div style='display:flex;align-items:center;gap:8px;'>
+                            <div style='font-size:1.1rem;font-weight:800;color:#f0f0f0;'>{_mr["Pitcher"]}</div>
+                            <div style='font-family:JetBrains Mono,monospace;font-size:0.65rem;
+                                        color:#3b82f6;background:#111;border:1px solid #1e2a3a;
+                                        padding:1px 7px;letter-spacing:0.08em;'>{_mr["Team"]}</div>
+                            <div style='font-family:JetBrains Mono,monospace;font-size:0.65rem;color:#555;'>
+                                vs {_mr["Opp"]}</div>
+                        </div>
+                        <div style='font-family:JetBrains Mono,monospace;font-size:0.65rem;color:#555;margin-top:4px;'>
+                            {_mr["Park"]} park · Avg {_mr["Avg K"]}K/start
+                        </div>
+                    </div>
+                    <div style='display:flex;gap:1.5rem;flex-wrap:wrap;align-items:center;'>
+                        <div>
+                            <div class='verdict-label'>Confidence</div>
+                            <div style='font-family:Barlow Condensed,sans-serif;font-size:1.6rem;
+                                        font-weight:900;color:{_mcc};line-height:1;'>{_mconf}</div>
+                            <div style='font-family:JetBrains Mono,monospace;font-size:0.55rem;color:#555;'>/100</div>
+                        </div>
+                        <div><div class='verdict-label'>Adjusted HR</div>
+                             <div style='font-size:1rem;font-weight:700;color:#f0f0f0;'>{_mr["Adjusted"]}</div></div>
+                        <div><div class='verdict-label'>Edge</div>
+                             <div style='font-size:1rem;font-weight:700;color:{_mec};'>{_mr["Edge"]:+.1f}</div></div>
+                        <div><div class='verdict-label'>Hit Rate</div>
+                             <div style='font-size:1rem;font-weight:700;color:#f0f0f0;'>{_mr["Hit Rate"]}</div></div>
+                        <div><div class='verdict-label'>Tier</div>
+                             <div class='verdict-tier {_mcs}' style='font-size:1rem;'>{_mem} {_mt}</div></div>
+                    </div>
+                </div>""", unsafe_allow_html=True)
+
     st.stop()
 
 
