@@ -3568,11 +3568,20 @@ if st.session_state.active_sport == "mlb":
                             "team": _a.get("team_abbreviation",""),
                             "position": _a.get("position",""),
                         }
-                _mlb_slate = []
+                # Debug — collect all unique stat types to see what PrizePicks returns
+                _all_stat_types = set()
                 for _proj in _mdata.get("data",[]):
-                    _a   = _proj.get("attributes",{})
-                    _stype = _a.get("stat_type","").lower()
-                    if "strikeout" not in _stype and "strike out" not in _stype:
+                    _st = _proj.get("attributes",{}).get("stat_type","")
+                    if _st: _all_stat_types.add(_st)
+                st.session_state["mlb_debug_stat_types"] = sorted(_all_stat_types)
+
+                _mlb_slate = []
+                _K_TYPES = {"strikeouts","strikeout","pitcher strikeouts","pitcher strikeout",
+                            "strike outs","strike out","ks","k's","pitching strikeouts"}
+                for _proj in _mdata.get("data",[]):
+                    _a     = _proj.get("attributes",{})
+                    _stype = _a.get("stat_type","").lower().strip()
+                    if _stype not in _K_TYPES and "strikeout" not in _stype and "strike out" not in _stype:
                         continue
                     _ln = _a.get("line_score")
                     if not _ln: continue
@@ -3583,6 +3592,7 @@ if st.session_state.active_sport == "mlb":
                             "pitcher": _pi["name"],
                             "team":    _pi.get("team",""),
                             "line":    float(_ln),
+                            "stat_type": _stype,
                         })
             except Exception as _me:
                 st.session_state.mlb_scanner_error = f"Could not fetch slate: {_me}"
@@ -3698,6 +3708,9 @@ if st.session_state.active_sport == "mlb":
                 unsafe_allow_html=True
             )
             with st.expander("🛠️ Debug — what did the scanner find?"):
+                _debug_types = st.session_state.get("mlb_debug_stat_types", [])
+                if _debug_types:
+                    st.write("All stat types returned by PrizePicks MLB:", _debug_types)
                 st.write(f"Total pitchers on PrizePicks slate: {len(_mres_all)}")
                 if _mres_all:
                     for _dbg in _mres_all:
