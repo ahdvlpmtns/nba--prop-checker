@@ -3505,7 +3505,7 @@ if st.session_state.active_sport == "mlb":
         _mlb_scan_run = st.button("🔍  Scan MLB Slate", key="mlb_scan_run")
     with _ms2:
         _mlb_filter = st.selectbox(
-            "Show", ["Strong Only", "Strong + Lean", "All results"],
+            "Show", ["All results", "Strong Only", "Strong + Lean"],
             key="mlb_scan_filter", label_visibility="collapsed"
         )
 
@@ -3651,6 +3651,14 @@ if st.session_state.active_sport == "mlb":
                 f"No {'Strong Overs with 80%+' if _mlb_filter=='Strong Only' else 'matching'} results on tonight's MLB slate.</div>",
                 unsafe_allow_html=True
             )
+            with st.expander("🛠️ Debug — what did the scanner find?"):
+                st.write(f"Total pitchers on PrizePicks slate: {len(_mres_all)}")
+                if _mres_all:
+                    for _dbg in _mres_all:
+                        st.write(f"{_dbg['Pitcher']} — Line: {_dbg['Line']} | Adj: {_dbg['Adjusted']} | Tier: {_dbg['Tier']} | Conf: {_dbg.get('_conf',0)}")
+                else:
+                    st.write("No pitchers were successfully analyzed.")
+                    st.write("Try switching filter to 'All results' to see raw data.")
         else:
             st.markdown(
                 f"<div style='font-family:JetBrains Mono,monospace;font-size:0.65rem;"
