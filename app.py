@@ -3242,6 +3242,12 @@ if st.session_state.active_sport == "mlb":
 
 
 
+
+# ═══════════════════════════════════════════════════════
+# SOCCER MODE
+# ═══════════════════════════════════════════════════════
+
+if st.session_state.active_sport == "soccer":
     _AF_KEY = st.secrets.get("API_FOOTBALL_KEY", "")
     _AF_HDRS = {"x-apisports-key": _AF_KEY}
     _AF_BASE = "https://v3.football.api-sports.io"
@@ -3393,7 +3399,7 @@ if st.session_state.active_sport == "mlb":
     with _soc_c2:
         soc_comp = st.selectbox(
             "Competition",
-            options=list(_COMPETITIONS.keys()),
+            options=list(_LEAGUE_IDS.keys()),
             key="soc_comp"
         )
 
@@ -3554,6 +3560,8 @@ if st.session_state.active_sport == "mlb":
             st.markdown(_soc_verdict_html, unsafe_allow_html=True)
 
     st.stop()
+
+
 
 
 # ── NBA Mode guard — stop here if MLB or Soccer selected ─────
