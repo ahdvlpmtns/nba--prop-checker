@@ -484,6 +484,43 @@ button[data-testid="baseButton-primary"][key="tab_scanner"] {
     transition: transform 0.25s cubic-bezier(0.4,0,0.2,1);
 }
 
+/* ── Sport switcher buttons ── */
+button[data-testid="baseButton-primary"][key="sport_nba"],
+button[data-testid="baseButton-primary"][key="sport_mlb"] {
+    background: var(--accent) !important;
+    color: #ffffff !important;
+    border: none !important;
+    clip-path: none !important;
+    border-radius: 0 !important;
+    font-family: var(--font-display) !important;
+    font-weight: 800 !important;
+    font-size: 0.85rem !important;
+    letter-spacing: 0.1em !important;
+    text-transform: uppercase !important;
+    box-shadow: 0 0 16px rgba(59,130,246,0.3) !important;
+}
+button[data-testid="baseButton-secondary"][key="sport_nba"],
+button[data-testid="baseButton-secondary"][key="sport_mlb"] {
+    background: var(--bg2) !important;
+    color: var(--text3) !important;
+    border: 1px solid var(--border) !important;
+    clip-path: none !important;
+    border-radius: 0 !important;
+    font-family: var(--font-display) !important;
+    font-weight: 700 !important;
+    font-size: 0.85rem !important;
+    letter-spacing: 0.1em !important;
+    text-transform: uppercase !important;
+    box-shadow: none !important;
+}
+button[data-testid="baseButton-secondary"][key="sport_nba"]:hover,
+button[data-testid="baseButton-secondary"][key="sport_mlb"]:hover {
+    background: var(--bg3) !important;
+    color: var(--text) !important;
+    border-color: var(--accent) !important;
+    transform: none !important;
+}
+
 /* ── Expanders ── */
 div[data-testid="stExpander"] {
     border: 1px solid var(--border) !important;
@@ -3249,9 +3286,211 @@ if st.session_state.active_sport == "mlb":
         except Exception:
             return empty
 
+    # ── MLB Park factors ──────────────────────────────────────
+    _MLB_PARK_FACTORS = {
+        "COL": 1.30, "CIN": 1.10, "BOS": 1.08, "PHI": 1.06,
+        "TEX": 1.05, "NYY": 1.04, "CHC": 1.03, "HOU": 1.02,
+        "ATL": 1.01, "MIL": 1.01, "STL": 1.00, "LAD": 0.99,
+        "NYM": 0.99, "TOR": 0.98, "DET": 0.98, "MIN": 0.97,
+        "CLE": 0.97, "ARI": 0.97, "BAL": 0.97, "KCR": 0.96,
+        "PIT": 0.96, "TBR": 0.96, "CHW": 0.95, "SEA": 0.95,
+        "SFG": 0.94, "MIA": 0.94, "LAA": 0.94, "WSN": 0.93,
+        "OAK": 0.93, "SDP": 0.92,
+    }
 
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def mlb_get_opp_k_rate(opp_abbr: str) -> Optional[float]:
+        try:
+            import requests as _req, datetime
+            season = datetime.datetime.now().year
+            teams_r = _req.get("https://statsapi.mlb.com/api/v1/teams",
+                params={"sportId":1,"season":season}, timeout=8)
+            if not teams_r.ok: return None
+            teams = teams_r.json().get("teams",[])
+            team  = next((t for t in teams if t.get("abbreviation","").upper()==opp_abbr.upper()),None)
+            if not team: return None
+            stats_r = _req.get(f"https://statsapi.mlb.com/api/v1/teams/{team['id']}/stats",
+                params={"stats":"season","group":"hitting","season":season}, timeout=8)
+            if not stats_r.ok: return None
+            stat = stats_r.json().get("stats",[{}])[0].get("splits",[{}])[0].get("stat",{})
+            ab = int(stat.get("atBats",0)); k = int(stat.get("strikeOuts",0))
+            return round(k/ab,3) if ab>0 else None
+        except Exception: return None
 
+    @st.cache_data(ttl=1800, show_spinner=False)
+    def mlb_get_tonight_game(pitcher_name: str) -> dict:
+        try:
+            import requests as _req, datetime, pytz
+            et    = pytz.timezone("America/New_York")
+            today = datetime.datetime.now(et).strftime("%Y-%m-%d")
+            sched = _req.get("https://statsapi.mlb.com/api/v1/schedule",
+                params={"sportId":1,"date":today,"hydrate":"probablePitcher,team"}, timeout=8)
+            if not sched.ok: return {}
+            games = []
+            for d in sched.json().get("dates",[]): games.extend(d.get("games",[]))
+            _norm = lambda s: s.lower().replace("-"," ").replace(".","").strip()
+            _pn   = _norm(pitcher_name)
+            for game in games:
+                for side in ["home","away"]:
+                    prob  = game.get("teams",{}).get(side,{}).get("probablePitcher",{})
+                    pname = prob.get("fullName","") or prob.get("lastName","")
+                    if not pname: continue
+                    if _pn in _norm(pname) or _norm(pname) in _pn:
+                        home = game["teams"]["home"]["team"]["abbreviation"]
+                        away = game["teams"]["away"]["team"]["abbreviation"]
+                        opp  = away if side=="home" else home
+                        return {"opp":opp,"home_team":home,"away_team":away,
+                                "pitcher_side":side,"venue":game.get("venue",{}).get("name",""),"game_date":today}
+        except Exception: pass
+        return {}
 
+    def mlb_weighted_hr(logs, line, stat, side):
+        vals = pd.to_numeric(logs[stat], errors="coerce").dropna().reset_index(drop=True)
+        n = len(vals)
+        if n==0: return 0.0
+        weights=[n-i for i in range(n)]; tw=sum(weights)
+        hits=sum(w for v,w in zip(vals,weights) if (v>=line if side=="Over" else v<=line))
+        return hits/tw
+
+    def mlb_park_signal(home_team):
+        pf = _MLB_PARK_FACTORS.get(home_team,1.00)
+        if pf<=0.95: return "Boost"
+        elif pf>=1.06: return "Penalty"
+        return "Neutral"
+
+    def mlb_apply_adj(weighted, opp_k, park, side):
+        adj = weighted
+        if opp_k is not None:
+            if opp_k>=0.26:   adj += 0.06 if side=="Over" else -0.06
+            elif opp_k<=0.18: adj += -0.06 if side=="Over" else 0.06
+        adj += {"Boost":+0.04,"Neutral":0.0,"Penalty":-0.04}.get(park,0.0)*(1 if side=="Over" else -1)
+        return max(0.05,min(0.95,adj))
+
+    def mlb_verdict(adj, edge, side):
+        if side=="Over":
+            if adj>=0.64 and edge>=1.0: return "Strong Over"
+            if adj>=0.55 and edge>0:    return "Lean Over"
+        else:
+            if adj>=0.64 and edge<=-1.0: return "Strong Under"
+            if adj>=0.55 and edge<0:     return "Lean Under"
+        return "Pass"
+
+    # ── MLB UI ────────────────────────────────────────────────
+    st.markdown("<div class='section-header'>⚾ MLB Pitcher Prop Analyzer</div>", unsafe_allow_html=True)
+
+    _mlb_pitchers = sorted([
+        "Gerrit Cole","Zack Wheeler","Spencer Strider","Blake Snell",
+        "Corbin Burnes","Logan Webb","Pablo Lopez","Framber Valdez",
+        "Dylan Cease","Chris Sale","Sonny Gray","Max Fried",
+        "Shota Imanaga","Kevin Gausman","Tarik Skubal","Freddy Peralta",
+        "MacKenzie Gore","Bryce Miller","Hunter Brown","Yusei Kikuchi",
+        "Lucas Giolito","Shane Bieber","Sandy Alcantara","Max Scherzer",
+        "Justin Verlander","Zac Gallen","Merrill Kelly","Brandon Pfaadt",
+        "George Kirby","Luis Castillo","Chris Bassitt","Paul Skenes",
+        "Kodai Senga","Yoshinobu Yamamoto","Bobby Miller","Dustin May",
+    ])
+
+    _mc1,_mc2,_mc3,_mc4 = st.columns([2.5,1,1,1])
+    with _mc1:
+        mlb_pitcher = st.selectbox("Pitcher — type to search",
+            options=[""]+_mlb_pitchers,
+            format_func=lambda x:"— select a pitcher —" if x=="" else x,
+            key="mlb_pitcher_sel")
+    with _mc2:
+        mlb_prop = st.selectbox("Prop",["Strikeouts","Outs Recorded"],key="mlb_prop_type")
+    with _mc3:
+        mlb_line = st.number_input("Line",min_value=0.5,max_value=30.0,value=5.5,step=0.5,key="mlb_line")
+    with _mc4:
+        mlb_side = st.selectbox("Over / Under",["Over","Under"],key="mlb_side")
+
+    _tonight = mlb_get_tonight_game(mlb_pitcher) if mlb_pitcher else {}
+    mlb_opp  = _tonight.get("opp","")
+    mlb_home = _tonight.get("home_team","")
+
+    if mlb_pitcher and _tonight:
+        _od = f"vs {mlb_opp} · {_tonight.get('venue','')} · {'Home' if _tonight.get('pitcher_side')=='home' else 'Away'}"
+        st.markdown(f"<div style='background:#111;border:1px solid #1e2a3a;border-left:3px solid #3b82f6;"
+                    f"padding:0.5rem 1rem;margin-bottom:0.5rem;font-family:JetBrains Mono,monospace;"
+                    f"font-size:0.68rem;color:#3b82f6;'>🎯 TONIGHT: {_od}</div>",unsafe_allow_html=True)
+    elif mlb_pitcher:
+        st.markdown("<div style='background:#111;border:1px solid #1e2a3a;border-left:3px solid #555;"
+                    "padding:0.5rem 1rem;margin-bottom:0.5rem;font-family:JetBrains Mono,monospace;"
+                    "font-size:0.68rem;color:#555;'>⚠️ No game found for tonight — pitcher may not be starting</div>",
+                    unsafe_allow_html=True)
+
+    mlb_fetch = st.button("⚾  Analyze Pitcher Prop", key="mlb_analyze")
+
+    if not mlb_pitcher:
+        st.markdown("<div style='color:#555;font-family:JetBrains Mono,monospace;font-size:0.75rem;"
+                    "margin-top:0.5rem;'>↑ Select a pitcher to get started.</div>",unsafe_allow_html=True)
+
+    if mlb_fetch and mlb_pitcher:
+        _stat = "K" if mlb_prop=="Strikeouts" else "OUTS"
+        _lbl  = "K" if mlb_prop=="Strikeouts" else "Outs"
+        with st.spinner(f"Fetching {mlb_pitcher} game logs..."):
+            mlb_logs = mlb_get_pitcher_logs(mlb_pitcher, n=10)
+        if mlb_logs.empty:
+            st.error("Could not fetch pitcher data. Check the name and try again.")
+        else:
+            vals    = pd.to_numeric(mlb_logs[_stat],errors="coerce").dropna()
+            avg_val = vals.mean(); edge = avg_val-mlb_line
+            whr     = mlb_weighted_hr(mlb_logs,mlb_line,_stat,mlb_side)
+            okpct   = mlb_get_opp_k_rate(mlb_opp) if mlb_opp else None
+            psig    = mlb_park_signal(mlb_home) if mlb_home else "Neutral"
+            adj     = mlb_apply_adj(whr,okpct,psig,mlb_side)
+            tier    = mlb_verdict(adj,edge,mlb_side)
+            cv      = vals.std()/avg_val if avg_val>0 else 1.0
+            cons    = max(0.1,min(0.95,1.0-cv*0.8))
+            _sc     = min(99,int(max(0,min((adj-0.50)/0.45,1.0)*65)+min(abs(edge)/7.0,1.0)*25+cons*10))
+            _cc     = "#3b82f6" if _sc>=80 else ("#eab308" if _sc>=65 else "#f97316")
+            css     = {"Strong Over":"green","Lean Over":"yellow","Strong Under":"red","Lean Under":"orange","Pass":"gray"}.get(tier,"gray")
+
+            st.markdown("<div class='section-header'>Key Stats</div>",unsafe_allow_html=True)
+            _c1,_c2,_c3,_c4 = st.columns(4)
+            with _c1:
+                _ac="green" if (edge>0 and mlb_side=="Over") or (edge<0 and mlb_side=="Under") else "red"
+                st.markdown(f"<div class='stat-card'><div class='stat-label'>Avg {_lbl} (L{len(vals)})</div>"
+                            f"<div class='stat-value {_ac}'>{avg_val:.1f}</div>"
+                            f"<div class='stat-hint'>Line {mlb_line} · edge {edge:+.1f}</div></div>",unsafe_allow_html=True)
+            with _c2:
+                hc="green" if whr>=0.64 else ("yellow" if whr>=0.55 else "red")
+                st.markdown(f"<div class='stat-card'><div class='stat-label'>Hit Rate</div>"
+                            f"<div class='stat-value {hc}'>{whr:.0%}</div>"
+                            f"<div class='stat-hint'>Weighted L10</div></div>",unsafe_allow_html=True)
+            with _c3:
+                cc2="green" if cons>=0.5 else ("yellow" if cons>=0.35 else "red")
+                st.markdown(f"<div class='stat-card'><div class='stat-label'>Consistency</div>"
+                            f"<div class='stat-value {cc2}'>{cons:.0%}</div>"
+                            f"<div class='stat-hint'>Start variance</div></div>",unsafe_allow_html=True)
+            with _c4:
+                st.markdown(f"<div class='stat-card'><div class='stat-label'>Confidence</div>"
+                            f"<div class='stat-value' style='color:{_cc};'>{_sc}</div>"
+                            f"<div class='stat-hint'>{psig} park · {'K%:'+f'{okpct:.0%}' if okpct else 'K%: N/A'}</div></div>",unsafe_allow_html=True)
+
+            st.markdown("<div class='section-header'>Last 10 Starts</div>",unsafe_allow_html=True)
+            _d = mlb_logs.copy()
+            _d["HIT"] = _d[_stat].apply(lambda x:"✅" if (mlb_side=="Over" and float(x)>=mlb_line) or (mlb_side=="Under" and float(x)<=mlb_line) else "❌")
+            _d["DATE"] = _d["DATE"].dt.strftime("%b %d")
+            st.dataframe(_d[["DATE","OPP","IP","K","OUTS","BB","ER","HIT"]],use_container_width=True,hide_index=True)
+
+            tier_emoji={"Strong Over":"🟢","Lean Over":"🟡","Strong Under":"🔴","Lean Under":"🟠","Pass":"⚪"}
+            _cl="Predictable" if cons>=0.5 else ("Variable" if cons>=0.35 else "Volatile")
+            st.markdown("<div class='section-header'>Verdict</div>",unsafe_allow_html=True)
+            st.markdown(
+                f"<div class='verdict-banner {css}'>"
+                f"<div><div class='verdict-label'>{mlb_pitcher} · {mlb_line} {_lbl} · {mlb_side}</div>"
+                f"<div class='verdict-tier {css}'>{tier_emoji.get(tier,'⚪')} {tier}</div></div>"
+                f"<div style='display:flex;gap:2rem;flex-wrap:wrap;align-items:flex-start;'>"
+                f"<div><div class='verdict-label'>Confidence</div>"
+                f"<div style='font-family:Barlow Condensed,sans-serif;font-size:1.8rem;font-weight:900;color:{_cc};'>{_sc}</div>"
+                f"<div style='font-family:JetBrains Mono,monospace;font-size:0.55rem;color:#555;'>/100</div></div>"
+                f"<div><div class='verdict-label'>Adjusted HR</div><div style='font-size:1.4rem;font-weight:800;color:#f0f0f0;'>{adj:.0%}</div></div>"
+                f"<div><div class='verdict-label'>Edge</div><div style='font-size:1.4rem;font-weight:800;color:#f0f0f0;'>{edge:+.1f}</div></div>"
+                f"<div><div class='verdict-label'>Consistency</div><div style='font-size:1.4rem;font-weight:800;color:#f0f0f0;'>{cons:.0%}</div>"
+                f"<div style='font-family:JetBrains Mono,monospace;font-size:0.6rem;color:#555;'>{_cl}</div></div>"
+                f"</div></div>",unsafe_allow_html=True)
+
+    st.stop()
 
 
 # ── NBA Mode guard — stop here if MLB or Soccer selected ─────
