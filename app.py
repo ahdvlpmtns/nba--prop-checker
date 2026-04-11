@@ -29,29 +29,29 @@ st.markdown("""
 @import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800;900&family=Barlow:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap');
 
 /* ══════════════════════════════════════════
-   V4.0 — PropLens · Broadcast Data Terminal
-   Sharp · Editorial · High-Contrast
+   V4.5 — PropLens · Broadcast Data Terminal
+   Electric Blue · Multi-Sport · Sharp
 ══════════════════════════════════════════ */
 
 :root {
-    /* Core palette — two-tone system */
+    /* Core palette */
     --bg:       #0a0a0a;
     --bg2:      #111111;
     --bg3:      #181818;
     --bg4:      #202020;
-    --border:   #2a2a2a;
-    --border2:  #333333;
+    --border:   #1e2a3a;
+    --border2:  #253548;
 
-    /* Electric accent — neon lime on near-black */
-    --accent:   #a3e635;
-    --accent2:  #84cc16;
-    --accent3:  #bef264;
+    /* Electric blue accent */
+    --accent:   #3b82f6;
+    --accent2:  #2563eb;
+    --accent3:  #60a5fa;
 
     /* Signal colors */
     --green:    #00e676;
     --red:      #ff3d57;
     --yellow:   #ffd600;
-    --blue:     #2979ff;
+    --blue:     #3b82f6;
     --orange:   #ff6d00;
 
     /* Typography */
@@ -127,11 +127,10 @@ html, body, [class*="css"] {
 }
 .pl-logo-wrap { display: flex; align-items: center; gap: 14px; padding-left: 8px; }
 .pl-icon {
-    width: 36px; height: 36px;
-    background: var(--accent);
+    width: 52px; height: 44px;
+    background: transparent;
     display: flex; align-items: center; justify-content: center;
     flex-shrink: 0;
-    clip-path: polygon(0 0, 85% 0, 100% 15%, 100% 100%, 15% 100%, 0 85%);
 }
 .pl-logo {
     font-family: var(--font-display) !important;
@@ -143,7 +142,7 @@ html, body, [class*="css"] {
     background: none !important;
     -webkit-background-clip: unset !important;
 }
-.pl-logo span { color: var(--accent); }
+.pl-logo span { color: var(--accent); letter-spacing: -1px; }
 .pl-sub {
     font-family: var(--font-mono) !important;
     font-size: 0.52rem; color: var(--text3);
@@ -152,12 +151,13 @@ html, body, [class*="css"] {
 .pl-badge {
     font-family: var(--font-mono) !important;
     font-size: 0.6rem;
-    background: var(--accent);
-    color: #0a0a0a;
+    background: transparent;
+    color: var(--accent);
     font-weight: 700;
     padding: 3px 10px;
     letter-spacing: 0.12em;
     text-transform: uppercase;
+    border: 1px solid var(--accent);
 }
 
 /* ── Ticker line below header ── */
@@ -364,7 +364,7 @@ html, body, [class*="css"] {
 /* ── Buttons ── */
 .stButton > button {
     background: var(--accent) !important;
-    color: #0a0a0a !important;
+    color: #ffffff !important;
     border: none !important;
     border-radius: 0 !important;
     font-family: var(--font-display) !important;
@@ -2780,7 +2780,7 @@ def get_playoff_picture(team_abbr: str) -> dict:
             if eliminated:
                 return {"status":"eliminated","label":"🔴 Eliminated","color":"#ef4444","seed":seed,"wins":int(wins),"losses":int(losses),"gb":gb}
             elif clinched and seed <= 2:
-                return {"status":"locked","label":f"🏆 #{seed} Seed Locked","color":"#a3e635","seed":seed,"wins":int(wins),"losses":int(losses),"gb":gb}
+                return {"status":"locked","label":f"🏆 #{seed} Seed Locked","color":"#3b82f6","seed":seed,"wins":int(wins),"losses":int(losses),"gb":gb}
             elif clinched:
                 return {"status":"clinched","label":f"✅ Clinched (#{seed})","color":"#22c55e","seed":seed,"wins":int(wins),"losses":int(losses),"gb":gb}
             elif seed <= 6:
@@ -3016,9 +3016,26 @@ st.markdown("""
 <div class="pl-header">
     <div class="pl-logo-wrap">
         <div class="pl-icon">
-            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-                <path d="M3 10 L10 2 L17 10 L10 18 Z" fill="#0a0a0a" stroke="#0a0a0a"/>
-                <text x="5.5" y="14" font-family="Arial Black" font-size="10" font-weight="900" fill="#0a0a0a">P</text>
+            <svg width="44" height="38" viewBox="0 0 44 38" fill="none">
+                <!-- Left bars (NBA) -->
+                <rect x="0" y="26" width="5" height="8" fill="#1e40af" rx="0.5"/>
+                <rect x="6" y="20" width="5" height="14" fill="#1d4ed8" rx="0.5"/>
+                <rect x="12" y="13" width="5" height="21" fill="#2563eb" rx="0.5"/>
+                <rect x="18" y="7" width="5" height="27" fill="#3b82f6" rx="0.5"/>
+                <!-- Divider -->
+                <rect x="25" y="16" width="2" height="18" fill="#1e2a3a" rx="0.5"/>
+                <!-- Right bars (MLB) -->
+                <rect x="29" y="7" width="5" height="27" fill="#3b82f6" rx="0.5"/>
+                <rect x="35" y="13" width="5" height="21" fill="#2563eb" rx="0.5"/>
+                <!-- Basketball on left peak -->
+                <circle cx="20" cy="5" r="5" fill="#ea580c"/>
+                <path d="M15 5 Q20 2 25 5" fill="none" stroke="#7c2d12" stroke-width="0.8"/>
+                <path d="M15 5 Q20 8 25 5" fill="none" stroke="#7c2d12" stroke-width="0.8"/>
+                <line x1="20" y1="0" x2="20" y2="10" stroke="#7c2d12" stroke-width="0.8"/>
+                <!-- Baseball on right peak -->
+                <circle cx="31" cy="5" r="5" fill="#f1f5f9"/>
+                <path d="M27 3.5 Q29 5 27 7" fill="none" stroke="#ef4444" stroke-width="0.8" stroke-linecap="round"/>
+                <path d="M34 3.5 Q32 5 34 7" fill="none" stroke="#ef4444" stroke-width="0.8" stroke-linecap="round"/>
             </svg>
         </div>
         <div>
@@ -3027,7 +3044,7 @@ st.markdown("""
         </div>
     </div>
     <div style="display:flex; align-items:center; gap:10px;">
-        <span class="pl-badge">V4.0</span>
+        <span class="pl-badge">V4.5</span>
     </div>
 </div>
 <div class="pl-ticker">
@@ -3070,8 +3087,8 @@ st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
 
 with st.sidebar:
     st.markdown("""
-    <div style='padding:0.5rem 0 1rem 0; border-bottom:2px solid #a3e635; margin-bottom:1rem;'>
-        <div style='font-family:Barlow Condensed,sans-serif; font-size:1.3rem; font-weight:900; color:#f0f0f0; letter-spacing:-0.5px; text-transform:uppercase; margin-bottom:2px;'>Prop<span style="color:#a3e635;">Lens</span></div>
+    <div style='padding:0.5rem 0 1rem 0; border-bottom:2px solid #3b82f6; margin-bottom:1rem;'>
+        <div style='font-family:Barlow Condensed,sans-serif; font-size:1.3rem; font-weight:900; color:#f0f0f0; letter-spacing:-0.5px; text-transform:uppercase; margin-bottom:2px;'>Prop<span style="color:#3b82f6;">Lens</span></div>
         <div style='font-family:JetBrains Mono,monospace; font-size:0.55rem; color:#555; letter-spacing:0.18em; text-transform:uppercase;'>Sports Prop Analyzer</div>
     </div>
     """, unsafe_allow_html=True)
@@ -3562,7 +3579,7 @@ if _mode == "🎯  Slate Scanner":
                 _ec   = "#22c55e" if _r["Edge"] > 0 else "#ef4444"
                 _conf = _r.get("_conf", 0)
                 # Confidence color
-                _cc   = "#a3e635" if _conf >= 80 else ("#eab308" if _conf >= 65 else "#f97316")
+                _cc   = "#3b82f6" if _conf >= 80 else ("#eab308" if _conf >= 65 else "#f97316")
 
                 _card_col, _btn_col = st.columns([5, 1])
                 with _card_col:
@@ -3573,7 +3590,7 @@ if _mode == "🎯  Slate Scanner":
                             <div style='display:flex;align-items:center;gap:8px;'>
                                 <div style='font-size:1.1rem;font-weight:800;color:#f1f5f9;'>{_r["Player"]}</div>
                                 <div style='font-family:JetBrains Mono,monospace;font-size:0.65rem;
-                                            color:#a3e635;background:#111;border:1px solid #2a2a2a;
+                                            color:#3b82f6;background:#111;border:1px solid #2a2a2a;
                                             padding:1px 7px;letter-spacing:0.08em;'>
                                     {_r.get("_team","?")}</div>
                                 <div style='font-family:JetBrains Mono,monospace;font-size:0.65rem;color:#555;'>
@@ -4371,10 +4388,10 @@ if st.session_state.logs is not None:
         _bl_games_str = " · ".join(_blowout_games[:3])
         st.markdown(
             f"<div style='background:#0d0d1a;border:1px solid #2e2e5a;"
-            f"border-left:3px solid #a3e635;"
+            f"border-left:3px solid #3b82f6;"
             f"padding:0.6rem 0.9rem;margin-bottom:0.4rem;'>"
             f"<span style='font-family:JetBrains Mono,monospace;font-size:0.6rem;"
-            f"color:#a3e635;font-weight:700;letter-spacing:0.1em;'>"
+            f"color:#3b82f6;font-weight:700;letter-spacing:0.1em;'>"
             f"BLOWOUT FILTER ACTIVE</span>"
             f"<span style='font-family:JetBrains Mono,monospace;font-size:0.6rem;"
             f"color:#555;'> · {_blowout_count} game{'s' if _blowout_count > 1 else ''} "
