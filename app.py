@@ -132,6 +132,36 @@ html, body, [class*="css"] {
     display: flex; align-items: center; justify-content: center;
     flex-shrink: 0;
 }
+/* ── Logo animations ── */
+@keyframes barGrow {
+    0%   { transform: scaleY(0); }
+    60%  { transform: scaleY(1.08); }
+    100% { transform: scaleY(1); }
+}
+@keyframes ballBounce {
+    0%   { transform: translateY(0px); }
+    20%  { transform: translateY(-8px); }
+    35%  { transform: translateY(0px); }
+    50%  { transform: translateY(-4px); }
+    65%  { transform: translateY(0px); }
+    80%  { transform: translateY(-2px); }
+    100% { transform: translateY(0px); }
+}
+@keyframes scanLogo {
+    0%   { transform: translateX(-52px); opacity:0; }
+    15%  { opacity:0.7; }
+    85%  { opacity:0.7; }
+    100% { transform: translateX(52px);  opacity:0; }
+}
+.pl-bar { transform-origin: bottom; animation: barGrow 0.5s cubic-bezier(0.34,1.56,0.64,1) both; }
+.pl-bar-1 { animation-delay:0.05s; } .pl-bar-2 { animation-delay:0.10s; }
+.pl-bar-3 { animation-delay:0.15s; } .pl-bar-4 { animation-delay:0.20s; }
+.pl-bar-5 { animation-delay:0.25s; } .pl-bar-6 { animation-delay:0.30s; }
+.pl-bar-7 { animation-delay:0.35s; }
+.pl-bball { animation: ballBounce 1.0s cubic-bezier(0.36,0.07,0.19,0.97) 0.25s both; }
+.pl-bbase { animation: ballBounce 1.0s cubic-bezier(0.36,0.07,0.19,0.97) 0.40s both; }
+.pl-scan  { animation: scanLogo 1.6s ease-in-out 0.1s both; }
+
 .pl-logo {
     font-family: var(--font-display) !important;
     font-size: 2rem; font-weight: 900; letter-spacing: -1px;
@@ -3052,27 +3082,34 @@ if st.session_state.get("prewarm_date") != _cache_date():
 st.markdown("""
 <div class="pl-header">
     <div class="pl-logo-wrap">
-        <div class="pl-icon">
-            <svg width="44" height="38" viewBox="0 0 44 38" fill="none">
-                <!-- Left bars (NBA) -->
-                <rect x="0" y="26" width="5" height="8" fill="#1e40af" rx="0.5"/>
-                <rect x="6" y="20" width="5" height="14" fill="#1d4ed8" rx="0.5"/>
-                <rect x="12" y="13" width="5" height="21" fill="#2563eb" rx="0.5"/>
-                <rect x="18" y="7" width="5" height="27" fill="#3b82f6" rx="0.5"/>
+        <div class="pl-icon" style="position:relative;overflow:hidden;width:52px;height:44px;">
+            <svg width="52" height="44" viewBox="0 0 52 44" fill="none" style="display:block;">
+                <!-- Left bars growing up -->
+                <rect class="pl-bar pl-bar-1" x="0"  y="30" width="6" height="10" fill="#1e40af" rx="0.5"/>
+                <rect class="pl-bar pl-bar-2" x="7"  y="22" width="6" height="18" fill="#1d4ed8" rx="0.5"/>
+                <rect class="pl-bar pl-bar-3" x="14" y="14" width="6" height="26" fill="#2563eb" rx="0.5"/>
+                <rect class="pl-bar pl-bar-4" x="21" y="8"  width="6" height="32" fill="#3b82f6" rx="0.5"/>
                 <!-- Divider -->
-                <rect x="25" y="16" width="2" height="18" fill="#1e2a3a" rx="0.5"/>
-                <!-- Right bars (MLB) -->
-                <rect x="29" y="7" width="5" height="27" fill="#3b82f6" rx="0.5"/>
-                <rect x="35" y="13" width="5" height="21" fill="#2563eb" rx="0.5"/>
-                <!-- Basketball on left peak -->
-                <circle cx="20" cy="5" r="5" fill="#ea580c"/>
-                <path d="M15 5 Q20 2 25 5" fill="none" stroke="#7c2d12" stroke-width="0.8"/>
-                <path d="M15 5 Q20 8 25 5" fill="none" stroke="#7c2d12" stroke-width="0.8"/>
-                <line x1="20" y1="0" x2="20" y2="10" stroke="#7c2d12" stroke-width="0.8"/>
-                <!-- Baseball on right peak -->
-                <circle cx="31" cy="5" r="5" fill="#f1f5f9"/>
-                <path d="M27 3.5 Q29 5 27 7" fill="none" stroke="#ef4444" stroke-width="0.8" stroke-linecap="round"/>
-                <path d="M34 3.5 Q32 5 34 7" fill="none" stroke="#ef4444" stroke-width="0.8" stroke-linecap="round"/>
+                <rect x="29" y="16" width="2" height="24" fill="#1e2a3a" rx="0.5"/>
+                <!-- Right bars growing up -->
+                <rect class="pl-bar pl-bar-5" x="33" y="8"  width="6" height="32" fill="#3b82f6" rx="0.5"/>
+                <rect class="pl-bar pl-bar-6" x="40" y="14" width="6" height="26" fill="#2563eb" rx="0.5"/>
+                <rect class="pl-bar pl-bar-7" x="47" y="22" width="5" height="18" fill="#1d4ed8" rx="0.5"/>
+                <!-- Basketball bouncing on left peak -->
+                <g class="pl-bball">
+                    <circle cx="24" cy="6" r="6" fill="#ea580c"/>
+                    <path d="M18 6 Q24 3 30 6" fill="none" stroke="#7c2d12" stroke-width="0.9"/>
+                    <path d="M18 6 Q24 9 30 6" fill="none" stroke="#7c2d12" stroke-width="0.9"/>
+                    <line x1="24" y1="0" x2="24" y2="12" stroke="#7c2d12" stroke-width="0.9"/>
+                </g>
+                <!-- Baseball bouncing on right peak -->
+                <g class="pl-bbase">
+                    <circle cx="36" cy="6" r="5" fill="#f1f5f9"/>
+                    <path d="M32 4 Q34 6 32 8"  fill="none" stroke="#ef4444" stroke-width="0.9" stroke-linecap="round"/>
+                    <path d="M40 4 Q38 6 40 8"  fill="none" stroke="#ef4444" stroke-width="0.9" stroke-linecap="round"/>
+                </g>
+                <!-- Scan line sweeping across -->
+                <rect class="pl-scan" x="0" y="0" width="3" height="44" fill="#3b82f6" opacity="0.5" rx="1"/>
             </svg>
         </div>
         <div>
