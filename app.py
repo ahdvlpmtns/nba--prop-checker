@@ -4118,17 +4118,18 @@ if _mode == "🎯  Slate Scanner":
         st.session_state.scanner_inj_skipped = 0
         with st.spinner(f"Fetching PrizePicks slate for {_day_sel}..."):
             try:
-                import pytz as _pytz
-                _et      = _pytz.timezone("America/New_York")
-                _today   = datetime.now(_et).date()
-                _tgt     = _today + timedelta(days=1) if _day_sel == "Tomorrow" else _today
-                _tgt_str = _tgt.strftime("%Y-%m-%d")
+                # PrizePicks live board — always reflects current props
+                # Note: "Tomorrow" just shows the same live board since PP doesn't
+                # publish future lines until the day-of
                 _r = requests.get(
                     "https://api.prizepicks.com/projections",
-                    params={"league_id": 7, "per_page": 250, "single_stat": "true",
-                            "game_date": _tgt_str},
-                    headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json",
-                             "Referer": "https://prizepicks.com/"},
+                    params={"league_id": 7, "per_page": 250, "single_stat": "true"},
+                    headers={
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                        "Accept": "application/json",
+                        "Referer": "https://prizepicks.com/",
+                        "X-Device-ID": "propslens-scanner",
+                    },
                     timeout=15
                 )
                 _data = _r.json()
@@ -4154,7 +4155,10 @@ if _mode == "🎯  Slate Scanner":
                         return ("AST", "AST")
                     return (None, None)
 
-                _slate = []
+                # Deduplicate by player+stat — keep standard line only
+                # PrizePicks tiers: "standard" = normal, "demon" = harder, "goblin" = easier
+                # We want standard only — goblins/demons skew our analysis
+                _slate_raw = {}
                 for _proj in _data.get("data", []):
                     _a     = _proj.get("attributes", {})
                     _stype = _a.get("stat_type", "")
@@ -4166,16 +4170,36 @@ if _mode == "🎯  Slate Scanner":
                     _ln = _a.get("line_score")
                     if not _ln:
                         continue
+                    _odds_type = _a.get("odds_type", "standard").lower()
                     _pid = _proj.get("relationships", {}).get("new_player", {}).get("data", {}).get("id")
                     _pi  = _pmap.get(_pid, {})
-                    if _pi.get("name"):
-                        _slate.append({
-                            "player_name": _pi["name"],
+                    _pname = _pi.get("name", "")
+                    if not _pname:
+                        continue
+                    _key = f"{_pname}_{_col}"
+                    # Prefer standard, then normal, then anything else
+                    _existing = _slate_raw.get(_key)
+                    if _existing is None:
+                        _slate_raw[_key] = {
+                            "player_name": _pname,
                             "line":        float(_ln),
                             "team":        _pi.get("team", ""),
                             "stat":        _col,
                             "stat_label":  _short,
-                        })
+                            "odds_type":   _odds_type,
+                        }
+                    elif _existing["odds_type"] != "standard" and _odds_type == "standard":
+                        # Upgrade to standard if we find it
+                        _slate_raw[_key] = {
+                            "player_name": _pname,
+                            "line":        float(_ln),
+                            "team":        _pi.get("team", ""),
+                            "stat":        _col,
+                            "stat_label":  _short,
+                            "odds_type":   _odds_type,
+                        }
+
+                _slate = list(_slate_raw.values())
             except Exception as _e:
                 _slate = []
                 st.session_state.scanner_error = f"Could not fetch PrizePicks slate: {_e}"
