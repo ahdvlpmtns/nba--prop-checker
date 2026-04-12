@@ -155,30 +155,7 @@ html, body, [class*="css"] {
 }
 .pl-bar { transform-origin: bottom; animation: barGrow 0.5s cubic-bezier(0.34,1.56,0.64,1) both; }
 
-/* ── Logo text typeout ── */
-@keyframes letterIn {
-    from { opacity:0; transform:translateY(4px); }
-    to   { opacity:1; transform:translateY(0); }
-}
-@keyframes cursorBlink {
-    0%,100% { opacity:1; } 50% { opacity:0; }
-}
-@keyframes cursorFade {
-    0%,90% { opacity:1; } 100% { opacity:0; }
-}
-.pl-type-letter {
-    display: inline-block;
-    opacity: 0;
-    animation: letterIn 0.08s ease forwards;
-}
-.pl-type-cursor {
-    display: inline-block;
-    width: 2px; height: 1.5rem;
-    background: var(--accent);
-    margin-left: 1px;
-    vertical-align: middle;
-    animation: cursorBlink 0.45s step-end 0s 6, cursorFade 0.2s linear 2.8s forwards;
-}
+
 .pl-bar-1 { animation-delay:0.05s; } .pl-bar-2 { animation-delay:0.10s; }
 .pl-bar-3 { animation-delay:0.15s; } .pl-bar-4 { animation-delay:0.20s; }
 .pl-bar-5 { animation-delay:0.25s; } .pl-bar-6 { animation-delay:0.30s; }
@@ -3138,7 +3115,7 @@ st.markdown("""
             </svg>
         </div>
         <div>
-            <div class="pl-logo" style="display:inline-flex;align-items:baseline;"><span class="pl-type-letter" style="animation-delay:0.50s">P</span><span class="pl-type-letter" style="animation-delay:0.58s">r</span><span class="pl-type-letter" style="animation-delay:0.66s">o</span><span class="pl-type-letter" style="animation-delay:0.74s">p</span><span class="pl-type-letter" style="color:var(--accent);animation-delay:0.85s">L</span><span class="pl-type-letter" style="color:var(--accent);animation-delay:0.93s">e</span><span class="pl-type-letter" style="color:var(--accent);animation-delay:1.01s">n</span><span class="pl-type-letter" style="color:var(--accent);animation-delay:1.09s">s</span><span class="pl-type-cursor"></span></div>
+            <div class="pl-logo">Prop<span>Lens</span></div>
             <div class="pl-sub">Sports Prop Analyzer · AI-Powered</div>
         </div>
     </div>
