@@ -4171,14 +4171,15 @@ if _mode == "🎯  Slate Scanner":
                     })
                 st.session_state["pp_debug_sample"] = _raw_sample
 
-                # Deduplicate by player+stat — keep the HIGHEST line
-                # PrizePicks goblin = lower line (easier), demon = higher line (harder)
-                # Standard = the real middle line we want to analyze
-                # Strategy: collect all lines per player+stat, take the median/middle one
-                # If only 1-2 lines exist, take the highest (avoids goblin)
-                _slate_all = {}
+                # Filter to "normal" odds_type only — that is PrizePicks standard line
+                # odds_type values: "normal" = standard, "demon" = harder, "goblin" = easier
+                _slate_seen = set()
+                _slate = []
                 for _proj in _data.get("data", []):
-                    _a     = _proj.get("attributes", {})
+                    _a         = _proj.get("attributes", {})
+                    _odds_type = _a.get("odds_type", "").lower()
+                    if _odds_type != "normal":
+                        continue
                     _stype = _a.get("stat_type", "")
                     _col, _short = _classify_stat(_stype)
                     if not _col:
@@ -4194,35 +4195,15 @@ if _mode == "🎯  Slate Scanner":
                     if not _pname:
                         continue
                     _key = f"{_pname}_{_col}"
-                    if _key not in _slate_all:
-                        _slate_all[_key] = {
-                            "player_name": _pname,
-                            "team":        _pi.get("team", ""),
-                            "stat":        _col,
-                            "stat_label":  _short,
-                            "lines":       [],
-                        }
-                    _slate_all[_key]["lines"].append(float(_ln))
-
-                # Pick the standard line from all tiers
-                # PrizePicks tier order: goblin(s) < standard < demon(s)
-                # Standard = 2nd highest when 3+ tiers, highest when 1-2 tiers
-                _slate = []
-                for _key, _entry in _slate_all.items():
-                    _lines = sorted(set(_entry["lines"]))
-                    _n = len(_lines)
-                    if _n == 1:
-                        _std_line = _lines[0]       # only one — must be standard
-                    elif _n == 2:
-                        _std_line = _lines[-1]      # goblin + standard → take highest
-                    else:
-                        _std_line = _lines[-2]      # 2nd highest = standard
+                    if _key in _slate_seen:
+                        continue
+                    _slate_seen.add(_key)
                     _slate.append({
-                        "player_name": _entry["player_name"],
-                        "line":        _std_line,
-                        "team":        _entry["team"],
-                        "stat":        _entry["stat"],
-                        "stat_label":  _entry["stat_label"],
+                        "player_name": _pname,
+                        "line":        float(_ln),
+                        "team":        _pi.get("team", ""),
+                        "stat":        _col,
+                        "stat_label":  _short,
                     })
             except Exception as _e:
                 _slate = []
