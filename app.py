@@ -4087,30 +4087,26 @@ if _mode == "🎯  Slate Scanner":
         )
 
     # ── Stat types + injury filter row ──────────────────────────
-    _sf1, _sf2, _sf3 = st.columns([2, 1, 1])
+    _sf1, _sf2, _sf3, _sf4, _sf5, _sf6 = st.columns([1,1,1,1,1,1])
     with _sf1:
-        _stat_types_sel = st.multiselect(
-            "Stat types",
-            options=["PTS", "REB", "AST", "PRA"],
-            default=["PTS"],
-            key="scanner_stat_types",
-            label_visibility="collapsed",
-            help="Which prop types to include in the scan"
-        )
-        if not _stat_types_sel:
-            _stat_types_sel = ["PTS"]
+        _sel_pts = st.checkbox("PTS", value=True,  key="sel_pts")
     with _sf2:
-        _inj_filter = st.toggle(
-            "Skip injured", value=True, key="scanner_inj_filter",
-            help="Exclude players listed as Out or Doubtful"
-        )
+        _sel_reb = st.checkbox("REB", value=False, key="sel_reb")
     with _sf3:
-        _min_conf = st.selectbox(
-            "Min confidence", [0, 50, 60, 70, 80],
-            index=0, key="scanner_min_conf",
-            label_visibility="collapsed",
-            help="Minimum confidence score to show"
-        )
+        _sel_ast = st.checkbox("AST", value=False, key="sel_ast")
+    with _sf4:
+        _sel_pra = st.checkbox("PRA", value=False, key="sel_pra")
+    with _sf5:
+        _inj_filter = st.toggle("Skip injured", value=True, key="scanner_inj_filter")
+    with _sf6:
+        _min_conf = st.selectbox("Min conf", [0,50,60,70,80], index=0,
+                                  key="scanner_min_conf", label_visibility="collapsed")
+    _stat_types_sel = []
+    if _sel_pts: _stat_types_sel.append("PTS")
+    if _sel_reb: _stat_types_sel.append("REB")
+    if _sel_ast: _stat_types_sel.append("AST")
+    if _sel_pra: _stat_types_sel.append("PRA")
+    if not _stat_types_sel: _stat_types_sel = ["PTS"]
 
     if _run:
         st.session_state.scanner_results  = None
@@ -4155,36 +4151,18 @@ if _mode == "🎯  Slate Scanner":
                         return ("AST", "AST")
                     return (None, None)
 
-                # Debug — store raw sample to inspect field names
-                _raw_sample = []
-                for _proj in _data.get("data", [])[:5]:
-                    _a = _proj.get("attributes", {})
-                    _raw_sample.append({
-                        "stat_type":  _a.get("stat_type",""),
-                        "line_score": _a.get("line_score",""),
-                        "odds_type":  _a.get("odds_type",""),
-                        "rank":       _a.get("rank",""),
-                        "tier":       _a.get("tier",""),
-                        "projection_type": _a.get("projection_type",""),
-                        "flash_sale": _a.get("flash_sale_line_score",""),
-                        "all_keys":   sorted(_a.keys()),
-                    })
-                st.session_state["pp_debug_sample"] = _raw_sample
-
-                # Filter to "normal" odds_type only — that is PrizePicks standard line
-                # odds_type values: "normal" = standard, "demon" = harder, "goblin" = easier
+                # Build slate — normal lines only, deduplicated by player+stat
                 _slate_seen = set()
                 _slate = []
                 for _proj in _data.get("data", []):
                     _a         = _proj.get("attributes", {})
-                    _odds_type = _a.get("odds_type", "").lower()
-                    if _odds_type != "normal":
+                    # Skip demon and goblin tiers — only want normal/standard line
+                    _odds_type = _a.get("odds_type", "normal").lower()
+                    if _odds_type in ("demon", "goblin"):
                         continue
                     _stype = _a.get("stat_type", "")
                     _col, _short = _classify_stat(_stype)
-                    if not _col:
-                        continue
-                    if _col not in _stat_types_sel:
+                    if not _col or _col not in _stat_types_sel:
                         continue
                     _ln = _a.get("line_score")
                     if not _ln:
@@ -4344,12 +4322,6 @@ if _mode == "🎯  Slate Scanner":
 
     if st.session_state.scanner_error:
         st.error(st.session_state.scanner_error)
-
-    # Debug — show raw PrizePicks field structure
-    if st.session_state.get("pp_debug_sample"):
-        with st.expander("🛠️ Debug — PrizePicks raw fields"):
-            for _s in st.session_state["pp_debug_sample"]:
-                st.write(_s)
 
     if st.session_state.scanner_results is not None:
         _res = st.session_state.scanner_results
