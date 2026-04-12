@@ -2313,8 +2313,8 @@ def hit_rate(df: pd.DataFrame, line: float, side: str) -> float:
     hits = (pts >= line).sum() if side == "Over" else (pts <= line).sum()
     return float(hits / len(pts))
 
-def weighted_hit_rate(df: pd.DataFrame, line: float, side: str) -> float:
-    pts = pd.to_numeric(df["PTS"], errors="coerce").dropna().reset_index(drop=True)
+def weighted_hit_rate(df: pd.DataFrame, line: float, side: str, stat_col: str = "PTS") -> float:
+    pts = pd.to_numeric(df[stat_col], errors="coerce").dropna().reset_index(drop=True)
     n = len(pts)
     if n == 0:
         return 0.0
@@ -2326,7 +2326,7 @@ def weighted_hit_rate(df: pd.DataFrame, line: float, side: str) -> float:
         weighted_hits = sum(w for p, w in zip(pts, weights) if p <= line)
     return weighted_hits / total_weight
 
-def consistency_score(df: pd.DataFrame, line: float) -> float:
+def consistency_score(df: pd.DataFrame, line: float, stat_col: str = "PTS") -> float:
     """
     Measures how predictable a player is relative to their OWN average,
     scaled by their distance from the line.
@@ -2342,7 +2342,7 @@ def consistency_score(df: pd.DataFrame, line: float) -> float:
 
     Returns 0.0 (extremely volatile) to 1.0 (perfectly predictable).
     """
-    pts = pd.to_numeric(df["PTS"], errors="coerce").dropna()
+    pts = pd.to_numeric(df[stat_col], errors="coerce").dropna()
     if len(pts) == 0:
         return 0.5
 
@@ -4086,9 +4086,36 @@ if _mode == "🎯  Slate Scanner":
             key="scanner_filter", label_visibility="collapsed"
         )
 
+    # ── Stat types + injury filter row ──────────────────────────
+    _sf1, _sf2, _sf3 = st.columns([2, 1, 1])
+    with _sf1:
+        _stat_types_sel = st.multiselect(
+            "Stat types",
+            options=["PTS", "REB", "AST", "PRA"],
+            default=["PTS"],
+            key="scanner_stat_types",
+            label_visibility="collapsed",
+            help="Which prop types to include in the scan"
+        )
+        if not _stat_types_sel:
+            _stat_types_sel = ["PTS"]
+    with _sf2:
+        _inj_filter = st.toggle(
+            "Skip injured", value=True, key="scanner_inj_filter",
+            help="Exclude players listed as Out or Doubtful"
+        )
+    with _sf3:
+        _min_conf = st.selectbox(
+            "Min confidence", [0, 50, 60, 70, 80],
+            index=0, key="scanner_min_conf",
+            label_visibility="collapsed",
+            help="Minimum confidence score to show"
+        )
+
     if _run:
-        st.session_state.scanner_results = None
-        st.session_state.scanner_error   = None
+        st.session_state.scanner_results  = None
+        st.session_state.scanner_error    = None
+        st.session_state.scanner_inj_skipped = 0
         with st.spinner(f"Fetching PrizePicks slate for {_day_sel}..."):
             try:
                 import pytz as _pytz
@@ -4113,18 +4140,42 @@ if _mode == "🎯  Slate Scanner":
                             "name": _a.get("display_name", _a.get("name", "")),
                             "team": _a.get("team_abbreviation", ""),
                         }
+                # Stat type map — PrizePicks label → our log column
+                _STAT_MAP = {
+                    "points": ("PTS", "pts"), "pts": ("PTS", "pts"),
+                    "rebounds": ("REB", "reb"), "total rebounds": ("REB", "reb"),
+                    "assists": ("AST", "ast"),
+                    "pts+reb+ast": ("PRA", "pra"), "points+rebounds+assists": ("PRA", "pra"),
+                    "pra": ("PRA", "pra"),
+                }
+                # Active stat filter from UI
+                _active_stats = set()
+                for _k, _v in _STAT_MAP.items():
+                    if _v[0] in _stat_types_sel:
+                        _active_stats.add(_k)
+
                 _slate = []
                 for _proj in _data.get("data", []):
-                    _a = _proj.get("attributes", {})
-                    if _a.get("stat_type", "").lower() not in ("points", "pts"):
+                    _a     = _proj.get("attributes", {})
+                    _stype = _a.get("stat_type", "").lower().strip()
+                    if _stype not in _STAT_MAP:
+                        continue
+                    _col, _short = _STAT_MAP[_stype]
+                    if _col not in _stat_types_sel:
                         continue
                     _ln = _a.get("line_score")
                     if not _ln:
                         continue
-                    _pid  = _proj.get("relationships", {}).get("new_player", {}).get("data", {}).get("id")
-                    _pi   = _pmap.get(_pid, {})
+                    _pid = _proj.get("relationships", {}).get("new_player", {}).get("data", {}).get("id")
+                    _pi  = _pmap.get(_pid, {})
                     if _pi.get("name"):
-                        _slate.append({"player_name": _pi["name"], "line": float(_ln), "team": _pi.get("team", "")})
+                        _slate.append({
+                            "player_name": _pi["name"],
+                            "line":        float(_ln),
+                            "team":        _pi.get("team", ""),
+                            "stat":        _col,
+                            "stat_label":  _short.upper(),
+                        })
             except Exception as _e:
                 _slate = []
                 st.session_state.scanner_error = f"Could not fetch PrizePicks slate: {_e}"
@@ -4145,24 +4196,46 @@ if _mode == "🎯  Slate Scanner":
                     _nid, _fn = nba_find_player(_prop["player_name"])
                     if not _nid:
                         return None
+
+                    # ── Injury check — skip Out/Doubtful if filter enabled ──
+                    if _inj_filter:
+                        _inj_status, _ = get_player_injury_status(_fn)
+                        if _inj_status in ("Out", "Doubtful"):
+                            st.session_state["scanner_inj_skipped"] = st.session_state.get("scanner_inj_skipped", 0) + 1
+                            return None
+
                     _logs = nba_get_game_logs(_nid, _season, n=15, _date=_cache_date())
                     if _logs.empty:
                         return None
-                    _ln   = _prop["line"]
-                    _wb   = weighted_hit_rate(_logs, _ln, "Over")
-                    _avgp = pd.to_numeric(_logs["PTS"], errors="coerce").dropna().mean()
+
+                    _ln       = _prop["line"]
+                    _stat_col = _prop.get("stat", "PTS")
+                    _stat_lbl = _prop.get("stat_label", "PTS")
+
+                    # Build PRA column if needed
+                    if _stat_col == "PRA":
+                        _logs = _logs.copy()
+                        _logs["PRA"] = (
+                            pd.to_numeric(_logs.get("PTS", 0), errors="coerce").fillna(0) +
+                            pd.to_numeric(_logs.get("REB", 0), errors="coerce").fillna(0) +
+                            pd.to_numeric(_logs.get("AST", 0), errors="coerce").fillna(0)
+                        )
+
+                    if _stat_col not in _logs.columns:
+                        return None
+
+                    _wb   = weighted_hit_rate(_logs, _ln, "Over", stat_col=_stat_col)
+                    _avgp = pd.to_numeric(_logs[_stat_col], errors="coerce").dropna().mean()
                     _ld   = _avgp - _ln
 
-                    # ── Early exit: skip players with no clear edge ──
-                    # If weighted hit rate is 44-56% AND edge is within 1pt,
-                    # this prop will almost certainly be Pass — skip expensive calls
+                    # Early exit: dead zone
                     if 0.44 <= _wb <= 0.56 and abs(_ld) < 1.0:
                         return None
 
-                    _cons = consistency_score(_logs, _ln)
+                    _cons = consistency_score(_logs, _ln, stat_col=_stat_col)
                     _avgm = pd.to_numeric(_logs["MIN"], errors="coerce").dropna().mean()
-                    _avgf = pd.to_numeric(_logs["FGA"], errors="coerce").dropna().mean()
-                    _avgt = pd.to_numeric(_logs["FTA"], errors="coerce").dropna().mean()
+                    _avgf = pd.to_numeric(_logs.get("FGA", pd.Series()), errors="coerce").dropna().mean() if "FGA" in _logs.columns else 12
+                    _avgt = pd.to_numeric(_logs.get("FTA", pd.Series()), errors="coerce").dropna().mean() if "FTA" in _logs.columns else 3
                     _ep   = next((p for p in espn_get_all_players(_date=_cache_date())
                                   if normalize_name(p["full_name"]) == normalize_name(_fn)), None)
                     _team = _ep["team_abbr"] if _ep else None
@@ -4185,25 +4258,31 @@ if _mode == "🎯  Slate Scanner":
                     _adj  = apply_adjustments(_wb, _ctx, "Over")
                     _tier = get_confidence_tier(_adj, _ld, _cons, "Over")
 
-                    # ── Confidence score 0-100 ────────────────────────
-                    # Hit rate dominates (65pts) — 80%=36, 90%=57, 95%=65
                     _score_adj  = max(0, min((_adj - 0.50) / 0.45, 1.0) * 65)
-                    # Edge (25pts) — +3.5=12, +6=21, +7+=25
                     _score_edge = min(abs(_ld) / 7.0, 1.0) * 25
-                    # Consistency bonus (10pts) — rewards predictable players
                     _score_cons = _cons * 10
                     _conf_score = min(99, int(_score_adj + _score_edge + _score_cons))
 
                     return {
-                        "Player": _fn, "Line": _ln, "Avg PTS": round(_avgp, 1),
-                        "Edge": round(_ld, 1), "Weighted HR": f"{_wb:.0%}",
-                        "Adjusted": f"{_adj:.0%}", "Matchup": _mq,
-                        "B2B": _b2b, "Form": _fsig, "Venue": _ven or "?",
-                        "Tier": _tier, "_adj_raw": _adj,
-                        "_conf": _conf_score,
-                        "_nid": _nid, "_line": _ln,
-                        "_team": _norm_team_abbr(_team) if _team else "",
-                        "_opp":  _norm_team_abbr(_opp)  if _opp  else "",
+                        "Player":   _fn,
+                        "Line":     _ln,
+                        "Stat":     _stat_lbl,
+                        "Avg":      round(_avgp, 1),
+                        "Edge":     round(_ld, 1),
+                        "Weighted HR": f"{_wb:.0%}",
+                        "Adjusted": f"{_adj:.0%}",
+                        "Matchup":  _mq,
+                        "B2B":      _b2b,
+                        "Form":     _fsig,
+                        "Venue":    _ven or "?",
+                        "Tier":     _tier,
+                        "_adj_raw": _adj,
+                        "_conf":    _conf_score,
+                        "_nid":     _nid,
+                        "_line":    _ln,
+                        "_stat":    _stat_col,
+                        "_team":    _norm_team_abbr(_team) if _team else "",
+                        "_opp":     _norm_team_abbr(_opp)  if _opp  else "",
                     }
                 except Exception:
                     return None
@@ -4252,7 +4331,6 @@ if _mode == "🎯  Slate Scanner":
 
         # ── Apply filter ──────────────────────────────────────────────
         if _filter == "Strong Only":
-            # Strong Over only, 80%+ adjusted hit rate
             _show = [r for r in _deduped
                      if r["Tier"] == "Strong Over"
                      and r.get("_adj", 0) >= 0.80]
@@ -4261,8 +4339,38 @@ if _mode == "🎯  Slate Scanner":
         else:
             _show = _deduped
 
+        # Apply min confidence filter
+        if _min_conf > 0:
+            _show = [r for r in _show if r.get("_conf", 0) >= _min_conf]
+
         # Sort by confidence score descending
         _show = sorted(_show, key=lambda r: r.get("_conf", 0), reverse=True)
+
+        # ── Best bets badge ────────────────────────────────────────
+        _strong_count = len([r for r in _deduped if r["Tier"] == "Strong Over" and r.get("_adj",0) >= 0.80])
+        _inj_skipped  = st.session_state.get("scanner_inj_skipped", 0)
+        _slate_grade  = "🔥 HOT" if _strong_count >= 5 else ("✅ GOOD" if _strong_count >= 3 else ("⚠️ THIN" if _strong_count >= 1 else "❌ DEAD"))
+        _grade_color  = "#00e676" if _strong_count >= 5 else ("#3b82f6" if _strong_count >= 3 else ("#f97316" if _strong_count >= 1 else "#555"))
+        st.markdown(
+            f"<div style='display:flex;gap:1rem;align-items:center;margin-bottom:0.75rem;flex-wrap:wrap;'>"
+            f"<div style='background:#111;border:1px solid #1e2a3a;padding:0.4rem 1rem;"
+            f"font-family:JetBrains Mono,monospace;font-size:0.65rem;'>"
+            f"<span style='color:#555;'>SLATE </span>"
+            f"<span style='color:{_grade_color};font-weight:700;'>{_slate_grade}</span>"
+            f"</div>"
+            f"<div style='background:#111;border:1px solid #1e2a3a;padding:0.4rem 1rem;"
+            f"font-family:JetBrains Mono,monospace;font-size:0.65rem;'>"
+            f"<span style='color:#555;'>STRONG OVERS </span>"
+            f"<span style='color:#3b82f6;font-weight:700;'>{_strong_count}</span>"
+            f"</div>"
+            + (f"<div style='background:#111;border:1px solid #1e2a3a;padding:0.4rem 1rem;"
+               f"font-family:JetBrains Mono,monospace;font-size:0.65rem;'>"
+               f"<span style='color:#555;'>INJ SKIPPED </span>"
+               f"<span style='color:#f97316;font-weight:700;'>{_inj_skipped}</span>"
+               f"</div>" if _inj_skipped > 0 else "") +
+            f"</div>",
+            unsafe_allow_html=True
+        )
 
         _tc = {"Strong Over":"green","Lean Over":"yellow","Lean Under":"orange","Strong Under":"red","Pass":"gray"}
         _te = {"Strong Over":"🟢","Lean Over":"🟡","Lean Under":"🟠","Strong Under":"🔴","Pass":"⚪"}
@@ -4333,7 +4441,7 @@ if _mode == "🎯  Slate Scanner":
                     st.markdown(f"""
                     <div class='verdict-banner {_cs}' style='margin:0.4rem 0;padding:1rem 1.4rem;'>
                         <div>
-                            <div class='verdict-label'>{_r["Line"]} pts Over · PrizePicks</div>
+                            <div class='verdict-label'>{_r["Line"]} {_r.get("Stat","PTS")} Over · PrizePicks</div>
                             <div style='display:flex;align-items:center;gap:8px;'>
                                 <div style='font-size:1.1rem;font-weight:800;color:#f1f5f9;'>{_r["Player"]}</div>
                                 <div style='font-family:JetBrains Mono,monospace;font-size:0.65rem;
@@ -4358,8 +4466,8 @@ if _mode == "🎯  Slate Scanner":
                                  <div style='font-size:1rem;font-weight:700;color:#f1f5f9;'>{_r["Adjusted"]}</div></div>
                             <div><div class='verdict-label'>Edge</div>
                                  <div style='font-size:1rem;font-weight:700;color:{_ec};'>{_r["Edge"]:+.1f}</div></div>
-                            <div><div class='verdict-label'>Avg PTS</div>
-                                 <div style='font-size:1rem;font-weight:700;color:#f1f5f9;'>{_r["Avg PTS"]}</div></div>
+                            <div><div class='verdict-label'>Avg {_r.get("Stat","PTS")}</div>
+                                 <div style='font-size:1rem;font-weight:700;color:#f1f5f9;'>{_r.get("Avg", _r.get("Avg PTS","?"))}</div></div>
                         </div>
                     </div>""", unsafe_allow_html=True)
 
