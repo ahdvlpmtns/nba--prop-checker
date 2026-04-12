@@ -4140,27 +4140,27 @@ if _mode == "🎯  Slate Scanner":
                             "name": _a.get("display_name", _a.get("name", "")),
                             "team": _a.get("team_abbreviation", ""),
                         }
-                # Stat type map — PrizePicks label → our log column
-                _STAT_MAP = {
-                    "points": ("PTS", "pts"), "pts": ("PTS", "pts"),
-                    "rebounds": ("REB", "reb"), "total rebounds": ("REB", "reb"),
-                    "assists": ("AST", "ast"),
-                    "pts+reb+ast": ("PRA", "pra"), "points+rebounds+assists": ("PRA", "pra"),
-                    "pra": ("PRA", "pra"),
-                }
-                # Active stat filter from UI
-                _active_stats = set()
-                for _k, _v in _STAT_MAP.items():
-                    if _v[0] in _stat_types_sel:
-                        _active_stats.add(_k)
+                # Map any PrizePicks stat label → (our column, short label)
+                def _classify_stat(stype):
+                    s = stype.lower().strip()
+                    # PRA first — before points check to avoid "pts" matching PRA
+                    if any(x in s for x in ("pra", "pts+reb", "points+reb", "+reb+ast", "reb+ast")):
+                        return ("PRA", "PRA")
+                    if any(x in s for x in ("point", " pts")) or s == "pts":
+                        return ("PTS", "PTS")
+                    if any(x in s for x in ("rebound", " reb")) or s == "reb":
+                        return ("REB", "REB")
+                    if "assist" in s or s == "ast":
+                        return ("AST", "AST")
+                    return (None, None)
 
                 _slate = []
                 for _proj in _data.get("data", []):
                     _a     = _proj.get("attributes", {})
-                    _stype = _a.get("stat_type", "").lower().strip()
-                    if _stype not in _STAT_MAP:
+                    _stype = _a.get("stat_type", "")
+                    _col, _short = _classify_stat(_stype)
+                    if not _col:
                         continue
-                    _col, _short = _STAT_MAP[_stype]
                     if _col not in _stat_types_sel:
                         continue
                     _ln = _a.get("line_score")
@@ -4174,7 +4174,7 @@ if _mode == "🎯  Slate Scanner":
                             "line":        float(_ln),
                             "team":        _pi.get("team", ""),
                             "stat":        _col,
-                            "stat_label":  _short.upper(),
+                            "stat_label":  _short,
                         })
             except Exception as _e:
                 _slate = []
