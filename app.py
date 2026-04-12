@@ -4094,20 +4094,18 @@ if _mode == "🎯  Slate Scanner":
         st.session_state.scanner_results  = None
         st.session_state.scanner_error    = None
         st.session_state.scanner_inj_skipped = 0
-        with st.spinner(f"Fetching PrizePicks slate for {_day_sel}..."):
+        with st.spinner(f"Fetching PrizePicks slate..."):
             try:
-                # PrizePicks live board — always reflects current props
-                # Note: "Tomorrow" just shows the same live board since PP doesn't
-                # publish future lines until the day-of
+                import pytz as _pytz
+                _et      = _pytz.timezone("America/New_York")
+                _today   = datetime.now(_et).date()
+                _tgt_str = _today.strftime("%Y-%m-%d")
                 _r = requests.get(
                     "https://api.prizepicks.com/projections",
-                    params={"league_id": 7, "per_page": 250, "single_stat": "true"},
-                    headers={
-                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                        "Accept": "application/json",
-                        "Referer": "https://prizepicks.com/",
-                        "X-Device-ID": "propslens-scanner",
-                    },
+                    params={"league_id": 7, "per_page": 250, "single_stat": "true",
+                            "game_date": _tgt_str},
+                    headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json",
+                             "Referer": "https://prizepicks.com/"},
                     timeout=15
                 )
                 _data = _r.json()
@@ -4119,46 +4117,27 @@ if _mode == "🎯  Slate Scanner":
                             "name": _a.get("display_name", _a.get("name", "")),
                             "team": _a.get("team_abbreviation", ""),
                         }
-                # Build slate — collect all lines per player, then pick normal tier
-                # Group by player to find the normal/standard line
-                _player_lines = {}  # player -> list of (odds_type, line_score)
+                _slate = []
+                _seen  = set()
                 for _proj in _data.get("data", []):
-                    _a     = _proj.get("attributes", {})
-                    _stype = _a.get("stat_type", "").lower()
-                    if "point" not in _stype and _stype not in ("pts",):
+                    _a = _proj.get("attributes", {})
+                    if _a.get("stat_type", "").lower() not in ("points", "pts"):
+                        continue
+                    if _a.get("odds_type", "").lower() in ("demon", "goblin"):
                         continue
                     _ln = _a.get("line_score")
                     if not _ln:
                         continue
-                    _odds = _a.get("odds_type", "normal").lower()
                     _pid  = _proj.get("relationships", {}).get("new_player", {}).get("data", {}).get("id")
                     _pi   = _pmap.get(_pid, {})
                     _pname = _pi.get("name", "")
-                    if not _pname:
+                    if not _pname or _pname in _seen:
                         continue
-                    if _pname not in _player_lines:
-                        _player_lines[_pname] = {"team": _pi.get("team",""), "lines": []}
-                    _player_lines[_pname]["lines"].append((_odds, float(_ln)))
-
-                # Pick the right line per player:
-                # Prefer "normal", fallback to median of all lines
-                _slate = []
-                for _pname, _pdata in _player_lines.items():
-                    _lines = _pdata["lines"]
-                    # Try normal first
-                    _normal = [l for o, l in _lines if o == "normal"]
-                    if _normal:
-                        _chosen = _normal[0]
-                    else:
-                        # No normal found — take median (avoids goblin and demon extremes)
-                        _sorted = sorted(set(l for _, l in _lines))
-                        _chosen = _sorted[len(_sorted)//2]
+                    _seen.add(_pname)
                     _slate.append({
                         "player_name": _pname,
-                        "line":        _chosen,
-                        "team":        _pdata["team"],
-                        "stat":        "PTS",
-                        "stat_label":  "PTS",
+                        "line":        float(_ln),
+                        "team":        _pi.get("team", ""),
                     })
             except Exception as _e:
                 _slate = []
