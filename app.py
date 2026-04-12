@@ -4155,10 +4155,28 @@ if _mode == "🎯  Slate Scanner":
                         return ("AST", "AST")
                     return (None, None)
 
-                # Deduplicate by player+stat — keep standard line only
-                # PrizePicks tiers: "standard" = normal, "demon" = harder, "goblin" = easier
-                # We want standard only — goblins/demons skew our analysis
-                _slate_raw = {}
+                # Debug — store raw sample to inspect field names
+                _raw_sample = []
+                for _proj in _data.get("data", [])[:5]:
+                    _a = _proj.get("attributes", {})
+                    _raw_sample.append({
+                        "stat_type":  _a.get("stat_type",""),
+                        "line_score": _a.get("line_score",""),
+                        "odds_type":  _a.get("odds_type",""),
+                        "rank":       _a.get("rank",""),
+                        "tier":       _a.get("tier",""),
+                        "projection_type": _a.get("projection_type",""),
+                        "flash_sale": _a.get("flash_sale_line_score",""),
+                        "all_keys":   sorted(_a.keys()),
+                    })
+                st.session_state["pp_debug_sample"] = _raw_sample
+
+                # Deduplicate by player+stat — keep the HIGHEST line
+                # PrizePicks goblin = lower line (easier), demon = higher line (harder)
+                # Standard = the real middle line we want to analyze
+                # Strategy: collect all lines per player+stat, take the median/middle one
+                # If only 1-2 lines exist, take the highest (avoids goblin)
+                _slate_all = {}
                 for _proj in _data.get("data", []):
                     _a     = _proj.get("attributes", {})
                     _stype = _a.get("stat_type", "")
@@ -4170,36 +4188,42 @@ if _mode == "🎯  Slate Scanner":
                     _ln = _a.get("line_score")
                     if not _ln:
                         continue
-                    _odds_type = _a.get("odds_type", "standard").lower()
-                    _pid = _proj.get("relationships", {}).get("new_player", {}).get("data", {}).get("id")
-                    _pi  = _pmap.get(_pid, {})
+                    _pid   = _proj.get("relationships", {}).get("new_player", {}).get("data", {}).get("id")
+                    _pi    = _pmap.get(_pid, {})
                     _pname = _pi.get("name", "")
                     if not _pname:
                         continue
                     _key = f"{_pname}_{_col}"
-                    # Prefer standard, then normal, then anything else
-                    _existing = _slate_raw.get(_key)
-                    if _existing is None:
-                        _slate_raw[_key] = {
+                    if _key not in _slate_all:
+                        _slate_all[_key] = {
                             "player_name": _pname,
-                            "line":        float(_ln),
                             "team":        _pi.get("team", ""),
                             "stat":        _col,
                             "stat_label":  _short,
-                            "odds_type":   _odds_type,
+                            "lines":       [],
                         }
-                    elif _existing["odds_type"] != "standard" and _odds_type == "standard":
-                        # Upgrade to standard if we find it
-                        _slate_raw[_key] = {
-                            "player_name": _pname,
-                            "line":        float(_ln),
-                            "team":        _pi.get("team", ""),
-                            "stat":        _col,
-                            "stat_label":  _short,
-                            "odds_type":   _odds_type,
-                        }
+                    _slate_all[_key]["lines"].append(float(_ln))
 
-                _slate = list(_slate_raw.values())
+                # Pick the standard line from all tiers
+                # PrizePicks tier order: goblin(s) < standard < demon(s)
+                # Standard = 2nd highest when 3+ tiers, highest when 1-2 tiers
+                _slate = []
+                for _key, _entry in _slate_all.items():
+                    _lines = sorted(set(_entry["lines"]))
+                    _n = len(_lines)
+                    if _n == 1:
+                        _std_line = _lines[0]       # only one — must be standard
+                    elif _n == 2:
+                        _std_line = _lines[-1]      # goblin + standard → take highest
+                    else:
+                        _std_line = _lines[-2]      # 2nd highest = standard
+                    _slate.append({
+                        "player_name": _entry["player_name"],
+                        "line":        _std_line,
+                        "team":        _entry["team"],
+                        "stat":        _entry["stat"],
+                        "stat_label":  _entry["stat_label"],
+                    })
             except Exception as _e:
                 _slate = []
                 st.session_state.scanner_error = f"Could not fetch PrizePicks slate: {_e}"
@@ -4339,6 +4363,12 @@ if _mode == "🎯  Slate Scanner":
 
     if st.session_state.scanner_error:
         st.error(st.session_state.scanner_error)
+
+    # Debug — show raw PrizePicks field structure
+    if st.session_state.get("pp_debug_sample"):
+        with st.expander("🛠️ Debug — PrizePicks raw fields"):
+            for _s in st.session_state["pp_debug_sample"]:
+                st.write(_s)
 
     if st.session_state.scanner_results is not None:
         _res = st.session_state.scanner_results
