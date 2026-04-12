@@ -4119,51 +4119,46 @@ if _mode == "🎯  Slate Scanner":
                             "name": _a.get("display_name", _a.get("name", "")),
                             "team": _a.get("team_abbreviation", ""),
                         }
-                # Map any PrizePicks stat label → (our column, short label)
-                def _classify_stat(stype):
-                    s = stype.lower().strip()
-                    # PRA first — before points check to avoid "pts" matching PRA
-                    if any(x in s for x in ("pra", "pts+reb", "points+reb", "+reb+ast", "reb+ast")):
-                        return ("PRA", "PRA")
-                    if any(x in s for x in ("point", " pts")) or s == "pts":
-                        return ("PTS", "PTS")
-                    if any(x in s for x in ("rebound", " reb")) or s == "reb":
-                        return ("REB", "REB")
-                    if "assist" in s or s == "ast":
-                        return ("AST", "AST")
-                    return (None, None)
-
-                # Build slate — normal lines only, deduplicated by player+stat
-                _slate_seen = set()
-                _slate = []
+                # Build slate — collect all lines per player, then pick normal tier
+                # Group by player to find the normal/standard line
+                _player_lines = {}  # player -> list of (odds_type, line_score)
                 for _proj in _data.get("data", []):
-                    _a         = _proj.get("attributes", {})
-                    # Skip demon and goblin tiers — only want normal/standard line
-                    _odds_type = _a.get("odds_type", "normal").lower()
-                    if _odds_type in ("demon", "goblin"):
-                        continue
-                    _stype = _a.get("stat_type", "")
-                    _col, _short = _classify_stat(_stype)
-                    if not _col or _col not in _stat_types_sel:
+                    _a     = _proj.get("attributes", {})
+                    _stype = _a.get("stat_type", "").lower()
+                    if "point" not in _stype and _stype not in ("pts",):
                         continue
                     _ln = _a.get("line_score")
                     if not _ln:
                         continue
-                    _pid   = _proj.get("relationships", {}).get("new_player", {}).get("data", {}).get("id")
-                    _pi    = _pmap.get(_pid, {})
+                    _odds = _a.get("odds_type", "normal").lower()
+                    _pid  = _proj.get("relationships", {}).get("new_player", {}).get("data", {}).get("id")
+                    _pi   = _pmap.get(_pid, {})
                     _pname = _pi.get("name", "")
                     if not _pname:
                         continue
-                    _key = f"{_pname}_{_col}"
-                    if _key in _slate_seen:
-                        continue
-                    _slate_seen.add(_key)
+                    if _pname not in _player_lines:
+                        _player_lines[_pname] = {"team": _pi.get("team",""), "lines": []}
+                    _player_lines[_pname]["lines"].append((_odds, float(_ln)))
+
+                # Pick the right line per player:
+                # Prefer "normal", fallback to median of all lines
+                _slate = []
+                for _pname, _pdata in _player_lines.items():
+                    _lines = _pdata["lines"]
+                    # Try normal first
+                    _normal = [l for o, l in _lines if o == "normal"]
+                    if _normal:
+                        _chosen = _normal[0]
+                    else:
+                        # No normal found — take median (avoids goblin and demon extremes)
+                        _sorted = sorted(set(l for _, l in _lines))
+                        _chosen = _sorted[len(_sorted)//2]
                     _slate.append({
                         "player_name": _pname,
-                        "line":        float(_ln),
-                        "team":        _pi.get("team", ""),
-                        "stat":        _col,
-                        "stat_label":  _short,
+                        "line":        _chosen,
+                        "team":        _pdata["team"],
+                        "stat":        "PTS",
+                        "stat_label":  "PTS",
                     })
             except Exception as _e:
                 _slate = []
