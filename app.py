@@ -4091,9 +4091,8 @@ if _mode == "🎯  Slate Scanner":
     _min_conf   = 0
 
     if _run:
-        st.session_state.scanner_results  = None
-        st.session_state.scanner_error    = None
-        st.session_state.scanner_inj_skipped = 0
+        st.session_state.scanner_results = None
+        st.session_state.scanner_error   = None
         with st.spinner(f"Fetching PrizePicks slate..."):
             try:
                 import pytz as _pytz
@@ -4275,17 +4274,19 @@ if _mode == "🎯  Slate Scanner":
 
         # ── Best bets summary ──────────────────────────────────────
         _strong_count = len([r for r in _deduped if r["Tier"] == "Strong Over" and r.get("_adj",0) >= 0.80])
-        _grade  = "🔥 HOT" if _strong_count >= 5 else ("✅ GOOD" if _strong_count >= 3 else ("⚠️ THIN" if _strong_count >= 1 else "❌ DEAD"))
-        _gcol   = "#00e676" if _strong_count >= 5 else ("#3b82f6" if _strong_count >= 3 else ("#f97316" if _strong_count >= 1 else "#555"))
+        _grade = "🔥 HOT" if _strong_count >= 5 else ("✅ GOOD" if _strong_count >= 3 else ("⚠️ THIN" if _strong_count >= 1 else "❌ DEAD"))
+        _gcol  = "#00e676" if _strong_count >= 5 else ("#3b82f6" if _strong_count >= 3 else ("#f97316" if _strong_count >= 1 else "#555"))
         st.markdown(
             f"<div style='display:flex;gap:1rem;align-items:center;margin-bottom:0.75rem;'>"
             f"<div style='background:#111;border:1px solid #1e2a3a;padding:0.4rem 1rem;"
             f"font-family:JetBrains Mono,monospace;font-size:0.65rem;'>"
-            f"<span style='color:#555;'>SLATE </span><span style='color:{_gcol};font-weight:700;'>{_grade}</span>"
+            f"<span style='color:#555;'>SLATE </span>"
+            f"<span style='color:{_gcol};font-weight:700;'>{_grade}</span>"
             f"</div>"
             f"<div style='background:#111;border:1px solid #1e2a3a;padding:0.4rem 1rem;"
             f"font-family:JetBrains Mono,monospace;font-size:0.65rem;'>"
-            f"<span style='color:#555;'>STRONG OVERS </span><span style='color:#3b82f6;font-weight:700;'>{_strong_count}</span>"
+            f"<span style='color:#555;'>STRONG OVERS </span>"
+            f"<span style='color:#3b82f6;font-weight:700;'>{_strong_count}</span>"
             f"</div></div>",
             unsafe_allow_html=True
         )
