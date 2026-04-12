@@ -154,6 +154,45 @@ html, body, [class*="css"] {
     100% { transform: translateX(52px);  opacity:0; }
 }
 .pl-bar { transform-origin: bottom; animation: barGrow 0.5s cubic-bezier(0.34,1.56,0.64,1) both; }
+
+/* ── Logo text typeout ── */
+@keyframes typeReveal {
+    from { width: 0; }
+    to   { width: 100%; }
+}
+@keyframes cursorBlink {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0; }
+}
+@keyframes cursorFade {
+    0%   { opacity: 1; }
+    80%  { opacity: 1; }
+    100% { opacity: 0; }
+}
+.pl-logo-type {
+    display: inline-flex; align-items: baseline;
+    overflow: hidden;
+}
+.pl-type-prop {
+    display: inline-block; overflow: hidden; white-space: nowrap;
+    width: 0;
+    animation: typeReveal 0.35s steps(4, end) 0.6s forwards;
+}
+.pl-type-lens {
+    display: inline-block; overflow: hidden; white-space: nowrap;
+    color: var(--accent);
+    width: 0;
+    animation: typeReveal 0.35s steps(4, end) 0.95s forwards;
+}
+.pl-type-cursor {
+    display: inline-block;
+    width: 2px; height: 1.6rem;
+    background: var(--accent);
+    margin-left: 2px;
+    vertical-align: middle;
+    animation: cursorBlink 0.5s step-end 0.95s 4,
+               cursorFade  0s linear 2.95s forwards;
+}
 .pl-bar-1 { animation-delay:0.05s; } .pl-bar-2 { animation-delay:0.10s; }
 .pl-bar-3 { animation-delay:0.15s; } .pl-bar-4 { animation-delay:0.20s; }
 .pl-bar-5 { animation-delay:0.25s; } .pl-bar-6 { animation-delay:0.30s; }
@@ -3113,7 +3152,7 @@ st.markdown("""
             </svg>
         </div>
         <div>
-            <div class="pl-logo">Prop<span>Lens</span></div>
+            <div class="pl-logo pl-logo-type"><span class="pl-type-prop">Prop</span><span class="pl-type-lens">Lens</span><span class="pl-type-cursor"></span></div>
             <div class="pl-sub">Sports Prop Analyzer · AI-Powered</div>
         </div>
     </div>
