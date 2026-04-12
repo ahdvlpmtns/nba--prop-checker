@@ -4093,12 +4093,13 @@ if _mode == "🎯  Slate Scanner":
     if _run:
         st.session_state.scanner_results = None
         st.session_state.scanner_error   = None
-        with st.spinner(f"Fetching PrizePicks slate..."):
+        with st.spinner(f"Fetching PrizePicks slate for {_day_sel}..."):
             try:
                 import pytz as _pytz
                 _et      = _pytz.timezone("America/New_York")
                 _today   = datetime.now(_et).date()
-                _tgt_str = _today.strftime("%Y-%m-%d")
+                _tgt     = _today + timedelta(days=1) if _day_sel == "Tomorrow" else _today
+                _tgt_str = _tgt.strftime("%Y-%m-%d")
                 _r = requests.get(
                     "https://api.prizepicks.com/projections",
                     params={"league_id": 7, "per_page": 250, "single_stat": "true",
@@ -4122,22 +4123,16 @@ if _mode == "🎯  Slate Scanner":
                     _a = _proj.get("attributes", {})
                     if _a.get("stat_type", "").lower() not in ("points", "pts"):
                         continue
-                    if _a.get("odds_type", "").lower() in ("demon", "goblin"):
-                        continue
                     _ln = _a.get("line_score")
                     if not _ln:
                         continue
-                    _pid  = _proj.get("relationships", {}).get("new_player", {}).get("data", {}).get("id")
-                    _pi   = _pmap.get(_pid, {})
+                    _pid   = _proj.get("relationships", {}).get("new_player", {}).get("data", {}).get("id")
+                    _pi    = _pmap.get(_pid, {})
                     _pname = _pi.get("name", "")
                     if not _pname or _pname in _seen:
                         continue
                     _seen.add(_pname)
-                    _slate.append({
-                        "player_name": _pname,
-                        "line":        float(_ln),
-                        "team":        _pi.get("team", ""),
-                    })
+                    _slate.append({"player_name": _pname, "line": float(_ln), "team": _pi.get("team", "")})
             except Exception as _e:
                 _slate = []
                 st.session_state.scanner_error = f"Could not fetch PrizePicks slate: {_e}"
