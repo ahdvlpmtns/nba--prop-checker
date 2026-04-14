@@ -2587,13 +2587,15 @@ def apply_adjustments(weighted: float, context: dict, side: str = "Over") -> flo
         "pace":     {"Boost": +0.04, "Neutral": 0.00, "Penalty": -0.04},
         # Shooting efficiency: hot/cold streak over last 3 games
         "shoot":    {"Boost": +0.05, "Neutral": 0.00, "Penalty": -0.05},
+        # Elimination/closeout — handled separately below, 0 here to avoid double-counting
+        "elim_game": {"Elimination": 0.00, "Closeout": 0.00, "Normal": 0.00},
     }
     # For Under bets, flip every signal: high scoring hurts the Under, low scoring helps it
     _flip = -1.0 if side == "Under" else 1.0
 
     adjusted = weighted
     for key, val in context.items():
-        adjusted += adj_map[key].get(val, 0.0) * _flip
+        adjusted += adj_map.get(key, {}).get(val, 0.0) * _flip
     adjusted = max(0.0, min(1.0, adjusted))
 
     # ── Elimination game boost ──────────────────────────────────
