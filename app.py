@@ -2611,8 +2611,9 @@ def apply_adjustments(weighted: float, context: dict, side: str = "Over") -> flo
         # Team trying to close out plays aggressive — slight boost
         adjusted = min(0.95, adjusted + (0.02 * _flip))
 
-    # Cap: context can shift probability by at most 12pp from weighted base
-    max_shift = 0.12
+    # Cap: context can shift probability from weighted base
+    # Wider in playoffs — more signals are active and meaningful
+    max_shift = 0.18 if _IS_PLAYOFFS else 0.12
     if adjusted > weighted + max_shift:
         adjusted = weighted + max_shift
     if adjusted < weighted - max_shift:
@@ -6206,6 +6207,13 @@ if st.session_state.logs is not None:
             <tr>
                 <td style='padding:3px 8px 3px 0; color:#475569;'>Consistency check</td>
                 <td colspan='3' style='color:{"#ef4444" if low_cons else "#475569"};'>{cons_note}</td>
+            </tr>
+            <tr>
+                <td style='padding:3px 8px 3px 0; color:#475569;'>Signal cap</td>
+                <td colspan='3' style='color:#475569;'>
+                    {"±18pp (playoff mode)" if _IS_PLAYOFFS else "±12pp (regular season)"}
+                    {" · capped from " + f"{min(weighted_base + (0.18 if _IS_PLAYOFFS else 0.12), max(weighted_base - (0.18 if _IS_PLAYOFFS else 0.12), sum([adj_map.get(k,{{}}).get(v,0.0)*(1 if side=="Over" else -1) for k,v in context.items()]) + weighted_base)):.1%}" if abs(adjusted - weighted_base) >= (0.17 if _IS_PLAYOFFS else 0.11) else ""}
+                </td>
             </tr>
             <tr style='border-top:1px solid #1a2333; margin-top:4px;'>
                 <td style='padding:6px 8px 3px 0; color:#475569;'>Final tier</td>
