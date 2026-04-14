@@ -4125,6 +4125,18 @@ st.markdown(f"""
 _mode = "🎯  Slate Scanner" if st.session_state.active_tab == "scanner" else "🏀  Player Prop"
 st.markdown("<div style='height:0.1rem'></div>", unsafe_allow_html=True)
 
+if _IS_PLAYOFFS:
+    st.markdown(
+        "<div style='background:#0c1a2e;border:1px solid #1e3a5f;border-left:4px solid #3b82f6;"
+        "padding:0.6rem 1rem;margin-bottom:0.5rem;display:flex;align-items:center;gap:10px;'>"
+        "<span style='font-size:1.1rem;'>🏆</span>"
+        "<span style='font-family:JetBrains Mono,monospace;font-size:0.68rem;'>"
+        "<span style='color:#3b82f6;font-weight:700;letter-spacing:0.1em;'>PLAYOFF MODE</span>"
+        "<span style='color:#475569;'> · H2H boosted · Playoff pace · No load mgmt warnings</span>"
+        "</span></div>",
+        unsafe_allow_html=True
+    )
+
 # ─────────────────────────────────────────────
 # Slate Scanner
 # ─────────────────────────────────────────────
@@ -4477,27 +4489,6 @@ if _mode == "🎯  Slate Scanner":
     st.stop()  # prevents player prop section rendering in scanner mode
 
 
-
-# ─────────────────────────────────────────────
-# Playoff Mode Banner
-# ─────────────────────────────────────────────
-
-if _IS_PLAYOFFS:
-    st.markdown("""
-    <div style='background:#0c1a2e;border:1px solid #1e3a5f;border-left:4px solid #3b82f6;
-                padding:0.65rem 1rem;margin-bottom:0.75rem;display:flex;
-                align-items:center;gap:12px;'>
-        <span style='font-size:1.2rem;'>🏆</span>
-        <div style='font-family:JetBrains Mono,monospace;'>
-            <span style='color:#3b82f6;font-weight:700;font-size:0.72rem;
-                         letter-spacing:0.1em;text-transform:uppercase;'>
-                PLAYOFF MODE ACTIVE</span>
-            <span style='color:#475569;font-size:0.68rem;margin-left:8px;'>
-                · H2H signal boosted · Pace recalibrated to playoff avg
-                · Load management warnings suppressed</span>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
 # Quick Entry — batch manual input
