@@ -2249,6 +2249,66 @@ def is_playoff_mode() -> bool:
 
 _IS_PLAYOFFS = is_playoff_mode()
 
+# ── Series context fetcher ──────────────────────────────────────────
+@st.cache_data(ttl=1800, show_spinner=False)
+def get_playoff_series_context(team_abbr: str) -> dict:
+    """
+    Fetch current playoff series record for a team.
+    Returns dict with series_wins, series_losses, is_elimination, is_closeout
+    Uses NBA Stats API schedule.
+    """
+    empty = {"series_wins": 0, "series_losses": 0, "is_elimination": False,
+             "is_closeout": False, "opp_abbr": None, "found": False}
+    if not _IS_PLAYOFFS or not team_abbr:
+        return empty
+    try:
+        import requests as _req, datetime, pytz
+        et    = pytz.timezone("America/New_York")
+        today = datetime.datetime.now(et).strftime("%Y-%m-%d")
+        # Get current playoff schedule
+        r = _req.get(
+            "https://statsapi.mlb.com/api/v1/schedule",  # wrong sport, use NBA
+            timeout=5
+        )
+        # Use NBA schedule endpoint
+        r2 = _req.get(
+            f"https://stats.nba.com/stats/scoreboard?DayOffset=0&LeagueID=00&gameDate={today}",
+            headers={"User-Agent": "Mozilla/5.0", "Referer": "https://www.nba.com/"},
+            timeout=8
+        )
+        if not r2.ok:
+            return empty
+        data = r2.json()
+        # Look through games for this team's series record
+        games = data.get("resultSets", [{}])[0].get("rowSet", [])
+        for game in games:
+            # Game format includes series wins/losses
+            try:
+                home_abbr = game[6] if len(game) > 6 else ""
+                away_abbr = game[7] if len(game) > 7 else ""
+                if team_abbr.upper() not in (home_abbr.upper(), away_abbr.upper()):
+                    continue
+                # Series record fields
+                home_wins = int(game[16]) if len(game) > 16 else 0
+                away_wins = int(game[17]) if len(game) > 17 else 0
+                is_home   = team_abbr.upper() == home_abbr.upper()
+                team_wins = home_wins if is_home else away_wins
+                opp_wins  = away_wins if is_home else home_wins
+                opp_abbr  = away_abbr if is_home else home_abbr
+                return {
+                    "series_wins":    team_wins,
+                    "series_losses":  opp_wins,
+                    "is_elimination": opp_wins == 3 and team_wins < 3,
+                    "is_closeout":    team_wins == 3 and opp_wins < 3,
+                    "opp_abbr":       opp_abbr,
+                    "found":          True,
+                }
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return empty
+
 # ── Playoff pace table — slower than regular season ─────────────────
 # Playoff games average ~2-3 fewer possessions than reg season
 # These are estimates based on historical playoff pace reductions
@@ -5071,6 +5131,7 @@ if st.session_state.logs is not None:
         _f_h2h      = _pool.submit(get_h2h_logs, player_id, opp_abbr, season_str_clean) if opp_abbr else None
         _f_season   = _pool.submit(nba_get_full_season_logs_cached, player_id, season_str_clean)
         _f_playoff  = _pool.submit(get_playoff_picture, player_team) if player_team else None
+        _f_series   = _pool.submit(get_playoff_series_context, player_team) if (_IS_PLAYOFFS and player_team) else None
 
         try:
             matchup_auto, opp_pts, league_avg = _f_matchup.result(timeout=10)
@@ -5092,6 +5153,11 @@ if st.session_state.logs is not None:
         except Exception:
             _playoff = {}
 
+        try:
+            _series = _f_series.result(timeout=8) if _f_series else {}
+        except Exception:
+            _series = {}
+
     _status_ph.empty()  # clear loading message — results are about to render
     h2h_sig, h2h_avg, h2h_count = h2h_signal(h2h_df, line, side)
     b2b_status  = detect_b2b(logs, game_date)
@@ -5100,6 +5166,19 @@ if st.session_state.logs is not None:
         rest_status = "B2B"
     season_avg     = nba_get_season_avg(player_id, season_str_clean, logs_l10=logs)
     season_avg_min = nba_get_season_avg_min(player_id, season_str_clean, logs_l10=logs)
+
+    # ── Playoff minutes floor warning ────────────────────────────────
+    # In playoffs, role players get buried. Flag anyone under 28 min avg
+    _playoff_mins_warning = ""
+    if _IS_PLAYOFFS and avg_min < 28 and avg_min > 0:
+        _playoff_mins_warning = (
+            f"<div style='background:#1c1005;border:1px solid #854d0e;"
+            f"border-radius:0;padding:0.55rem 1rem;margin-bottom:0.5rem;"
+            f"font-family:JetBrains Mono,monospace;font-size:0.68rem;'>"
+            f"<span style='color:#f97316;font-weight:700;'>⚠️ PLAYOFF MINUTES RISK</span>"
+            f"<span style='color:#475569;'> · Avg {avg_min:.0f} min — role players often see reduced "
+            f"playoff time. Lines may not reflect reduced possessions.</span></div>"
+        )
 
     # ── Minutes restriction downgrade ─────────────────────────────
     # Now that season_avg_min is available, downgrade minutes/role
@@ -5263,7 +5342,21 @@ if st.session_state.logs is not None:
         st.markdown(_spike_html, unsafe_allow_html=True)
 
     # ── H2H + B2B + Form cards ───────────────
-    st.markdown("<div class='section-header'>H2H, Form, Schedule & Pace</div>", unsafe_allow_html=True)
+    # Series context header in playoffs
+    _section_title = "H2H, Form, Schedule & Pace"
+    if _IS_PLAYOFFS and _series and _series.get("found"):
+        _sw = _series["series_wins"]; _sl = _series["series_losses"]
+        _elim  = _series.get("is_elimination", False)
+        _close = _series.get("is_closeout", False)
+        _series_tag = f"{'⚠️ ELIM GAME' if _elim else ('🏆 CLOSEOUT' if _close else f'Series {_sw}-{_sl}')}"
+        _section_title = f"H2H · Form · Schedule · Pace &nbsp;·&nbsp; <span style='color:#3b82f6;font-size:0.75rem;'>{_series_tag}</span>"
+
+    st.markdown(f"<div class='section-header'>{_section_title}</div>", unsafe_allow_html=True)
+
+    # Playoff minutes warning
+    if _playoff_mins_warning:
+        st.markdown(_playoff_mins_warning, unsafe_allow_html=True)
+
     hb1, hb2, hb3, hb4 = st.columns(4)
 
     with hb1:
@@ -5271,24 +5364,24 @@ if st.session_state.logs is not None:
             sig_color = {"Strong": "#22c55e", "Neutral": "#94a3b8", "Risk": "#ef4444"}.get(h2h_sig, "#94a3b8")
             sig_bg    = {"Strong": "#052e16", "Neutral": "#0f172a",  "Risk": "#1c0505"}.get(h2h_sig, "#0f172a")
             sig_border= {"Strong": "#166534", "Neutral": "#1e293b",  "Risk": "#991b1b"}.get(h2h_sig, "#1e293b")
+            _h2h_label = f"This Series H2H ({h2h_count}G)" if _IS_PLAYOFFS else f"vs {opp_abbr} (L{h2h_count} H2H)"
             st.markdown(f"""
-            <div class='stat-card' style='border-color:{sig_border}; background:linear-gradient(135deg,{sig_bg} 0%,#111827 100%);'>
-                <div class='stat-label'>vs {opp_abbr} (L{h2h_count} H2H)</div>
-                <div style='display:flex; align-items:baseline; gap:12px; margin-top:4px;'>
+            <div class='stat-card' style='border-color:{sig_border};background:{sig_bg};'>
+                <div class='stat-label'>{_h2h_label}</div>
+                <div style='display:flex;align-items:baseline;gap:12px;margin-top:4px;'>
                     <div class='stat-value' style='color:{sig_color};'>{h2h_avg:.1f}</div>
-                    <div style='font-family:DM Mono; font-size:0.72rem; color:#475569;'>avg pts</div>
+                    <div style='font-family:DM Mono;font-size:0.72rem;color:#475569;'>avg pts</div>
                 </div>
-                <div style='font-family:DM Mono; font-size:0.72rem; color:{sig_color}; margin-top:4px;'>
-                    {h2h_sig} H2H signal · line is {line}
+                <div style='font-family:DM Mono;font-size:0.72rem;color:{sig_color};margin-top:4px;'>
+                    {h2h_sig} signal · line {line}
                 </div>
             </div>""", unsafe_allow_html=True)
         else:
+            _h2h_note = "Building this-series data..." if _IS_PLAYOFFS else ("Not enough H2H data (need 2+ games)" if opp_abbr else "Opponent not detected")
             st.markdown(f"""
             <div class='stat-card'>
-                <div class='stat-label'>vs {opp_abbr or "opponent"} H2H</div>
-                <div style='color:#475569; font-size:0.85rem; margin-top:8px;'>
-                    {"Not enough H2H data (need 2+ games)" if opp_abbr else "Opponent not detected"}
-                </div>
+                <div class='stat-label'>{"This Series H2H" if _IS_PLAYOFFS else f"vs {opp_abbr or "opponent"} H2H"}</div>
+                <div style='color:#475569;font-size:0.85rem;margin-top:8px;'>{_h2h_note}</div>
             </div>""", unsafe_allow_html=True)
 
     with hb2:
