@@ -4344,11 +4344,13 @@ if _mode == "🎯  Slate Scanner":
                     _savg      = nba_get_season_avg(_nid, _season, logs_l10=_logs)
                     _fsig, _   = form_divergence_signal(_avgp, _savg, _ln, "Over")
                     _ctx = {
-                        "minutes": suggest_bucket(_avgm, 32, 26),
-                        "role":    suggest_bucket(_avgf + 0.5 * _avgt, 18, 12),
-                        "shots":   "High" if _avgf >= 15 else ("Low" if _avgf < 10 else "Medium"),
-                        "matchup": _mq, "script": "Neutral", "venue": _vadj,
-                        "h2h": _hsig, "b2b": _b2b, "form": _fsig,
+                        "minutes":   suggest_bucket(_avgm, 32, 26),
+                        "role":      suggest_bucket(_avgf + 0.5 * _avgt, 18, 12),
+                        "shots":     "High" if _avgf >= 15 else ("Low" if _avgf < 10 else "Medium"),
+                        "matchup":   _mq, "script": "Neutral", "venue": _vadj,
+                        "h2h":       _hsig, "b2b": _b2b, "form": _fsig,
+                        "rest":      "Normal", "pace": "Neutral", "shoot": "Neutral",
+                        "elim_game": "Normal",
                     }
                     _adj  = apply_adjustments(_wb, _ctx, "Over")
                     _tier = get_confidence_tier(_adj, _ld, _cons, "Over")
