@@ -1279,6 +1279,10 @@ def minutes_restriction_alert(
     which may indicate injury recovery, load management, or a role change.
     Returns an HTML alert string or empty string if no concern.
     """
+    # In playoffs nobody rests — suppress load management warning
+    if _IS_PLAYOFFS:
+        return ""
+
     if season_avg_min is None or season_avg_min < 10:
         return ""
 
@@ -2231,6 +2235,32 @@ def classify_matchup_espn(opp_abbr: Optional[str], _date: str = None) -> Tuple[s
 
 # ── Pace of play ─────────────────────────────────────────────
 
+# ── Playoff Mode Detection ──────────────────────────────────────────
+def is_playoff_mode() -> bool:
+    """
+    Returns True if we're in NBA playoff season.
+    Play-in: ~April 14-17. Playoffs: ~April 19 - June 22.
+    Automatically resets for next regular season (Oct onwards).
+    """
+    import datetime
+    today = datetime.date.today()
+    # Playoffs run mid-April through late June each year
+    return (today.month == 4 and today.day >= 14) or            (today.month == 5) or            (today.month == 6 and today.day <= 25)
+
+_IS_PLAYOFFS = is_playoff_mode()
+
+# ── Playoff pace table — slower than regular season ─────────────────
+# Playoff games average ~2-3 fewer possessions than reg season
+# These are estimates based on historical playoff pace reductions
+_NBA_PACE_PLAYOFFS = {
+    "ATL": 98.5,  "BOS": 92.8,  "BKN": 100.1, "CHA": 100.2, "CHI": 99.0,
+    "CLE": 96.8,  "DAL": 101.2, "DEN": 99.0,  "DET": 104.0, "GSW": 99.8,
+    "HOU": 103.0, "IND": 104.5, "LAC": 98.5,  "LAL": 99.0,  "MEM": 101.0,
+    "MIA": 97.0,  "MIL": 100.2, "MIN": 97.8,  "NOP": 100.5, "NYK": 96.0,
+    "OKC": 99.2,  "ORL": 97.5,  "PHI": 99.8,  "PHX": 101.5, "POR": 102.0,
+    "SAC": 102.2, "SAS": 101.0, "TOR": 101.0, "UTA": 102.0, "WAS": 103.0,
+}
+
 # Static pace lookup — derived from NBA advanced stats (2025-26 season)
 # Updated periodically. Fast enough for Streamlit Cloud with no API call needed.
 _NBA_PACE_2526 = {
@@ -2251,7 +2281,9 @@ def get_team_pace(team_abbr: str) -> Optional[float]:
     if not team_abbr:
         return None
 
-    # Static lookup — instant, no API call
+    # Static lookup — use playoff pace if in playoff mode
+    if _IS_PLAYOFFS and team_abbr in _NBA_PACE_PLAYOFFS:
+        return _NBA_PACE_PLAYOFFS[team_abbr]
     if team_abbr in _NBA_PACE_2526:
         return _NBA_PACE_2526[team_abbr]
 
@@ -2300,7 +2332,7 @@ def pace_adjustment(
     Fast game (>107 poss) → more scoring opportunities → boosts Over / hurts Under
     Slow game (<102 poss) → fewer opportunities → hurts Over / boosts Under
     """
-    LEAGUE_AVG_PACE = 104.5
+    LEAGUE_AVG_PACE = 101.5 if _IS_PLAYOFFS else 104.5  # playoffs ~3 fewer possessions
 
     p1 = get_team_pace(player_team_abbr) if player_team_abbr else None
     p2 = get_team_pace(opp_abbr) if opp_abbr else None
@@ -2484,7 +2516,9 @@ def apply_adjustments(weighted: float, context: dict, side: str = "Over") -> flo
         "matchup":  {"Good":   +0.06, "Neutral": 0.00, "Bad": -0.06},
         "script":   {"Competitive": +0.02, "Neutral": 0.00, "Blowout risk": -0.04},
         "venue":    {"Boost": +0.04, "Neutral": 0.00, "Penalty": -0.05},
-        "h2h":      {"Strong": +0.05, "Neutral": 0.00, "Risk": -0.06},
+        "h2h":      {"Strong": +0.09 if _IS_PLAYOFFS else +0.05,
+                       "Neutral": 0.00,
+                       "Risk":   -0.10 if _IS_PLAYOFFS else -0.06},
         "b2b":      {"Normal": 0.00, "B2B": -0.06},
         # Rest days: 3+ days rest = small scoring boost
         "rest":     {"Rested": +0.03, "Normal": 0.00, "Short": -0.02, "B2B": -0.06},
@@ -4445,6 +4479,27 @@ if _mode == "🎯  Slate Scanner":
 
 
 # ─────────────────────────────────────────────
+# Playoff Mode Banner
+# ─────────────────────────────────────────────
+
+if _IS_PLAYOFFS:
+    st.markdown("""
+    <div style='background:#0c1a2e;border:1px solid #1e3a5f;border-left:4px solid #3b82f6;
+                padding:0.65rem 1rem;margin-bottom:0.75rem;display:flex;
+                align-items:center;gap:12px;'>
+        <span style='font-size:1.2rem;'>🏆</span>
+        <div style='font-family:JetBrains Mono,monospace;'>
+            <span style='color:#3b82f6;font-weight:700;font-size:0.72rem;
+                         letter-spacing:0.1em;text-transform:uppercase;'>
+                PLAYOFF MODE ACTIVE</span>
+            <span style='color:#475569;font-size:0.68rem;margin-left:8px;'>
+                · H2H signal boosted · Pace recalibrated to playoff avg
+                · Load management warnings suppressed</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+# ─────────────────────────────────────────────
 # Quick Entry — batch manual input
 # ─────────────────────────────────────────────
 
@@ -5791,7 +5846,7 @@ if st.session_state.logs is not None:
     _pl_w      = _playoff.get("wins",   0) if _playoff else 0
     _pl_l      = _playoff.get("losses", 0) if _playoff else 0
     _load_mgmt_risk = _pl_status in ("locked", "eliminated")
-    _load_note = "  ·  ⚠️ Load management risk" if _load_mgmt_risk else ""
+    _load_note = "" if _IS_PLAYOFFS else ("  ·  ⚠️ Load management risk" if _load_mgmt_risk else "")
 
     # Show if we have data OR show a debug fallback
     _pl_display_label = _pl_label if _pl_label else f"standings unavailable · {player_team or '?'}"
