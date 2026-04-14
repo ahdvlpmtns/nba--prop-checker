@@ -2596,6 +2596,19 @@ def apply_adjustments(weighted: float, context: dict, side: str = "Over") -> flo
         adjusted += adj_map[key].get(val, 0.0) * _flip
     adjusted = max(0.0, min(1.0, adjusted))
 
+    # ── Elimination game boost ──────────────────────────────────
+    # Do-or-die games: stars score MORE (desperation), role players score LESS
+    # This is applied after context signals — it's an override layer
+    if context.get("elim_game") == "Elimination":
+        # Stars (high minutes) go up, role players go down
+        if context.get("minutes") == "Strong":
+            adjusted = min(0.95, adjusted + (0.04 * _flip))
+        else:
+            adjusted = max(0.05, adjusted - (0.03 * _flip))
+    elif context.get("elim_game") == "Closeout":
+        # Team trying to close out plays aggressive — slight boost
+        adjusted = min(0.95, adjusted + (0.02 * _flip))
+
     # Cap: context can shift probability by at most 12pp from weighted base
     max_shift = 0.12
     if adjusted > weighted + max_shift:
@@ -5460,6 +5473,12 @@ if st.session_state.logs is not None:
             _pc = "#22c55e" if pace_sig == "Boost" else ("#ef4444" if pace_sig == "Penalty" else "#94a3b8")
             _pb = "#052e16" if pace_sig == "Boost" else ("#1c0505" if pace_sig == "Penalty" else "#0f172a")
             _pborder = "#166534" if pace_sig == "Boost" else ("#991b1b" if pace_sig == "Penalty" else "#1e293b")
+            # In playoffs show reg vs playoff pace comparison
+            _pace_note = ""
+            if _IS_PLAYOFFS and player_pace and opp_pace:
+                _reg_pace = ((_NBA_PACE_2526.get(player_team,104.5) + _NBA_PACE_2526.get(opp_abbr,104.5))/2)
+                _pl_pace  = (player_pace + opp_pace) / 2
+                _pace_note = f" · Reg: {_reg_pace:.1f} → Playoff: {_pl_pace:.1f}"
             _plabel = "🚀 Fast" if _pd >= 2.5 else ("🐢 Slow" if _pd <= -2.5 else "⚖️ Average")
             _psub = f"{_gp:.1f} poss/game · league avg {LEAGUE_AVG_PACE}"
             _pverdict = {
@@ -5624,19 +5643,28 @@ if st.session_state.logs is not None:
         _minutes_ctx = minutes_sel
         _role_ctx    = role_sel
 
+    # Elimination/closeout signal from series context
+    _elim_game_ctx = "Normal"
+    if _IS_PLAYOFFS and _series and _series.get("found"):
+        if _series.get("is_elimination"):
+            _elim_game_ctx = "Elimination"
+        elif _series.get("is_closeout"):
+            _elim_game_ctx = "Closeout"
+
     context = {
-        "minutes": _minutes_ctx,
-        "role":    _role_ctx,
-        "shots":   shots_sel,
-        "matchup": matchup_sel,
-        "script":  script_sel,
-        "venue":   venue_adj,
-        "h2h":     h2h_sig,
-        "b2b":     b2b_status,
-        "rest":    rest_status,
-        "form":    form_sig,
-        "pace":    pace_sig,
-        "shoot":   shoot_sig,
+        "minutes":  _minutes_ctx,
+        "role":     _role_ctx,
+        "shots":    shots_sel,
+        "matchup":  matchup_sel,
+        "script":   script_sel,
+        "venue":    venue_adj,
+        "h2h":      h2h_sig,
+        "b2b":      b2b_status,
+        "rest":     rest_status,
+        "form":     form_sig,
+        "pace":     pace_sig,
+        "shoot":    shoot_sig,
+        "elim_game": _elim_game_ctx,
     }
 
     adjusted  = apply_adjustments(weighted_base, context, side)
@@ -6000,6 +6028,7 @@ if st.session_state.logs is not None:
         # ── Step-by-step adjustment trace ────────────────────────────
         multipliers_map = {
             "minutes":  {"Strong": +0.05, "Okay": 0.00, "Risk": -0.07},
+            "elim_game": {"Elimination": +0.04, "Closeout": +0.02, "Normal": 0.00},
             "role":     {"Strong": +0.04, "Okay": 0.00, "Risk": -0.05},
             "shots":    {"High":   +0.03, "Medium": 0.00, "Low": -0.06},
             "matchup":  {"Good":   +0.06, "Neutral": 0.00, "Bad": -0.06},
@@ -6013,18 +6042,19 @@ if st.session_state.logs is not None:
             "shoot":    {"Boost": +0.05, "Neutral": 0.00, "Penalty": -0.05},
         }
         signal_labels = {
-            "minutes": "Minutes load",
-            "role":    "Role/usage",
-            "shots":   "Shot volume",
-            "matchup": "Opponent defense",
-            "script":  "Game script",
-            "venue":   "Home/Away split",
-            "h2h":     "H2H vs opponent",
-            "b2b":     "Back-to-back rest",
-            "rest":    "Rest days",
-            "form":    "Recent form vs season",
-            "pace":    "Game pace",
-            "shoot":   "Recent shooting",
+            "minutes":   "Minutes load",
+            "role":      "Role/usage",
+            "shots":     "Shot volume",
+            "matchup":   "Opponent defense",
+            "script":    "Game script",
+            "venue":     "Home/Away split",
+            "h2h":       "H2H vs opponent",
+            "b2b":       "Back-to-back rest",
+            "rest":      "Rest days",
+            "form":      "Recent form vs season",
+            "pace":      "Game pace",
+            "shoot":     "Recent shooting",
+            "elim_game": "Playoff game type",
         }
 
         # Simulate the computation step by step (additive, side-aware)
