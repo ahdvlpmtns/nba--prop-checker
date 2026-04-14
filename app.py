@@ -6210,10 +6210,7 @@ if st.session_state.logs is not None:
             </tr>
             <tr>
                 <td style='padding:3px 8px 3px 0; color:#475569;'>Signal cap</td>
-                <td colspan='3' style='color:#475569;'>
-                    {"±18pp (playoff mode)" if _IS_PLAYOFFS else "±12pp (regular season)"}
-                    {" · capped from " + f"{min(weighted_base + (0.18 if _IS_PLAYOFFS else 0.12), max(weighted_base - (0.18 if _IS_PLAYOFFS else 0.12), sum([adj_map.get(k,{{}}).get(v,0.0)*(1 if side=="Over" else -1) for k,v in context.items()]) + weighted_base)):.1%}" if abs(adjusted - weighted_base) >= (0.17 if _IS_PLAYOFFS else 0.11) else ""}
-                </td>
+                <td colspan='3' style='color:#475569;'>{"±18pp · playoff mode" if _IS_PLAYOFFS else "±12pp · regular season"}</td>
             </tr>
             <tr style='border-top:1px solid #1a2333; margin-top:4px;'>
                 <td style='padding:6px 8px 3px 0; color:#475569;'>Final tier</td>
