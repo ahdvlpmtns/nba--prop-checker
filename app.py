@@ -6156,7 +6156,9 @@ if st.session_state.logs is not None:
             "matchup":  {"Good":   +0.06, "Neutral": 0.00, "Bad": -0.06},
             "script":   {"Competitive": +0.02, "Neutral": 0.00, "Blowout risk": -0.04},
             "venue":    {"Boost": +0.04, "Neutral": 0.00, "Penalty": -0.05},
-            "h2h":      {"Strong": +0.05, "Neutral": 0.00, "Risk": -0.06},
+            "h2h":      {"Strong": +0.09 if _IS_PLAYOFFS else +0.05,
+                       "Neutral": 0.00,
+                       "Risk":   -0.10 if _IS_PLAYOFFS else -0.06},
             "b2b":      {"Normal": 0.00, "B2B": -0.06},
             "rest":     {"Rested": +0.03, "Normal": 0.00, "Short": -0.02, "B2B": -0.06},
             "form":     {"Boost": +0.05, "Neutral": 0.00, "Penalty": -0.05},
@@ -6224,7 +6226,7 @@ if st.session_state.logs is not None:
                 <td style='padding:3px 8px 3px 0; color:#475569;'>Raw hit rate</td>
                 <td style='color:#e2e8f0;'>{baseline:.1%}</td>
                 <td style='padding:3px 8px; color:#475569;'>Weighted hit rate</td>
-                <td style='color:#e2e8f0;'>{weighted_base:.1%} ← starting point</td>
+                <td style='color:#e2e8f0;'>{weighted_base:.1%} ← starting point{"  (playoff series boost applied)" if _IS_PLAYOFFS and opp_abbr and _series_cov_n > 0 else ""}</td>
             </tr>
             <tr>
                 <td style='padding:3px 8px 3px 0; color:#475569;'>Consistency</td>
