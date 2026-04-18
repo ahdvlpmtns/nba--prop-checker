@@ -5466,26 +5466,6 @@ if st.session_state.logs is not None:
     if _playoff_mins_warning:
         st.markdown(_playoff_mins_warning, unsafe_allow_html=True)
 
-    # Series coverage — how has THIS defense guarded THIS player in last 30 days
-    if _IS_PLAYOFFS and _series_cov_sig != "Neutral" and _series_cov_n >= 1:
-        _sc_color = "#22c55e" if _series_cov_sig == "Strong" else "#ef4444"
-        _sc_bg    = "#052e16" if _series_cov_sig == "Strong" else "#1c0505"
-        _sc_border= "#166534" if _series_cov_sig == "Strong" else "#991b1b"
-        _sc_verb  = "outperforming" if _series_cov_sig == "Strong" else "under-performing"
-        _sc_benchmark = f"{season_avg:.1f} season avg" if season_avg else f"line ({line})"
-        st.markdown(
-            f"<div style='background:{_sc_bg};border:1px solid {_sc_border};border-left:4px solid {_sc_color};"
-            f"padding:0.65rem 1rem;margin-bottom:0.5rem;font-family:JetBrains Mono,monospace;font-size:0.7rem;'>"
-            f"<span style='color:{_sc_color};font-weight:700;letter-spacing:0.08em;'>"
-            f"📊 SERIES COVERAGE</span>"
-            f"<span style='color:#94a3b8;'> · {_series_cov_n} game{'s' if _series_cov_n!=1 else ''} vs {opp_abbr} "
-            f"in last 30 days — averaging </span>"
-            f"<span style='color:{_sc_color};font-weight:700;'>{_series_cov_avg:.1f} pts</span>"
-            f"<span style='color:#94a3b8;'> · {_sc_verb} vs {_sc_benchmark}</span>"
-            f"</div>",
-            unsafe_allow_html=True
-        )
-
     hb1, hb2, hb3, hb4 = st.columns(4)
 
     with hb1:
@@ -5792,6 +5772,25 @@ if st.session_state.logs is not None:
     adjusted  = apply_adjustments(weighted_base, context, side)
     line_diff = sample_avg_pts - line
     tier      = get_confidence_tier(adjusted, line_diff, consistency, side)
+
+    # ── Series coverage banner ────────────────────────────────────
+    if _IS_PLAYOFFS and _series_cov_sig != "Neutral" and _series_cov_n >= 1 and _series_cov_avg is not None:
+        _sc_color  = "#22c55e" if _series_cov_sig == "Strong" else "#ef4444"
+        _sc_bg     = "#052e16" if _series_cov_sig == "Strong" else "#1c0505"
+        _sc_border = "#166534" if _series_cov_sig == "Strong" else "#991b1b"
+        _sc_verb   = "outperforming" if _series_cov_sig == "Strong" else "under-performing"
+        _sc_bench  = f"{season_avg:.1f} season avg" if season_avg else f"line ({line})"
+        st.markdown(
+            f"<div style='background:{_sc_bg};border:1px solid {_sc_border};border-left:4px solid {_sc_color};"
+            f"padding:0.65rem 1rem;margin-bottom:0.75rem;font-family:JetBrains Mono,monospace;font-size:0.7rem;'>"
+            f"<span style='color:{_sc_color};font-weight:700;letter-spacing:0.08em;'>📊 SERIES COVERAGE</span>"
+            f"<span style='color:#94a3b8;'> · {_series_cov_n} game{'s' if _series_cov_n!=1 else ''} "
+            f"vs {opp_abbr} in this series — averaging </span>"
+            f"<span style='color:{_sc_color};font-weight:700;'>{_series_cov_avg:.1f} pts</span>"
+            f"<span style='color:#94a3b8;'> · {_sc_verb} vs {_sc_bench}</span>"
+            f"</div>",
+            unsafe_allow_html=True
+        )
 
     # Also compute the opposite side — if it's stronger, flag it
     _opp_side    = "Under" if side == "Over" else "Over"
