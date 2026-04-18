@@ -5198,7 +5198,7 @@ if st.session_state.logs is not None:
 
     # ── Core stats ────────────────────────────
     baseline       = hit_rate(logs, line, side)
-    weighted_base  = weighted_hit_rate(logs, line, side, opp_abbr=opp_abbr)
+    weighted_base  = weighted_hit_rate(logs, line, side)  # recomputed after opp_abbr is set
     consistency    = consistency_score(logs, line)
     avg_min        = pd.to_numeric(logs["MIN"],  errors="coerce").dropna().mean()
     avg_fga        = pd.to_numeric(logs["FGA"],  errors="coerce").dropna().mean()
@@ -5307,6 +5307,10 @@ if st.session_state.logs is not None:
         )
     except Exception:
         _spike_sig, _spike_players, _spike_html = "Neutral", [], ""
+    # Recompute weighted base with playoff series boost now that opp_abbr is known
+    if _IS_PLAYOFFS and opp_abbr:
+        weighted_base = weighted_hit_rate(logs, line, side, opp_abbr=opp_abbr)
+
     pace_sig, player_pace, opp_pace = pace_adjustment(player_team, opp_abbr, side)
     shoot_sig, recent_3pt, recent_ts = shooting_efficiency_signal(logs, side, n_recent=3)
 
@@ -5791,7 +5795,7 @@ if st.session_state.logs is not None:
 
     # Also compute the opposite side — if it's stronger, flag it
     _opp_side    = "Under" if side == "Over" else "Over"
-    _opp_wb      = weighted_hit_rate(logs, line, _opp_side, opp_abbr=opp_abbr)
+    _opp_wb      = weighted_hit_rate(logs, line, _opp_side, opp_abbr=opp_abbr if _IS_PLAYOFFS else None)
     _opp_ctx     = dict(context)
     _opp_adj     = apply_adjustments(_opp_wb, _opp_ctx, _opp_side)
     _opp_tier    = get_confidence_tier(_opp_adj, line_diff, consistency, _opp_side)
