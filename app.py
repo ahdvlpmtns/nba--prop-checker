@@ -1094,6 +1094,65 @@ def h2h_signal(h2h_df: pd.DataFrame, line: float, side: str) -> Tuple[str, Optio
     return "Neutral", avg, len(pts)
 
 
+def series_coverage_signal(
+    logs: pd.DataFrame,
+    opp_abbr: Optional[str],
+    line: float,
+    side: str,
+    season_avg: Optional[float],
+) -> Tuple[str, Optional[float], int]:
+    """
+    How has this specific defense guarded this player IN THIS SERIES?
+    Returns (signal, this_series_avg, games_count).
+    Only activates in playoffs — looks at games vs opp_abbr in last 30 days.
+
+    signal:
+      "Strong"   — player has outperformed season avg vs this defense
+      "Risk"     — player has underperformed vs this defense
+      "Neutral"  — performance in line or insufficient data
+    """
+    if not _IS_PLAYOFFS or not opp_abbr or logs is None or logs.empty:
+        return "Neutral", None, 0
+    if "MATCHUP" not in logs.columns or "GAME_DATE" not in logs.columns:
+        return "Neutral", None, 0
+
+    try:
+        opp_up   = opp_abbr.upper()
+        df       = logs.copy().reset_index(drop=True)
+        df["GD"] = pd.to_datetime(df["GAME_DATE"], errors="coerce")
+        today    = pd.Timestamp.now().normalize()
+        # Filter to games vs this opponent in last 30 days
+        mask = df["GD"].notna() & df["MATCHUP"].astype(str).str.upper().str.contains(opp_up, na=False)
+        recent_opp = df[mask].copy()
+        recent_opp = recent_opp[(today - recent_opp["GD"].dt.normalize()).dt.days <= 30]
+        if recent_opp.empty:
+            return "Neutral", None, 0
+
+        pts = pd.to_numeric(recent_opp["PTS"], errors="coerce").dropna()
+        if len(pts) == 0:
+            return "Neutral", None, 0
+
+        series_avg = float(pts.mean())
+        n = len(pts)
+
+        # Compare to season avg if available, otherwise to line
+        benchmark = season_avg if season_avg else line
+
+        if side == "Over":
+            if series_avg > benchmark + 2 and series_avg > line:
+                return "Strong", series_avg, n
+            if series_avg < benchmark - 2 or series_avg < line - 2:
+                return "Risk", series_avg, n
+        else:  # Under
+            if series_avg < benchmark - 2 and series_avg < line:
+                return "Strong", series_avg, n
+            if series_avg > benchmark + 2 or series_avg > line + 2:
+                return "Risk", series_avg, n
+        return "Neutral", series_avg, n
+    except Exception:
+        return "Neutral", None, 0
+
+
 # ── Back-to-back detection ────────────────────
 
 def detect_b2b(logs: pd.DataFrame, game_date: Optional[str]) -> str:
@@ -2437,17 +2496,42 @@ def hit_rate(df: pd.DataFrame, line: float, side: str) -> float:
     hits = (pts >= line).sum() if side == "Over" else (pts <= line).sum()
     return float(hits / len(pts))
 
-def weighted_hit_rate(df: pd.DataFrame, line: float, side: str, stat_col: str = "PTS") -> float:
-    pts = pd.to_numeric(df[stat_col], errors="coerce").dropna().reset_index(drop=True)
-    n = len(pts)
+def weighted_hit_rate(df: pd.DataFrame, line: float, side: str, stat_col: str = "PTS",
+                      opp_abbr: Optional[str] = None) -> float:
+    """
+    Weighted hit rate with optional playoff series boost.
+    If in playoffs and opp_abbr is given, games vs that opponent in the last
+    ~30 days get weighted 3x heavier — they represent this current series.
+    """
+    pts_series = pd.to_numeric(df[stat_col], errors="coerce").dropna().reset_index(drop=True)
+    n = len(pts_series)
     if n == 0:
         return 0.0
+
+    # Base weights: most recent game has heaviest weight
     weights = [n - i for i in range(n)]
+
+    # ── Playoff series boost: games vs same opponent in last 30 days = this series ──
+    if _IS_PLAYOFFS and opp_abbr and "MATCHUP" in df.columns and "GAME_DATE" in df.columns:
+        try:
+            opp_up = opp_abbr.upper()
+            dates  = pd.to_datetime(df["GAME_DATE"], errors="coerce").reset_index(drop=True)
+            matchups = df["MATCHUP"].astype(str).reset_index(drop=True)
+            today = pd.Timestamp.now().normalize()
+            # Only games in last 30 days count as "this series"
+            for i in range(n):
+                if pd.notna(dates[i]) and opp_up in matchups[i].upper():
+                    days_ago = (today - dates[i].normalize()).days
+                    if 0 <= days_ago <= 30:
+                        weights[i] *= 3  # 3x boost for this-series games
+        except Exception:
+            pass
+
     total_weight = sum(weights)
     if side == "Over":
-        weighted_hits = sum(w for p, w in zip(pts, weights) if p >= line)
+        weighted_hits = sum(w for p, w in zip(pts_series, weights) if p >= line)
     else:
-        weighted_hits = sum(w for p, w in zip(pts, weights) if p <= line)
+        weighted_hits = sum(w for p, w in zip(pts_series, weights) if p <= line)
     return weighted_hits / total_weight
 
 def consistency_score(df: pd.DataFrame, line: float, stat_col: str = "PTS") -> float:
@@ -2589,6 +2673,8 @@ def apply_adjustments(weighted: float, context: dict, side: str = "Over") -> flo
         "shoot":    {"Boost": +0.05, "Neutral": 0.00, "Penalty": -0.05},
         # Elimination/closeout — handled separately below, 0 here to avoid double-counting
         "elim_game": {"Elimination": 0.00, "Closeout": 0.00, "Normal": 0.00},
+        # Playoffs only — how this specific defense has covered this player in this series
+        "series_cov": {"Strong": +0.07, "Neutral": 0.00, "Risk": -0.08},
     }
     # For Under bets, flip every signal: high scoring hurts the Under, low scoring helps it
     _flip = -1.0 if side == "Under" else 1.0
@@ -4320,7 +4406,7 @@ if _mode == "🎯  Slate Scanner":
                         return None
 
                     _ln   = _prop["line"]
-                    _wb   = weighted_hit_rate(_logs, _ln, "Over")
+                    _wb   = weighted_hit_rate(_logs, _ln, "Over", opp_abbr=_opp)
                     _avgp = pd.to_numeric(_logs["PTS"], errors="coerce").dropna().mean()
                     _ld   = _avgp - _ln
 
@@ -4350,8 +4436,9 @@ if _mode == "🎯  Slate Scanner":
                         "shots":     "High" if _avgf >= 15 else ("Low" if _avgf < 10 else "Medium"),
                         "matchup":   _mq, "script": "Neutral", "venue": _vadj,
                         "h2h":       _hsig, "b2b": _b2b, "form": _fsig,
-                        "rest":      "Normal", "pace": "Neutral", "shoot": "Neutral",
-                        "elim_game": "Normal",
+                        "rest":       "Normal", "pace": "Neutral", "shoot": "Neutral",
+                        "elim_game":  "Normal",
+                        "series_cov": "Neutral",
                     }
                     _adj  = apply_adjustments(_wb, _ctx, "Over")
                     _tier = get_confidence_tier(_adj, _ld, _cons, "Over")
@@ -5111,7 +5198,7 @@ if st.session_state.logs is not None:
 
     # ── Core stats ────────────────────────────
     baseline       = hit_rate(logs, line, side)
-    weighted_base  = weighted_hit_rate(logs, line, side)
+    weighted_base  = weighted_hit_rate(logs, line, side, opp_abbr=opp_abbr)
     consistency    = consistency_score(logs, line)
     avg_min        = pd.to_numeric(logs["MIN"],  errors="coerce").dropna().mean()
     avg_fga        = pd.to_numeric(logs["FGA"],  errors="coerce").dropna().mean()
@@ -5374,6 +5461,26 @@ if st.session_state.logs is not None:
     # Playoff minutes warning
     if _playoff_mins_warning:
         st.markdown(_playoff_mins_warning, unsafe_allow_html=True)
+
+    # Series coverage — how has THIS defense guarded THIS player in last 30 days
+    if _IS_PLAYOFFS and _series_cov_sig != "Neutral" and _series_cov_n >= 1:
+        _sc_color = "#22c55e" if _series_cov_sig == "Strong" else "#ef4444"
+        _sc_bg    = "#052e16" if _series_cov_sig == "Strong" else "#1c0505"
+        _sc_border= "#166534" if _series_cov_sig == "Strong" else "#991b1b"
+        _sc_verb  = "outperforming" if _series_cov_sig == "Strong" else "under-performing"
+        _sc_benchmark = f"{season_avg:.1f} season avg" if season_avg else f"line ({line})"
+        st.markdown(
+            f"<div style='background:{_sc_bg};border:1px solid {_sc_border};border-left:4px solid {_sc_color};"
+            f"padding:0.65rem 1rem;margin-bottom:0.5rem;font-family:JetBrains Mono,monospace;font-size:0.7rem;'>"
+            f"<span style='color:{_sc_color};font-weight:700;letter-spacing:0.08em;'>"
+            f"📊 SERIES COVERAGE</span>"
+            f"<span style='color:#94a3b8;'> · {_series_cov_n} game{'s' if _series_cov_n!=1 else ''} vs {opp_abbr} "
+            f"in last 30 days — averaging </span>"
+            f"<span style='color:{_sc_color};font-weight:700;'>{_series_cov_avg:.1f} pts</span>"
+            f"<span style='color:#94a3b8;'> · {_sc_verb} vs {_sc_benchmark}</span>"
+            f"</div>",
+            unsafe_allow_html=True
+        )
 
     hb1, hb2, hb3, hb4 = st.columns(4)
 
@@ -5648,6 +5755,11 @@ if st.session_state.logs is not None:
         _minutes_ctx = minutes_sel
         _role_ctx    = role_sel
 
+    # ── Series coverage signal — this defense vs this player in this series ──
+    _series_cov_sig, _series_cov_avg, _series_cov_n = series_coverage_signal(
+        logs, opp_abbr, line, side, season_avg
+    )
+
     # Elimination/closeout signal from series context
     _elim_game_ctx = "Normal"
     if _IS_PLAYOFFS and _series and _series.get("found"):
@@ -5669,7 +5781,8 @@ if st.session_state.logs is not None:
         "form":     form_sig,
         "pace":     pace_sig,
         "shoot":    shoot_sig,
-        "elim_game": _elim_game_ctx,
+        "elim_game":  _elim_game_ctx,
+        "series_cov": _series_cov_sig,
     }
 
     adjusted  = apply_adjustments(weighted_base, context, side)
@@ -5678,7 +5791,7 @@ if st.session_state.logs is not None:
 
     # Also compute the opposite side — if it's stronger, flag it
     _opp_side    = "Under" if side == "Over" else "Over"
-    _opp_wb      = weighted_hit_rate(logs, line, _opp_side)
+    _opp_wb      = weighted_hit_rate(logs, line, _opp_side, opp_abbr=opp_abbr)
     _opp_ctx     = dict(context)
     _opp_adj     = apply_adjustments(_opp_wb, _opp_ctx, _opp_side)
     _opp_tier    = get_confidence_tier(_opp_adj, line_diff, consistency, _opp_side)
@@ -6033,7 +6146,8 @@ if st.session_state.logs is not None:
         # ── Step-by-step adjustment trace ────────────────────────────
         multipliers_map = {
             "minutes":  {"Strong": +0.05, "Okay": 0.00, "Risk": -0.07},
-            "elim_game": {"Elimination": +0.04, "Closeout": +0.02, "Normal": 0.00},
+            "elim_game":  {"Elimination": +0.04, "Closeout": +0.02, "Normal": 0.00},
+            "series_cov": {"Strong": +0.07, "Neutral": 0.00, "Risk": -0.08},
             "role":     {"Strong": +0.04, "Okay": 0.00, "Risk": -0.05},
             "shots":    {"High":   +0.03, "Medium": 0.00, "Low": -0.06},
             "matchup":  {"Good":   +0.06, "Neutral": 0.00, "Bad": -0.06},
@@ -6059,7 +6173,8 @@ if st.session_state.logs is not None:
             "form":      "Recent form vs season",
             "pace":      "Game pace",
             "shoot":     "Recent shooting",
-            "elim_game": "Playoff game type",
+            "elim_game":  "Playoff game type",
+            "series_cov": "This series coverage",
         }
 
         # Simulate the computation step by step (additive, side-aware)
