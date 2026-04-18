@@ -5769,20 +5769,20 @@ if st.session_state.logs is not None:
             _elim_game_ctx = "Closeout"
 
     context = {
-        "minutes":  _minutes_ctx,
-        "role":     _role_ctx,
-        "shots":    shots_sel,
-        "matchup":  matchup_sel,
-        "script":   script_sel,
-        "venue":    venue_adj,
-        "h2h":      h2h_sig,
-        "b2b":      b2b_status,
-        "rest":     rest_status,
-        "form":     form_sig,
-        "pace":     pace_sig,
-        "shoot":    shoot_sig,
-        "elim_game":  _elim_game_ctx,
+        "minutes":    _minutes_ctx,
+        "role":       _role_ctx,
+        "shots":      shots_sel,
+        "matchup":    matchup_sel,
+        "script":     script_sel,
+        "venue":      venue_adj,
+        "h2h":        h2h_sig,
         "series_cov": _series_cov_sig,
+        "b2b":        b2b_status,
+        "rest":       rest_status,
+        "form":       form_sig,
+        "pace":       pace_sig,
+        "shoot":      shoot_sig,
+        "elim_game":  _elim_game_ctx,
     }
 
     adjusted  = apply_adjustments(weighted_base, context, side)
