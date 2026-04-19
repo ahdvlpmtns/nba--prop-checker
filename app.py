@@ -5132,6 +5132,43 @@ if _mode == "🎯  Slate Scanner":
 
 
 
+# Load player list
+with st.spinner("Loading players..."):
+    try:
+        all_players_list = espn_get_all_players(_date=_cache_date())
+        # Build both full names AND common aliases for fuzzy matching
+        _raw_names = [p["full_name"] for p in all_players_list]
+
+        # Add nickname/abbreviation mappings
+        _aliases = {
+            "LeBron": "LeBron James",
+            "SGA": "Shai Gilgeous-Alexander",
+            "KD": "Kevin Durant",
+            "PG": "Paul George",
+            "AD": "Anthony Davis",
+            "Giannis": "Giannis Antetokounmpo",
+            "Luka": "Luka Doncic",
+            "Steph": "Stephen Curry",
+            "Bron": "LeBron James",
+            "Embiid": "Joel Embiid",
+            "Jokic": "Nikola Jokic",
+            "Wemby": "Victor Wembanyama",
+            "CP3": "Chris Paul",
+            "Dame": "Damian Lillard",
+            "Trae": "Trae Young",
+            "Ja": "Ja Morant",
+            "Zion": "Zion Williamson",
+            "KAT": "Karl-Anthony Towns",
+            "Kawhi": "Kawhi Leonard",
+            "Draymond": "Draymond Green",
+        }
+
+        # Sort by last name
+        player_names_list = sorted(_raw_names, key=lambda x: x.split()[-1])
+    except Exception:
+        player_names_list = []
+        _aliases = {}
+
 # ─────────────────────────────────────────────
 # Quick Entry — batch manual input
 # ─────────────────────────────────────────────
@@ -5147,7 +5184,7 @@ with st.expander("⚡  Quick Entry — analyze multiple props at once"):
     </div>
     """, unsafe_allow_html=True)
 
-    _qe_players = player_names_list if 'player_names_list' in dir() else []
+    _qe_players = player_names_list if player_names_list else []
 
     # Build 6-row entry table
     _qe_rows = []
@@ -5293,7 +5330,7 @@ with st.expander("🎯  Parlay Checker — validate your entry before locking"):
     </div>
     """, unsafe_allow_html=True)
 
-    _pc_players = player_names_list if 'player_names_list' in dir() else []
+    _pc_players = player_names_list if player_names_list else []
 
     # Entry rows
     _pc_hc1, _pc_hc2, _pc_hc3 = st.columns([3, 1.2, 1])
@@ -5509,43 +5546,6 @@ with st.expander("🎯  Parlay Checker — validate your entry before locking"):
 # ─────────────────────────────────────────────
 
 st.markdown("<div class='section-header'>Player & Prop</div>", unsafe_allow_html=True)
-
-# Load player list
-with st.spinner("Loading players..."):
-    try:
-        all_players_list = espn_get_all_players(_date=_cache_date())
-        # Build both full names AND common aliases for fuzzy matching
-        _raw_names = [p["full_name"] for p in all_players_list]
-
-        # Add nickname/abbreviation mappings
-        _aliases = {
-            "LeBron": "LeBron James",
-            "SGA": "Shai Gilgeous-Alexander",
-            "KD": "Kevin Durant",
-            "PG": "Paul George",
-            "AD": "Anthony Davis",
-            "Giannis": "Giannis Antetokounmpo",
-            "Luka": "Luka Doncic",
-            "Steph": "Stephen Curry",
-            "Bron": "LeBron James",
-            "Embiid": "Joel Embiid",
-            "Jokic": "Nikola Jokic",
-            "Wemby": "Victor Wembanyama",
-            "CP3": "Chris Paul",
-            "Dame": "Damian Lillard",
-            "Trae": "Trae Young",
-            "Ja": "Ja Morant",
-            "Zion": "Zion Williamson",
-            "KAT": "Karl-Anthony Towns",
-            "Kawhi": "Kawhi Leonard",
-            "Draymond": "Draymond Green",
-        }
-
-        # Sort by last name
-        player_names_list = sorted(_raw_names, key=lambda x: x.split()[-1])
-    except Exception:
-        player_names_list = []
-        _aliases = {}
 
 # Session state for player clear
 if "player_key" not in st.session_state:
