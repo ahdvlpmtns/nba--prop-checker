@@ -2812,26 +2812,35 @@ def referee_signal(
     if not refs:
         return "Neutral", None, []
 
+    # Clean ref names — site returns "Marc Davis (#8)", table has "Marc Davis"
+    import re as _re
+    def _clean_ref(name):
+        # Remove jersey number like '(#8)' or '(8)'
+        n = name.split('(')[0].strip()
+        return n
+
+    clean_refs = [_clean_ref(r) for r in refs]
+
     # Average PPG for tonight's crew
-    known = [_REF_PPG[r] for r in refs if r in _REF_PPG]
+    known = [_REF_PPG[r] for r in clean_refs if r in _REF_PPG]
     if not known:
-        return "Neutral", None, refs
+        return "Neutral", None, clean_refs
 
     crew_avg = sum(known) / len(known)
     diff = crew_avg - _REF_LEAGUE_AVG_PPG
 
     if side == "Over":
         if diff >= 4.0:
-            return "High FT", crew_avg, refs
+            return "High FT", crew_avg, clean_refs
         if diff <= -4.0:
-            return "Low FT", crew_avg, refs
+            return "Low FT", crew_avg, clean_refs
     else:  # Under
         if diff >= 4.0:
-            return "Low FT", crew_avg, refs   # high-scoring game hurts Under
+            return "Low FT", crew_avg, clean_refs
         if diff <= -4.0:
-            return "High FT", crew_avg, refs  # low-scoring game helps Under
+            return "High FT", crew_avg, clean_refs
 
-    return "Neutral", crew_avg, refs
+    return "Neutral", crew_avg, clean_refs
 
 
 def get_opponent_injury_report(
