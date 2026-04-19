@@ -3837,36 +3837,67 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
-    st.markdown("<div class='section-header'>How It Works</div>", unsafe_allow_html=True)
+    st.markdown("<div class='section-header'>How To Use PropLens</div>", unsafe_allow_html=True)
     st.markdown("""
-    <div class='how-it-works'>
-        <div class='how-step'>
-            <div class='how-num'>1</div>
-            <div class='how-text'><strong>Game Logs</strong> — fetches your last 5–15 games from NBA.com</div>
+    <div style='display:flex;flex-direction:column;gap:8px;'>
+        <div style='display:flex;gap:12px;align-items:flex-start;background:#0d1520;border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:0.75rem 1rem;'>
+            <div style='min-width:28px;height:28px;background:#3b82f6;border-radius:8px;display:flex;align-items:center;justify-content:center;font-family:Outfit,sans-serif;font-weight:800;font-size:0.9rem;color:#fff;flex-shrink:0;'>1</div>
+            <div>
+                <div style='font-family:Outfit,sans-serif;font-weight:600;color:#f1f5f9;font-size:0.85rem;'>Open PrizePicks and find a prop you like</div>
+                <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#475569;margin-top:3px;'>Example: LeBron James — 22.5 pts — Over</div>
+            </div>
         </div>
-        <div class='how-step'>
-            <div class='how-num'>2</div>
-            <div class='how-text'><strong>Hit Rate</strong> — calculates raw + recency-weighted % over/under the line</div>
+        <div style='display:flex;gap:12px;align-items:flex-start;background:#0d1520;border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:0.75rem 1rem;'>
+            <div style='min-width:28px;height:28px;background:#3b82f6;border-radius:8px;display:flex;align-items:center;justify-content:center;font-family:Outfit,sans-serif;font-weight:800;font-size:0.9rem;color:#fff;flex-shrink:0;'>2</div>
+            <div>
+                <div style='font-family:Outfit,sans-serif;font-weight:600;color:#f1f5f9;font-size:0.85rem;'>Type the player name, enter the line and pick Over or Under</div>
+                <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#475569;margin-top:3px;'>Always use the standard line — not the goblin (lower) or demon (higher)</div>
+            </div>
         </div>
-        <div class='how-step'>
-            <div class='how-num'>3</div>
-            <div class='how-text'><strong>Signals</strong> — applies 8 context multipliers: matchup, venue, H2H, rest, form, role, minutes, shots</div>
+        <div style='display:flex;gap:12px;align-items:flex-start;background:#0d1520;border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:0.75rem 1rem;'>
+            <div style='min-width:28px;height:28px;background:#3b82f6;border-radius:8px;display:flex;align-items:center;justify-content:center;font-family:Outfit,sans-serif;font-weight:800;font-size:0.9rem;color:#fff;flex-shrink:0;'>3</div>
+            <div>
+                <div style='font-family:Outfit,sans-serif;font-weight:600;color:#f1f5f9;font-size:0.85rem;'>Hit Analyze Prop and wait ~10 seconds</div>
+                <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#475569;margin-top:3px;'>PropLens pulls live stats, injuries, matchups, referee data, and more</div>
+            </div>
         </div>
-        <div class='how-step'>
-            <div class='how-num'>4</div>
-            <div class='how-text'><strong>Verdict</strong> — outputs a confidence tier from Strong Over to Strong Under</div>
+        <div style='display:flex;gap:12px;align-items:flex-start;background:#0d1520;border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:0.75rem 1rem;'>
+            <div style='min-width:28px;height:28px;background:#10f590;border-radius:8px;display:flex;align-items:center;justify-content:center;font-family:Outfit,sans-serif;font-weight:800;font-size:0.9rem;color:#041a0e;flex-shrink:0;'>4</div>
+            <div>
+                <div style='font-family:Outfit,sans-serif;font-weight:600;color:#f1f5f9;font-size:0.85rem;'>Read the verdict — only play Strong Over / Strong Under</div>
+                <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#475569;margin-top:3px;'>Lean picks are OK in 2-leg entries only. Always skip Pass.</div>
+            </div>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
     st.markdown("<div class='section-header'>Verdict Guide</div>", unsafe_allow_html=True)
     st.markdown("""
-    <div style='font-family:DM Mono; font-size:0.72rem; line-height:2; color:#94a3b8;'>
-        🟢 <span style='color:#22c55e;'>Strong Over/Under</span> — High confidence<br>
-        🟡 <span style='color:#eab308;'>Lean Over</span> — Moderate edge<br>
-        🟠 <span style='color:#f97316;'>Lean Under</span> — Moderate edge<br>
-        🔴 <span style='color:#ef4444;'>Strong Under</span> — High confidence<br>
-        ⚪ <span style='color:#64748b;'>Pass</span> — No clear edge
+    <div style='display:flex;flex-direction:column;gap:6px;'>
+        <div style='background:#041a0e;border:1px solid rgba(16,245,144,0.2);border-radius:10px;padding:0.6rem 0.9rem;display:flex;justify-content:space-between;align-items:center;'>
+            <div><span style='font-size:1rem;'>🟢</span> <span style='color:#10f590;font-weight:700;font-family:Outfit,sans-serif;'>Strong Over / Strong Under</span></div>
+            <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#475569;text-align:right;'>64%+ hit rate · edge ≥1.5pts<br><span style='color:#10f590;'>Best bets — play these</span></div>
+        </div>
+        <div style='background:#1a1200;border:1px solid rgba(251,191,36,0.2);border-radius:10px;padding:0.6rem 0.9rem;display:flex;justify-content:space-between;align-items:center;'>
+            <div><span style='font-size:1rem;'>🟡</span> <span style='color:#fbbf24;font-weight:700;font-family:Outfit,sans-serif;'>Lean Over</span> &nbsp;<span style='font-size:1rem;'>🟠</span> <span style='color:#f97316;font-weight:700;font-family:Outfit,sans-serif;'>Lean Under</span></div>
+            <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#475569;text-align:right;'>55–63% hit rate<br><span style='color:#fbbf24;'>OK for 2-leg entries only</span></div>
+        </div>
+        <div style='background:#111;border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:0.6rem 0.9rem;display:flex;justify-content:space-between;align-items:center;'>
+            <div><span style='font-size:1rem;'>⚪</span> <span style='color:#475569;font-weight:700;font-family:Outfit,sans-serif;'>Pass</span></div>
+            <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#475569;text-align:right;'>No clear edge<br><span style='color:#ef4444;'>Skip this prop</span></div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("<div class='section-header'>Confidence Score</div>", unsafe_allow_html=True)
+    st.markdown("""
+    <div style='font-family:JetBrains Mono,monospace;font-size:0.68rem;color:#475569;line-height:1.9;
+                background:#0d1520;border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:0.75rem 1rem;'>
+        The <span style='color:#f1f5f9;'>confidence score (0–100)</span> combines three things:<br>
+        &nbsp;&nbsp;<span style='color:#3b82f6;'>●</span> <span style='color:#94a3b8;'>Hit rate</span> — how often has this player cleared this line?<br>
+        &nbsp;&nbsp;<span style='color:#3b82f6;'>●</span> <span style='color:#94a3b8;'>Edge</span> — how far is their average above/below the line?<br>
+        &nbsp;&nbsp;<span style='color:#3b82f6;'>●</span> <span style='color:#94a3b8;'>Consistency</span> — do they score reliably or all over the place?<br><br>
+        <span style='color:#10f590;'>80+</span> = elite pick &nbsp;·&nbsp; <span style='color:#fbbf24;'>65–79</span> = solid &nbsp;·&nbsp; <span style='color:#ef4444;'>below 65</span> = skip
     </div>
     """, unsafe_allow_html=True)
 
@@ -4781,9 +4812,15 @@ if _mode == "🎯  Slate Scanner":
     st.markdown("<div class='section-header'>PrizePicks NBA — Today's Slate</div>", unsafe_allow_html=True)
     st.markdown("""
     <div class='explainer'>
-        Fetches today's NBA points props from PrizePicks and runs every player through the PropLens model.
-        Surfaces <strong>Strong Over</strong> and <strong>Strong Under</strong> results ranked by confidence.
-        Takes 2–4 minutes. Results are cached for 5 minutes.
+        <strong>How it works:</strong> Scans every player on today's PrizePicks NBA slate and runs each
+        one through the PropLens model automatically. Only shows <strong>Strong Over</strong> results by default
+        — these are the highest-confidence picks. Change the filter to see more.
+        Takes 2–4 minutes to scan the full slate.
+        <br><br>
+        <span style='color:#475569;font-size:0.75rem;'>
+        💡 Tip: Run this every evening after 6pm ET when lines are finalized. 
+        Use <strong>Strong Only</strong> filter and only play props showing 80%+ adjusted hit rate.
+        </span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -5325,8 +5362,16 @@ if "parlay_results" not in st.session_state:
 with st.expander("🎯  Parlay Checker — validate your entry before locking"):
     st.markdown("""
     <div class='explainer'>
-        Enter your full entry to check combined probability, spot weak legs,
-        flag correlated picks, and see your real odds of hitting.
+        <strong>Before you lock your entry on PrizePicks — check it here first.</strong>
+        Enter each leg of your parlay, hit Check Entry, and PropLens will:
+        <br>• Show your <strong>real combined probability</strong> of hitting
+        <br>• Flag any <strong>weak legs</strong> that are dragging the entry down
+        <br>• Warn you about <strong>correlated picks</strong> (same game players)
+        <br>• Suggest a <strong>trimmed entry</strong> using only your strongest legs
+        <br><br>
+        <span style='color:#475569;font-size:0.75rem;'>
+        💡 Rule of thumb: 3-leg entries with all Strong picks beat 5-leg entries with mixed results every time.
+        </span>
     </div>
     """, unsafe_allow_html=True)
 
@@ -5546,6 +5591,16 @@ with st.expander("🎯  Parlay Checker — validate your entry before locking"):
 # ─────────────────────────────────────────────
 
 st.markdown("<div class='section-header'>Player & Prop</div>", unsafe_allow_html=True)
+st.markdown("""
+<div style='background:#0d1520;border:1px solid rgba(59,130,246,0.15);border-radius:10px;
+            padding:0.65rem 1rem;margin-bottom:0.75rem;display:flex;align-items:center;gap:10px;'>
+    <span style='font-size:1.1rem;'>💡</span>
+    <span style='font-family:JetBrains Mono,monospace;font-size:0.67rem;color:#475569;'>
+        <span style='color:#94a3b8;'>Enter a player from tonight's PrizePicks slate, set the line, choose Over or Under, and hit </span>
+        <span style='color:#3b82f6;font-weight:700;'>Analyze Prop</span><span style='color:#94a3b8;'>. Takes ~10 seconds.</span>
+    </span>
+</div>
+""", unsafe_allow_html=True)
 
 # Session state for player clear
 if "player_key" not in st.session_state:
@@ -5607,17 +5662,21 @@ with col_b:
         value=float(_dd_line) if _dd_line else 24.5,
         step=0.5,
         format="%.1f",
+        help="The number shown on PrizePicks — use the standard line, not goblin/demon"
     )
 with col_c:
     _dd_side = st.session_state.get("_drilldown_side", None)
     side = st.selectbox(
         "Over / Under", ["Over", "Under"],
         index=0 if not _dd_side or _dd_side == "Over" else 1,
+        help="Match what PrizePicks shows. Over = player scores MORE than the line"
     )
 with col_d:
-    n_games = st.selectbox("Sample", [5, 10, 15], index=1)
+    n_games = st.selectbox("Sample", [5, 10, 15], index=1,
+                           help="How many recent games to analyze. 10 is the sweet spot.")
 with col_e:
-    season_str = st.text_input("Season", value="2025-26")
+    season_str = st.text_input("Season", value="2025-26",
+                               help="Leave this as 2025-26 unless analyzing a past season")
 
 season_int = season_str_to_int(season_str)
 season_str_clean = season_str_to_season(season_str)
@@ -6664,6 +6723,27 @@ if st.session_state.logs is not None:
     # ── Verdict banner ────────────────────────
     st.markdown("<div class='section-header'>Verdict</div>", unsafe_allow_html=True)
 
+    # Plain language summary — for casual users
+    _plain_map = {
+        "Strong Over":  ("✅ Strong Over — the model backs this pick", "#10f590", "#041a0e"),
+        "Lean Over":    ("👍 Lean Over — slight edge, good in 2-leg entries", "#fbbf24", "#1a1200"),
+        "Lean Under":   ("👍 Lean Under — slight edge, good in 2-leg entries", "#f97316", "#1a0d00"),
+        "Strong Under": ("✅ Strong Under — the model backs this pick", "#ff4560", "#1a0008"),
+        "Pass":         ("⛔ Pass — no clear edge on this prop, skip it", "#475569", "#0d1520"),
+    }
+    _pm = _plain_map.get(_display_tier, ("", "#475569", "#0d1520"))
+    st.markdown(
+        f"<div style='background:{_pm[2]};border:1px solid rgba(255,255,255,0.06);"
+        f"border-radius:12px;padding:0.75rem 1.1rem;margin-bottom:0.75rem;"
+        f"display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;'>"
+        f"<span style='font-family:Outfit,sans-serif;font-size:0.95rem;"
+        f"font-weight:600;color:{_pm[1]};'>{_pm[0]}</span>"
+        f"<span style='font-family:JetBrains Mono,monospace;font-size:0.65rem;color:#475569;'>"
+        f"Confidence {_conf_score}/100 · Adjusted {adjusted:.0%}</span>"
+        f"</div>",
+        unsafe_allow_html=True
+    )
+
 
     venue_adj_labels = {
         "Boost":   ("▲ Venue Boost",   "#22c55e"),
@@ -6989,7 +7069,19 @@ if st.session_state.logs is not None:
         </div>
         """, unsafe_allow_html=True)
 
-    with st.expander("🔬  Logic Debugger — step-by-step verdict breakdown"):
+    with st.expander("🔬  Show full signal breakdown (advanced)"):
+        st.markdown("""
+        <div style='font-family:JetBrains Mono,monospace;font-size:0.65rem;color:#475569;
+                    background:#0d1520;border:1px solid rgba(255,255,255,0.06);border-radius:8px;
+                    padding:0.65rem 1rem;margin-bottom:0.75rem;line-height:1.8;'>
+            This table shows exactly how PropLens arrived at the final probability.
+            Each row is a signal that pushed the number up or down.
+            <span style='color:#3b82f6;'>Positive adjustments</span> favor the Over.
+            <span style='color:#ef4444;'>Negative adjustments</span> favor the Under.
+            The final result is capped to prevent any single signal from dominating.
+        </div>
+        """, unsafe_allow_html=True)
+
         # ── Step-by-step adjustment trace ────────────────────────────
         multipliers_map = {
             "minutes":  {"Strong": +0.05, "Okay": 0.00, "Risk": -0.07},
