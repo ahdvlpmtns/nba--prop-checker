@@ -5405,48 +5405,142 @@ with st.expander("🎯  Parlay Checker — validate your entry before locking"):
         st.session_state.parlay_results = None
         _pc_season = "2025-26"
         _pc_results = []
-        with st.spinner(f"Analyzing {len(_pc_rows)} legs..."):
-            for _pc_row in _pc_rows:
+        with st.spinner(f"Analyzing {len(_pc_rows)} legs — all 17 signals..."):
+            from concurrent.futures import ThreadPoolExecutor, as_completed as _afc
+
+            def _analyze_pc_leg(_pc_row):
+                """Full signal analysis for one parlay leg — matches player prop analyzer."""
                 try:
                     _pc_nid, _pc_fn = nba_find_player(_pc_row["player"])
                     if not _pc_nid:
-                        continue
+                        return None
                     _pc_logs = nba_get_game_logs(_pc_nid, _pc_season, n=15, _date=_cache_date())
                     if _pc_logs is None or _pc_logs.empty:
-                        continue
+                        return None
+
                     _pc_ln   = _pc_row["line"]
                     _pc_side = _pc_row["side"]
-                    _pc_wb   = weighted_hit_rate(_pc_logs, _pc_ln, _pc_side)
                     _pc_avgp = pd.to_numeric(_pc_logs["PTS"], errors="coerce").dropna().mean()
                     _pc_edge = _pc_avgp - _pc_ln if _pc_side == "Over" else _pc_ln - _pc_avgp
                     _pc_cons = consistency_score(_pc_logs, _pc_ln)
                     _pc_avgm = pd.to_numeric(_pc_logs["MIN"], errors="coerce").dropna().mean()
                     _pc_avgf = pd.to_numeric(_pc_logs["FGA"], errors="coerce").dropna().mean()
                     _pc_avgt = pd.to_numeric(_pc_logs["FTA"], errors="coerce").dropna().mean()
+
+                    # ESPN team + opponent
                     _pc_ep   = next((p for p in espn_get_all_players(_date=_cache_date())
                                      if normalize_name(p["full_name"]) == normalize_name(_pc_fn)), None)
                     _pc_team = _norm_team_abbr(_pc_ep["team_abbr"]) if _pc_ep else None
                     _pc_opp, _pc_gd, _pc_ven = espn_get_next_game(_pc_team) if _pc_team else (None, None, None)
-                    _pc_mq, _, _ = classify_matchup_espn(_pc_opp)
+
+                    # Run slow calls in parallel
+                    with ThreadPoolExecutor(max_workers=6) as _ex:
+                        _f_mq    = _ex.submit(classify_matchup_espn, _pc_opp)
+                        _f_h2h   = _ex.submit(get_h2h_logs, _pc_nid, _pc_opp, _pc_season, _cache_date()) if _pc_opp else None
+                        _f_savg  = _ex.submit(nba_get_season_avg, _pc_nid, _pc_season, _pc_logs)
+                        _f_pace  = _ex.submit(pace_adjustment, _pc_team, _pc_opp, _pc_side) if _pc_team else None
+                        _f_shoot = _ex.submit(shooting_efficiency_signal, _pc_logs, _pc_side, 3)
+                        _f_ref   = _ex.submit(referee_signal, _pc_team, _pc_side) if _pc_team else None
+                        _f_def   = _ex.submit(get_opp_recent_defensive_form, _pc_opp) if _pc_opp else None
+                        _f_ser   = _ex.submit(get_playoff_series_context, _pc_team) if (_IS_PLAYOFFS and _pc_team) else None
+                        _f_polog = _ex.submit(get_playoff_game_logs, _pc_nid, _pc_season) if _IS_PLAYOFFS else None
+
+                        try: _pc_mq, _, _ = _f_mq.result(timeout=8)
+                        except: _pc_mq = "Neutral"
+
+                        try: _pc_h2hdf = _f_h2h.result(timeout=10) if _f_h2h else pd.DataFrame()
+                        except: _pc_h2hdf = pd.DataFrame()
+
+                        try: _pc_savg = _f_savg.result(timeout=8)
+                        except: _pc_savg = None
+
+                        try: _pc_pace_sig, _, _ = _f_pace.result(timeout=8) if _f_pace else ("Neutral", None, None)
+                        except: _pc_pace_sig = "Neutral"
+
+                        try: _pc_shoot_sig, _, _ = _f_shoot.result(timeout=8)
+                        except: _pc_shoot_sig = "Neutral"
+
+                        try: _pc_ref_sig, _, _ = _f_ref.result(timeout=8) if _f_ref else ("Neutral", None, [])
+                        except: _pc_ref_sig = "Neutral"
+
+                        try: _pc_def = _f_def.result(timeout=8) if _f_def else {}
+                        except: _pc_def = {}
+
+                        try: _pc_ser = _f_ser.result(timeout=8) if _f_ser else {}
+                        except: _pc_ser = {}
+
+                        try: _pc_polog = _f_polog.result(timeout=10) if _f_polog else pd.DataFrame()
+                        except: _pc_polog = pd.DataFrame()
+
+                    # Defensive form — blend into matchup
+                    _pc_def_trend = _pc_def.get("trend", "Neutral")
+                    if _pc_def_trend == "Softening" and _pc_mq in ("Neutral", "Bad"):
+                        _pc_mq = "Good" if _pc_mq == "Neutral" else "Neutral"
+                    elif _pc_def_trend == "Tightening" and _pc_mq in ("Neutral", "Good"):
+                        _pc_mq = "Bad" if _pc_mq == "Neutral" else "Neutral"
+
+                    # Series context
+                    _pc_elim = "Normal"
+                    _pc_gnum_label = "N/A"
+                    if _IS_PLAYOFFS and _pc_ser and _pc_ser.get("found"):
+                        if _pc_ser.get("is_elimination"): _pc_elim = "Elimination"
+                        elif _pc_ser.get("is_closeout"):  _pc_elim = "Closeout"
+                        _pc_gn = get_series_game_number(_pc_ser.get("series_wins",0), _pc_ser.get("series_losses",0))
+                        _pc_gnum_label, _ = game_number_adjustment(_pc_gn, _pc_side)
+
+                    # Playoff usage spike
+                    _pc_pu_sig = "Neutral"
+                    if _IS_PLAYOFFS and not _pc_polog.empty and "PTS" in _pc_polog.columns:
+                        _po_pts = pd.to_numeric(_pc_polog["PTS"], errors="coerce").dropna()
+                        if len(_po_pts) >= 2:
+                            _po_avg = float(_po_pts.mean())
+                            if _po_avg - _pc_avgp >= 3.0: _pc_pu_sig = "Spike"
+                            elif _pc_avgp - _po_avg >= 3.0: _pc_pu_sig = "Drop"
+
+                    # Series coverage
+                    _pc_scov_sig, _, _ = series_coverage_signal(_pc_logs, _pc_opp, _pc_ln, _pc_side, _pc_savg)
+
+                    # Weighted hit rate with playoff boost
+                    _pc_wb = weighted_hit_rate(_pc_logs, _pc_ln, _pc_side, opp_abbr=_pc_opp if _IS_PLAYOFFS else None)
+
+                    # All signals
                     _pc_sp   = home_away_split(_pc_logs, _pc_ln, _pc_side, _pc_team)
                     _pc_vadj = venue_adjustment(_pc_sp, _pc_ven, _pc_side)
                     _pc_b2b  = detect_b2b(_pc_logs, _pc_gd)
-                    _pc_h2h  = get_h2h_logs(_pc_nid, _pc_opp, _pc_season, _date=_cache_date()) if _pc_opp else pd.DataFrame()
-                    _pc_hsig, _, _ = h2h_signal(_pc_h2h, _pc_ln, _pc_side)
-                    _pc_savg = nba_get_season_avg(_pc_nid, _pc_season, logs_l10=_pc_logs)
-                    _pc_fsig, _ = form_divergence_signal(_pc_avgp, _pc_savg, _pc_ln, _pc_side)
+                    _pc_rest = detect_rest_days(_pc_logs, _pc_gd)
+                    if _pc_b2b == "B2B": _pc_rest = "B2B"
+                    _pc_hsig, _, _ = h2h_signal(_pc_h2hdf, _pc_ln, _pc_side)
+                    _pc_fsig, _    = form_divergence_signal(_pc_avgp, _pc_savg, _pc_ln, _pc_side)
+
                     _pc_ctx = {
                         "minutes":    suggest_bucket(_pc_avgm, 32, 26),
                         "role":       suggest_bucket(_pc_avgf + 0.5 * _pc_avgt, 18, 12),
                         "shots":      "High" if _pc_avgf >= 15 else ("Low" if _pc_avgf < 10 else "Medium"),
-                        "matchup":    _pc_mq, "script": "Neutral", "venue": _pc_vadj,
-                        "h2h":        _pc_hsig, "b2b": _pc_b2b, "form": _pc_fsig,
-                        "rest":       "Normal", "pace": "Neutral", "shoot": "Neutral",
-                        "elim_game":  "Normal", "series_cov": "Neutral",
+                        "matchup":    _pc_mq,
+                        "script":     "Neutral",
+                        "venue":      _pc_vadj,
+                        "h2h":        _pc_hsig,
+                        "series_cov": _pc_scov_sig,
+                        "b2b":        _pc_b2b,
+                        "rest":       _pc_rest,
+                        "form":       _pc_fsig,
+                        "pace":       _pc_pace_sig,
+                        "shoot":      _pc_shoot_sig,
+                        "elim_game":  _pc_elim,
+                        "ref":        _pc_ref_sig,
+                        "game_num":   _pc_gnum_label,
+                        "pu_spike":   _pc_pu_sig,
                     }
                     _pc_adj  = apply_adjustments(_pc_wb, _pc_ctx, _pc_side)
                     _pc_tier = get_confidence_tier(_pc_adj, _pc_edge, _pc_cons, _pc_side)
-                    _pc_results.append({
+
+                    # Confidence score
+                    _pc_score_adj  = max(0, min((_pc_adj - 0.50) / 0.45, 1.0) * 65)
+                    _pc_score_edge = min(abs(_pc_edge) / 7.0, 1.0) * 25
+                    _pc_score_cons = _pc_cons * 10
+                    _pc_conf = min(99, int(_pc_score_adj + _pc_score_edge + _pc_score_cons))
+
+                    return {
                         "player":  _pc_fn,
                         "line":    _pc_ln,
                         "side":    _pc_side,
@@ -5454,12 +5548,25 @@ with st.expander("🎯  Parlay Checker — validate your entry before locking"):
                         "edge":    round(_pc_edge, 1),
                         "tier":    _pc_tier,
                         "cons":    _pc_cons,
+                        "conf":    _pc_conf,
                         "team":    _norm_team_abbr(_pc_team) if _pc_team else "?",
                         "opp":     _norm_team_abbr(_pc_opp) if _pc_opp else "?",
                         "matchup": _pc_mq,
-                    })
+                        "ref":     _pc_ref_sig,
+                        "pace":    _pc_pace_sig,
+                        "inj_flag": "",
+                    }
                 except Exception:
-                    continue
+                    return None
+
+            # Run all legs in parallel
+            with ThreadPoolExecutor(max_workers=5) as _ex:
+                _futures = {_ex.submit(_analyze_pc_leg, row): row for row in _pc_rows}
+                for _f in _afc(_futures, timeout=60):
+                    _res = _f.result()
+                    if _res:
+                        _pc_results.append(_res)
+
         st.session_state.parlay_results = _pc_results
 
     if st.session_state.parlay_results:
@@ -5536,26 +5643,44 @@ with st.expander("🎯  Parlay Checker — validate your entry before locking"):
             )
             _tc = {"Strong Over":"green","Lean Over":"yellow","Lean Under":"orange","Strong Under":"red","Pass":"gray"}
             _te = {"Strong Over":"🟢","Lean Over":"🟡","Lean Under":"🟠","Strong Under":"🔴","Pass":"⚪"}
-            for _r in sorted(_pr, key=lambda x: x["adj"]):
+            for _ri, _r in enumerate(sorted(_pr, key=lambda x: x["adj"])):
                 _rc   = _tc.get(_r["tier"], "gray")
                 _em   = _te.get(_r["tier"], "⚪")
                 _ecol = "#22c55e" if _r["edge"] > 0 else "#ef4444"
-                _vol  = " ⚠️ volatile" if _r["cons"] < 0.65 else ""
+                _vol  = "⚠️ volatile · " if _r["cons"] < 0.65 else ""
+                _conf = _r.get("conf", 0)
+                _cc   = "#10f590" if _conf >= 80 else ("#fbbf24" if _conf >= 65 else "#ef4444")
+                _ref_note = f" · 🧑‍⚖️ {_r.get('ref','')}" if _r.get("ref") not in ("Neutral","","N/A",None) else ""
+                _pace_note = f" · 🐢 Slow pace" if _r.get("pace") == "Penalty" else (" · 🚀 Fast pace" if _r.get("pace") == "Boost" else "")
+                # Rank badge
+                _rank_colors = ["#ef4444","#f97316","#fbbf24","#22c55e","#10f590"]
+                _rank_col = _rank_colors[min(_ri, 4)]
                 st.markdown(f"""
-                <div class='verdict-banner {_rc}' style='margin:0.3rem 0;padding:0.8rem 1.2rem;'>
-                    <div>
-                        <div class='verdict-label'>{_r["line"]} pts {_r["side"]} · vs {_r["opp"]}</div>
-                        <div style='font-size:1rem;font-weight:800;color:#f1f5f9;'>{_r["player"]}</div>
-                        <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#555;'>
-                            {_r["matchup"]} defense{_vol}</div>
+                <div class='verdict-banner {_rc}' style='margin:0.3rem 0;padding:0.9rem 1.2rem;'>
+                    <div style='flex:1;min-width:200px;'>
+                        <div style='display:flex;align-items:center;gap:8px;margin-bottom:4px;'>
+                            <div style='background:{_rank_col}22;border:1px solid {_rank_col}44;
+                                        border-radius:6px;padding:1px 8px;font-family:JetBrains Mono,monospace;
+                                        font-size:0.6rem;color:{_rank_col};font-weight:700;'>
+                                #{_ri+1} LEG</div>
+                            <div class='verdict-label' style='margin:0;'>{_r["line"]} pts {_r["side"]} · vs {_r["opp"]}</div>
+                        </div>
+                        <div style='font-size:1.05rem;font-weight:800;color:#f1f5f9;'>{_r["player"]}</div>
+                        <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#475569;margin-top:3px;'>
+                            {_vol}{_r["matchup"]} def{_ref_note}{_pace_note}</div>
                     </div>
                     <div style='display:flex;gap:1.2rem;flex-wrap:wrap;align-items:center;'>
-                        <div><div class='verdict-label'>Adjusted</div>
+                        <div>
+                            <div class='verdict-label'>Confidence</div>
+                            <div style='font-size:1.3rem;font-weight:900;color:{_cc};line-height:1;'>{_conf}</div>
+                            <div style='font-family:JetBrains Mono,monospace;font-size:0.5rem;color:#475569;'>/100</div>
+                        </div>
+                        <div><div class='verdict-label'>Hit Rate</div>
                              <div style='font-size:1rem;font-weight:700;color:#f1f5f9;'>{_r["adj"]:.0%}</div></div>
                         <div><div class='verdict-label'>Edge</div>
                              <div style='font-size:1rem;font-weight:700;color:{_ecol};'>{_r["edge"]:+.1f}</div></div>
-                        <div><div class='verdict-label'>Tier</div>
-                             <div style='font-size:0.9rem;font-weight:700;'>{_em} {_r["tier"]}</div></div>
+                        <div><div class='verdict-label'>Signal</div>
+                             <div style='font-size:0.85rem;font-weight:700;'>{_em} {_r["tier"].replace(" Over","").replace(" Under","")}</div></div>
                     </div>
                 </div>""", unsafe_allow_html=True)
 
