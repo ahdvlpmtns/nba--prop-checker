@@ -2730,6 +2730,7 @@ _REF_PPG = {
     "Gediminas Petraitis": 219.2, "Nick Buchert":    218.5,
     "Pat Fraher":        218.3, "Matt Boland":       218.0,
     # Low whistle (<218)
+    "Mark Lindsay":      219.8,
     "Kane Fitzgerald":   217.4, "Brian Forte":       216.9,
     "Phenizee Ransom":   216.2, "Rodney Mott":       215.8,
     "Justin Van Duyne":  215.1, "Marat Kogut":       214.7,
@@ -2830,14 +2831,14 @@ def referee_signal(
     diff = crew_avg - _REF_LEAGUE_AVG_PPG
 
     if side == "Over":
-        if diff >= 4.0:
+        if diff >= 3.0:
             return "High FT", crew_avg, clean_refs
-        if diff <= -4.0:
+        if diff <= -3.0:
             return "Low FT", crew_avg, clean_refs
     else:  # Under
-        if diff >= 4.0:
+        if diff >= 3.0:
             return "Low FT", crew_avg, clean_refs
-        if diff <= -4.0:
+        if diff <= -3.0:
             return "High FT", crew_avg, clean_refs
 
     return "Neutral", crew_avg, clean_refs
