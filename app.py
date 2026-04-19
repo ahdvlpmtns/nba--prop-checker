@@ -26,7 +26,7 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&family=JetBrains+Mono:wght@400;500;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap');
 
 /* ══════════════════════════════════════════
    V5.0 — PropLens · Premium Sports Intelligence
@@ -61,8 +61,8 @@ st.markdown("""
     --text3:    #475569;
 
     /* Fonts */
-    --font-display: 'Syne', sans-serif;
-    --font-body:    'DM Sans', sans-serif;
+    --font-display: 'Outfit', sans-serif;
+    --font-body:    'Inter', sans-serif;
     --font-mono:    'JetBrains Mono', monospace;
 
     /* Radius system */
@@ -5763,7 +5763,7 @@ if fetch:
         filter: blur(3px);
     }
     .bb-title {
-        font-family: 'Syne', sans-serif;
+        font-family: 'Outfit', sans-serif;
         font-size: 0.95rem;
         font-weight: 700;
         color: #edf2f8;
