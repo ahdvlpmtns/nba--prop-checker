@@ -6848,6 +6848,12 @@ if st.session_state.logs is not None:
     # ── Verdict banner ────────────────────────
     st.markdown("<div class='section-header'>Verdict</div>", unsafe_allow_html=True)
 
+    # Compute confidence score for player prop (same formula as scanner)
+    _score_adj  = max(0, min((adjusted - 0.50) / 0.45, 1.0) * 65)
+    _score_edge = min(abs(line_diff) / 7.0, 1.0) * 25
+    _score_cons = consistency * 10
+    _conf_score = min(99, int(_score_adj + _score_edge + _score_cons))
+
     # Plain language summary — for casual users
     _plain_map = {
         "Strong Over":  ("✅ Strong Over — the model backs this pick", "#10f590", "#041a0e"),
