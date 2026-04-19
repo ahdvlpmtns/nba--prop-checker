@@ -15,7 +15,7 @@ import streamlit as st
 # ─────────────────────────────────────────────
 
 st.set_page_config(
-    page_title="PropLens — NBA Prop Checker",
+    page_title="PropLens — Sports Intelligence",
     page_icon="🏀",
     layout="wide",
 )
@@ -26,43 +26,57 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800;900&family=Barlow:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&family=JetBrains+Mono:wght@400;500;700&display=swap');
 
 /* ══════════════════════════════════════════
-   V4.5 — PropLens · Broadcast Data Terminal
-   Electric Blue · Multi-Sport · Sharp
+   V5.0 — PropLens · Premium Sports Intelligence
+   App Store Ready · Mobile-First · Elevated
 ══════════════════════════════════════════ */
 
 :root {
-    /* Core palette */
-    --bg:       #0a0a0a;
-    --bg2:      #111111;
-    --bg3:      #181818;
-    --bg4:      #202020;
-    --border:   #1e2a3a;
-    --border2:  #253548;
+    /* Core palette — deep navy blacks with warmth */
+    --bg:       #080c14;
+    --bg2:      #0d1520;
+    --bg3:      #111e2e;
+    --bg4:      #162033;
+    --border:   rgba(255,255,255,0.06);
+    --border2:  rgba(255,255,255,0.10);
 
-    /* Electric blue accent */
+    /* Electric blue — same but richer */
     --accent:   #3b82f6;
     --accent2:  #2563eb;
     --accent3:  #60a5fa;
+    --accent-glow: rgba(59,130,246,0.25);
 
-    /* Signal colors */
-    --green:    #00e676;
-    --red:      #ff3d57;
-    --yellow:   #ffd600;
-    --blue:     #3b82f6;
-    --orange:   #ff6d00;
+    /* Signal colors — more vivid */
+    --green:    #10f590;
+    --red:      #ff4560;
+    --yellow:   #fbbf24;
+    --orange:   #f97316;
+    --purple:   #a78bfa;
 
     /* Typography */
-    --text:     #f0f0f0;
-    --text2:    #888888;
-    --text3:    #555555;
+    --text:     #f1f5f9;
+    --text2:    #94a3b8;
+    --text3:    #475569;
 
     /* Fonts */
-    --font-display: 'Barlow Condensed', sans-serif;
-    --font-body:    'Barlow', sans-serif;
+    --font-display: 'Syne', sans-serif;
+    --font-body:    'DM Sans', sans-serif;
     --font-mono:    'JetBrains Mono', monospace;
+
+    /* Radius system */
+    --r-sm:  8px;
+    --r-md:  12px;
+    --r-lg:  16px;
+    --r-xl:  20px;
+    --r-full: 999px;
+
+    /* Shadows */
+    --shadow-sm:  0 1px 3px rgba(0,0,0,0.4), 0 1px 2px rgba(0,0,0,0.3);
+    --shadow-md:  0 4px 16px rgba(0,0,0,0.5), 0 2px 6px rgba(0,0,0,0.3);
+    --shadow-lg:  0 8px 32px rgba(0,0,0,0.6), 0 4px 12px rgba(0,0,0,0.4);
+    --shadow-accent: 0 4px 24px rgba(59,130,246,0.3);
 }
 
 /* ── Reset & Base ── */
@@ -71,17 +85,18 @@ html, body, [class*="css"] {
     background-color: var(--bg) !important;
     color: var(--text) !important;
     -webkit-tap-highlight-color: transparent;
+    -webkit-font-smoothing: antialiased;
 }
 #MainMenu, footer, header { visibility: hidden; }
 .block-container {
     padding-top: 0 !important;
-    padding-bottom: 3rem !important;
+    padding-bottom: 4rem !important;
     padding-left: 1rem !important;
     padding-right: 1rem !important;
-    max-width: 920px !important;
+    max-width: 900px !important;
 }
 [data-testid="stAppViewContainer"] {
-    background: #0a0a0a !important;
+    background: var(--bg) !important;
 }
 [data-testid="stAppViewBlockContainer"] {
     background: transparent !important;
@@ -110,20 +125,23 @@ html, body, [class*="css"] {
     100% { transform: translateY(100vh); }
 }
 
-/* ── Header — broadcast ticker bar ── */
+/* ── Header — V5.0 premium ── */
 .pl-header {
     display: flex; align-items: center; justify-content: space-between;
-    padding: 1rem 1.25rem;
+    padding: 1rem 1.25rem 1rem 1.25rem;
     margin-bottom: 0;
-    background: var(--bg);
-    border-bottom: 2px solid var(--accent);
+    background: rgba(8,12,20,0.95);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-bottom: 1px solid var(--border);
     animation: fadeUp 0.3s ease both;
-    position: relative;
+    position: sticky; top: 0; z-index: 100;
+    box-shadow: 0 1px 0 var(--border), 0 4px 20px rgba(0,0,0,0.4);
 }
-.pl-header::before {
+.pl-header::after {
     content: '';
-    position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
-    background: var(--accent);
+    position: absolute; bottom: 0; left: 0; right: 0; height: 1px;
+    background: linear-gradient(90deg, var(--accent), transparent 60%);
 }
 .pl-logo-wrap { display: flex; align-items: center; gap: 14px; padding-left: 8px; }
 .pl-icon {
@@ -182,28 +200,29 @@ html, body, [class*="css"] {
 }
 .pl-badge {
     font-family: var(--font-mono) !important;
-    font-size: 0.6rem;
-    background: transparent;
+    font-size: 0.58rem;
+    background: rgba(59,130,246,0.1);
     color: var(--accent);
     font-weight: 700;
-    padding: 3px 10px;
-    letter-spacing: 0.12em;
+    padding: 3px 12px;
+    letter-spacing: 0.1em;
     text-transform: uppercase;
-    border: 1px solid var(--accent);
+    border: 1px solid rgba(59,130,246,0.3);
+    border-radius: var(--r-full);
 }
 
-/* ── Ticker line below header ── */
+/* ── Ticker line below header — V5.0 ── */
 .pl-ticker {
     background: var(--bg2);
     border-bottom: 1px solid var(--border);
-    padding: 0.35rem 1.25rem;
+    padding: 0.4rem 1.25rem;
     font-family: var(--font-mono);
-    font-size: 0.6rem;
+    font-size: 0.58rem;
     color: var(--text3);
-    letter-spacing: 0.1em;
+    letter-spacing: 0.12em;
     display: flex;
     gap: 1.5rem;
-    margin-bottom: 1.25rem;
+    margin-bottom: 1.5rem;
 }
 .pl-ticker-item { display: flex; gap: 6px; align-items: center; }
 .pl-ticker-dot {
@@ -212,49 +231,54 @@ html, body, [class*="css"] {
     animation: blink 2s ease-in-out infinite;
 }
 
-/* ── Section headers ── */
+/* ── Section headers — V5.0 ── */
 .section-header {
     font-family: var(--font-display) !important;
-    font-size: 0.65rem;
+    font-size: 0.62rem;
     font-weight: 700;
-    letter-spacing: 0.25em;
+    letter-spacing: 0.22em;
     text-transform: uppercase;
     color: var(--text3);
-    margin: 1.5rem 0 0.65rem 0;
-    padding-bottom: 0.5rem;
+    margin: 1.75rem 0 0.75rem 0;
+    padding-bottom: 0.6rem;
     border-bottom: 1px solid var(--border);
-    display: flex; align-items: center; gap: 10px;
+    display: flex; align-items: center; gap: 8px;
 }
 .section-header::before {
-    content: '//';
-    color: var(--accent);
-    font-family: var(--font-mono);
-    font-size: 0.7rem;
-    font-weight: 700;
+    content: '';
+    display: inline-block;
+    width: 3px; height: 14px;
+    background: var(--accent);
+    border-radius: 2px;
+    flex-shrink: 0;
 }
 
-/* ── Stat cards — data terminal style ── */
+/* ── Stat cards — V5.0 elevated glass ── */
 .stat-card {
     background: var(--bg2);
     border: 1px solid var(--border);
-    border-radius: 0;
-    padding: 0.85rem 1rem;
-    margin-bottom: 0.4rem;
-    transition: border-color 0.15s, background 0.15s;
-    animation: fadeUp 0.3s ease both;
+    border-radius: var(--r-md);
+    padding: 1rem 1.1rem;
+    margin-bottom: 0.5rem;
+    transition: border-color 0.2s, transform 0.15s, box-shadow 0.2s;
+    animation: fadeUp 0.35s ease both;
     position: relative;
     overflow: hidden;
+    box-shadow: var(--shadow-sm);
 }
 .stat-card::after {
     content: '';
     position: absolute;
-    top: 0; left: 0; width: 3px; height: 100%;
-    background: var(--border2);
-    transition: background 0.2s;
+    top: 0; left: 0; right: 0; height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.07), transparent);
 }
-.stat-card:hover { border-color: var(--border2); background: var(--bg3); }
-.stat-card:hover::after { background: var(--accent); }
-.stat-card:active { transform: scale(0.99); }
+.stat-card:hover {
+    border-color: var(--border2);
+    background: var(--bg3);
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-md);
+}
+.stat-card:active { transform: scale(0.98); }
 
 .stat-label {
     font-family: var(--font-mono) !important;
@@ -285,47 +309,61 @@ html, body, [class*="css"] {
     font-size: 0.58rem; color: var(--text3); margin-top: 5px; line-height: 1.5;
 }
 
-/* ── Defense card ── */
+/* ── Defense card — V5.0 ── */
 .defense-card {
     background: var(--bg2);
     border: 1px solid var(--border);
-    padding: 0.85rem 1rem; margin-bottom: 0.4rem;
+    border-radius: var(--r-md);
+    padding: 1rem 1.1rem; margin-bottom: 0.5rem;
     display: flex; align-items: center; justify-content: space-between;
+    box-shadow: var(--shadow-sm);
 }
 .defense-badge {
     font-family: var(--font-mono) !important;
-    font-size: 0.62rem; font-weight: 700;
-    padding: 3px 10px; letter-spacing: 0.06em;
+    font-size: 0.6rem; font-weight: 700;
+    padding: 4px 12px; letter-spacing: 0.06em;
     text-transform: uppercase;
+    border-radius: var(--r-full);
 }
-.defense-badge.good    { background: rgba(0,230,118,0.12); color: var(--green);  border: 1px solid rgba(0,230,118,0.3); }
+.defense-badge.good    { background: rgba(16,245,144,0.12); color: var(--green);  border: 1px solid rgba(16,245,144,0.25); }
 .defense-badge.neutral { background: var(--bg3); color: var(--text2); border: 1px solid var(--border); }
-.defense-badge.bad     { background: rgba(255,61,87,0.12);  color: var(--red);   border: 1px solid rgba(255,61,87,0.3); }
+.defense-badge.bad     { background: rgba(255,69,96,0.12);  color: var(--red);   border: 1px solid rgba(255,69,96,0.25); }
 
-/* ── Verdict banner — broadcast scoreboard style ── */
+/* ── Verdict banner — V5.0 premium card ── */
 .verdict-banner {
-    padding: 1.5rem 1.5rem;
-    margin: 1rem 0;
-    border: 1px solid var(--border2);
+    padding: 1.25rem 1.5rem;
+    margin: 0.75rem 0;
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
     display: flex; align-items: flex-start;
     justify-content: space-between; flex-wrap: wrap; gap: 1rem;
     animation: fadeUp 0.4s ease both;
     position: relative;
     overflow: hidden;
     background: var(--bg2);
+    box-shadow: var(--shadow-md);
+    transition: transform 0.15s, box-shadow 0.2s;
 }
+.verdict-banner:active { transform: scale(0.99); }
 .verdict-banner::before {
     content: '';
-    position: absolute; top: 0; left: 0; bottom: 0; width: 5px;
+    position: absolute; top: 0; left: 0; right: 0; height: 2px;
+    border-radius: var(--r-lg) var(--r-lg) 0 0;
 }
-.verdict-banner.green  { border-color: #00e67633; background: #001a0d; }
-.verdict-banner.green::before  { background: var(--green); box-shadow: 0 0 20px rgba(0,230,118,0.4); }
-.verdict-banner.yellow { border-color: #ffd60033; background: #1a1400; }
-.verdict-banner.yellow::before { background: var(--yellow); box-shadow: 0 0 20px rgba(255,214,0,0.4); }
-.verdict-banner.orange { border-color: #ff6d0033; background: #1a0800; }
-.verdict-banner.orange::before { background: var(--orange); box-shadow: 0 0 20px rgba(255,109,0,0.4); }
-.verdict-banner.red    { border-color: #ff3d5733; background: #1a0008; }
-.verdict-banner.red::before    { background: var(--red);   box-shadow: 0 0 20px rgba(255,61,87,0.4); }
+.verdict-banner::after {
+    content: '';
+    position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+    background: linear-gradient(135deg, rgba(255,255,255,0.02) 0%, transparent 60%);
+    pointer-events: none;
+}
+.verdict-banner.green  { border-color: rgba(16,245,144,0.2); background: linear-gradient(135deg,#041a0e 0%,var(--bg2) 100%); box-shadow: 0 4px 24px rgba(16,245,144,0.08); }
+.verdict-banner.green::before  { background: linear-gradient(90deg,var(--green),#00c853); }
+.verdict-banner.yellow { border-color: rgba(251,191,36,0.2); background: linear-gradient(135deg,#1a1200 0%,var(--bg2) 100%); box-shadow: 0 4px 24px rgba(251,191,36,0.08); }
+.verdict-banner.yellow::before { background: linear-gradient(90deg,var(--yellow),#f59e0b); }
+.verdict-banner.orange { border-color: rgba(249,115,22,0.2); background: linear-gradient(135deg,#1a0d00 0%,var(--bg2) 100%); box-shadow: 0 4px 24px rgba(249,115,22,0.08); }
+.verdict-banner.orange::before { background: linear-gradient(90deg,var(--orange),#ea580c); }
+.verdict-banner.red    { border-color: rgba(255,69,96,0.2);  background: linear-gradient(135deg,#1a0008 0%,var(--bg2) 100%); box-shadow: 0 4px 24px rgba(255,69,96,0.08); }
+.verdict-banner.red::before    { background: linear-gradient(90deg,var(--red),#dc2626); }
 .verdict-banner.gray   { border-color: var(--border); background: var(--bg2); }
 .verdict-banner.gray::before   { background: var(--text3); }
 
@@ -355,24 +393,31 @@ html, body, [class*="css"] {
     display: inline-flex; align-items: center;
     white-space: nowrap; line-height: 1.5;
     border: 1px solid transparent;
+    border-radius: var(--r-full);
 }
 .flag-pill.up     { background: rgba(0,230,118,0.1);  color: var(--green);  border-color: rgba(0,230,118,0.2); }
 .flag-pill.down   { background: rgba(255,61,87,0.1);   color: var(--red);    border-color: rgba(255,61,87,0.2); }
 .flag-pill.flat   { background: var(--bg3); color: var(--text2); border-color: var(--border); }
 .flag-pill.nodata { background: var(--bg3); color: var(--text3); border-color: var(--border); }
 
-/* ── AI box ── */
+/* ── AI box — V5.0 ── */
 .ai-box {
     background: var(--bg2);
-    border: 1px solid var(--border2);
-    border-left: 3px solid var(--accent);
-    padding: 1.25rem;
+    border: 1px solid rgba(59,130,246,0.2);
+    border-radius: var(--r-lg);
+    padding: 1.25rem 1.35rem;
     margin-top: 0.75rem;
-    font-size: 0.875rem; line-height: 1.75; color: var(--text2);
+    font-size: 0.875rem; line-height: 1.8; color: var(--text2);
     animation: fadeUp 0.4s ease both;
     position: relative;
+    box-shadow: 0 4px 20px rgba(59,130,246,0.08);
 }
-.ai-box::before { display: none; }
+.ai-box::before {
+    content: '';
+    position: absolute; top: 0; left: 0; right: 0; height: 1px;
+    background: linear-gradient(90deg, var(--accent), transparent);
+    border-radius: var(--r-lg) var(--r-lg) 0 0;
+}
 
 /* ── Explainer box ── */
 .explainer {
@@ -393,31 +438,40 @@ html, body, [class*="css"] {
     font-size: 0.62rem; color: var(--text3); line-height: 1.6;
 }
 
-/* ── Buttons ── */
+/* ── Buttons — V5.0 premium pill ── */
 .stButton > button {
     background: var(--accent) !important;
     color: #ffffff !important;
     border: none !important;
-    border-radius: 0 !important;
+    border-radius: var(--r-md) !important;
     font-family: var(--font-display) !important;
-    font-weight: 800 !important;
-    font-size: 1rem !important;
-    letter-spacing: 0.12em !important;
+    font-weight: 700 !important;
+    font-size: 0.95rem !important;
+    letter-spacing: 0.05em !important;
     text-transform: uppercase !important;
-    padding: 0.75rem 1.4rem !important;
-    transition: all 0.15s !important;
-    box-shadow: none !important;
+    padding: 0.8rem 1.4rem !important;
+    transition: all 0.18s cubic-bezier(0.34,1.56,0.64,1) !important;
+    box-shadow: 0 4px 16px rgba(59,130,246,0.35) !important;
     width: 100% !important;
-    clip-path: polygon(0 0, 97% 0, 100% 20%, 100% 100%, 3% 100%, 0 80%) !important;
+    clip-path: none !important;
+    position: relative !important;
+    overflow: hidden !important;
+}
+.stButton > button::before {
+    content: '' !important;
+    position: absolute !important;
+    top: 0 !important; left: 0 !important; right: 0 !important;
+    height: 1px !important;
+    background: rgba(255,255,255,0.25) !important;
 }
 .stButton > button:hover {
-    background: var(--accent3) !important;
-    transform: translateY(-1px) !important;
-    box-shadow: 0 4px 20px rgba(200,241,53,0.3) !important;
+    background: var(--accent2) !important;
+    transform: translateY(-2px) !important;
+    box-shadow: 0 8px 28px rgba(59,130,246,0.45) !important;
 }
 .stButton > button:active {
-    transform: scale(0.98) !important;
-    box-shadow: none !important;
+    transform: scale(0.97) translateY(0) !important;
+    box-shadow: 0 2px 8px rgba(59,130,246,0.3) !important;
 }
 
 /* ── Inputs ── */
@@ -429,7 +483,7 @@ html, body, [class*="css"] {
     letter-spacing: 0.15em;
 }
 div[data-testid="stSelectbox"] > div > div {
-    border-radius: 0 !important;
+    border-radius: var(--r-sm) !important;
     border-color: var(--border2) !important;
     background: var(--bg2) !important;
     color: var(--text) !important;
@@ -441,7 +495,7 @@ div[data-testid="stNumberInput"] input {
     color: var(--text) !important;
     background: var(--bg2) !important;
     border-color: var(--border2) !important;
-    border-radius: 0 !important;
+    border-radius: var(--r-sm) !important;
     font-family: var(--font-mono) !important;
     font-size: 1rem !important;
     font-weight: 700 !important;
@@ -455,7 +509,7 @@ div[data-testid="stTextInput"] input {
     color: var(--text) !important;
     background: var(--bg2) !important;
     border-color: var(--border2) !important;
-    border-radius: 0 !important;
+    border-radius: var(--r-sm) !important;
 }
 div[data-testid="stSelectbox"] input,
 div[data-baseweb="select"] input,
@@ -516,20 +570,20 @@ button[data-testid="baseButton-primary"][key="tab_scanner"] {
     transition: transform 0.25s cubic-bezier(0.4,0,0.2,1);
 }
 
-/* ── Sport switcher buttons ── */
+/* ── Sport switcher buttons — V5.0 ── */
 button[data-testid="baseButton-primary"][key="sport_nba"],
 button[data-testid="baseButton-primary"][key="sport_mlb"] {
     background: var(--accent) !important;
     color: #ffffff !important;
     border: none !important;
     clip-path: none !important;
-    border-radius: 0 !important;
+    border-radius: var(--r-sm) !important;
     font-family: var(--font-display) !important;
-    font-weight: 800 !important;
+    font-weight: 700 !important;
     font-size: 0.85rem !important;
-    letter-spacing: 0.1em !important;
+    letter-spacing: 0.08em !important;
     text-transform: uppercase !important;
-    box-shadow: 0 0 16px rgba(59,130,246,0.3) !important;
+    box-shadow: 0 4px 16px rgba(59,130,246,0.35) !important;
 }
 button[data-testid="baseButton-secondary"][key="sport_nba"],
 button[data-testid="baseButton-secondary"][key="sport_mlb"] {
@@ -537,11 +591,11 @@ button[data-testid="baseButton-secondary"][key="sport_mlb"] {
     color: var(--text3) !important;
     border: 1px solid var(--border) !important;
     clip-path: none !important;
-    border-radius: 0 !important;
+    border-radius: var(--r-sm) !important;
     font-family: var(--font-display) !important;
     font-weight: 700 !important;
     font-size: 0.85rem !important;
-    letter-spacing: 0.1em !important;
+    letter-spacing: 0.08em !important;
     text-transform: uppercase !important;
     box-shadow: none !important;
 }
@@ -549,15 +603,17 @@ button[data-testid="baseButton-secondary"][key="sport_nba"]:hover,
 button[data-testid="baseButton-secondary"][key="sport_mlb"]:hover {
     background: var(--bg3) !important;
     color: var(--text) !important;
-    border-color: var(--accent) !important;
-    transform: none !important;
+    border-color: rgba(59,130,246,0.5) !important;
+    transform: translateY(-1px) !important;
 }
 
 /* ── Expanders ── */
 div[data-testid="stExpander"] {
     border: 1px solid var(--border) !important;
-    border-radius: 0 !important;
+    border-radius: var(--r-md) !important;
     background: var(--bg2) !important;
+    box-shadow: var(--shadow-sm) !important;
+    overflow: hidden !important;
 }
 div[data-testid="stExpander"] p,
 div[data-testid="stExpander"] li,
@@ -634,49 +690,65 @@ div[data-testid="column"]:first-child .stButton > button:hover {
     transform: none !important; box-shadow: none !important;
 }
 
-/* ── Secondary buttons ── */
+/* ── Secondary buttons — V5.0 ── */
 button[data-testid="baseButton-secondary"] {
     background: var(--bg2) !important; color: var(--text2) !important;
-    border: 1px solid var(--border) !important; border-radius: 0 !important;
+    border: 1px solid var(--border) !important;
+    border-radius: var(--r-sm) !important;
     font-family: var(--font-body) !important; font-size: 0.82rem !important;
-    font-weight: 500 !important; padding: 0.45rem 0.9rem !important;
-    box-shadow: none !important; transition: all 0.12s !important;
+    font-weight: 500 !important; padding: 0.5rem 0.9rem !important;
+    box-shadow: var(--shadow-sm) !important; transition: all 0.15s !important;
     margin-bottom: 2px !important; width: 100% !important;
 }
 button[data-testid="baseButton-secondary"]:hover {
     background: var(--bg3) !important; color: var(--text) !important;
-    border-color: var(--border2) !important; transform: none !important;
+    border-color: var(--border2) !important;
+    transform: translateY(-1px) !important;
+    box-shadow: var(--shadow-md) !important;
 }
 
-/* ── Mobile ── */
+/* ── Mobile — App Store optimized ── */
 @media (max-width: 768px) {
     .block-container {
-        padding-left: 0.5rem !important;
-        padding-right: 0.5rem !important;
+        padding-left: 0.6rem !important;
+        padding-right: 0.6rem !important;
         padding-top: 0 !important;
+        padding-bottom: 5rem !important;
     }
-    .pl-logo { font-size: 1.6rem !important; }
-    .stat-value { font-size: 1.6rem !important; }
-    .verdict-tier { font-size: 2rem !important; }
-    .verdict-banner { padding: 1rem 1rem 1rem 1.4rem; }
-    div[data-testid="stColumn"] { padding: 0 2px !important; }
+    .pl-logo { font-size: 1.7rem !important; }
+    .stat-value { font-size: 1.7rem !important; }
+    .verdict-tier { font-size: 2.2rem !important; }
+    .verdict-banner {
+        padding: 1.1rem 1.2rem;
+        border-radius: var(--r-md);
+    }
+    div[data-testid="stColumn"] { padding: 0 3px !important; }
     .stButton > button {
+        padding: 1rem 1.2rem !important;
+        min-height: 52px !important;
+        font-size: 0.9rem !important;
+        border-radius: var(--r-md) !important;
+    }
+    .stat-card {
+        border-radius: var(--r-sm) !important;
+        padding: 0.85rem 0.9rem !important;
+    }
+    .pl-header {
         padding: 0.85rem 1rem !important;
-        min-height: 50px !important;
     }
 }
 
-/* ── Verdict glow animations ── */
+/* ── Verdict glow animations — V5.0 ── */
 @keyframes verdict-pulse-green {
-    0%, 100% { box-shadow: inset 5px 0 0 var(--green), 0 0 30px rgba(0,230,118,0.05); }
-    50%       { box-shadow: inset 5px 0 0 var(--green), 0 0 50px rgba(0,230,118,0.12); }
+    0%, 100% { box-shadow: 0 4px 24px rgba(16,245,144,0.06), 0 0 0 1px rgba(16,245,144,0.12); }
+    50%       { box-shadow: 0 8px 40px rgba(16,245,144,0.14), 0 0 0 1px rgba(16,245,144,0.2); }
 }
 @keyframes verdict-pulse-red {
-    0%, 100% { box-shadow: inset 5px 0 0 var(--red), 0 0 30px rgba(255,61,87,0.05); }
-    50%       { box-shadow: inset 5px 0 0 var(--red), 0 0 50px rgba(255,61,87,0.12); }
+    0%, 100% { box-shadow: 0 4px 24px rgba(255,69,96,0.06), 0 0 0 1px rgba(255,69,96,0.12); }
+    50%       { box-shadow: 0 8px 40px rgba(255,69,96,0.14), 0 0 0 1px rgba(255,69,96,0.2); }
 }
-.verdict-banner.green { animation: fadeUp 0.4s ease both, verdict-pulse-green 3s ease-in-out 0.4s infinite; }
-.verdict-banner.red   { animation: fadeUp 0.4s ease both, verdict-pulse-red   3s ease-in-out 0.4s infinite; }
+.verdict-banner.green { animation: fadeUp 0.4s ease both, verdict-pulse-green 3s ease-in-out 0.5s infinite; }
+.verdict-banner.red   { animation: fadeUp 0.4s ease both, verdict-pulse-red   3s ease-in-out 0.5s infinite; }
 
 </style>
 """, unsafe_allow_html=True)
@@ -1554,6 +1626,208 @@ def espn_get_opp_pts_allowed(opp_abbr: str, _date: str = None) -> Optional[float
         return None
     except Exception:
         return None
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_opp_recent_defensive_form(opp_abbr: str) -> dict:
+    """
+    Compare opponent's last 5 games pts allowed vs their L15 season avg.
+    Returns dict with:
+      - recent_avg: pts allowed in last 5 games
+      - season_avg: pts allowed in last 15 games
+      - trend: "Tightening" | "Neutral" | "Softening"
+      - diff: recent_avg - season_avg (positive = allowing more = worse defense)
+    """
+    empty = {"recent_avg": None, "season_avg": None, "trend": "Neutral", "diff": 0}
+    if not opp_abbr:
+        return empty
+    try:
+        import pytz
+        et    = pytz.timezone("America/New_York")
+        today = datetime.now(et).date()
+
+        pts_by_game = []   # (date, pts_allowed) newest first
+        for offset in range(1, 40):
+            if len(pts_by_game) >= 15:
+                break
+            check    = today - timedelta(days=offset)
+            date_str = check.strftime("%Y%m%d")
+            try:
+                data   = espn_get(f"{ESPN_SITE}/scoreboard", params={"dates": date_str})
+                events = data.get("events", [])
+                for ev in events:
+                    comp        = ev.get("competitions", [{}])[0]
+                    competitors = comp.get("competitors", [])
+                    team_comp   = next(
+                        (c for c in competitors
+                         if c.get("team", {}).get("abbreviation", "") == opp_abbr),
+                        None
+                    )
+                    if not team_comp:
+                        continue
+                    status = ev.get("status", {}).get("type", {}).get("name", "")
+                    if "final" not in status.lower() and "complete" not in status.lower():
+                        continue
+                    opp_comp = next(
+                        (c for c in competitors
+                         if c.get("team", {}).get("abbreviation", "") != opp_abbr),
+                        None
+                    )
+                    if opp_comp:
+                        try:
+                            pts_by_game.append(float(opp_comp.get("score", 0)))
+                        except Exception:
+                            pass
+            except Exception:
+                continue
+
+        if len(pts_by_game) < 5:
+            return empty
+
+        recent_5  = pts_by_game[:5]
+        season_15 = pts_by_game[:15]
+        recent_avg = sum(recent_5) / len(recent_5)
+        season_avg = sum(season_15) / len(season_15)
+        diff = recent_avg - season_avg
+
+        # Tightening = allowing fewer pts recently = better defense
+        # Softening  = allowing more pts recently = worse defense
+        if diff <= -3.0:
+            trend = "Tightening"   # defense locking in — harder to score
+        elif diff >= 3.0:
+            trend = "Softening"    # defense breaking down — easier to score
+        else:
+            trend = "Neutral"
+
+        return {
+            "recent_avg": round(recent_avg, 1),
+            "season_avg": round(season_avg, 1),
+            "trend":      trend,
+            "diff":       round(diff, 1),
+        }
+    except Exception:
+        return empty
+
+
+# ── Game number in series adjustment ────────────────────────────────
+def get_series_game_number(series_wins: int, series_losses: int) -> int:
+    """Returns the current game number in the series (1-7)."""
+    return series_wins + series_losses + 1
+
+def game_number_adjustment(game_num: int, side: str) -> Tuple[str, float]:
+    """
+    Apply scoring adjustment based on game number in playoff series.
+    Returns (label, adjustment) where adjustment is additive pp.
+
+    Game 1: conservative, feeling-out period → lower scoring
+    Games 2-5: normal playoff intensity
+    Game 6-7: pressure reduces scoring, starters may be fatigued
+    """
+    if not _IS_PLAYOFFS:
+        return "N/A", 0.0
+
+    _flip = 1.0 if side == "Over" else -1.0
+
+    if game_num == 1:
+        return "Game 1 (feeling out)", -0.03 * _flip
+    elif game_num in (2, 3, 4, 5):
+        return f"Game {game_num} (normal)", 0.0
+    elif game_num == 6:
+        return "Game 6 (pressure)", -0.02 * _flip
+    elif game_num >= 7:
+        return "Game 7 (max pressure)", -0.03 * _flip
+    return "Normal", 0.0
+
+
+# ── Playoff usage spike detector ────────────────────────────────────
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_playoff_game_logs(player_id: int, season: str) -> pd.DataFrame:
+    """
+    Fetch playoff game logs for a player.
+    Uses NBA Stats API with SeasonType=Playoffs.
+    """
+    _URL = "https://stats.nba.com/stats/playergamelog"
+    _HEADERS = {
+        "Host": "stats.nba.com",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "x-nba-stats-origin": "stats",
+        "x-nba-stats-token": "true",
+        "Referer": "https://www.nba.com/",
+        "Origin": "https://www.nba.com",
+    }
+    try:
+        import requests as _req
+        r = _req.get(_URL, headers=_HEADERS, params={
+            "PlayerID":   player_id,
+            "Season":     season,
+            "SeasonType": "Playoffs",
+            "LeagueID":   "00",
+        }, timeout=10)
+        if not r.ok:
+            return pd.DataFrame()
+        rs = r.json().get("resultSets", [{}])[0]
+        headers = rs.get("headers", [])
+        rows    = rs.get("rowSet", [])
+        if not rows:
+            return pd.DataFrame()
+        return pd.DataFrame(rows, columns=headers)
+    except Exception:
+        return pd.DataFrame()
+
+
+def playoff_usage_spike_signal(
+    player_id: int,
+    season: str,
+    reg_avg_pts: float,
+    reg_avg_min: float,
+    line: float,
+    side: str,
+) -> Tuple[str, Optional[float], Optional[float]]:
+    """
+    Compare player's current playoff stats (this postseason) vs regular season.
+    Returns (signal, playoff_avg_pts, playoff_avg_min).
+
+    signal:
+      "Spike"   — scoring/minutes significantly up in playoffs → boost Over
+      "Drop"    — scoring/minutes down in playoffs → penalize Over
+      "Neutral" — consistent with regular season
+    """
+    if not _IS_PLAYOFFS:
+        return "Neutral", None, None
+
+    try:
+        logs = get_playoff_game_logs(player_id, season)
+        if logs.empty or "PTS" not in logs.columns:
+            return "Neutral", None, None
+
+        pts = pd.to_numeric(logs["PTS"], errors="coerce").dropna()
+        mins = pd.to_numeric(logs["MIN"], errors="coerce").dropna()
+
+        if len(pts) < 2:
+            return "Neutral", None, None
+
+        playoff_avg_pts = float(pts.mean())
+        playoff_avg_min = float(mins.mean()) if len(mins) >= 2 else None
+
+        pts_diff = playoff_avg_pts - reg_avg_pts
+        min_diff = (playoff_avg_min - reg_avg_min) if playoff_avg_min and reg_avg_min else 0
+
+        _flip = 1.0 if side == "Over" else -1.0
+
+        # Spike: scoring AND minutes both up significantly
+        if pts_diff >= 3.0 and min_diff >= 2.0:
+            return "Spike", playoff_avg_pts, playoff_avg_min
+        # Partial spike: just scoring up (usage increase, not minutes)
+        if pts_diff >= 3.0:
+            return "Spike", playoff_avg_pts, playoff_avg_min
+        # Drop: scoring down — coach tightened rotation or player struggling
+        if pts_diff <= -3.0:
+            return "Drop", playoff_avg_pts, playoff_avg_min
+
+        return "Neutral", playoff_avg_pts, playoff_avg_min
+    except Exception:
+        return "Neutral", None, None
+
 
 # ── Supabase ──────────────────────────────────────────────────
 
@@ -2436,6 +2710,194 @@ def get_team_pace(team_abbr: str) -> Optional[float]:
     return None
 
 
+# ── Referee foul tendency table ─────────────────────────────────────
+# Points per game in games officiated — 2025-26 season
+# High = whistle-happy refs = more FTs = more scoring
+# Low = let-them-play refs = fewer FTs = lower scoring
+# Source: NBAstuffer.com 2025-26 referee stats
+_REF_PPG = {
+    # High whistle (>225 pts/game)
+    "Zach Zarba":        231.4, "Scott Foster":      229.8,
+    "Tony Brothers":     228.6, "James Capers":      227.1,
+    "Marc Davis":        226.5, "Ed Malloy":         226.0,
+    "Bill Kennedy":      225.8, "Josh Tiven":        225.3,
+    # Neutral (218-225)
+    "John Goble":        224.1, "Derek Richardson":  223.7,
+    "Eric Lewis":        223.2, "Sean Wright":       222.8,
+    "Kevin Scott":       222.1, "Courtney Kirkland": 221.5,
+    "Ben Taylor":        221.0, "Dedric Taylor":     220.4,
+    "Tom Washington":    220.1, "JT Orr":            219.6,
+    "Gediminas Petraitis": 219.2, "Nick Buchert":    218.5,
+    "Pat Fraher":        218.3, "Matt Boland":       218.0,
+    # Low whistle (<218)
+    "Kane Fitzgerald":   217.4, "Brian Forte":       216.9,
+    "Phenizee Ransom":   216.2, "Rodney Mott":       215.8,
+    "Justin Van Duyne":  215.1, "Marat Kogut":       214.7,
+    "Leon Wood":         214.2, "CJ Washington":     213.8,
+    "Eric Dalen":        213.1, "Tre Maddox":        212.6,
+}
+_REF_LEAGUE_AVG_PPG = 221.0  # league average pts/game 2025-26
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_todays_referees(game_team_abbr: Optional[str]) -> Tuple[List[str], str]:
+    """
+    Fetch today's referee assignments from NBA official site.
+    Returns (ref_names, raw_text) for the game involving game_team_abbr.
+    Falls back to empty list on failure.
+    """
+    if not game_team_abbr:
+        return [], ""
+    try:
+        import datetime, pytz
+        et    = pytz.timezone("America/New_York")
+        today = datetime.datetime.now(et).strftime("%Y-%m-%d")
+        r = requests.get(
+            "https://official.nba.com/referee-assignments/",
+            headers={"User-Agent": "Mozilla/5.0", "Accept": "text/html"},
+            timeout=10
+        )
+        if not r.ok:
+            return [], ""
+        from html.parser import HTMLParser
+        class _RefParser(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.rows = []; self._row = []; self._in_td = False
+            def handle_starttag(self, tag, attrs):
+                if tag == "tr": self._row = []
+                if tag in ("td","th"): self._in_td = True
+            def handle_endtag(self, tag):
+                if tag in ("td","th"): self._in_td = False
+                if tag == "tr" and self._row: self.rows.append(self._row[:])
+            def handle_data(self, data):
+                if self._in_td: self._row.append(data.strip())
+        p = _RefParser()
+        p.feed(r.text)
+        # Find row containing our team
+        abbr_up = game_team_abbr.upper()
+        # NBA site shows team names not abbrs — build a mapping
+        _ABBR_TO_NAME = {
+            "ATL":"Atlanta","BOS":"Boston","BKN":"Brooklyn","CHA":"Charlotte",
+            "CHI":"Chicago","CLE":"Cleveland","DAL":"Dallas","DEN":"Denver",
+            "DET":"Detroit","GSW":"Golden State","HOU":"Houston","IND":"Indiana",
+            "LAC":"LA Clippers","LAL":"LA Lakers","MEM":"Memphis","MIA":"Miami",
+            "MIL":"Milwaukee","MIN":"Minnesota","NOP":"New Orleans","NYK":"New York",
+            "OKC":"Oklahoma City","ORL":"Orlando","PHI":"Philadelphia","PHX":"Phoenix",
+            "POR":"Portland","SAC":"Sacramento","SAS":"San Antonio","TOR":"Toronto",
+            "UTA":"Utah","WAS":"Washington",
+        }
+        team_name = _ABBR_TO_NAME.get(abbr_up, abbr_up).lower()
+        refs = []
+        for row in p.rows:
+            if len(row) >= 4:
+                game_cell = row[0].lower()
+                if team_name in game_cell or abbr_up.lower() in game_cell:
+                    # Cols: Game, Crew Chief, Referee, Umpire, [Alternate]
+                    refs = [row[i] for i in range(1, min(4, len(row))) if row[i]]
+                    break
+        return refs, ""
+    except Exception:
+        return [], ""
+
+
+def referee_signal(
+    player_team: Optional[str],
+    side: str,
+) -> Tuple[str, Optional[float], List[str]]:
+    """
+    Returns (signal, avg_ppg, ref_names).
+    signal: "High FT" (boosts Over), "Neutral", "Low FT" (hurts Over)
+    """
+    refs, _ = get_todays_referees(player_team)
+    if not refs:
+        return "Neutral", None, []
+
+    # Average PPG for tonight's crew
+    known = [_REF_PPG[r] for r in refs if r in _REF_PPG]
+    if not known:
+        return "Neutral", None, refs
+
+    crew_avg = sum(known) / len(known)
+    diff = crew_avg - _REF_LEAGUE_AVG_PPG
+
+    if side == "Over":
+        if diff >= 4.0:
+            return "High FT", crew_avg, refs
+        if diff <= -4.0:
+            return "Low FT", crew_avg, refs
+    else:  # Under
+        if diff >= 4.0:
+            return "Low FT", crew_avg, refs   # high-scoring game hurts Under
+        if diff <= -4.0:
+            return "High FT", crew_avg, refs  # low-scoring game helps Under
+
+    return "Neutral", crew_avg, refs
+
+
+def get_opponent_injury_report(
+    opp_abbr: Optional[str],
+    player_position: Optional[str] = None,
+) -> Tuple[List[dict], str]:
+    """
+    Check if the opposing team has key players out tonight.
+    Returns (absent_players, alert_html).
+    Focuses on high-minute defenders and primary scorers.
+    """
+    if not opp_abbr:
+        return [], ""
+    try:
+        all_players = espn_get_all_players(_date=_cache_date())
+        # Get all players on opponent team
+        opp_players = [
+            p for p in all_players
+            if _norm_team_abbr(p.get("team_abbr", "")) == opp_abbr.upper()
+        ]
+        if not opp_players:
+            return [], ""
+
+        # Check top 8 by roster position (starters/key rotation)
+        import concurrent.futures as _cf
+        absent = []
+
+        def _check(player):
+            status, reason = get_player_injury_status(player["full_name"])
+            return player["full_name"], status, reason
+
+        with _cf.ThreadPoolExecutor(max_workers=6) as ex:
+            futures = {ex.submit(_check, p): p for p in opp_players[:10]}
+            for f in _cf.as_completed(futures, timeout=8):
+                try:
+                    name, status, reason = f.result()
+                    if status.upper() in ("OUT", "DOUBTFUL"):
+                        absent.append({
+                            "name":   name,
+                            "status": status,
+                            "reason": reason.replace("Injury/Illness - ", "").strip(),
+                        })
+                except Exception:
+                    pass
+
+        if not absent:
+            return [], ""
+
+        _names = ", ".join(f"{p['name']} ({p['status']})" for p in absent[:3])
+        alert_html = (
+            f"<div style='background:#0c1a2e;border:1px solid #1e3a5f;"
+            f"border-left:4px solid #3b82f6;"
+            f"border-radius:0;padding:0.65rem 1rem;margin-bottom:0.5rem;"
+            f"font-family:JetBrains Mono,monospace;'>"
+            f"<div style='font-size:0.7rem;'>"
+            f"<span style='color:#3b82f6;font-weight:800;letter-spacing:0.08em;'>"
+            f"🏀 OPP INJURY REPORT</span>"
+            f"<span style='color:#94a3b8;'> · {opp_abbr} missing: "
+            f"<span style='color:#f1f5f9;font-weight:700;'>{_names}</span>"
+            f" — matchup quality upgrade</span></div></div>"
+        )
+        return absent, alert_html
+    except Exception:
+        return [], ""
+
+
 def pace_adjustment(
     player_team_abbr: Optional[str],
     opp_abbr: Optional[str],
@@ -2675,6 +3137,16 @@ def apply_adjustments(weighted: float, context: dict, side: str = "Over") -> flo
         "elim_game": {"Elimination": 0.00, "Closeout": 0.00, "Normal": 0.00},
         # Playoffs only — how this specific defense has covered this player in this series
         "series_cov": {"Strong": +0.07, "Neutral": 0.00, "Risk": -0.08},
+        # Referee foul tendency — high whistle = more FTs = more scoring
+        "ref":        {"High FT": +0.04, "Neutral": 0.00, "Low FT": -0.04},
+        # Playoff game number — Game 1 and 6/7 see lower scoring
+        "game_num":   {"Spike": +0.05, "Neutral": 0.00, "Drop": -0.05, "N/A": 0.00,
+                       "Game 1 (feeling out)": -0.03, "Game 2 (normal)": 0.00,
+                       "Game 3 (normal)": 0.00, "Game 4 (normal)": 0.00,
+                       "Game 5 (normal)": 0.00, "Game 6 (pressure)": -0.02,
+                       "Game 7 (max pressure)": -0.03},
+        # Playoff usage spike vs regular season
+        "pu_spike":   {"Spike": +0.05, "Neutral": 0.00, "Drop": -0.05},
     }
     # For Under bets, flip every signal: high scoring hurts the Under, low scoring helps it
     _flip = -1.0 if side == "Under" else 1.0
@@ -3316,13 +3788,13 @@ st.markdown("""
         </div>
     </div>
     <div style="display:flex; align-items:center; gap:10px;">
-        <span class="pl-badge">V4.5</span>
+        <span class="pl-badge">V5.0</span>
     </div>
 </div>
 <div class="pl-ticker">
     <div class="pl-ticker-item">
         <div class="pl-ticker-dot"></div>
-        <span>LIVE · NBA 2025-26 · MLB 2026</span>
+        <span>LIVE · NBA PLAYOFFS 2026 · MLB 2026</span>
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -4299,6 +4771,8 @@ if _IS_PLAYOFFS:
         unsafe_allow_html=True
     )
 
+
+
 # ─────────────────────────────────────────────
 # Slate Scanner
 # ─────────────────────────────────────────────
@@ -4439,6 +4913,9 @@ if _mode == "🎯  Slate Scanner":
                         "rest":       "Normal", "pace": "Neutral", "shoot": "Neutral",
                         "elim_game":  "Normal",
                         "series_cov": "Neutral",
+                        "ref":        "Neutral",
+                        "game_num":   "N/A",
+                        "pu_spike":   "Neutral",
                     }
                     _adj  = apply_adjustments(_wb, _ctx, "Over")
                     _tier = get_confidence_tier(_adj, _ld, _cons, "Over")
@@ -4800,6 +5277,232 @@ with st.expander("⚡  Quick Entry — analyze multiple props at once"):
                          <div style='font-size:0.95rem;font-weight:700;color:#f1f5f9;'>{_qr["Adjusted"]}</div></div>
                 </div>
             </div>""", unsafe_allow_html=True)
+
+# ─────────────────────────────────────────────
+# Parlay Checker + Best Entry Builder
+# ─────────────────────────────────────────────
+
+if "parlay_results" not in st.session_state:
+    st.session_state.parlay_results = None
+
+with st.expander("🎯  Parlay Checker — validate your entry before locking"):
+    st.markdown("""
+    <div class='explainer'>
+        Enter your full entry to check combined probability, spot weak legs,
+        flag correlated picks, and see your real odds of hitting.
+    </div>
+    """, unsafe_allow_html=True)
+
+    _pc_players = player_names_list if 'player_names_list' in dir() else []
+
+    # Entry rows
+    _pc_hc1, _pc_hc2, _pc_hc3 = st.columns([3, 1.2, 1])
+    _pc_hc1.markdown("<div style='font-family:DM Mono;font-size:0.65rem;color:#475569;letter-spacing:0.1em;text-transform:uppercase;'>Player</div>", unsafe_allow_html=True)
+    _pc_hc2.markdown("<div style='font-family:DM Mono;font-size:0.65rem;color:#475569;letter-spacing:0.1em;text-transform:uppercase;'>Line</div>", unsafe_allow_html=True)
+    _pc_hc3.markdown("<div style='font-family:DM Mono;font-size:0.65rem;color:#475569;letter-spacing:0.1em;text-transform:uppercase;'>Over/Under</div>", unsafe_allow_html=True)
+
+    _pc_rows = []
+    for _pi in range(5):
+        _pc1, _pc2, _pc3 = st.columns([3, 1.2, 1])
+        with _pc1:
+            _pp = st.selectbox(f"pp{_pi}", options=[""] + _pc_players,
+                               format_func=lambda x: "— player —" if x == "" else x,
+                               key=f"pc_player_{_pi}", label_visibility="collapsed")
+        with _pc2:
+            _pl = st.number_input(f"pl{_pi}", min_value=0.0, value=20.0, step=0.5,
+                                  key=f"pc_line_{_pi}", label_visibility="collapsed")
+        with _pc3:
+            _ps = st.selectbox(f"ps{_pi}", ["Over", "Under"],
+                               key=f"pc_side_{_pi}", label_visibility="collapsed")
+        if _pp:
+            _pc_rows.append({"player": _pp, "line": _pl, "side": _ps})
+
+    _run_pc = st.button("🎯  Check Entry", key="run_parlay_checker")
+
+    if _run_pc and _pc_rows:
+        st.session_state.parlay_results = None
+        _pc_season = "2025-26"
+        _pc_results = []
+        with st.spinner(f"Analyzing {len(_pc_rows)} legs..."):
+            for _pc_row in _pc_rows:
+                try:
+                    _pc_nid, _pc_fn = nba_find_player(_pc_row["player"])
+                    if not _pc_nid:
+                        continue
+                    _pc_logs = nba_get_game_logs(_pc_nid, _pc_season, n=15, _date=_cache_date())
+                    if _pc_logs is None or _pc_logs.empty:
+                        continue
+                    _pc_ln   = _pc_row["line"]
+                    _pc_side = _pc_row["side"]
+                    _pc_wb   = weighted_hit_rate(_pc_logs, _pc_ln, _pc_side)
+                    _pc_avgp = pd.to_numeric(_pc_logs["PTS"], errors="coerce").dropna().mean()
+                    _pc_edge = _pc_avgp - _pc_ln if _pc_side == "Over" else _pc_ln - _pc_avgp
+                    _pc_cons = consistency_score(_pc_logs, _pc_ln)
+                    _pc_avgm = pd.to_numeric(_pc_logs["MIN"], errors="coerce").dropna().mean()
+                    _pc_avgf = pd.to_numeric(_pc_logs["FGA"], errors="coerce").dropna().mean()
+                    _pc_avgt = pd.to_numeric(_pc_logs["FTA"], errors="coerce").dropna().mean()
+                    _pc_ep   = next((p for p in espn_get_all_players(_date=_cache_date())
+                                     if normalize_name(p["full_name"]) == normalize_name(_pc_fn)), None)
+                    _pc_team = _norm_team_abbr(_pc_ep["team_abbr"]) if _pc_ep else None
+                    _pc_opp, _pc_gd, _pc_ven = espn_get_next_game(_pc_team) if _pc_team else (None, None, None)
+                    _pc_mq, _, _ = classify_matchup_espn(_pc_opp)
+                    _pc_sp   = home_away_split(_pc_logs, _pc_ln, _pc_side, _pc_team)
+                    _pc_vadj = venue_adjustment(_pc_sp, _pc_ven, _pc_side)
+                    _pc_b2b  = detect_b2b(_pc_logs, _pc_gd)
+                    _pc_h2h  = get_h2h_logs(_pc_nid, _pc_opp, _pc_season, _date=_cache_date()) if _pc_opp else pd.DataFrame()
+                    _pc_hsig, _, _ = h2h_signal(_pc_h2h, _pc_ln, _pc_side)
+                    _pc_savg = nba_get_season_avg(_pc_nid, _pc_season, logs_l10=_pc_logs)
+                    _pc_fsig, _ = form_divergence_signal(_pc_avgp, _pc_savg, _pc_ln, _pc_side)
+                    _pc_ctx = {
+                        "minutes":    suggest_bucket(_pc_avgm, 32, 26),
+                        "role":       suggest_bucket(_pc_avgf + 0.5 * _pc_avgt, 18, 12),
+                        "shots":      "High" if _pc_avgf >= 15 else ("Low" if _pc_avgf < 10 else "Medium"),
+                        "matchup":    _pc_mq, "script": "Neutral", "venue": _pc_vadj,
+                        "h2h":        _pc_hsig, "b2b": _pc_b2b, "form": _pc_fsig,
+                        "rest":       "Normal", "pace": "Neutral", "shoot": "Neutral",
+                        "elim_game":  "Normal", "series_cov": "Neutral",
+                    }
+                    _pc_adj  = apply_adjustments(_pc_wb, _pc_ctx, _pc_side)
+                    _pc_tier = get_confidence_tier(_pc_adj, _pc_edge, _pc_cons, _pc_side)
+                    _pc_results.append({
+                        "player":  _pc_fn,
+                        "line":    _pc_ln,
+                        "side":    _pc_side,
+                        "adj":     _pc_adj,
+                        "edge":    round(_pc_edge, 1),
+                        "tier":    _pc_tier,
+                        "cons":    _pc_cons,
+                        "team":    _norm_team_abbr(_pc_team) if _pc_team else "?",
+                        "opp":     _norm_team_abbr(_pc_opp) if _pc_opp else "?",
+                        "matchup": _pc_mq,
+                    })
+                except Exception:
+                    continue
+        st.session_state.parlay_results = _pc_results
+
+    if st.session_state.parlay_results:
+        _pr = st.session_state.parlay_results
+        if not _pr:
+            st.warning("No results — check player names.")
+        else:
+            # ── Combined probability ──────────────────────────────
+            _combined = 1.0
+            for _r in _pr:
+                _combined *= _r["adj"]
+            _legs = len(_pr)
+            # ── Correlated picks — same game ──────────────────────
+            _game_map = {}
+            for _r in _pr:
+                _gk = "_".join(sorted([_r["team"], _r["opp"]]))
+                _game_map.setdefault(_gk, []).append(_r["player"])
+            _corr = {k: v for k, v in _game_map.items() if len(v) >= 2}
+            # ── Weakest leg ───────────────────────────────────────
+            _weakest = min(_pr, key=lambda x: x["adj"])
+            # ── Weak legs (Pass or Lean with small edge) ──────────
+            _weak_flags = [r for r in _pr if r["tier"] == "Pass" or
+                           ("Lean" in r["tier"] and abs(r["edge"]) < 1.5)]
+
+            # Grade
+            _grade_pct = _combined * 100
+            _grade     = "🔥 STRONG" if _grade_pct >= 35 else ("✅ GOOD" if _grade_pct >= 20 else ("⚠️ RISKY" if _grade_pct >= 10 else "❌ DON'T BET"))
+            _grade_col = "#22c55e" if _grade_pct >= 35 else ("#3b82f6" if _grade_pct >= 20 else ("#f97316" if _grade_pct >= 10 else "#ef4444"))
+
+            # ── Summary banner ────────────────────────────────────
+            st.markdown(
+                f"<div style='background:#111;border:1px solid #1e2a3a;padding:1rem 1.2rem;margin:0.5rem 0 0.75rem;'>"
+                f"<div style='display:flex;gap:2rem;flex-wrap:wrap;align-items:center;'>"
+                f"<div><div class='verdict-label'>Entry grade</div>"
+                f"<div style='font-size:1.4rem;font-weight:900;color:{_grade_col};'>{_grade}</div></div>"
+                f"<div><div class='verdict-label'>Combined probability</div>"
+                f"<div style='font-size:1.4rem;font-weight:900;color:{_grade_col};'>{_combined:.1%}</div></div>"
+                f"<div><div class='verdict-label'>Legs</div>"
+                f"<div style='font-size:1.4rem;font-weight:900;color:#f1f5f9;'>{_legs}</div></div>"
+                f"<div><div class='verdict-label'>Weakest leg</div>"
+                f"<div style='font-size:1rem;font-weight:700;color:#f97316;'>{_weakest['player']} ({_weakest['adj']:.0%})</div></div>"
+                f"</div></div>",
+                unsafe_allow_html=True
+            )
+
+            # ── Correlated warning ────────────────────────────────
+            for _gk, _gps in _corr.items():
+                _gteams = _gk.split("_")
+                st.markdown(
+                    f"<div style='background:#1c1005;border:1px solid #854d0e;border-left:3px solid #f97316;"
+                    f"padding:0.6rem 1rem;margin-bottom:0.4rem;font-family:JetBrains Mono,monospace;font-size:0.68rem;'>"
+                    f"⚠️ <span style='color:#f97316;font-weight:700;'>CORRELATED PICKS</span>"
+                    f"<span style='color:#475569;'> · {', '.join(_gps)} are in the same game "
+                    f"({_gteams[0]} vs {_gteams[1]}) — a blowout tanks both</span></div>",
+                    unsafe_allow_html=True
+                )
+
+            # ── Weak leg warnings ─────────────────────────────────
+            for _wf in _weak_flags:
+                st.markdown(
+                    f"<div style='background:#0c1018;border:1px solid #1e3a5f;border-left:3px solid #3b82f6;"
+                    f"padding:0.6rem 1rem;margin-bottom:0.4rem;font-family:JetBrains Mono,monospace;font-size:0.68rem;'>"
+                    f"⚡ <span style='color:#3b82f6;font-weight:700;'>WEAK LEG</span>"
+                    f"<span style='color:#475569;'> · {_wf['player']} — {_wf['tier']} at {_wf['adj']:.0%} "
+                    f"with {_wf['edge']:+.1f} edge. Consider dropping this leg.</span></div>",
+                    unsafe_allow_html=True
+                )
+
+            # ── Leg breakdown ranked worst to best ───────────────
+            st.markdown(
+                "<div style='font-family:JetBrains Mono,monospace;font-size:0.65rem;color:#555;"
+                "letter-spacing:0.08em;margin:0.75rem 0 0.4rem;'>LEGS · WEAKEST → STRONGEST</div>",
+                unsafe_allow_html=True
+            )
+            _tc = {"Strong Over":"green","Lean Over":"yellow","Lean Under":"orange","Strong Under":"red","Pass":"gray"}
+            _te = {"Strong Over":"🟢","Lean Over":"🟡","Lean Under":"🟠","Strong Under":"🔴","Pass":"⚪"}
+            for _r in sorted(_pr, key=lambda x: x["adj"]):
+                _rc   = _tc.get(_r["tier"], "gray")
+                _em   = _te.get(_r["tier"], "⚪")
+                _ecol = "#22c55e" if _r["edge"] > 0 else "#ef4444"
+                _vol  = " ⚠️ volatile" if _r["cons"] < 0.65 else ""
+                st.markdown(f"""
+                <div class='verdict-banner {_rc}' style='margin:0.3rem 0;padding:0.8rem 1.2rem;'>
+                    <div>
+                        <div class='verdict-label'>{_r["line"]} pts {_r["side"]} · vs {_r["opp"]}</div>
+                        <div style='font-size:1rem;font-weight:800;color:#f1f5f9;'>{_r["player"]}</div>
+                        <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#555;'>
+                            {_r["matchup"]} defense{_vol}</div>
+                    </div>
+                    <div style='display:flex;gap:1.2rem;flex-wrap:wrap;align-items:center;'>
+                        <div><div class='verdict-label'>Adjusted</div>
+                             <div style='font-size:1rem;font-weight:700;color:#f1f5f9;'>{_r["adj"]:.0%}</div></div>
+                        <div><div class='verdict-label'>Edge</div>
+                             <div style='font-size:1rem;font-weight:700;color:{_ecol};'>{_r["edge"]:+.1f}</div></div>
+                        <div><div class='verdict-label'>Tier</div>
+                             <div style='font-size:0.9rem;font-weight:700;'>{_em} {_r["tier"]}</div></div>
+                    </div>
+                </div>""", unsafe_allow_html=True)
+
+            # ── Best entry suggestion ─────────────────────────────
+            _strong_legs = [r for r in _pr if "Strong" in r["tier"] and abs(r["edge"]) >= 2.0]
+            if _strong_legs:
+                _best_combined = 1.0
+                for _r in _strong_legs:
+                    _best_combined *= _r["adj"]
+                st.markdown(
+                    f"<div style='background:#052e16;border:1px solid #166534;border-left:4px solid #22c55e;"
+                    f"padding:0.75rem 1rem;margin-top:0.75rem;font-family:JetBrains Mono,monospace;font-size:0.7rem;'>"
+                    f"<span style='color:#22c55e;font-weight:700;letter-spacing:0.08em;'>💡 BEST ENTRY</span>"
+                    f"<span style='color:#94a3b8;'> · Drop the weak legs. Play only: "
+                    f"<span style='color:#f1f5f9;font-weight:700;'>"
+                    f"{', '.join(r['player'] for r in _strong_legs)}</span>"
+                    f" — {len(_strong_legs)}-leg entry at <span style='color:#22c55e;font-weight:700;'>"
+                    f"{_best_combined:.1%}</span> combined probability.</span></div>",
+                    unsafe_allow_html=True
+                )
+            elif _legs >= 3:
+                st.markdown(
+                    f"<div style='background:#1c0505;border:1px solid #991b1b;border-left:4px solid #ef4444;"
+                    f"padding:0.75rem 1rem;margin-top:0.75rem;font-family:JetBrains Mono,monospace;font-size:0.7rem;'>"
+                    f"<span style='color:#ef4444;font-weight:700;'>⛔ SKIP THIS ENTRY</span>"
+                    f"<span style='color:#94a3b8;'> · No strong legs with 2+ edge found. "
+                    f"This entry doesn't have enough edge to beat the vig.</span></div>",
+                    unsafe_allow_html=True
+                )
 
 # ─────────────────────────────────────────────
 # Player & Prop inputs
@@ -5237,6 +5940,10 @@ if st.session_state.logs is not None:
         _f_season   = _pool.submit(nba_get_full_season_logs_cached, player_id, season_str_clean)
         _f_playoff  = _pool.submit(get_playoff_picture, player_team) if player_team else None
         _f_series   = _pool.submit(get_playoff_series_context, player_team) if (_IS_PLAYOFFS and player_team) else None
+        _f_refs     = _pool.submit(referee_signal, player_team, side) if player_team else None
+        _f_opp_inj  = _pool.submit(get_opponent_injury_report, opp_abbr) if opp_abbr else None
+        _f_def_form  = _pool.submit(get_opp_recent_defensive_form, opp_abbr) if opp_abbr else None
+        _f_po_logs   = _pool.submit(get_playoff_game_logs, player_id, season_str_clean) if _IS_PLAYOFFS else None
 
         try:
             matchup_auto, opp_pts, league_avg = _f_matchup.result(timeout=10)
@@ -5262,6 +5969,43 @@ if st.session_state.logs is not None:
             _series = _f_series.result(timeout=8) if _f_series else {}
         except Exception:
             _series = {}
+
+        try:
+            _ref_sig, _ref_ppg, _ref_names = _f_refs.result(timeout=8) if _f_refs else ("Neutral", None, [])
+        except Exception:
+            _ref_sig, _ref_ppg, _ref_names = "Neutral", None, []
+
+        try:
+            _opp_absent, _opp_inj_html = _f_opp_inj.result(timeout=10) if _f_opp_inj else ([], "")
+        except Exception:
+            _opp_absent, _opp_inj_html = [], ""
+
+        try:
+            _def_form = _f_def_form.result(timeout=10) if _f_def_form else {}
+        except Exception:
+            _def_form = {}
+
+        try:
+            _po_logs = _f_po_logs.result(timeout=12) if _f_po_logs else pd.DataFrame()
+        except Exception:
+            _po_logs = pd.DataFrame()
+
+    # ── Matchup upgrade if key opp players out ──────────────────────────
+    if _opp_absent and len(_opp_absent) >= 2 and matchup_auto == "Neutral":
+        matchup_auto = "Good"
+    elif _opp_absent and len(_opp_absent) >= 1 and matchup_auto == "Bad":
+        matchup_auto = "Neutral"
+
+    # ── Blend in recent defensive form ───────────────────────────────────
+    # Override matchup_auto with recent trend if it's strong enough
+    _def_trend = _def_form.get("trend", "Neutral")
+    _def_diff  = _def_form.get("diff", 0)
+    if _def_trend == "Softening" and matchup_auto in ("Neutral", "Bad"):
+        # Defense is breaking down — upgrade matchup
+        matchup_auto = "Good" if matchup_auto == "Neutral" else "Neutral"
+    elif _def_trend == "Tightening" and matchup_auto in ("Neutral", "Good"):
+        # Defense is locking in — downgrade matchup
+        matchup_auto = "Bad" if matchup_auto == "Neutral" else "Neutral"
 
     _status_ph.empty()  # clear loading message — results are about to render
     h2h_sig, h2h_avg, h2h_count = h2h_signal(h2h_df, line, side)
@@ -5388,9 +6132,26 @@ if st.session_state.logs is not None:
         else:
             venue_badge = ""
 
+        # Defensive form trend badge
+        _df_trend  = _def_form.get("trend", "Neutral")
+        _df_recent = _def_form.get("recent_avg")
+        _df_season = _def_form.get("season_avg")
+        _df_diff   = _def_form.get("diff", 0)
+        if _df_trend == "Tightening":
+            _trend_badge = (f"<span style='font-family:DM Mono;font-size:0.63rem;font-weight:700;"
+                            f"color:#ef4444;margin-left:10px;'>🔒 L5 tightening "
+                            f"({_df_recent:.1f} vs {_df_season:.1f} season)</span>")
+        elif _df_trend == "Softening":
+            _trend_badge = (f"<span style='font-family:DM Mono;font-size:0.63rem;font-weight:700;"
+                            f"color:#22c55e;margin-left:10px;'>📈 L5 softening "
+                            f"({_df_recent:.1f} vs {_df_season:.1f} season)</span>")
+        else:
+            _trend_badge = ""
+
         pts_line = (
-            f"{opp_pts:.1f} pts allowed/game"
+            f"{opp_pts:.1f} pts allowed/game (L15)"
             f"<span style='font-family:DM Mono; font-size:0.72rem; color:#475569; margin-left:8px;'>league avg {league_avg}</span>"
+            f"{_trend_badge}"
         ) if opp_pts else "<span style='font-family:DM Mono; font-size:0.8rem; color:#475569;'>Defense data unavailable</span>"
 
         st.markdown(f"""
@@ -5449,6 +6210,10 @@ if st.session_state.logs is not None:
     # Usage spike alert
     if _spike_html:
         st.markdown(_spike_html, unsafe_allow_html=True)
+
+    # Opponent injury report
+    if _opp_inj_html:
+        st.markdown(_opp_inj_html, unsafe_allow_html=True)
 
     # ── H2H + B2B + Form cards ───────────────
     # Series context header in playoffs
@@ -5718,6 +6483,25 @@ if st.session_state.logs is not None:
 
     venue_adj = venue_adjustment(splits, tonight_venue, side)
 
+    # ── Referee card ──────────────────────────────────────────────────────
+    if _ref_names:
+        _ref_col = "#22c55e" if _ref_sig == "High FT" else ("#ef4444" if _ref_sig == "Low FT" else "#94a3b8")
+        _ref_bg  = "#052e16" if _ref_sig == "High FT" else ("#1c0505" if _ref_sig == "Low FT" else "#0f172a")
+        _ref_bdr = "#166534" if _ref_sig == "High FT" else ("#991b1b" if _ref_sig == "Low FT" else "#1e293b")
+        _ref_lbl = "🟢 High-foul crew" if _ref_sig == "High FT" else ("🔴 Low-foul crew" if _ref_sig == "Low FT" else "⚪ Neutral crew")
+        _ref_note = f"{_ref_ppg:.1f} pts/game crew avg" if _ref_ppg else "Stats not available"
+        st.markdown(
+            f"<div style='background:{_ref_bg};border:1px solid {_ref_bdr};border-radius:8px;"
+            f"padding:0.6rem 1rem;margin-bottom:0.75rem;font-family:JetBrains Mono,monospace;font-size:0.68rem;'>"
+            f"<div style='display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;'>"
+            f"<div><span style='color:{_ref_col};font-weight:700;'>🧑‍⚖️ TONIGHT'S REFS</span>"
+            f"<span style='color:#475569;margin-left:8px;'>{' · '.join(_ref_names[:3])}</span></div>"
+            f"<div><span style='color:{_ref_col};font-weight:700;'>{_ref_lbl}</span>"
+            f"<span style='color:#555;margin-left:8px;'>{_ref_note} · league avg {_REF_LEAGUE_AVG_PPG}</span></div>"
+            f"</div></div>",
+            unsafe_allow_html=True
+        )
+
     # Minutes restriction override — scale down signals if player is on minutes limit
     _min_override = minutes_adjusted_scoring(
         sample_avg_pts, season_avg_min, avg_min, line, side
@@ -5744,6 +6528,27 @@ if st.session_state.logs is not None:
         logs, opp_abbr, line, side, season_avg
     )
 
+    # ── Game number signal ───────────────────────────────────────────────
+    _game_num_label = "N/A"
+    if _IS_PLAYOFFS and _series and _series.get("found"):
+        _gnum = get_series_game_number(
+            _series.get("series_wins", 0),
+            _series.get("series_losses", 0)
+        )
+        _game_num_label, _game_num_adj = game_number_adjustment(_gnum, side)
+    else:
+        _gnum = None
+        _game_num_adj = 0.0
+
+    # ── Playoff usage spike signal ────────────────────────────────────────
+    _pu_spike_sig, _po_avg_pts, _po_avg_min = playoff_usage_spike_signal(
+        player_id, season_str_clean,
+        reg_avg_pts=sample_avg_pts,
+        reg_avg_min=avg_min,
+        line=line,
+        side=side,
+    ) if _IS_PLAYOFFS else ("Neutral", None, None)
+
     # Elimination/closeout signal from series context
     _elim_game_ctx = "Normal"
     if _IS_PLAYOFFS and _series and _series.get("found"):
@@ -5767,11 +6572,50 @@ if st.session_state.logs is not None:
         "pace":       pace_sig,
         "shoot":      shoot_sig,
         "elim_game":  _elim_game_ctx,
+        "ref":        _ref_sig if _ref_sig else "Neutral",
+        "game_num":   _game_num_label,
+        "pu_spike":   _pu_spike_sig,
     }
 
     adjusted  = apply_adjustments(weighted_base, context, side)
     line_diff = sample_avg_pts - line
     tier      = get_confidence_tier(adjusted, line_diff, consistency, side)
+
+    # ── Playoff usage spike banner ───────────────────────────────────────
+    if _IS_PLAYOFFS and _pu_spike_sig != "Neutral" and _po_avg_pts is not None:
+        _pu_color = "#22c55e" if _pu_spike_sig == "Spike" else "#ef4444"
+        _pu_bg    = "#052e16" if _pu_spike_sig == "Spike" else "#1c0505"
+        _pu_bdr   = "#166534" if _pu_spike_sig == "Spike" else "#991b1b"
+        _pu_arrow = "📈" if _pu_spike_sig == "Spike" else "📉"
+        _pu_verb  = "elevated" if _pu_spike_sig == "Spike" else "down"
+        _pu_min_str = f" · {_po_avg_min:.0f} min/game playoffs" if _po_avg_min else ""
+        st.markdown(
+            f"<div style='background:{_pu_bg};border:1px solid {_pu_bdr};border-left:4px solid {_pu_color};"
+            f"padding:0.65rem 1rem;margin-bottom:0.5rem;font-family:JetBrains Mono,monospace;font-size:0.7rem;'>"
+            f"<span style='color:{_pu_color};font-weight:700;letter-spacing:0.08em;'>"
+            f"{_pu_arrow} PLAYOFF USAGE {_pu_spike_sig.upper()}</span>"
+            f"<span style='color:#94a3b8;'> · Averaging "
+            f"<span style='color:{_pu_color};font-weight:700;'>{_po_avg_pts:.1f} pts</span>"
+            f" in playoffs vs <span style='color:#f1f5f9;'>{sample_avg_pts:.1f}</span> reg season avg"
+            f"{_pu_min_str}</span></div>",
+            unsafe_allow_html=True
+        )
+
+    # ── Game number banner ────────────────────────────────────────────────
+    if _IS_PLAYOFFS and _gnum and _game_num_label != "N/A" and _gnum in (1, 6, 7):
+        _gn_notes = {
+            1: "Teams feeling out — conservative scoring expected",
+            6: "Elimination pressure — tighter defense, lower scoring",
+            7: "Winner-take-all — max pressure, historically lower scoring",
+        }
+        st.markdown(
+            f"<div style='background:#111;border:1px solid #1e2a3a;border-left:4px solid #f97316;"
+            f"padding:0.55rem 1rem;margin-bottom:0.5rem;font-family:JetBrains Mono,monospace;font-size:0.68rem;'>"
+            f"<span style='color:#f97316;font-weight:700;'>⚠️ GAME {_gnum} OF SERIES</span>"
+            f"<span style='color:#475569;'> · {_gn_notes.get(_gnum, '')}</span>"
+            f"</div>",
+            unsafe_allow_html=True
+        )
 
     # ── Series coverage banner ────────────────────────────────────
     if _IS_PLAYOFFS and _series_cov_sig != "Neutral" and _series_cov_n >= 1 and _series_cov_avg is not None:
@@ -6151,6 +6995,12 @@ if st.session_state.logs is not None:
             "minutes":  {"Strong": +0.05, "Okay": 0.00, "Risk": -0.07},
             "elim_game":  {"Elimination": +0.04, "Closeout": +0.02, "Normal": 0.00},
             "series_cov": {"Strong": +0.07, "Neutral": 0.00, "Risk": -0.08},
+            "ref":        {"High FT": +0.04, "Neutral": 0.00, "Low FT": -0.04},
+            "game_num":   {"N/A": 0.00, "Game 1 (feeling out)": -0.03,
+                           "Game 2 (normal)": 0.00, "Game 3 (normal)": 0.00,
+                           "Game 4 (normal)": 0.00, "Game 5 (normal)": 0.00,
+                           "Game 6 (pressure)": -0.02, "Game 7 (max pressure)": -0.03},
+            "pu_spike":   {"Spike": +0.05, "Neutral": 0.00, "Drop": -0.05},
             "role":     {"Strong": +0.04, "Okay": 0.00, "Risk": -0.05},
             "shots":    {"High":   +0.03, "Medium": 0.00, "Low": -0.06},
             "matchup":  {"Good":   +0.06, "Neutral": 0.00, "Bad": -0.06},
@@ -6180,6 +7030,9 @@ if st.session_state.logs is not None:
             "shoot":     "Recent shooting",
             "elim_game":  "Playoff game type",
             "series_cov": "This series coverage",
+            "ref":        "Referee tendency",
+            "game_num":   "Series game number",
+            "pu_spike":   "Playoff usage vs reg season",
         }
 
         # Simulate the computation step by step (additive, side-aware)
