@@ -2589,64 +2589,111 @@ def is_playoff_mode() -> bool:
 
 _IS_PLAYOFFS = is_playoff_mode()
 
-# ── Series context fetcher ──────────────────────────────────────────
-@st.cache_data(ttl=1800, show_spinner=False)
+# ── 2026 Playoff Bracket — first round matchups only ────────────────
+# Used as FALLBACK if NBA Stats API is unavailable.
+# Wins/losses are auto-fetched from leaguegamefinder — no manual updates needed.
+_PLAYOFF_BRACKET_2026 = {
+    # EAST
+    "NYK": {"opp": "ATL"}, "ATL": {"opp": "NYK"},
+    "DET": {"opp": "ORL"}, "ORL": {"opp": "DET"},
+    "CLE": {"opp": "TOR"}, "TOR": {"opp": "CLE"},
+    "BOS": {"opp": "PHI"}, "PHI": {"opp": "BOS"},
+    # WEST
+    "OKC": {"opp": "PHX"}, "PHX": {"opp": "OKC"},
+    "SAS": {"opp": "POR"}, "POR": {"opp": "SAS"},
+    "DEN": {"opp": "MIN"}, "MIN": {"opp": "DEN"},
+    "LAL": {"opp": "HOU"}, "HOU": {"opp": "LAL"},
+}
+
+
+@st.cache_data(ttl=900, show_spinner=False)
 def get_playoff_series_context(team_abbr: str) -> dict:
     """
-    Fetch current playoff series record for a team.
-    Returns dict with series_wins, series_losses, is_elimination, is_closeout
-    Uses NBA Stats API schedule.
+    Auto-fetches current playoff series W/L from NBA Stats API.
+    Uses leaguegamefinder with SeasonType=Playoffs — updates automatically
+    after every game, no manual maintenance needed.
+    Falls back to bracket matchup dict for opponent name only.
     """
     empty = {"series_wins": 0, "series_losses": 0, "is_elimination": False,
              "is_closeout": False, "opp_abbr": None, "found": False}
     if not _IS_PLAYOFFS or not team_abbr:
         return empty
+
+    abbr = team_abbr.upper()
+
     try:
-        import requests as _req, datetime, pytz
-        et    = pytz.timezone("America/New_York")
-        today = datetime.datetime.now(et).strftime("%Y-%m-%d")
-        # Get current playoff schedule
+        import requests as _req
         r = _req.get(
-            "https://statsapi.mlb.com/api/v1/schedule",  # wrong sport, use NBA
-            timeout=5
+            "https://stats.nba.com/stats/leaguegamefinder",
+            params={
+                "LeagueID":          "00",
+                "Season":            "2025-26",
+                "SeasonType":        "Playoffs",
+                "TeamAbbreviation":  abbr,
+            },
+            headers={
+                "User-Agent":         "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+                "Referer":            "https://www.nba.com/",
+                "x-nba-stats-origin": "stats",
+                "x-nba-stats-token":  "true",
+                "Accept":             "application/json",
+            },
+            timeout=10,
         )
-        # Use NBA schedule endpoint
-        r2 = _req.get(
-            f"https://stats.nba.com/stats/scoreboard?DayOffset=0&LeagueID=00&gameDate={today}",
-            headers={"User-Agent": "Mozilla/5.0", "Referer": "https://www.nba.com/"},
-            timeout=8
-        )
-        if not r2.ok:
-            return empty
-        data = r2.json()
-        # Look through games for this team's series record
-        games = data.get("resultSets", [{}])[0].get("rowSet", [])
-        for game in games:
-            # Game format includes series wins/losses
-            try:
-                home_abbr = game[6] if len(game) > 6 else ""
-                away_abbr = game[7] if len(game) > 7 else ""
-                if team_abbr.upper() not in (home_abbr.upper(), away_abbr.upper()):
-                    continue
-                # Series record fields
-                home_wins = int(game[16]) if len(game) > 16 else 0
-                away_wins = int(game[17]) if len(game) > 17 else 0
-                is_home   = team_abbr.upper() == home_abbr.upper()
-                team_wins = home_wins if is_home else away_wins
-                opp_wins  = away_wins if is_home else home_wins
-                opp_abbr  = away_abbr if is_home else home_abbr
-                return {
-                    "series_wins":    team_wins,
-                    "series_losses":  opp_wins,
-                    "is_elimination": opp_wins == 3 and team_wins < 3,
-                    "is_closeout":    team_wins == 3 and opp_wins < 3,
-                    "opp_abbr":       opp_abbr,
-                    "found":          True,
-                }
-            except Exception:
-                continue
+        if not r.ok:
+            raise ValueError(f"HTTP {r.status_code}")
+
+        rs       = r.json().get("resultSets", [{}])[0]
+        hdrs     = rs.get("headers", [])
+        rows     = rs.get("rowSet", [])
+
+        if not rows or not hdrs:
+            raise ValueError("Empty resultset")
+
+        wl_i  = hdrs.index("WL")       if "WL"      in hdrs else -1
+        mu_i  = hdrs.index("MATCHUP")  if "MATCHUP" in hdrs else -1
+
+        if wl_i < 0:
+            raise ValueError("No WL column")
+
+        wins   = sum(1 for row in rows if str(row[wl_i]).upper() == "W")
+        losses = sum(1 for row in rows if str(row[wl_i]).upper() == "L")
+
+        # Parse opponent from most recent game matchup string
+        # e.g. "ATL @ NYK" or "ATL vs. NYK"
+        opp_abbr = _PLAYOFF_BRACKET_2026.get(abbr, {}).get("opp", "")
+        if mu_i >= 0 and rows:
+            mu    = str(rows[0][mu_i])  # most recent game first
+            parts = mu.replace("vs.", "@").split("@")
+            if len(parts) == 2:
+                candidate = parts[1].strip().split()[0].upper()
+                if len(candidate) <= 4:
+                    opp_abbr = candidate
+
+        return {
+            "series_wins":    wins,
+            "series_losses":  losses,
+            "is_elimination": losses == 3 and wins < 3,
+            "is_closeout":    wins == 3 and losses < 3,
+            "opp_abbr":       opp_abbr,
+            "found":          True,
+        }
+
     except Exception:
         pass
+
+    # ── Fallback: bracket opponent only, 0-0 record ───────────────
+    if abbr in _PLAYOFF_BRACKET_2026:
+        opp = _PLAYOFF_BRACKET_2026[abbr].get("opp", "")
+        return {
+            "series_wins":    0,
+            "series_losses":  0,
+            "is_elimination": False,
+            "is_closeout":    False,
+            "opp_abbr":       opp,
+            "found":          False,   # found=False signals data unavailable
+        }
+
     return empty
 
 # ── Playoff pace table — slower than regular season ─────────────────
