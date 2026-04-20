@@ -1638,6 +1638,167 @@ def espn_get_player_news(player_name: str) -> list:
         return []
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def espn_get_player_role(player_name: str, team_abbr: str) -> dict:
+    """
+    Detect if a player is a starter or bench player.
+    Strategy (in order):
+    1. Tonight's game summary — confirmed starter if game is active/scheduled
+    2. Last game boxscore — was he a starter last game?
+    3. Depth chart position — where does ESPN rank him on the roster?
+
+    Returns dict:
+    {
+        "role":      "Starter" | "Bench" | "Unknown",
+        "source":    "tonight" | "last_game" | "depth_chart",
+        "game_info": "vs NYK · Apr 20" or similar,
+        "starter_confirmed": True/False,
+        "depth_pos": 1-5 = starter, 6+ = bench
+    }
+    """
+    empty = {"role": "Unknown", "source": None, "game_info": "", "starter_confirmed": False, "depth_pos": None}
+    if not player_name or not team_abbr:
+        return empty
+
+    try:
+        import pytz, requests as _req
+        et    = pytz.timezone("America/New_York")
+        today = datetime.now(et).date()
+        _HDRS = {"User-Agent": "Mozilla/5.0"}
+
+        # ── Step 1: Find ESPN team ID ─────────────────────────
+        _ESPN_TEAM_IDS = {
+            "ATL":1,"BOS":2,"BKN":17,"CHA":30,"CHI":4,"CLE":5,"DAL":6,
+            "DEN":7,"DET":8,"GSW":9,"HOU":10,"IND":11,"LAC":12,"LAL":13,
+            "MEM":29,"MIA":14,"MIL":15,"MIN":16,"NOP":3,"NYK":18,"OKC":25,
+            "ORL":19,"PHI":20,"PHX":21,"POR":22,"SAC":23,"SAS":24,"TOR":28,
+            "UTA":26,"WAS":27,
+        }
+        team_id = _ESPN_TEAM_IDS.get(team_abbr.upper())
+        if not team_id:
+            return empty
+
+        # Normalize player name for matching
+        def _norm(n): return n.lower().strip()
+        pname_norm = _norm(player_name)
+        pparts     = pname_norm.split()
+        plast      = pparts[-1] if pparts else ""
+        pfirst     = pparts[0]  if pparts else ""
+
+        def _name_matches(n):
+            n = _norm(n)
+            return (pname_norm in n or n in pname_norm or
+                    (plast in n and pfirst in n) or
+                    (plast in n and len(plast) > 4))
+
+        # ── Step 2: Tonight's game / last game via scoreboard ─
+        for offset in range(0, 5):  # check today + next 4 days for tonight's game
+            check    = today + timedelta(days=offset) if offset <= 1 else today - timedelta(days=offset-1)
+            date_str = check.strftime("%Y%m%d")
+            try:
+                sb   = espn_get(f"{ESPN_SITE}/scoreboard", params={"dates": date_str})
+                evts = sb.get("events", [])
+                for ev in evts:
+                    comp   = ev.get("competitions", [{}])[0]
+                    comps  = comp.get("competitors", [])
+                    status = ev.get("status", {}).get("type", {}).get("name", "")
+
+                    # Find the team in this game
+                    my_comp = next(
+                        (c for c in comps
+                         if _norm_team_abbr(c.get("team",{}).get("abbreviation","")) == team_abbr.upper()),
+                        None
+                    )
+                    if not my_comp:
+                        continue
+
+                    opp_comp   = next((c for c in comps if c != my_comp), {})
+                    opp_name   = opp_comp.get("team", {}).get("abbreviation", "")
+                    game_label = f"vs {opp_name} · {check.strftime('%b %d')}"
+                    is_tonight = (offset == 0)
+                    is_final   = "final" in status.lower() or "complete" in status.lower()
+                    is_active  = "in" in status.lower() or "progress" in status.lower()
+
+                    # Get lineup from this game's roster
+                    lineup = my_comp.get("roster", []) or []
+
+                    # If no roster in scoreboard, try the game summary
+                    if not lineup:
+                        evt_id = ev.get("id", "")
+                        if evt_id:
+                            try:
+                                summary = _req.get(
+                                    f"https://site.web.api.espn.com/apis/site/v2/sports/basketball/nba/summary",
+                                    params={"event": evt_id},
+                                    headers=_HDRS, timeout=6
+                                ).json()
+                                for team_data in summary.get("boxscore", {}).get("players", []):
+                                    ta = team_data.get("team", {}).get("abbreviation", "")
+                                    if _norm_team_abbr(ta) != team_abbr.upper():
+                                        continue
+                                    for pg in team_data.get("statistics", []):
+                                        for athlete in pg.get("athletes", []):
+                                            aname   = athlete.get("athlete", {}).get("displayName", "")
+                                            started = athlete.get("starter", False)
+                                            dnp     = athlete.get("didNotPlay", False)
+                                            if _name_matches(aname):
+                                                src = "tonight" if is_tonight else "last_game"
+                                                role = "Starter" if started else ("Bench" if not dnp else "DNP")
+                                                return {
+                                                    "role":              role,
+                                                    "source":            src,
+                                                    "game_info":         game_label,
+                                                    "starter_confirmed": True,
+                                                    "depth_pos":         1 if started else 6,
+                                                }
+                            except Exception:
+                                pass
+
+                    # Check roster in scoreboard itself
+                    for p in lineup:
+                        aname   = p.get("athlete", {}).get("displayName", "")
+                        started = p.get("starter", False)
+                        if _name_matches(aname):
+                            src  = "tonight" if is_tonight else "last_game"
+                            role = "Starter" if started else "Bench"
+                            return {
+                                "role":              role,
+                                "source":            src,
+                                "game_info":         game_label,
+                                "starter_confirmed": is_final or is_active,
+                                "depth_pos":         1 if started else 6,
+                            }
+            except Exception:
+                continue
+
+        # ── Step 3: Depth chart fallback ──────────────────────
+        try:
+            dc   = espn_get(f"{ESPN_SITE}/teams/{team_id}/depthcharts")
+            pos_groups = dc.get("positionGroups", []) or dc.get("items", [])
+            pos_rank = 99
+            for grp in pos_groups:
+                for pos in grp.get("positions", {}).values() if isinstance(grp.get("positions"), dict) else []:
+                    athletes = pos.get("athletes", [])
+                    for rank, ath in enumerate(athletes, start=1):
+                        aname = ath.get("athlete", {}).get("displayName", "")
+                        if _name_matches(aname):
+                            pos_rank = rank
+                            break
+            if pos_rank <= 5:
+                return {"role": "Starter", "source": "depth_chart", "game_info": "",
+                        "starter_confirmed": False, "depth_pos": pos_rank}
+            elif pos_rank <= 99:
+                return {"role": "Bench", "source": "depth_chart", "game_info": "",
+                        "starter_confirmed": False, "depth_pos": pos_rank}
+        except Exception:
+            pass
+
+    except Exception:
+        pass
+
+    return empty
+
+
 @st.cache_data(ttl=900, show_spinner=False)
 def espn_get_last_game_date(team_abbr: str) -> Optional[str]:
     """
@@ -6432,6 +6593,7 @@ if st.session_state.logs is not None:
         _f_po_logs   = _pool.submit(get_playoff_game_logs, player_id, season_str_clean) if _IS_PLAYOFFS else None
         _f_last_game = _pool.submit(espn_get_last_game_date, player_team) if player_team else None
         _f_news      = _pool.submit(espn_get_player_news, full_name)
+        _f_role      = _pool.submit(espn_get_player_role, full_name, player_team) if player_team else None
 
         try:
             matchup_auto, opp_pts, league_avg = _f_matchup.result(timeout=10)
@@ -6487,6 +6649,11 @@ if st.session_state.logs is not None:
             _player_news = _f_news.result(timeout=8)
         except Exception:
             _player_news = []
+
+        try:
+            _player_role = _f_role.result(timeout=10) if _f_role else {}
+        except Exception:
+            _player_role = {}
 
     # ── Matchup upgrade if key opp players out ──────────────────────────
     if _opp_absent and len(_opp_absent) >= 2 and matchup_auto == "Neutral":
@@ -7072,6 +7239,58 @@ if st.session_state.logs is not None:
             "<div style='background:#0d1520;border:1px solid rgba(255,255,255,0.06);border-radius:14px;"
             "padding:0.75rem 1rem;color:#475569;font-family:JetBrains Mono,monospace;font-size:0.7rem;'>"
             "Next opponent not found — check back closer to tip-off</div>",
+            unsafe_allow_html=True
+        )
+
+    # ── Starter / Role Card ────────────────────────────────────────────────
+    _role_val  = _player_role.get("role", "Unknown")
+    _role_src  = _player_role.get("source", "")
+    _role_game = _player_role.get("game_info", "")
+    _role_conf = _player_role.get("starter_confirmed", False)
+    _role_pos  = _player_role.get("depth_pos")
+
+    if _role_val != "Unknown":
+        # Colors and labels
+        if _role_val == "Starter":
+            _rc  = "#10f590"; _rb  = "rgba(16,245,144,0.15)"; _rbdr = "rgba(16,245,144,0.2)"
+            _ric = "🟢"; _rlbl = "Starting"
+            _rsub = "Expected to start tonight — full minutes and usage"
+        elif _role_val == "DNP":
+            _rc  = "#ef4444"; _rb  = "rgba(255,69,96,0.1)"; _rbdr = "rgba(255,69,96,0.2)"
+            _ric = "🚫"; _rlbl = "Did Not Play"
+            _rsub = "Did not play last game — check injury report"
+        else:
+            _rc  = "#f97316"; _rb  = "rgba(249,115,22,0.1)"; _rbdr = "rgba(249,115,22,0.2)"
+            _ric = "🟡"; _rlbl = "Bench"
+            _rsub = "Coming off the bench — minutes and usage may be limited"
+
+        # Source label
+        _src_labels = {
+            "tonight":    "✅ Confirmed from tonight's lineup",
+            "last_game":  "📋 Based on last game's lineup",
+            "depth_chart":"📊 Based on ESPN depth chart",
+        }
+        _src_txt = _src_labels.get(_role_src, "")
+        if _role_game:
+            _src_txt += f" · {_role_game}"
+        if _role_pos and not _role_conf:
+            _src_txt += f" (depth chart pos #{_role_pos})"
+
+        st.markdown(
+            f"<div style='background:{_rb};border:1px solid {_rbdr};border-radius:12px;"
+            f"padding:0.85rem 1.1rem;margin-bottom:0.5rem;"
+            f"display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;'>"
+            f"<div>"
+            f"<div style='font-family:JetBrains Mono,monospace;font-size:0.58rem;color:#475569;"
+            f"letter-spacing:0.15em;text-transform:uppercase;margin-bottom:4px;'>Starting Role</div>"
+            f"<div style='font-family:Outfit,sans-serif;font-size:1.1rem;font-weight:800;"
+            f"color:{_rc};'>{_ric} {_rlbl}</div>"
+            f"<div style='font-family:JetBrains Mono,monospace;font-size:0.63rem;color:#475569;margin-top:3px;'>"
+            f"{_rsub}</div>"
+            f"</div>"
+            f"<div style='font-family:JetBrains Mono,monospace;font-size:0.58rem;color:#475569;"
+            f"text-align:right;max-width:200px;line-height:1.5;'>{_src_txt}</div>"
+            f"</div>",
             unsafe_allow_html=True
         )
 
