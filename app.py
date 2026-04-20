@@ -15,8 +15,8 @@ import streamlit as st
 # ─────────────────────────────────────────────
 
 st.set_page_config(
-    page_title="PropLens — Sports Intelligence",
-    page_icon="🏀",
+    page_title="PropIQ — Sports Intelligence",
+    page_icon="🎯",
     layout="wide",
 )
 
@@ -26,30 +26,31 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&family=JetBrains+Mono:wght@400;500;700&display=swap');
 
 /* ══════════════════════════════════════════
-   V5.0 — PropLens · Premium Sports Intelligence
+   V5.0 — PropIQ · Sports Intelligence Platform
+   Renamed from PropIQ · Enhanced aesthetics
    App Store Ready · Mobile-First · Elevated
 ══════════════════════════════════════════ */
 
 :root {
     /* Core palette — deep navy blacks with warmth */
-    --bg:       #080c14;
-    --bg2:      #0d1520;
-    --bg3:      #111e2e;
-    --bg4:      #162033;
+    --bg:       #060a10;
+    --bg2:      #0b1219;
+    --bg3:      #0f1a24;
+    --bg4:      #142030;
     --border:   rgba(255,255,255,0.06);
     --border2:  rgba(255,255,255,0.10);
 
     /* Electric blue — same but richer */
-    --accent:   #3b82f6;
-    --accent2:  #2563eb;
-    --accent3:  #60a5fa;
-    --accent-glow: rgba(59,130,246,0.25);
+    --accent:   #4f8ef7;
+    --accent2:  #2d6ef0;
+    --accent3:  #7db3ff;
+    --accent-glow: rgba(79,142,247,0.3);
 
     /* Signal colors — more vivid */
-    --green:    #10f590;
+    --green:    #00f5a0;
     --red:      #ff4560;
     --yellow:   #fbbf24;
     --orange:   #f97316;
@@ -61,8 +62,8 @@ st.markdown("""
     --text3:    #475569;
 
     /* Fonts */
-    --font-display: 'Outfit', sans-serif;
-    --font-body:    'Inter', sans-serif;
+    --font-display: 'Plus Jakarta Sans', sans-serif;
+    --font-body:    'DM Sans', sans-serif;
     --font-mono:    'JetBrains Mono', monospace;
 
     /* Radius system */
@@ -184,7 +185,7 @@ html, body, [class*="css"] {
 
 .pl-logo {
     font-family: var(--font-display) !important;
-    font-size: 2rem; font-weight: 900; letter-spacing: -1px;
+    font-size: 2rem; font-weight: 800; letter-spacing: -1.5px;
     color: var(--text) !important;
     line-height: 1;
     text-transform: uppercase;
@@ -192,7 +193,13 @@ html, body, [class*="css"] {
     background: none !important;
     -webkit-background-clip: unset !important;
 }
-.pl-logo span { color: var(--accent); letter-spacing: -1px; }
+.pl-logo span {
+    background: linear-gradient(135deg, var(--accent), var(--accent3));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    letter-spacing: -1.5px;
+}
 .pl-sub {
     font-family: var(--font-mono) !important;
     font-size: 0.52rem; color: var(--text3);
@@ -234,22 +241,22 @@ html, body, [class*="css"] {
 /* ── Section headers — V5.0 ── */
 .section-header {
     font-family: var(--font-display) !important;
-    font-size: 0.62rem;
-    font-weight: 700;
-    letter-spacing: 0.22em;
+    font-size: 0.6rem;
+    font-weight: 800;
+    letter-spacing: 0.28em;
     text-transform: uppercase;
     color: var(--text3);
-    margin: 1.75rem 0 0.75rem 0;
-    padding-bottom: 0.6rem;
+    margin: 2rem 0 0.85rem 0;
+    padding-bottom: 0.65rem;
     border-bottom: 1px solid var(--border);
-    display: flex; align-items: center; gap: 8px;
+    display: flex; align-items: center; gap: 10px;
 }
 .section-header::before {
     content: '';
     display: inline-block;
-    width: 3px; height: 14px;
-    background: var(--accent);
-    border-radius: 2px;
+    width: 3px; height: 16px;
+    background: linear-gradient(180deg, var(--accent), var(--accent3));
+    border-radius: 3px;
     flex-shrink: 0;
 }
 
@@ -297,8 +304,8 @@ html, body, [class*="css"] {
 }
 .stat-value {
     font-family: var(--font-display) !important;
-    font-size: 2rem; font-weight: 800;
-    color: var(--text); letter-spacing: -0.5px; line-height: 1;
+    font-size: 2.1rem; font-weight: 800;
+    color: var(--text); letter-spacing: -1px; line-height: 1;
 }
 .stat-value.orange { color: var(--accent); }
 .stat-value.green  { color: var(--green); }
@@ -374,7 +381,7 @@ html, body, [class*="css"] {
 }
 .verdict-tier {
     font-family: var(--font-display) !important;
-    font-size: 2.4rem; font-weight: 900; letter-spacing: -1px; line-height: 1;
+    font-size: 2.6rem; font-weight: 800; letter-spacing: -1.5px; line-height: 1;
     text-transform: uppercase;
 }
 .verdict-tier.green  { color: var(--green); }
@@ -387,13 +394,14 @@ html, body, [class*="css"] {
 .flag-row { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 0.5rem; align-items: center; }
 .flag-pill {
     font-family: var(--font-mono) !important;
-    font-size: 0.6rem;
-    padding: 3px 10px;
-    letter-spacing: 0.06em;
+    font-size: 0.62rem;
+    padding: 4px 12px;
+    letter-spacing: 0.05em;
     display: inline-flex; align-items: center;
     white-space: nowrap; line-height: 1.5;
     border: 1px solid transparent;
     border-radius: var(--r-full);
+    font-weight: 600;
 }
 .flag-pill.up     { background: rgba(0,230,118,0.1);  color: var(--green);  border-color: rgba(0,230,118,0.2); }
 .flag-pill.down   { background: rgba(255,61,87,0.1);   color: var(--red);    border-color: rgba(255,61,87,0.2); }
@@ -3725,7 +3733,7 @@ def run_backtest(
     min_games: int = 5,
 ) -> pd.DataFrame:
     """
-    Simulate the PropLens model game-by-game over a full season.
+    Simulate the PropIQ model game-by-game over a full season.
 
     For each game G, uses the prior `window` games as the sample,
     runs apply_adjustments with neutral context (no live signals),
@@ -4280,7 +4288,7 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
-    st.markdown("<div class='section-header'>How To Use PropLens</div>", unsafe_allow_html=True)
+    st.markdown("<div class='section-header'>How To Use PropIQ</div>", unsafe_allow_html=True)
     st.markdown("""
     <div style='display:flex;flex-direction:column;gap:8px;'>
         <div style='display:flex;gap:12px;align-items:flex-start;background:#0d1520;border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:0.75rem 1rem;'>
@@ -4301,7 +4309,7 @@ with st.sidebar:
             <div style='min-width:28px;height:28px;background:#3b82f6;border-radius:8px;display:flex;align-items:center;justify-content:center;font-family:Outfit,sans-serif;font-weight:800;font-size:0.9rem;color:#fff;flex-shrink:0;'>3</div>
             <div>
                 <div style='font-family:Outfit,sans-serif;font-weight:600;color:#f1f5f9;font-size:0.85rem;'>Hit Analyze Prop and wait ~10 seconds</div>
-                <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#475569;margin-top:3px;'>PropLens pulls live stats, injuries, matchups, referee data, and more</div>
+                <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#475569;margin-top:3px;'>PropIQ pulls live stats, injuries, matchups, referee data, and more</div>
             </div>
         </div>
         <div style='display:flex;gap:12px;align-items:flex-start;background:#0d1520;border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:0.75rem 1rem;'>
@@ -4362,7 +4370,7 @@ with st.sidebar:
     with st.expander("📊  Backtest Engine"):
         st.markdown("""
         <div style='font-family:DM Mono;font-size:0.68rem;color:#475569;line-height:1.6;margin-bottom:0.75rem;'>
-        Simulate PropLens on a full season to see how often each verdict tier actually hit.
+        Simulate PropIQ on a full season to see how often each verdict tier actually hit.
         Use this to validate the model on specific players and lines.
         </div>
         """, unsafe_allow_html=True)
@@ -5264,7 +5272,7 @@ if _mode == "🎯  Scanner":
     st.markdown("""
     <div class='explainer'>
         <strong>How it works:</strong> Scans every player on today's PrizePicks NBA slate and runs each
-        one through the PropLens model automatically. Only shows <strong>Strong Over</strong> results by default
+        one through the PropIQ model automatically. Only shows <strong>Strong Over</strong> results by default
         — these are the highest-confidence picks. Change the filter to see more.
         Takes 2–4 minutes to scan the full slate.
         <br><br>
@@ -5671,7 +5679,7 @@ with st.expander("⚡  Quick Entry — analyze multiple props at once"):
     st.markdown("""
     <div class='explainer'>
         Enter up to 6 props manually — useful when browsing Underdog or any other platform.
-        Hit <strong>Run All</strong> and PropLens analyzes each one instantly.
+        Hit <strong>Run All</strong> and PropIQ analyzes each one instantly.
     </div>
     """, unsafe_allow_html=True)
 
@@ -5817,7 +5825,7 @@ with st.expander("🎯  Parlay Checker — validate your entry before locking"):
     st.markdown("""
     <div class='explainer'>
         <strong>Before you lock your entry on PrizePicks — check it here first.</strong>
-        Enter each leg of your parlay, hit Check Entry, and PropLens will:
+        Enter each leg of your parlay, hit Check Entry, and PropIQ will:
         <br>• Show your <strong>real combined probability</strong> of hitting
         <br>• Flag any <strong>weak legs</strong> that are dragging the entry down
         <br>• Warn you about <strong>correlated picks</strong> (same game players)
@@ -8035,7 +8043,7 @@ if st.session_state.logs is not None:
         <div style='font-family:JetBrains Mono,monospace;font-size:0.65rem;color:#475569;
                     background:#0d1520;border:1px solid rgba(255,255,255,0.06);border-radius:8px;
                     padding:0.65rem 1rem;margin-bottom:0.75rem;line-height:1.8;'>
-            This table shows exactly how PropLens arrived at the final probability.
+            This table shows exactly how PropIQ arrived at the final probability.
             Each row is a signal that pushed the number up or down.
             <span style='color:#3b82f6;'>Positive adjustments</span> favor the Over.
             <span style='color:#ef4444;'>Negative adjustments</span> favor the Under.
@@ -8282,7 +8290,7 @@ if st.session_state.logs is not None:
             f"Hit Rate: {adjusted:.0%} · Edge: {line_diff:+.1f} · Consistency: {consistency:.0%}"
             f"{_blowout_str}"
             f"{_playoff_str}\n"
-            f"🏀 PropLens v4.0"
+            f"🎯 PropIQ"
         ).strip()
 
         # Display share box with copy instruction
@@ -8462,4 +8470,4 @@ else:
 
 
 
-st.markdown("<div style='margin-top:3rem; font-family:DM Mono; font-size:0.65rem; color:#334155; text-align:center;'>PropLens — For educational purposes only. Not financial or betting advice.</div>", unsafe_allow_html=True)
+st.markdown("<div style='margin-top:3rem; font-family:DM Mono; font-size:0.65rem; color:#334155; text-align:center;'>PropIQ — For educational purposes only. Not financial or betting advice.</div>", unsafe_allow_html=True)
