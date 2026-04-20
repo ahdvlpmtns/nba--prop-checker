@@ -1193,10 +1193,17 @@ def series_coverage_signal(
         df       = logs.copy().reset_index(drop=True)
         df["GD"] = pd.to_datetime(df["GAME_DATE"], errors="coerce")
         today    = pd.Timestamp.now().normalize()
-        # Filter to games vs this opponent in last 30 days
+        # Filter to games vs this opponent — in playoffs use stricter date filter
+        # Only count games from playoff start (April 14) to avoid regular season contamination
         mask = df["GD"].notna() & df["MATCHUP"].astype(str).str.upper().str.contains(opp_up, na=False)
         recent_opp = df[mask].copy()
-        recent_opp = recent_opp[(today - recent_opp["GD"].dt.normalize()).dt.days <= 30]
+        if _IS_PLAYOFFS:
+            # Only this year's playoff games vs this opponent (after April 13)
+            import datetime
+            _playoff_start = pd.Timestamp("2026-04-14").normalize()
+            recent_opp = recent_opp[recent_opp["GD"].dt.normalize() >= _playoff_start]
+        else:
+            recent_opp = recent_opp[(today - recent_opp["GD"].dt.normalize()).dt.days <= 30]
         if recent_opp.empty:
             return "Neutral", None, 0
 
@@ -2989,13 +2996,12 @@ def weighted_hit_rate(df: pd.DataFrame, line: float, side: str, stat_col: str = 
             opp_up = opp_abbr.upper()
             dates  = pd.to_datetime(df["GAME_DATE"], errors="coerce").reset_index(drop=True)
             matchups = df["MATCHUP"].astype(str).reset_index(drop=True)
-            today = pd.Timestamp.now().normalize()
-            # Only games in last 30 days count as "this series"
+            # Only actual playoff games (on or after April 14) count as this series
+            _playoff_start = pd.Timestamp("2026-04-14").normalize()
             for i in range(n):
                 if pd.notna(dates[i]) and opp_up in matchups[i].upper():
-                    days_ago = (today - dates[i].normalize()).days
-                    if 0 <= days_ago <= 30:
-                        weights[i] *= 3  # 3x boost for this-series games
+                    if dates[i].normalize() >= _playoff_start:
+                        weights[i] *= 3  # 3x boost for actual playoff series games only
         except Exception:
             pass
 
@@ -6792,7 +6798,33 @@ if st.session_state.logs is not None:
     }
 
     adjusted  = apply_adjustments(weighted_base, context, side)
-    line_diff = sample_avg_pts - line
+    # In playoffs, weight this-series games 3x for edge calc (matches weighted_hit_rate)
+    if _IS_PLAYOFFS and opp_abbr and "MATCHUP" in logs.columns and "GAME_DATE" in logs.columns:
+        try:
+            _opp_up = opp_abbr.upper()
+            _dates  = pd.to_datetime(logs["GAME_DATE"], errors="coerce").reset_index(drop=True)
+            _matchups = logs["MATCHUP"].astype(str).reset_index(drop=True)
+            _pts_raw  = pd.to_numeric(logs["PTS"], errors="coerce").reset_index(drop=True)
+            _today    = pd.Timestamp.now().normalize()
+            _weights  = []
+            for _i in range(len(_pts_raw)):
+                _w = 1.0
+                if pd.notna(_dates[_i]) and _opp_up in _matchups[_i].upper():
+                    _playoff_start = pd.Timestamp("2026-04-14").normalize()
+                    if _dates[_i].normalize() >= _playoff_start:
+                        _w = 3.0
+                _weights.append(_w)
+            _total_w = sum(_weights)
+            _weighted_avg_pts = sum(
+                float(_pts_raw[_i]) * _weights[_i]
+                for _i in range(len(_pts_raw))
+                if pd.notna(_pts_raw[_i])
+            ) / _total_w if _total_w > 0 else sample_avg_pts
+            line_diff = _weighted_avg_pts - line
+        except Exception:
+            line_diff = sample_avg_pts - line
+    else:
+        line_diff = sample_avg_pts - line
     tier      = get_confidence_tier(adjusted, line_diff, consistency, side)
 
     # ── Playoff usage spike banner ───────────────────────────────────────
