@@ -1216,34 +1216,7 @@ def get_h2h_logs(player_id: int, opp_abbr: str, season: str, _date: str = None) 
 
     combined = pd.concat(all_rows).sort_values("GAME_DATE", ascending=False).reset_index(drop=True)
     combined["GAME_DATE"] = pd.to_datetime(combined["GAME_DATE"], errors="coerce")
-
-    # In playoffs: split into series games vs regular season history
-    # Return series games for signal, but attach reg season as metadata
-    import datetime as _dtm2
-    _today2 = _dtm2.date.today()
-    _in_po2 = ((_today2.month == 4 and _today2.day >= 14) or
-               _today2.month == 5 or
-               (_today2.month == 6 and _today2.day <= 25))
-    if _in_po2:
-        try:
-            _playoff_start = pd.Timestamp("2026-04-14")
-            series_games   = combined[combined["GAME_DATE"] >= _playoff_start].reset_index(drop=True)
-            reg_history    = combined[combined["GAME_DATE"] <  _playoff_start].reset_index(drop=True)
-            # Tag series games so caller can detect them
-            if not series_games.empty:
-                series_games.attrs["playoff_series"] = True
-                series_games.attrs["reg_history"]    = reg_history
-                return series_games
-            else:
-                # No series games yet — return reg season history with flag
-                if not reg_history.empty:
-                    reg_history.attrs["playoff_series"] = False
-                    reg_history.attrs["reg_history"]    = reg_history
-                    return reg_history
-                return pd.DataFrame(columns=combined.columns)
-        except Exception:
-            pass
-
+    # Return full history — caller splits into series vs reg season
     return combined
 
 
@@ -6666,9 +6639,23 @@ if st.session_state.logs is not None:
             matchup_auto, opp_pts, league_avg = "Neutral", None, "114.5"
 
         try:
-            h2h_df = _f_h2h.result(timeout=22) if _f_h2h else pd.DataFrame()
+            _h2h_full = _f_h2h.result(timeout=22) if _f_h2h else pd.DataFrame()
         except Exception:
-            h2h_df = pd.DataFrame()
+            _h2h_full = pd.DataFrame()
+
+        # Split full H2H history into series games vs regular season — outside cache
+        if _IS_PLAYOFFS and not _h2h_full.empty:
+            try:
+                _playoff_start = pd.Timestamp("2026-04-14")
+                _h2h_dates     = pd.to_datetime(_h2h_full["GAME_DATE"], errors="coerce")
+                h2h_df      = _h2h_full[_h2h_dates >= _playoff_start].reset_index(drop=True)
+                _reg_h2h_df = _h2h_full[_h2h_dates <  _playoff_start].reset_index(drop=True)
+            except Exception:
+                h2h_df      = _h2h_full
+                _reg_h2h_df = pd.DataFrame()
+        else:
+            h2h_df      = _h2h_full
+            _reg_h2h_df = pd.DataFrame()
 
         try:
             _f_season.result(timeout=20)
@@ -7061,9 +7048,9 @@ if st.session_state.logs is not None:
     hb1, hb2, hb3, hb4 = st.columns(4)
 
     with hb1:
-        # Pull regular season history from attrs if in playoffs
-        _reg_h2h    = getattr(h2h_df, "attrs", {}).get("reg_history", pd.DataFrame()) if h2h_df is not None else pd.DataFrame()
-        _is_series  = _IS_PLAYOFFS and h2h_df is not None and getattr(h2h_df, "attrs", {}).get("playoff_series", False)
+        # _reg_h2h_df and h2h_df already split above outside cache
+        _reg_h2h   = _reg_h2h_df if "_reg_h2h_df" in dir() else pd.DataFrame()
+        _is_series = _IS_PLAYOFFS and h2h_df is not None and not h2h_df.empty
 
         sig_color = {"Strong": "#10f590", "Neutral": "#94a3b8", "Risk": "#ef4444"}.get(h2h_sig, "#94a3b8")
         sig_bg    = {"Strong": "#041a0e", "Neutral": "#0f172a",  "Risk": "#1c0505"}.get(h2h_sig, "#0f172a")
@@ -7536,10 +7523,8 @@ if st.session_state.logs is not None:
             _starter_sig = "DNP"
 
     # ── Reg season H2H blended into h2h_sig when series only has 1 game ───
-    # If we only have 1 series game, blend with reg season avg for a more reliable signal
     _h2h_sig_final = h2h_sig
     if _IS_PLAYOFFS and h2h_count == 1 and h2h_avg is not None:
-        _reg_h2h_df = getattr(h2h_df, "attrs", {}).get("reg_history", pd.DataFrame())
         if not _reg_h2h_df.empty:
             try:
                 _reg_pts_arr = pd.to_numeric(_reg_h2h_df["PTS"], errors="coerce").dropna()
