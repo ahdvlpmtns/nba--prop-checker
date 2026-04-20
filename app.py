@@ -1117,15 +1117,14 @@ def nba_get_game_logs(player_id: int, season: str, n: int = 10, _date: str = Non
                 if c not in _df.columns: _df[c] = 0
             for c in ["PLUS_MINUS","WL"]:
                 if c not in _df.columns: _df[c] = None
-            _df = _df[["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A","FG3M","PLUS_MINUS","WL"]]
-            return _merge_playoff_logs(_df, player_id, season, n)
+            return _df[["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A","FG3M","PLUS_MINUS","WL"]]
     except Exception:
         pass
     # Hit NBA API — result gets cached by st.cache_data only if non-empty
     result = _nba_get_game_logs_uncached(player_id, season, n, _date)
     if result is None or result.empty:
         raise RuntimeError("NBA API returned no data — do not cache this failure")
-    return _merge_playoff_logs(result, player_id, season, n)
+    return result
 
 @st.cache_data(ttl=21600, show_spinner=False)
 def nba_get_player_team(player_id: int) -> Optional[str]:
@@ -1673,10 +1672,46 @@ def espn_get_next_game(team_abbr: str) -> Tuple[Optional[str], Optional[str], Op
 @st.cache_data(ttl=21600, show_spinner=False)
 def espn_get_opp_pts_allowed(opp_abbr: str, _date: str = None) -> Optional[float]:
     """
-    Calculate pts allowed per game by averaging opponent scores
-    from the team's last 15 completed games via ESPN scoreboard.
-    ESPN's team stats endpoint doesn't include pts allowed directly.
+    Calculate pts allowed per game. Tries NBA Stats API first (most reliable),
+    falls back to ESPN scoreboard scrape.
     """
+    # Method 1: NBA Stats leaguedashteamstats — direct pts allowed
+    _NBA_ABBR_TO_ID = {
+        "ATL":1610612737,"BOS":1610612738,"BKN":1610612751,"CHA":1610612766,
+        "CHI":1610612741,"CLE":1610612739,"DAL":1610612742,"DEN":1610612743,
+        "DET":1610612765,"GSW":1610612744,"HOU":1610612745,"IND":1610612754,
+        "LAC":1610612746,"LAL":1610612747,"MEM":1610612763,"MIA":1610612748,
+        "MIL":1610612749,"MIN":1610612750,"NOP":1610612740,"NYK":1610612752,
+        "OKC":1610612760,"ORL":1610612753,"PHI":1610612755,"PHX":1610612756,
+        "POR":1610612757,"SAC":1610612758,"SAS":1610612759,"TOR":1610612761,
+        "UTA":1610612762,"WAS":1610612764,
+    }
+    try:
+        import requests as _req
+        _hdrs = {"User-Agent":"Mozilla/5.0","Referer":"https://www.nba.com/",
+                 "x-nba-stats-origin":"stats","x-nba-stats-token":"true","Accept":"application/json"}
+        r = _req.get(
+            "https://stats.nba.com/stats/leaguedashteamstats",
+            params={"Season":"2025-26","SeasonType":"Playoffs" if _date is None else "Regular Season",
+                    "PerMode":"PerGame","MeasureType":"Base","LeagueID":"00"},
+            headers=_hdrs, timeout=8
+        )
+        if r.ok:
+            rs = r.json().get("resultSets",[{}])[0]
+            hs = rs.get("headers",[])
+            rows = rs.get("rowSet",[])
+            if hs and rows:
+                abbr_i = hs.index("TEAM_ABBREVIATION") if "TEAM_ABBREVIATION" in hs else -1
+                opp_i  = hs.index("OPP_PTS") if "OPP_PTS" in hs else -1
+                if abbr_i >= 0 and opp_i >= 0:
+                    for row in rows:
+                        if str(row[abbr_i]).upper() == opp_abbr.upper():
+                            val = float(row[opp_i])
+                            if val > 80:
+                                return round(val, 1)
+    except Exception:
+        pass
+    # Method 2: ESPN scoreboard scrape (original method)
     try:
         import pytz
         et    = pytz.timezone("America/New_York")
@@ -5081,6 +5116,7 @@ if _mode == "🎯  Scanner":
                         return None
 
                     _logs = nba_get_game_logs(_nid, _season, n=15, _date=_cache_date())
+                    _logs = _merge_playoff_logs(_logs, _nid, _season, 15)
                     if _logs.empty:
                         return None
 
@@ -6169,6 +6205,8 @@ if fetch:
             _all_logs = nba_get_game_logs(
                 player_id=player_id, season=season_str_clean, n=15, _date=_cache_date()
             )
+            # Merge playoff games OUTSIDE the cache so they always reflect latest
+            _all_logs = _merge_playoff_logs(_all_logs, player_id, season_str_clean, 15)
         except RuntimeError:
             _all_logs = None  # NBA API failed — don't cache, show retry
         st.session_state.logs = _all_logs.head(n_games) if _all_logs is not None and not getattr(_all_logs, "empty", True) else None
