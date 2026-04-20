@@ -4797,18 +4797,26 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-_mode = "🎯  Slate Scanner" if st.session_state.active_tab == "scanner" else "🏀  Player Prop"
+_mode = "🎯  Scanner" if st.session_state.active_tab == "scanner" else "🏀  Player Prop"
 st.markdown("<div style='height:0.1rem'></div>", unsafe_allow_html=True)
 
 if _IS_PLAYOFFS:
     st.markdown(
-        "<div style='background:#0c1a2e;border:1px solid #1e3a5f;border-left:4px solid #3b82f6;"
-        "padding:0.6rem 1rem;margin-bottom:0.5rem;display:flex;align-items:center;gap:10px;'>"
-        "<span style='font-size:1.1rem;'>🏆</span>"
-        "<span style='font-family:JetBrains Mono,monospace;font-size:0.68rem;'>"
-        "<span style='color:#3b82f6;font-weight:700;letter-spacing:0.1em;'>PLAYOFF MODE</span>"
-        "<span style='color:#475569;'> · H2H boosted · Playoff pace · No load mgmt warnings</span>"
-        "</span></div>",
+        "<div style='background:linear-gradient(90deg,#0c1a2e,#111e2e);border:1px solid #3b82f6;"
+        "border-radius:10px;padding:0.75rem 1.1rem;margin-bottom:0.75rem;"
+        "display:flex;align-items:center;justify-content:space-between;gap:12px;'>"
+        "<div style='display:flex;align-items:center;gap:10px;'>"
+        "<span style='font-size:1.3rem;'>🏆</span>"
+        "<div>"
+        "<div style='font-family:Outfit,sans-serif;font-size:0.9rem;font-weight:700;"
+        "color:#60a5fa;letter-spacing:0.05em;'>PLAYOFF MODE ACTIVE</div>"
+        "<div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#475569;margin-top:2px;'>"
+        "H2H signal boosted · Playoff pace calibrated · Load mgmt warnings off</div>"
+        "</div></div>"
+        "<div style='font-family:JetBrains Mono,monospace;font-size:0.6rem;color:#3b82f6;"
+        "background:rgba(59,130,246,0.1);border:1px solid rgba(59,130,246,0.3);"
+        "padding:3px 10px;border-radius:999px;white-space:nowrap;'>NBA 2026</div>"
+        "</div>",
         unsafe_allow_html=True
     )
 
@@ -4818,7 +4826,7 @@ if _IS_PLAYOFFS:
 # Slate Scanner
 # ─────────────────────────────────────────────
 
-if _mode == "🎯  Slate Scanner":
+if _mode == "🎯  Scanner":
     st.markdown("<div class='section-header'>PrizePicks NBA — Today's Slate</div>", unsafe_allow_html=True)
     st.markdown("""
     <div class='explainer'>
@@ -6216,11 +6224,16 @@ if st.session_state.logs is not None:
     if _IS_PLAYOFFS and avg_min < 28 and avg_min > 0:
         _playoff_mins_warning = (
             f"<div style='background:#1c1005;border:1px solid #854d0e;"
-            f"border-radius:0;padding:0.55rem 1rem;margin-bottom:0.5rem;"
-            f"font-family:JetBrains Mono,monospace;font-size:0.68rem;'>"
-            f"<span style='color:#f97316;font-weight:700;'>⚠️ PLAYOFF MINUTES RISK</span>"
-            f"<span style='color:#475569;'> · Avg {avg_min:.0f} min — role players often see reduced "
-            f"playoff time. Lines may not reflect reduced possessions.</span></div>"
+            f"border-radius:10px;padding:0.75rem 1rem;margin-bottom:0.5rem;"
+            f"display:flex;align-items:center;gap:10px;'>"
+            f"<span style='font-size:1.2rem;'>⚠️</span>"
+            f"<div>"
+            f"<div style='font-family:Outfit,sans-serif;font-size:0.85rem;font-weight:700;color:#f97316;'>"
+            f"Playoff Minutes Risk</div>"
+            f"<div style='font-family:JetBrains Mono,monospace;font-size:0.65rem;color:#94a3b8;margin-top:2px;'>"
+            f"Avg {avg_min:.0f} min/game — role players often get buried in playoffs. "
+            f"This line may not reflect reduced possessions.</div>"
+            f"</div></div>"
         )
 
     # ── Minutes restriction downgrade ─────────────────────────────
@@ -6360,6 +6373,12 @@ if st.session_state.logs is not None:
         </div>
         """, unsafe_allow_html=True)
     else:
+        st.markdown(
+            "<div style='background:#0d1520;border:1px solid rgba(255,255,255,0.06);border-radius:10px;"
+            "padding:0.75rem 1rem;color:#475569;font-family:JetBrains Mono,monospace;font-size:0.68rem;'>"
+            "Opponent defensive stats not available — matchup set to Neutral</div>",
+            unsafe_allow_html=True
+        )
         matchup_auto = "Neutral"
 
     # Pre-build all pills to avoid f-string rendering issues
@@ -6432,16 +6451,17 @@ if st.session_state.logs is not None:
             sig_color = {"Strong": "#22c55e", "Neutral": "#94a3b8", "Risk": "#ef4444"}.get(h2h_sig, "#94a3b8")
             sig_bg    = {"Strong": "#052e16", "Neutral": "#0f172a",  "Risk": "#1c0505"}.get(h2h_sig, "#0f172a")
             sig_border= {"Strong": "#166534", "Neutral": "#1e293b",  "Risk": "#991b1b"}.get(h2h_sig, "#1e293b")
-            _h2h_label = f"This Series H2H ({h2h_count}G)" if _IS_PLAYOFFS else f"vs {opp_abbr} (L{h2h_count} H2H)"
+            _h2h_label = f"Avg pts vs {opp_abbr} · this series ({h2h_count}G)" if _IS_PLAYOFFS else f"Avg pts vs {opp_abbr} (L{h2h_count} games)"
+            _h2h_meaning = {"Strong": "✅ Good matchup historically", "Risk": "⚠️ Struggles vs this team", "Neutral": "Neutral history"}.get(h2h_sig, "")
             st.markdown(f"""
             <div class='stat-card' style='border-color:{sig_border};background:{sig_bg};'>
                 <div class='stat-label'>{_h2h_label}</div>
                 <div style='display:flex;align-items:baseline;gap:12px;margin-top:4px;'>
                     <div class='stat-value' style='color:{sig_color};'>{h2h_avg:.1f}</div>
-                    <div style='font-family:DM Mono;font-size:0.72rem;color:#475569;'>avg pts</div>
+                    <div style='font-family:JetBrains Mono,monospace;font-size:0.72rem;color:#475569;'>pts avg</div>
                 </div>
-                <div style='font-family:DM Mono;font-size:0.72rem;color:{sig_color};margin-top:4px;'>
-                    {h2h_sig} signal · line {line}
+                <div style='font-family:JetBrains Mono,monospace;font-size:0.68rem;color:{sig_color};margin-top:4px;'>
+                    {_h2h_meaning} · line {line}
                 </div>
             </div>""", unsafe_allow_html=True)
         else:
