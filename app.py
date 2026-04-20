@@ -3384,6 +3384,8 @@ def apply_adjustments(weighted: float, context: dict, side: str = "Over") -> flo
         "series_cov": {"Strong": +0.07, "Neutral": 0.00, "Risk": -0.08},
         # Referee foul tendency — high whistle = more FTs = more scoring
         "ref":        {"High FT": +0.04, "Neutral": 0.00, "Low FT": -0.04},
+        # Shot volume in playoffs — high usage players hold, low usage get buried
+        "shot_vol":   {"Star": +0.04, "Neutral": 0.00, "Risk": -0.05},
         # Playoff game number — Game 1 and 6/7 see lower scoring
         "game_num":   {"Spike": +0.05, "Neutral": 0.00, "Drop": -0.05, "N/A": 0.00,
                        "Game 1 (feeling out)": -0.03, "Game 2 (normal)": 0.00,
@@ -5207,6 +5209,7 @@ if _mode == "🎯  Scanner":
                         "ref":        "Neutral",
                         "game_num":   "N/A",
                         "pu_spike":   "Neutral",
+                        "shot_vol":   "Neutral",
                     }
                     _adj  = apply_adjustments(_wb, _ctx, "Over")
                     _tier = get_confidence_tier(_adj, _ld, _cons, "Over")
@@ -6587,6 +6590,69 @@ if st.session_state.logs is not None:
             <div class='stat-hint'>Avg FGA: {avg_fga:.1f} · FTA: {avg_fta:.1f}{f" · Season avg: {season_avg_min:.1f} min" if season_avg_min else ""}</div>
         </div>""", unsafe_allow_html=True)
 
+    # ── Shot Attempts Card ───────────────────
+    _fga_trend_color = "#10f590" if fga_flag == "↑" else ("#ef4444" if fga_flag == "↓" else "#94a3b8")
+    _fga_label = "Trending Up" if fga_flag == "↑" else ("Trending Down" if fga_flag == "↓" else "Stable")
+    _fga_pts_per_attempt = round(sample_avg_pts / avg_fga, 2) if avg_fga > 0 else 0
+
+    # Playoff FGA context — star players shoot more in playoffs
+    _fga_playoff_note = ""
+    if _IS_PLAYOFFS:
+        if avg_fga >= 15:
+            _fga_playoff_note = "High-volume scorer · playoff usage likely holds"
+        elif avg_fga < 10:
+            _fga_playoff_note = "⚠️ Low volume · watch for playoff rotation cut"
+        else:
+            _fga_playoff_note = "Role player volume · may fluctuate in playoffs"
+
+    # FTA adds free throw scoring — important for foul-prone matchups
+    _fta_note = f"{avg_fta:.1f} FTA/game" if avg_fta else ""
+    _fta_pts  = round(avg_fta * 0.78, 1) if avg_fta else 0  # ~78% FT avg
+
+    _fga_bg     = "#0d1520"
+    _fga_border = "rgba(255,255,255,0.06)"
+    if avg_fga >= 15:
+        _fga_bg = "#041a0e"; _fga_border = "rgba(16,245,144,0.15)"
+    elif avg_fga < 10:
+        _fga_bg = "#1a0008"; _fga_border = "rgba(255,69,96,0.15)"
+
+    st.markdown(f"""
+    <div style='background:{_fga_bg};border:1px solid {_fga_border};border-radius:12px;
+                padding:1rem 1.1rem;margin-bottom:0.5rem;'>
+        <div style='font-family:JetBrains Mono,monospace;font-size:0.58rem;color:#475569;
+                    letter-spacing:0.15em;text-transform:uppercase;margin-bottom:8px;'>
+            Shot Attempts (L{n_games})
+            <span style='color:#475569;font-size:0.55rem;margin-left:6px;'>
+            — attempts = scoring opportunities</span>
+        </div>
+        <div style='display:flex;gap:2rem;flex-wrap:wrap;align-items:flex-end;'>
+            <div>
+                <div style='font-family:Outfit,sans-serif;font-size:2rem;font-weight:800;
+                            color:{_fga_trend_color};line-height:1;'>{avg_fga:.1f}</div>
+                <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;
+                            color:#475569;margin-top:3px;'>FGA per game
+                    <span style='color:{_fga_trend_color};margin-left:6px;'>{fga_flag} {_fga_label}</span>
+                </div>
+            </div>
+            <div>
+                <div style='font-family:Outfit,sans-serif;font-size:2rem;font-weight:800;
+                            color:#60a5fa;line-height:1;'>{avg_fta:.1f}</div>
+                <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;
+                            color:#475569;margin-top:3px;'>FTA per game
+                    <span style='color:#60a5fa;margin-left:6px;'>≈ {_fta_pts} pts from FTs</span>
+                </div>
+            </div>
+            <div>
+                <div style='font-family:Outfit,sans-serif;font-size:2rem;font-weight:800;
+                            color:#94a3b8;line-height:1;'>{_fga_pts_per_attempt}</div>
+                <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;
+                            color:#475569;margin-top:3px;'>pts per attempt</div>
+            </div>
+        </div>
+        {f"<div style='font-family:JetBrains Mono,monospace;font-size:0.65rem;color:#475569;margin-top:8px;border-top:1px solid rgba(255,255,255,0.05);padding-top:8px;'>{_fga_playoff_note}</div>" if _fga_playoff_note else ""}
+    </div>
+    """, unsafe_allow_html=True)
+
     # ── Defense card ──────────────────────────
     if opp_abbr:
         badge_css   = matchup_auto.lower()
@@ -6908,8 +6974,7 @@ if st.session_state.logs is not None:
 
     # ── Chart ─────────────────────────────────
     st.markdown("<div class='section-header'>Points Chart</div>", unsafe_allow_html=True)
-    fig = build_points_chart(logs, full_name, line, sample_avg_pts)
-    st.plotly_chart(fig, use_container_width=True)
+
 
     with st.expander("📋  Game Log"):
         st.dataframe(logs.reset_index(drop=True), use_container_width=True)
@@ -6965,17 +7030,10 @@ if st.session_state.logs is not None:
     with pc2:
         script_sel = st.selectbox("Game Script", ["Neutral", "Competitive", "Blowout risk"])
 
-    with st.expander("⚙️  Advanced overrides"):
-        ac1, ac2, ac3 = st.columns(3)
-        with ac1:
-            minutes_sel = st.selectbox("Minutes", ["Okay", "Strong", "Risk"],
-                                       index=["Okay", "Strong", "Risk"].index(minutes_suggest))
-        with ac2:
-            role_sel = st.selectbox("Role", ["Okay", "Strong", "Risk"],
-                                    index=["Okay", "Strong", "Risk"].index(role_suggest))
-        with ac3:
-            shots_sel = st.selectbox("Shots", ["Medium", "High", "Low"],
-                                     index=["Medium", "High", "Low"].index(shots_suggest))
+    # Advanced overrides removed — signals are auto-computed
+    minutes_sel = minutes_suggest
+    role_sel    = role_suggest
+    shots_sel   = shots_suggest
 
     venue_adj = venue_adjustment(splits, tonight_venue, side)
 
@@ -7024,6 +7082,15 @@ if st.session_state.logs is not None:
         logs, opp_abbr, line, side, season_avg
     )
 
+    # ── Playoff shot volume signal ───────────────────────────────────────
+    # High-volume scorers maintain usage in playoffs; role players get buried
+    _shot_vol_sig = "Neutral"
+    if _IS_PLAYOFFS:
+        if avg_fga >= 15:
+            _shot_vol_sig = "Star"      # 15+ FGA — usage protected in playoffs
+        elif avg_fga < 10:
+            _shot_vol_sig = "Risk"      # <10 FGA — likely to see rotation cut
+
     # ── Game number signal ───────────────────────────────────────────────
     _game_num_label = "N/A"
     if _IS_PLAYOFFS and _series and _series.get("found"):
@@ -7071,6 +7138,7 @@ if st.session_state.logs is not None:
         "ref":        _ref_sig if _ref_sig else "Neutral",
         "game_num":   _game_num_label,
         "pu_spike":   _pu_spike_sig,
+        "shot_vol":   _shot_vol_sig,
     }
 
     adjusted  = apply_adjustments(weighted_base, context, side)
@@ -7562,6 +7630,7 @@ if st.session_state.logs is not None:
                            "Game 4 (normal)": 0.00, "Game 5 (normal)": 0.00,
                            "Game 6 (pressure)": -0.02, "Game 7 (max pressure)": -0.03},
             "pu_spike":   {"Spike": +0.05, "Neutral": 0.00, "Drop": -0.05},
+            "shot_vol":   {"Star": +0.04, "Neutral": 0.00, "Risk": -0.05},
             "role":     {"Strong": +0.04, "Okay": 0.00, "Risk": -0.05},
             "shots":    {"High":   +0.03, "Medium": 0.00, "Low": -0.06},
             "matchup":  {"Good":   +0.06, "Neutral": 0.00, "Bad": -0.06},
@@ -7594,6 +7663,7 @@ if st.session_state.logs is not None:
             "ref":        "Referee tendency",
             "game_num":   "Series game number",
             "pu_spike":   "Playoff usage vs reg season",
+            "shot_vol":   "Playoff shot volume",
         }
 
         # Simulate the computation step by step (additive, side-aware)
@@ -7759,44 +7829,7 @@ if st.session_state.logs is not None:
         </div>
         """, unsafe_allow_html=True)
 
-    # ── AI Analysis ───────────────────────────
-    st.markdown("<div class='section-header'>AI Breakdown</div>", unsafe_allow_html=True)
-    groq_key = get_groq_key()
-    if not groq_key:
-        st.error("❌ No GROQ_API_KEY found in Streamlit secrets.")
-    else:
-        if st.session_state.ai_analysis:
-            st.markdown(f"<div class='ai-box'>{st.session_state.ai_analysis}</div>", unsafe_allow_html=True)
-            if st.button("⚡  Regenerate"):
-                st.session_state.ai_analysis = None
-                st.session_state.ai_error = None
-                st.rerun()
-        elif st.session_state.ai_error:
-            st.error(f"AI analysis failed: {st.session_state.ai_error}")
-            if st.button("⚡  Retry"):
-                st.session_state.ai_analysis = None
-                st.session_state.ai_error = None
-                st.rerun()
-        else:
-            if st.button("⚡  Generate AI Analysis"):
-                with st.spinner("Analyzing..."):
-                    try:
-                        prompt = build_analysis_prompt(
-                            full_name=full_name, line=line, side=side, n_games=n_games,
-                            logs=logs, baseline=baseline, weighted_base=weighted_base,
-                            adjusted=adjusted, tier=tier, avg_pts=sample_avg_pts,
-                            avg_min=avg_min, avg_fga=avg_fga, consistency=consistency,
-                            min_flag=min_flag, fga_flag=fga_flag, pts_flag=pts_flag,
-                            minutes_sel=minutes_sel, role_sel=role_sel, shots_sel=shots_sel,
-                            matchup_sel=matchup_sel, script_sel=script_sel,
-                            opp_abbr=opp_abbr, opp_pts=opp_pts, league_avg=league_avg,
-                            splits=splits, tonight_venue=tonight_venue, venue_adj=venue_adj,
-                        )
-                        st.session_state.ai_analysis = generate_ai_analysis(prompt)
-                        st.session_state.ai_error = None
-                    except Exception as e:
-                        st.session_state.ai_error = repr(e)
-                        st.session_state.ai_analysis = None
+
 
     # ── Share + Add to Tracker ───────────────
     _share_col, _tracker_col = st.columns(2)
