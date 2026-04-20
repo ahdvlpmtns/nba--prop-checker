@@ -1595,6 +1595,56 @@ def form_divergence_signal(
 # ── Next game / schedule ──────────────────────
 
 @st.cache_data(ttl=1800, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False)
+def espn_get_last_game_date(team_abbr: str) -> Optional[str]:
+    """
+    Returns the date of the team's most recent completed game from ESPN.
+    Much more reliable than game logs for rest detection — updates immediately.
+    Returns date string 'YYYY-MM-DD' or None.
+    """
+    if not team_abbr:
+        return None
+    try:
+        import pytz
+        et    = pytz.timezone("America/New_York")
+        today = datetime.now(et).date()
+    except Exception:
+        today = datetime.today().date()
+
+    _ESPN_REVERSE = {
+        "GSW":"GS","SAS":"SA","NYK":"NY","NOP":"NO",
+        "UTA":"UTAH","PHX":"PHX","MEM":"MEM","OKC":"OKC",
+    }
+    _candidates = {team_abbr, _ESPN_REVERSE.get(team_abbr, team_abbr)}
+
+    def _team_matches(abbr: str) -> bool:
+        return abbr == team_abbr or _norm_team_abbr(abbr) == team_abbr or abbr in _candidates
+
+    # Look back up to 10 days for most recent completed game
+    for offset in range(1, 11):
+        check    = today - timedelta(days=offset)
+        date_str = check.strftime("%Y%m%d")
+        try:
+            data   = espn_get(f"{ESPN_SITE}/scoreboard", params={"dates": date_str})
+            events = data.get("events", [])
+            for ev in events:
+                status = ev.get("status", {}).get("type", {}).get("name", "")
+                if "final" not in status.lower() and "complete" not in status.lower():
+                    continue
+                comps       = ev.get("competitions", [{}])[0]
+                competitors = comps.get("competitors", [])
+                my_comp = next(
+                    (c for c in competitors
+                     if _team_matches(c.get("team", {}).get("abbreviation", ""))),
+                    None
+                )
+                if my_comp:
+                    return check.strftime("%Y-%m-%d")
+        except Exception:
+            continue
+    return None
+
+
 def espn_get_next_game(team_abbr: str) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """
     Find next upcoming game for a team using ESPN scoreboard.
@@ -6331,9 +6381,10 @@ if st.session_state.logs is not None:
         _f_playoff  = _pool.submit(get_playoff_picture, player_team) if player_team else None
         _f_series   = _pool.submit(get_playoff_series_context, player_team) if (_IS_PLAYOFFS and player_team) else None
         _f_refs     = _pool.submit(referee_signal, player_team, side) if player_team else None
-        _f_opp_inj  = _pool.submit(get_opponent_injury_report, opp_abbr) if opp_abbr else None
+        _f_opp_inj   = _pool.submit(get_opponent_injury_report, opp_abbr) if opp_abbr else None
         _f_def_form  = _pool.submit(get_opp_recent_defensive_form, opp_abbr) if opp_abbr else None
         _f_po_logs   = _pool.submit(get_playoff_game_logs, player_id, season_str_clean) if _IS_PLAYOFFS else None
+        _f_last_game = _pool.submit(espn_get_last_game_date, player_team) if player_team else None
 
         try:
             matchup_auto, opp_pts, league_avg = _f_matchup.result(timeout=10)
@@ -6380,6 +6431,11 @@ if st.session_state.logs is not None:
         except Exception:
             _po_logs = pd.DataFrame()
 
+        try:
+            _espn_last_game = _f_last_game.result(timeout=8) if _f_last_game else None
+        except Exception:
+            _espn_last_game = None
+
     # ── Matchup upgrade if key opp players out ──────────────────────────
     if _opp_absent and len(_opp_absent) >= 2 and matchup_auto == "Neutral":
         matchup_auto = "Good"
@@ -6399,8 +6455,31 @@ if st.session_state.logs is not None:
 
     _status_ph.empty()  # clear loading message — results are about to render
     h2h_sig, h2h_avg, h2h_count = h2h_signal(h2h_df, line, side)
-    b2b_status  = detect_b2b(logs, game_date)
-    rest_status = detect_rest_days(logs, game_date)
+    # Use ESPN last game date for rest detection — more reliable than game logs
+    # Game logs lag 24-48hrs during playoffs; ESPN scoreboard updates immediately
+    if _espn_last_game and game_date:
+        try:
+            _last_dt   = pd.Timestamp(_espn_last_game)
+            _next_dt   = pd.Timestamp(game_date)
+            _days_rest = (_next_dt - _last_dt).days
+            if _days_rest <= 1:
+                b2b_status  = "B2B"
+                rest_status = "B2B"
+            elif _days_rest == 2:
+                b2b_status  = "Normal"
+                rest_status = "Short"
+            elif _days_rest == 3:
+                b2b_status  = "Normal"
+                rest_status = "Normal"
+            else:
+                b2b_status  = "Normal"
+                rest_status = "Rested"
+        except Exception:
+            b2b_status  = detect_b2b(logs, game_date)
+            rest_status = detect_rest_days(logs, game_date)
+    else:
+        b2b_status  = detect_b2b(logs, game_date)
+        rest_status = detect_rest_days(logs, game_date)
     if b2b_status == "B2B":
         rest_status = "B2B"
     season_avg     = nba_get_season_avg(player_id, season_str_clean, logs_l10=logs)
@@ -6661,9 +6740,24 @@ if st.session_state.logs is not None:
             </div>""", unsafe_allow_html=True)
 
     with hb2:
-        # Last game info for context
+        # Last game info — use ESPN date (real-time) over log date (can lag 48hrs)
         _last_game_info = ""
-        if logs is not None and not logs.empty:
+        if _espn_last_game:
+            try:
+                _espn_date_fmt = pd.Timestamp(_espn_last_game).strftime("%b %d")
+                # Try to get pts from logs for the matching date
+                _espn_pts = ""
+                if logs is not None and not logs.empty:
+                    _log_dates = pd.to_datetime(logs["GAME_DATE"], errors="coerce")
+                    _match = logs[_log_dates.dt.date == pd.Timestamp(_espn_last_game).date()]
+                    if not _match.empty:
+                        _pts_val = pd.to_numeric(_match.iloc[0].get("PTS", 0), errors="coerce")
+                        if pd.notna(_pts_val):
+                            _espn_pts = f" — {int(_pts_val)} pts"
+                _last_game_info = f"Last: {_espn_date_fmt}{_espn_pts}"
+            except Exception:
+                pass
+        if not _last_game_info and logs is not None and not logs.empty:
             try:
                 _last_row  = logs.iloc[0]
                 _last_date = pd.to_datetime(_last_row["GAME_DATE"]).strftime("%b %d")
