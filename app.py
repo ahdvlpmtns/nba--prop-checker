@@ -1025,6 +1025,72 @@ def _nba_get_game_logs_uncached(player_id: int, season: str, n: int = 10, _date:
 
     return empty
 
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def _fetch_playoff_game_logs_raw(player_id: int, season: str) -> pd.DataFrame:
+    """
+    Fetch playoff game logs from NBA Stats API.
+    Cached separately with short TTL so it updates quickly after games.
+    """
+    _HEADERS = {
+        "Host": "stats.nba.com",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "x-nba-stats-origin": "stats",
+        "x-nba-stats-token": "true",
+        "Referer": "https://www.nba.com/",
+        "Origin": "https://www.nba.com",
+    }
+    empty = pd.DataFrame(columns=["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A","FG3M","PLUS_MINUS","WL"])
+    try:
+        import requests as _req
+        r = _req.get(
+            "https://stats.nba.com/stats/playergamelog",
+            params={"PlayerID": player_id, "Season": season,
+                    "SeasonType": "Playoffs", "LeagueID": "00"},
+            headers=_HEADERS, timeout=10
+        )
+        if not r.ok:
+            return empty
+        rs   = r.json().get("resultSets", [{}])[0]
+        hdrs = rs.get("headers", [])
+        rows = rs.get("rowSet", [])
+        if not rows:
+            return empty
+        df = pd.DataFrame(rows, columns=hdrs)
+        df["GAME_DATE"] = pd.to_datetime(df["GAME_DATE"], errors="coerce")
+        for c in ["MATCHUP","MIN","PTS","FGA","FTA","FG3A"]:
+            if c not in df.columns: df[c] = None
+        for c in ["FG3M"]:
+            if c not in df.columns: df[c] = 0
+        for c in ["PLUS_MINUS","WL"]:
+            if c not in df.columns: df[c] = None
+        return df[["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A","FG3M","PLUS_MINUS","WL"]]
+    except Exception:
+        return empty
+
+
+def _merge_playoff_logs(reg_logs: pd.DataFrame, player_id: int, season: str, n: int) -> pd.DataFrame:
+    """
+    During playoffs, merge playoff game logs on top of regular season logs.
+    Playoff games sort to the top (most recent), ensuring rest/form/H2H
+    all see the actual last game played including playoff games.
+    """
+    if not _IS_PLAYOFFS:
+        return reg_logs
+    try:
+        po_logs = _fetch_playoff_game_logs_raw(player_id, season)
+        if po_logs is None or po_logs.empty:
+            return reg_logs
+        # Combine and re-sort by date descending, keep top n
+        combined = pd.concat([po_logs, reg_logs], ignore_index=True)
+        combined["GAME_DATE"] = pd.to_datetime(combined["GAME_DATE"], errors="coerce")
+        combined = combined.sort_values("GAME_DATE", ascending=False).head(n).reset_index(drop=True)
+        return combined
+    except Exception:
+        return reg_logs
+
+
 @st.cache_data(ttl=14400, show_spinner=False)
 def nba_get_game_logs(player_id: int, season: str, n: int = 10, _date: str = None) -> pd.DataFrame:
     """
@@ -1044,14 +1110,15 @@ def nba_get_game_logs(player_id: int, season: str, n: int = 10, _date: str = Non
                 if c not in _df.columns: _df[c] = 0
             for c in ["PLUS_MINUS","WL"]:
                 if c not in _df.columns: _df[c] = None
-            return _df[["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A","FG3M","PLUS_MINUS","WL"]]
+            _df = _df[["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A","FG3M","PLUS_MINUS","WL"]]
+            return _merge_playoff_logs(_df, player_id, season, n)
     except Exception:
         pass
     # Hit NBA API — result gets cached by st.cache_data only if non-empty
     result = _nba_get_game_logs_uncached(player_id, season, n, _date)
     if result is None or result.empty:
         raise RuntimeError("NBA API returned no data — do not cache this failure")
-    return result
+    return _merge_playoff_logs(result, player_id, season, n)
 
 @st.cache_data(ttl=21600, show_spinner=False)
 def nba_get_player_team(player_id: int) -> Optional[str]:
@@ -1141,7 +1208,23 @@ def get_h2h_logs(player_id: int, opp_abbr: str, season: str, _date: str = None) 
     if not all_rows:
         return empty
 
-    return pd.concat(all_rows).sort_values("GAME_DATE", ascending=False).reset_index(drop=True)
+    combined = pd.concat(all_rows).sort_values("GAME_DATE", ascending=False).reset_index(drop=True)
+
+    # In playoffs: only show this series (games since April 14)
+    # Prepend any playoff game logs vs this opponent
+    if _IS_PLAYOFFS:
+        try:
+            _playoff_start = pd.Timestamp("2026-04-14")
+            combined["GAME_DATE"] = pd.to_datetime(combined["GAME_DATE"], errors="coerce")
+            series_games = combined[combined["GAME_DATE"] >= _playoff_start]
+            if not series_games.empty:
+                return series_games.reset_index(drop=True)
+            # No playoff games found yet — return empty so it shows "no series data"
+            return pd.DataFrame(columns=combined.columns)
+        except Exception:
+            pass
+
+    return combined
 
 
 def h2h_signal(h2h_df: pd.DataFrame, line: float, side: str) -> Tuple[str, Optional[float], int]:
