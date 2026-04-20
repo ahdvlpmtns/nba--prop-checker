@@ -1595,6 +1595,49 @@ def form_divergence_signal(
 # ── Next game / schedule ──────────────────────
 
 @st.cache_data(ttl=1800, show_spinner=False)
+@st.cache_data(ttl=1800, show_spinner=False)
+def espn_get_player_news(player_name: str) -> list:
+    """
+    Fetch latest news headlines for a player from ESPN.
+    Returns list of {headline, description, date} dicts.
+    No API key needed.
+    """
+    try:
+        import requests as _req
+        # Search ESPN for the player
+        r = _req.get(
+            "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/news",
+            params={"limit": 50},
+            timeout=6
+        )
+        if not r.ok:
+            return []
+        articles = r.json().get("articles", [])
+        # Filter for articles mentioning this player
+        name_parts = player_name.lower().split()
+        last_name  = name_parts[-1] if name_parts else ""
+        first_name = name_parts[0]  if name_parts else ""
+        results = []
+        for a in articles:
+            headline = a.get("headline", "")
+            desc     = a.get("description", "") or a.get("summary", "")
+            text     = (headline + " " + desc).lower()
+            if last_name in text and (len(last_name) > 4 or first_name in text):
+                # Parse date
+                date_str = a.get("published", "")[:10]
+                results.append({
+                    "headline":    headline,
+                    "description": desc,
+                    "date":        date_str,
+                    "link":        a.get("links", {}).get("web", {}).get("href", ""),
+                })
+            if len(results) >= 3:
+                break
+        return results
+    except Exception:
+        return []
+
+
 @st.cache_data(ttl=900, show_spinner=False)
 def espn_get_last_game_date(team_abbr: str) -> Optional[str]:
     """
@@ -6388,6 +6431,7 @@ if st.session_state.logs is not None:
         _f_def_form  = _pool.submit(get_opp_recent_defensive_form, opp_abbr) if opp_abbr else None
         _f_po_logs   = _pool.submit(get_playoff_game_logs, player_id, season_str_clean) if _IS_PLAYOFFS else None
         _f_last_game = _pool.submit(espn_get_last_game_date, player_team) if player_team else None
+        _f_news      = _pool.submit(espn_get_player_news, full_name)
 
         try:
             matchup_auto, opp_pts, league_avg = _f_matchup.result(timeout=10)
@@ -6438,6 +6482,11 @@ if st.session_state.logs is not None:
             _espn_last_game = _f_last_game.result(timeout=8) if _f_last_game else None
         except Exception:
             _espn_last_game = None
+
+        try:
+            _player_news = _f_news.result(timeout=8)
+        except Exception:
+            _player_news = []
 
     # ── Matchup upgrade if key opp players out ──────────────────────────
     if _opp_absent and len(_opp_absent) >= 2 and matchup_auto == "Neutral":
@@ -6973,67 +7022,85 @@ if st.session_state.logs is not None:
                 st.markdown("<div class='stat-card'><div class='stat-label'>Away</div><div style='color:#475569; font-size:0.8rem; margin-top:4px;'>Not enough data</div></div>", unsafe_allow_html=True)
 
     # ── Chart ─────────────────────────────────
-    st.markdown("<div class='section-header'>Points Chart</div>", unsafe_allow_html=True)
-
 
     with st.expander("📋  Game Log"):
         st.dataframe(logs.reset_index(drop=True), use_container_width=True)
 
-    # ── Context ───────────────────────────────
-    st.markdown("<div class='section-header'>Context</div>", unsafe_allow_html=True)
-
-    if opp_abbr:
-        badge_css    = matchup_auto.lower()
-        badge_text   = {"Good": "Weak defense", "Bad": "Strong defense", "Neutral": "Average defense"}[matchup_auto]
-        opp_pts_str  = f"{opp_pts:.1f}" if opp_pts else "N/A"
-        date_display = game_date if game_date else ""
-
-        # Venue pill
-        if tonight_venue:
-            vc = "#22c55e" if tonight_venue == "Home" else "#60a5fa"
-            venue_pill = (
-                f"<span style='font-family:DM Mono; font-size:0.68rem; font-weight:600; "
-                f"background:{vc}22; color:{vc}; border:1px solid {vc}55; "
-                f"padding:2px 10px; border-radius:999px; margin-left:10px;'>"
-                f"{'🏠 Home' if tonight_venue == 'Home' else '✈️ Away'}</span>"
-            )
-        else:
-            venue_pill = ""
-
-        st.markdown(
-            f"<div style='background:#0f172a; border:1px solid #1e293b; border-radius:10px; "
-            f"padding:0.75rem 1.2rem; margin-bottom:1rem; display:flex; "
-            f"align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.5rem;'>"
-            f"<div>"
-            f"<div style='font-family:DM Mono; font-size:0.65rem; color:#475569; letter-spacing:0.12em; text-transform:uppercase; margin-bottom:4px;'>Next Game</div>"
-            f"<div style='font-size:1.2rem; font-weight:800; color:#f1f5f9; letter-spacing:-0.5px;'>"
-            f"vs <span style='color:#f97316;'>{opp_abbr}</span>"
-            f"<span style='font-family:DM Mono; font-size:0.75rem; color:#475569; font-weight:400; margin-left:8px;'>{date_display}</span>"
-            f"{venue_pill}</div>"
-            f"</div>"
-            f"<span class='defense-badge {badge_css}'>{badge_text} · {opp_pts_str} pts/g allowed</span>"
-            f"</div>",
-            unsafe_allow_html=True
-        )
-        st.caption("Matchup quality auto-filled from opponent's defensive rating. Override manually if needed.")
-    else:
-        st.caption("Next opponent not found — matchup set to Neutral.")
-
-    pc1, pc2 = st.columns(2)
-    with pc1:
-        matchup_options = ["Neutral", "Good", "Bad"]
-        matchup_sel = st.selectbox(
-            "Matchup 🤖", matchup_options,
-            index=matchup_options.index(matchup_auto),
-            help=f"Auto: {opp_abbr or 'unknown'} allows {f'{opp_pts:.1f}' if opp_pts else 'N/A'} pts/game"
-        )
-    with pc2:
-        script_sel = st.selectbox("Game Script", ["Neutral", "Competitive", "Blowout risk"])
-
-    # Advanced overrides removed — signals are auto-computed
+    # All signals auto-computed — no manual overrides needed
+    matchup_sel = matchup_auto
+    script_sel  = "Neutral"
     minutes_sel = minutes_suggest
     role_sel    = role_suggest
     shots_sel   = shots_suggest
+
+    # ── Tonight's Game ─────────────────────────────────────────────────────
+    st.markdown("<div class='section-header'>Tonight's Game</div>", unsafe_allow_html=True)
+
+    if opp_abbr:
+        _def_plain = {
+            "Good":    ("✅ Soft defense", "#10f590", "This team gives up a lot of points — good for Overs"),
+            "Bad":     ("🔴 Tough defense", "#ef4444", "This team is hard to score on — lean Under"),
+            "Neutral": ("⚪ Average defense", "#94a3b8", "No clear defensive edge either way"),
+        }.get(matchup_auto, ("⚪ Average defense", "#94a3b8", ""))
+        _opp_pts_str = f"{opp_pts:.1f} pts allowed/game" if opp_pts else ""
+        _venue_icon  = "🏠 Home" if tonight_venue == "Home" else "✈️ Away"
+        _venue_col   = "#22c55e" if tonight_venue == "Home" else "#60a5fa"
+        st.markdown(
+            f"<div style='background:#0d1520;border:1px solid rgba(255,255,255,0.07);"
+            f"border-radius:14px;padding:1rem 1.2rem;margin-bottom:0.5rem;'>"
+            f"<div style='display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:0.75rem;'>"
+            f"<div>"
+            f"<div style='font-family:JetBrains Mono,monospace;font-size:0.58rem;color:#475569;"
+            f"letter-spacing:0.15em;text-transform:uppercase;margin-bottom:6px;'>Next Game</div>"
+            f"<div style='font-family:Outfit,sans-serif;font-size:1.4rem;font-weight:800;"
+            f"color:#f1f5f9;line-height:1;'>vs {opp_abbr}"
+            f"<span style='font-size:0.85rem;font-weight:400;color:#475569;margin-left:10px;'>{game_date or ''}</span></div>"
+            f"<div style='margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;'>"
+            f"<span style='font-family:JetBrains Mono,monospace;font-size:0.65rem;color:{_venue_col};"
+            f"background:{_venue_col}15;border:1px solid {_venue_col}33;padding:3px 12px;border-radius:999px;'>{_venue_icon}</span>"
+            f"<span style='font-family:JetBrains Mono,monospace;font-size:0.65rem;color:{_def_plain[1]};"
+            f"background:{_def_plain[1]}15;border:1px solid {_def_plain[1]}33;padding:3px 12px;border-radius:999px;'>{_def_plain[0]}</span>"
+            f"</div></div>"
+            f"<div style='text-align:right;'>"
+            f"<div style='font-family:JetBrains Mono,monospace;font-size:0.7rem;color:#475569;'>{_opp_pts_str}</div>"
+            f"<div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#475569;margin-top:4px;line-height:1.5;'>{_def_plain[2]}</div>"
+            f"</div></div></div>",
+            unsafe_allow_html=True
+        )
+    else:
+        st.markdown(
+            "<div style='background:#0d1520;border:1px solid rgba(255,255,255,0.06);border-radius:14px;"
+            "padding:0.75rem 1rem;color:#475569;font-family:JetBrains Mono,monospace;font-size:0.7rem;'>"
+            "Next opponent not found — check back closer to tip-off</div>",
+            unsafe_allow_html=True
+        )
+
+    # ── Latest News ────────────────────────────────────────────────────────
+    if _player_news:
+        st.markdown("<div class='section-header'>Latest News</div>", unsafe_allow_html=True)
+        for _n in _player_news:
+            _ndate = _n.get("date", "")
+            _nhead = _n.get("headline", "")
+            _ndesc = _n.get("description", "")
+            _nlink = _n.get("link", "")
+            _link_html = (
+                f"<a href='{_nlink}' target='_blank' style='color:#3b82f6;"
+                f"font-size:0.6rem;font-family:JetBrains Mono,monospace;'>Read more →</a>"
+            ) if _nlink else ""
+            st.markdown(
+                f"<div style='background:#0d1520;border:1px solid rgba(255,255,255,0.06);"
+                f"border-left:3px solid #3b82f6;border-radius:0 10px 10px 0;"
+                f"padding:0.7rem 1rem;margin-bottom:0.4rem;'>"
+                f"<div style='display:flex;justify-content:space-between;align-items:flex-start;gap:8px;'>"
+                f"<div style='font-family:Outfit,sans-serif;font-size:0.82rem;font-weight:600;"
+                f"color:#f1f5f9;line-height:1.4;'>{_nhead}</div>"
+                f"<div style='font-family:JetBrains Mono,monospace;font-size:0.58rem;color:#475569;"
+                f"white-space:nowrap;flex-shrink:0;'>{_ndate}</div></div>"
+                f"{f'<div style="font-family:JetBrains Mono,monospace;font-size:0.65rem;color:#475569;margin-top:4px;line-height:1.5;">{_ndesc[:150]}...</div>' if _ndesc else ''}"
+                f"<div style='margin-top:6px;'>{_link_html}</div>"
+                f"</div>",
+                unsafe_allow_html=True
+            )
 
     venue_adj = venue_adjustment(splits, tonight_venue, side)
 
