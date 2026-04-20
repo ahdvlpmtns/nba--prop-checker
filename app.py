@@ -1075,8 +1075,14 @@ def _merge_playoff_logs(reg_logs: pd.DataFrame, player_id: int, season: str, n: 
     During playoffs, merge playoff game logs on top of regular season logs.
     Playoff games sort to the top (most recent), ensuring rest/form/H2H
     all see the actual last game played including playoff games.
+    Uses date check instead of _IS_PLAYOFFS to avoid forward-reference issues.
     """
-    if not _IS_PLAYOFFS:
+    import datetime as _dtm
+    _today = _dtm.date.today()
+    _in_playoffs = ((_today.month == 4 and _today.day >= 14) or
+                    _today.month == 5 or
+                    (_today.month == 6 and _today.day <= 25))
+    if not _in_playoffs:
         return reg_logs
     try:
         po_logs = _fetch_playoff_game_logs_raw(player_id, season)
@@ -1091,11 +1097,12 @@ def _merge_playoff_logs(reg_logs: pd.DataFrame, player_id: int, season: str, n: 
         return reg_logs
 
 
-@st.cache_data(ttl=14400, show_spinner=False)
+@st.cache_data(ttl=1800, show_spinner=False)
 def nba_get_game_logs(player_id: int, season: str, n: int = 10, _date: str = None) -> pd.DataFrame:
     """
     Cached wrapper — only caches successful (non-empty) results.
     Falls back to uncached fetch on every call if cache misses.
+    TTL set to 30min during playoffs so game logs refresh quickly after games.
     """
     # Check Supabase first — fastest path
     try:
@@ -1211,8 +1218,12 @@ def get_h2h_logs(player_id: int, opp_abbr: str, season: str, _date: str = None) 
     combined = pd.concat(all_rows).sort_values("GAME_DATE", ascending=False).reset_index(drop=True)
 
     # In playoffs: only show this series (games since April 14)
-    # Prepend any playoff game logs vs this opponent
-    if _IS_PLAYOFFS:
+    import datetime as _dtm2
+    _today2 = _dtm2.date.today()
+    _in_po2 = ((_today2.month == 4 and _today2.day >= 14) or
+               _today2.month == 5 or
+               (_today2.month == 6 and _today2.day <= 25))
+    if _in_po2:
         try:
             _playoff_start = pd.Timestamp("2026-04-14")
             combined["GAME_DATE"] = pd.to_datetime(combined["GAME_DATE"], errors="coerce")
@@ -1280,9 +1291,12 @@ def series_coverage_signal(
         # Only count games from playoff start (April 14) to avoid regular season contamination
         mask = df["GD"].notna() & df["MATCHUP"].astype(str).str.upper().str.contains(opp_up, na=False)
         recent_opp = df[mask].copy()
-        if _IS_PLAYOFFS:
+        import datetime as _dtm3
+        _td3 = _dtm3.date.today()
+        _in_po3 = ((_td3.month == 4 and _td3.day >= 14) or _td3.month == 5 or
+                   (_td3.month == 6 and _td3.day <= 25))
+        if _in_po3:
             # Only this year's playoff games vs this opponent (after April 13)
-            import datetime
             _playoff_start = pd.Timestamp("2026-04-14").normalize()
             recent_opp = recent_opp[recent_opp["GD"].dt.normalize() >= _playoff_start]
         else:
@@ -1413,7 +1427,7 @@ def season_str_to_int(season_str: str) -> int:
 
 # ── Season average fetch + divergence signal ─────────────────────
 
-@st.cache_data(ttl=86400, show_spinner=False)
+@st.cache_data(ttl=1800, show_spinner=False)
 def nba_get_full_season_logs_cached(player_id: int, season: str, _date: str = None) -> Optional[pd.DataFrame]:
     """
     Fetch full season game log via direct REST API. Cached 24hrs.
