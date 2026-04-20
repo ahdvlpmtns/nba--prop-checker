@@ -7269,16 +7269,19 @@ if st.session_state.logs is not None:
         }
 
         # Simulate the computation step by step (additive, side-aware)
+        # NOTE: real apply_adjustments accumulates without per-step clipping,
+        # then clips once at the end — we mirror that here for accuracy
         _flip   = -1.0 if side == "Under" else 1.0
         running = weighted_base
         steps   = []
         for key, val in context.items():
             adj    = multipliers_map[key].get(val, 0.0) * _flip
             before = running
-            running = max(0.0, min(1.0, running + adj))
-            after  = running
-            delta  = after - before
-            steps.append((key, val, adj, before, after, delta))
+            running = running + adj   # no per-step clip — matches real function
+            after_raw = running
+            after  = max(0.0, min(1.0, after_raw))  # show display-clamped value
+            delta  = max(0.0, min(1.0, after_raw)) - max(0.0, min(1.0, before))
+            steps.append((key, val, adj, max(0.0, min(1.0, before)), after, delta))
 
         # Consistency override check
         extremely_volatile = consistency < 0.20
