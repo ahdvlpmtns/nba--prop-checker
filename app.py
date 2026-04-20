@@ -1215,8 +1215,10 @@ def get_h2h_logs(player_id: int, opp_abbr: str, season: str, _date: str = None) 
         return empty
 
     combined = pd.concat(all_rows).sort_values("GAME_DATE", ascending=False).reset_index(drop=True)
+    combined["GAME_DATE"] = pd.to_datetime(combined["GAME_DATE"], errors="coerce")
 
-    # In playoffs: only show this series (games since April 14)
+    # In playoffs: split into series games vs regular season history
+    # Return series games for signal, but attach reg season as metadata
     import datetime as _dtm2
     _today2 = _dtm2.date.today()
     _in_po2 = ((_today2.month == 4 and _today2.day >= 14) or
@@ -1225,12 +1227,20 @@ def get_h2h_logs(player_id: int, opp_abbr: str, season: str, _date: str = None) 
     if _in_po2:
         try:
             _playoff_start = pd.Timestamp("2026-04-14")
-            combined["GAME_DATE"] = pd.to_datetime(combined["GAME_DATE"], errors="coerce")
-            series_games = combined[combined["GAME_DATE"] >= _playoff_start]
+            series_games   = combined[combined["GAME_DATE"] >= _playoff_start].reset_index(drop=True)
+            reg_history    = combined[combined["GAME_DATE"] <  _playoff_start].reset_index(drop=True)
+            # Tag series games so caller can detect them
             if not series_games.empty:
-                return series_games.reset_index(drop=True)
-            # No playoff games found yet — return empty so it shows "no series data"
-            return pd.DataFrame(columns=combined.columns)
+                series_games.attrs["playoff_series"] = True
+                series_games.attrs["reg_history"]    = reg_history
+                return series_games
+            else:
+                # No series games yet — return reg season history with flag
+                if not reg_history.empty:
+                    reg_history.attrs["playoff_series"] = False
+                    reg_history.attrs["reg_history"]    = reg_history
+                    return reg_history
+                return pd.DataFrame(columns=combined.columns)
         except Exception:
             pass
 
@@ -1241,12 +1251,19 @@ def h2h_signal(h2h_df: pd.DataFrame, line: float, side: str) -> Tuple[str, Optio
     """
     Returns (signal, avg_pts, games_count).
     signal: 'Strong', 'Okay', or 'Risk'
+    Requires 1+ game in playoffs, 2+ games in regular season.
     """
     if h2h_df is None or h2h_df.empty:
         return "Neutral", None, 0
 
     pts = pd.to_numeric(h2h_df["PTS"], errors="coerce").dropna()
-    if len(pts) < 2:
+    import datetime as _dtm_h2h
+    _today_h = _dtm_h2h.date.today()
+    _in_playoffs = ((_today_h.month == 4 and _today_h.day >= 14) or
+                    _today_h.month == 5 or
+                    (_today_h.month == 6 and _today_h.day <= 25))
+    min_games = 1 if _in_playoffs else 2
+    if len(pts) < min_games:
         return "Neutral", None, len(pts)
 
     avg = float(pts.mean())
@@ -3590,6 +3607,8 @@ def apply_adjustments(weighted: float, context: dict, side: str = "Over") -> flo
         "ref":        {"High FT": +0.04, "Neutral": 0.00, "Low FT": -0.04},
         # Shot volume in playoffs — high usage players hold, low usage get buried
         "shot_vol":   {"Star": +0.04, "Neutral": 0.00, "Risk": -0.05},
+        # Starter vs bench — confirmed starter = full usage, bench = minutes risk
+        "starter":    {"Starter": +0.03, "Neutral": 0.00, "Bench": -0.06, "DNP": -0.20},
         # Playoff game number — Game 1 and 6/7 see lower scoring
         "game_num":   {"Spike": +0.05, "Neutral": 0.00, "Drop": -0.05, "N/A": 0.00,
                        "Game 1 (feeling out)": -0.03, "Game 2 (normal)": 0.00,
@@ -5414,6 +5433,7 @@ if _mode == "🎯  Scanner":
                         "game_num":   "N/A",
                         "pu_spike":   "Neutral",
                         "shot_vol":   "Neutral",
+                        "starter":    "Neutral",
                     }
                     _adj  = apply_adjustments(_wb, _ctx, "Over")
                     _tier = get_confidence_tier(_adj, _ld, _cons, "Over")
@@ -5845,7 +5865,7 @@ with st.expander("🎯  Parlay Checker — validate your entry before locking"):
     _pc_hc3.markdown("<div style='font-family:DM Mono;font-size:0.65rem;color:#475569;letter-spacing:0.1em;text-transform:uppercase;'>Over/Under</div>", unsafe_allow_html=True)
 
     _pc_rows = []
-    for _pi in range(5):
+    for _pi in range(6):
         _pc1, _pc2, _pc3 = st.columns([3, 1.2, 1])
         with _pc1:
             _pp = st.selectbox(f"pp{_pi}", options=[""] + _pc_players,
@@ -5866,7 +5886,7 @@ with st.expander("🎯  Parlay Checker — validate your entry before locking"):
         st.session_state.parlay_results = None
         _pc_season = "2025-26"
         _pc_results = []
-        with st.spinner(f"Analyzing {len(_pc_rows)} legs — all 17 signals..."):
+        with st.spinner(f"Analyzing {len(_pc_rows)} legs — all 19 signals..."):
             from concurrent.futures import ThreadPoolExecutor, as_completed as _afc
 
             def _analyze_pc_leg(_pc_row):
@@ -5973,6 +5993,42 @@ with st.expander("🎯  Parlay Checker — validate your entry before locking"):
                     _pc_hsig, _, _ = h2h_signal(_pc_h2hdf, _pc_ln, _pc_side)
                     _pc_fsig, _    = form_divergence_signal(_pc_avgp, _pc_savg, _pc_ln, _pc_side)
 
+                    # Playoff shot volume
+                    _pc_shot_vol = "Neutral"
+                    if _IS_PLAYOFFS:
+                        if _pc_avgf >= 15: _pc_shot_vol = "Star"
+                        elif _pc_avgf < 10: _pc_shot_vol = "Risk"
+
+                    # Starter/bench from ESPN
+                    _pc_role_data = espn_get_player_role(_pc_fn, _pc_team) if _pc_team else {}
+                    _pc_starter   = _pc_role_data.get("role", "Unknown")
+                    _pc_starter_sig = (
+                        "Starter" if _pc_starter == "Starter" else
+                        "Bench"   if _pc_starter == "Bench"   else
+                        "DNP"     if _pc_starter == "DNP"     else "Neutral"
+                    )
+
+                    # Blended H2H — if only 1 series game blend with reg season
+                    _pc_hsig_final = _pc_hsig
+                    if _IS_PLAYOFFS and _pc_h2hdf is not None and not _pc_h2hdf.empty:
+                        _pc_h2h_pts = pd.to_numeric(_pc_h2hdf["PTS"], errors="coerce").dropna()
+                        _pc_h2h_n   = len(_pc_h2h_pts)
+                        if _pc_h2h_n == 1:
+                            # Try reg season history
+                            _pc_reg_h2h = getattr(_pc_h2hdf, "attrs", {}).get("reg_history", pd.DataFrame())
+                            if not _pc_reg_h2h.empty:
+                                try:
+                                    _pc_reg_pts = pd.to_numeric(_pc_reg_h2h["PTS"], errors="coerce").dropna()
+                                    if len(_pc_reg_pts) >= 2:
+                                        _pc_blended = 0.6*float(_pc_h2h_pts.mean()) + 0.4*float(_pc_reg_pts.mean())
+                                        _pc_bl_hit  = (0.6*(1.0 if float(_pc_h2h_pts.mean())>=_pc_ln else 0.0) +
+                                                       0.4*float((_pc_reg_pts>=_pc_ln).mean()))
+                                        if _pc_bl_hit >= 0.65 and _pc_blended > _pc_ln: _pc_hsig_final = "Strong"
+                                        elif _pc_bl_hit <= 0.35 or _pc_blended < _pc_ln - 3: _pc_hsig_final = "Risk"
+                                        else: _pc_hsig_final = "Neutral"
+                                except Exception:
+                                    pass
+
                     _pc_ctx = {
                         "minutes":    suggest_bucket(_pc_avgm, 32, 26),
                         "role":       suggest_bucket(_pc_avgf + 0.5 * _pc_avgt, 18, 12),
@@ -5980,7 +6036,7 @@ with st.expander("🎯  Parlay Checker — validate your entry before locking"):
                         "matchup":    _pc_mq,
                         "script":     "Neutral",
                         "venue":      _pc_vadj,
-                        "h2h":        _pc_hsig,
+                        "h2h":        _pc_hsig_final,
                         "series_cov": _pc_scov_sig,
                         "b2b":        _pc_b2b,
                         "rest":       _pc_rest,
@@ -5991,6 +6047,8 @@ with st.expander("🎯  Parlay Checker — validate your entry before locking"):
                         "ref":        _pc_ref_sig,
                         "game_num":   _pc_gnum_label,
                         "pu_spike":   _pc_pu_sig,
+                        "shot_vol":   _pc_shot_vol,
+                        "starter":    _pc_starter_sig,
                     }
                     _pc_adj  = apply_adjustments(_pc_wb, _pc_ctx, _pc_side)
                     _pc_tier = get_confidence_tier(_pc_adj, _pc_edge, _pc_cons, _pc_side)
@@ -6008,6 +6066,7 @@ with st.expander("🎯  Parlay Checker — validate your entry before locking"):
                         "adj":     _pc_adj,
                         "edge":    round(_pc_edge, 1),
                         "tier":    _pc_tier,
+                        "starter": _pc_starter_sig,
                         "cons":    _pc_cons,
                         "conf":    _pc_conf,
                         "team":    _norm_team_abbr(_pc_team) if _pc_team else "?",
@@ -6111,8 +6170,14 @@ with st.expander("🎯  Parlay Checker — validate your entry before locking"):
                 _vol  = "⚠️ volatile · " if _r["cons"] < 0.65 else ""
                 _conf = _r.get("conf", 0)
                 _cc   = "#10f590" if _conf >= 80 else ("#fbbf24" if _conf >= 65 else "#ef4444")
-                _ref_note = f" · 🧑‍⚖️ {_r.get('ref','')}" if _r.get("ref") not in ("Neutral","","N/A",None) else ""
-                _pace_note = f" · 🐢 Slow pace" if _r.get("pace") == "Penalty" else (" · 🚀 Fast pace" if _r.get("pace") == "Boost" else "")
+                _ref_note     = f" · 🧑‍⚖️ {_r.get('ref','')}" if _r.get("ref") not in ("Neutral","","N/A",None) else ""
+                _pace_note    = f" · 🐢 Slow pace" if _r.get("pace") == "Penalty" else (" · 🚀 Fast pace" if _r.get("pace") == "Boost" else "")
+                _starter_val  = _r.get("starter", "Neutral")
+                _starter_note = (
+                    " · 🟢 Starting" if _starter_val == "Starter" else
+                    " · 🟡 Bench"    if _starter_val == "Bench"   else
+                    " · 🚫 DNP"      if _starter_val == "DNP"     else ""
+                )
                 # Rank badge
                 _rank_colors = ["#ef4444","#f97316","#fbbf24","#22c55e","#10f590"]
                 _rank_col = _rank_colors[min(_ri, 4)]
@@ -6996,12 +7061,39 @@ if st.session_state.logs is not None:
     hb1, hb2, hb3, hb4 = st.columns(4)
 
     with hb1:
-        if h2h_count >= 2:
-            sig_color = {"Strong": "#22c55e", "Neutral": "#94a3b8", "Risk": "#ef4444"}.get(h2h_sig, "#94a3b8")
-            sig_bg    = {"Strong": "#052e16", "Neutral": "#0f172a",  "Risk": "#1c0505"}.get(h2h_sig, "#0f172a")
-            sig_border= {"Strong": "#166534", "Neutral": "#1e293b",  "Risk": "#991b1b"}.get(h2h_sig, "#1e293b")
-            _h2h_label = f"Avg pts vs {opp_abbr} · this series ({h2h_count}G)" if _IS_PLAYOFFS else f"Avg pts vs {opp_abbr} (L{h2h_count} games)"
-            _h2h_meaning = {"Strong": "✅ Good matchup historically", "Risk": "⚠️ Struggles vs this team", "Neutral": "Neutral history"}.get(h2h_sig, "")
+        # Pull regular season history from attrs if in playoffs
+        _reg_h2h    = getattr(h2h_df, "attrs", {}).get("reg_history", pd.DataFrame()) if h2h_df is not None else pd.DataFrame()
+        _is_series  = _IS_PLAYOFFS and h2h_df is not None and getattr(h2h_df, "attrs", {}).get("playoff_series", False)
+
+        sig_color = {"Strong": "#10f590", "Neutral": "#94a3b8", "Risk": "#ef4444"}.get(h2h_sig, "#94a3b8")
+        sig_bg    = {"Strong": "#041a0e", "Neutral": "#0f172a",  "Risk": "#1c0505"}.get(h2h_sig, "#0f172a")
+        sig_border= {"Strong": "#166534", "Neutral": "#1e293b",  "Risk": "#991b1b"}.get(h2h_sig, "#1e293b")
+        _h2h_meaning = {
+            "Strong":  "✅ Scores well vs this team",
+            "Risk":    "⚠️ Struggles vs this team",
+            "Neutral": "Average vs this team",
+        }.get(h2h_sig, "")
+
+        # Build reg season context string
+        _reg_ctx = ""
+        if _IS_PLAYOFFS and not _reg_h2h.empty:
+            try:
+                _reg_pts = pd.to_numeric(_reg_h2h["PTS"], errors="coerce").dropna()
+                if len(_reg_pts) >= 1:
+                    _reg_avg = float(_reg_pts.mean())
+                    _reg_n   = len(_reg_pts)
+                    _reg_ctx = f"This season vs {opp_abbr}: {_reg_avg:.1f} avg ({_reg_n}G)"
+            except Exception:
+                pass
+
+        if h2h_count >= 1:
+            if _is_series:
+                _h2h_label = f"Game {h2h_count} · vs {opp_abbr} this series"
+            elif _IS_PLAYOFFS:
+                _h2h_label = f"vs {opp_abbr} · reg season ({h2h_count}G)"
+            else:
+                _h2h_label = f"vs {opp_abbr} (L{h2h_count} games)"
+
             st.markdown(f"""
             <div class='stat-card' style='border-color:{sig_border};background:{sig_bg};'>
                 <div class='stat-label'>{_h2h_label}</div>
@@ -7012,14 +7104,40 @@ if st.session_state.logs is not None:
                 <div style='font-family:JetBrains Mono,monospace;font-size:0.68rem;color:{sig_color};margin-top:4px;'>
                     {_h2h_meaning} · line {line}
                 </div>
+                {f"<div style='font-family:JetBrains Mono,monospace;font-size:0.6rem;color:#475569;margin-top:5px;border-top:1px solid rgba(255,255,255,0.05);padding-top:5px;'>{_reg_ctx}</div>" if _reg_ctx else ""}
             </div>""", unsafe_allow_html=True)
         else:
-            _h2h_note = "Building this-series data..." if _IS_PLAYOFFS else ("Not enough H2H data (need 2+ games)" if opp_abbr else "Opponent not detected")
-            st.markdown(f"""
-            <div class='stat-card'>
-                <div class='stat-label'>{"This Series H2H" if _IS_PLAYOFFS else f"vs {opp_abbr or "opponent"} H2H"}</div>
-                <div style='color:#475569;font-size:0.85rem;margin-top:8px;'>{_h2h_note}</div>
-            </div>""", unsafe_allow_html=True)
+            # No games at all — show reg season if available
+            if _IS_PLAYOFFS and not _reg_h2h.empty:
+                try:
+                    _reg_pts = pd.to_numeric(_reg_h2h["PTS"], errors="coerce").dropna()
+                    _reg_avg = float(_reg_pts.mean())
+                    _reg_n   = len(_reg_pts)
+                    _reg_sig_col = "#10f590" if _reg_avg >= line + 2 else ("#ef4444" if _reg_avg <= line - 2 else "#94a3b8")
+                    st.markdown(f"""
+                    <div class='stat-card'>
+                        <div class='stat-label'>vs {opp_abbr} · reg season ({_reg_n}G)</div>
+                        <div style='display:flex;align-items:baseline;gap:12px;margin-top:4px;'>
+                            <div class='stat-value' style='color:{_reg_sig_col};'>{_reg_avg:.1f}</div>
+                            <div style='font-family:JetBrains Mono,monospace;font-size:0.72rem;color:#475569;'>pts avg</div>
+                        </div>
+                        <div style='font-family:JetBrains Mono,monospace;font-size:0.65rem;color:#475569;margin-top:4px;'>
+                            Series just started — using reg season history
+                        </div>
+                    </div>""", unsafe_allow_html=True)
+                except Exception:
+                    st.markdown(f"""
+                    <div class='stat-card'>
+                        <div class='stat-label'>vs {opp_abbr or "opponent"} H2H</div>
+                        <div style='color:#475569;font-size:0.82rem;margin-top:8px;'>Series underway — data loading</div>
+                    </div>""", unsafe_allow_html=True)
+            else:
+                _h2h_note = "No series data yet" if _IS_PLAYOFFS else ("No H2H data" if opp_abbr else "Opponent not detected")
+                st.markdown(f"""
+                <div class='stat-card'>
+                    <div class='stat-label'>vs {opp_abbr or "opponent"} H2H</div>
+                    <div style='color:#475569;font-size:0.82rem;margin-top:8px;'>{_h2h_note}</div>
+                </div>""", unsafe_allow_html=True)
 
     with hb2:
         # Last game info — use ESPN date (real-time) over log date (can lag 48hrs)
@@ -7406,6 +7524,40 @@ if st.session_state.logs is not None:
         elif _series.get("is_closeout"):
             _elim_game_ctx = "Closeout"
 
+    # ── Starter/bench signal from ESPN lineup ───────────────────────────────
+    _starter_sig = "Neutral"
+    if _player_role:
+        _pr = _player_role.get("role", "Unknown")
+        if _pr == "Starter":
+            _starter_sig = "Starter"
+        elif _pr == "Bench":
+            _starter_sig = "Bench"
+        elif _pr == "DNP":
+            _starter_sig = "DNP"
+
+    # ── Reg season H2H blended into h2h_sig when series only has 1 game ───
+    # If we only have 1 series game, blend with reg season avg for a more reliable signal
+    _h2h_sig_final = h2h_sig
+    if _IS_PLAYOFFS and h2h_count == 1 and h2h_avg is not None:
+        _reg_h2h_df = getattr(h2h_df, "attrs", {}).get("reg_history", pd.DataFrame())
+        if not _reg_h2h_df.empty:
+            try:
+                _reg_pts_arr = pd.to_numeric(_reg_h2h_df["PTS"], errors="coerce").dropna()
+                if len(_reg_pts_arr) >= 2:
+                    _reg_avg_h2h = float(_reg_pts_arr.mean())
+                    # Blend: 60% series game, 40% reg season (series is more relevant)
+                    _blended_avg = 0.6 * h2h_avg + 0.4 * _reg_avg_h2h
+                    _blended_hit = (0.6 * (1.0 if (h2h_avg >= line) else 0.0) +
+                                    0.4 * float((_reg_pts_arr >= line).mean()))
+                    if _blended_hit >= 0.65 and _blended_avg > line:
+                        _h2h_sig_final = "Strong"
+                    elif _blended_hit <= 0.35 or _blended_avg < line - 3:
+                        _h2h_sig_final = "Risk"
+                    else:
+                        _h2h_sig_final = "Neutral"
+            except Exception:
+                pass
+
     context = {
         "minutes":    _minutes_ctx,
         "role":       _role_ctx,
@@ -7413,7 +7565,7 @@ if st.session_state.logs is not None:
         "matchup":    matchup_sel,
         "script":     script_sel,
         "venue":      venue_adj,
-        "h2h":        h2h_sig,
+        "h2h":        _h2h_sig_final,
         "series_cov": _series_cov_sig,
         "b2b":        b2b_status,
         "rest":       rest_status,
@@ -7425,6 +7577,7 @@ if st.session_state.logs is not None:
         "game_num":   _game_num_label,
         "pu_spike":   _pu_spike_sig,
         "shot_vol":   _shot_vol_sig,
+        "starter":    _starter_sig,
     }
 
     adjusted  = apply_adjustments(weighted_base, context, side)
@@ -7917,6 +8070,7 @@ if st.session_state.logs is not None:
                            "Game 6 (pressure)": -0.02, "Game 7 (max pressure)": -0.03},
             "pu_spike":   {"Spike": +0.05, "Neutral": 0.00, "Drop": -0.05},
             "shot_vol":   {"Star": +0.04, "Neutral": 0.00, "Risk": -0.05},
+            "starter":    {"Starter": +0.03, "Neutral": 0.00, "Bench": -0.06, "DNP": -0.20},
             "role":     {"Strong": +0.04, "Okay": 0.00, "Risk": -0.05},
             "shots":    {"High":   +0.03, "Medium": 0.00, "Low": -0.06},
             "matchup":  {"Good":   +0.06, "Neutral": 0.00, "Bad": -0.06},
@@ -7950,6 +8104,7 @@ if st.session_state.logs is not None:
             "game_num":   "Series game number",
             "pu_spike":   "Playoff usage vs reg season",
             "shot_vol":   "Playoff shot volume",
+            "starter":    "Starting role",
         }
 
         # Simulate the computation step by step (additive, side-aware)
