@@ -1077,7 +1077,7 @@ def _merge_playoff_logs(reg_logs: pd.DataFrame, player_id: int, season: str, n: 
         return reg_logs
 
 
-@st.cache_data(ttl=1800, show_spinner=False)
+@st.cache_data(ttl=14400, show_spinner=False)
 def nba_get_game_logs(player_id: int, season: str, n: int = 10, _date: str = None) -> pd.DataFrame:
     """
     Cached wrapper — only caches successful (non-empty) results.
@@ -1396,7 +1396,7 @@ def season_str_to_int(season_str: str) -> int:
 
 # ── Season average fetch + divergence signal ─────────────────────
 
-@st.cache_data(ttl=1800, show_spinner=False)
+@st.cache_data(ttl=86400, show_spinner=False)
 def nba_get_full_season_logs_cached(player_id: int, season: str, _date: str = None) -> Optional[pd.DataFrame]:
     """
     Fetch full season game log via direct REST API. Cached 24hrs.
@@ -1565,7 +1565,7 @@ def form_divergence_signal(
 # ── Next game / schedule ──────────────────────
 
 @st.cache_data(ttl=1800, show_spinner=False)
-@st.cache_data(ttl=1800, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False)
 def espn_get_player_news(player_name: str) -> list:
     """
     Fetch latest news headlines for a player from ESPN.
@@ -1608,7 +1608,7 @@ def espn_get_player_news(player_name: str) -> list:
         return []
 
 
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=1800, show_spinner=False)
 def espn_get_player_role(player_name: str, team_abbr: str) -> dict:
     """
     Detect if a player is a starter or bench player.
@@ -5964,13 +5964,11 @@ with st.expander("🎯  Parlay Checker — validate your entry before locking"):
                         if _pc_avgf >= 15: _pc_shot_vol = "Star"
                         elif _pc_avgf < 10: _pc_shot_vol = "Risk"
 
-                    # Starter/bench from ESPN
-                    _pc_role_data = espn_get_player_role(_pc_fn, _pc_team) if _pc_team else {}
-                    _pc_starter   = _pc_role_data.get("role", "Unknown")
+                    # Starter signal — use season minutes as proxy to avoid slow ESPN call per leg
+                    # Full role detection only in single player prop view
                     _pc_starter_sig = (
-                        "Starter" if _pc_starter == "Starter" else
-                        "Bench"   if _pc_starter == "Bench"   else
-                        "DNP"     if _pc_starter == "DNP"     else "Neutral"
+                        "Starter" if _pc_avgm >= 28 else
+                        "Bench"   if _pc_avgm < 20 else "Neutral"
                     )
 
                     # Blended H2H — if only 1 series game blend with reg season
@@ -6611,7 +6609,7 @@ if st.session_state.logs is not None:
 
     # ── Fire slow calls in parallel ──────────────────────────────
     import concurrent.futures as _cf
-    with _cf.ThreadPoolExecutor(max_workers=4) as _pool:
+    with _cf.ThreadPoolExecutor(max_workers=8) as _pool:
         _f_matchup  = _pool.submit(classify_matchup_espn, opp_abbr)
         _f_h2h      = _pool.submit(get_h2h_logs, player_id, opp_abbr, season_str_clean) if opp_abbr else None
         _f_season   = _pool.submit(nba_get_full_season_logs_cached, player_id, season_str_clean)
@@ -6695,7 +6693,7 @@ if st.session_state.logs is not None:
             _player_news = []
 
         try:
-            _player_role = _f_role.result(timeout=10) if _f_role else {}
+            _player_role = _f_role.result(timeout=6) if _f_role else {}
         except Exception:
             _player_role = {}
 
