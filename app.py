@@ -4175,39 +4175,51 @@ if st.session_state.get("prewarm_date") != _cache_date():
 st.markdown("""
 <div class="pl-header">
     <div class="pl-logo-wrap">
-        <div class="pl-icon" style="position:relative;overflow:hidden;width:52px;height:44px;">
-            <svg width="52" height="44" viewBox="0 0 52 44" fill="none" style="display:block;">
-                <!-- Left bars growing up -->
-                <rect class="pl-bar pl-bar-1" x="0"  y="30" width="6" height="10" fill="#1e40af" rx="0.5"/>
-                <rect class="pl-bar pl-bar-2" x="7"  y="22" width="6" height="18" fill="#1d4ed8" rx="0.5"/>
-                <rect class="pl-bar pl-bar-3" x="14" y="14" width="6" height="26" fill="#2563eb" rx="0.5"/>
-                <rect class="pl-bar pl-bar-4" x="21" y="8"  width="6" height="32" fill="#3b82f6" rx="0.5"/>
-                <!-- Divider -->
-                <rect x="29" y="16" width="2" height="24" fill="#1e2a3a" rx="0.5"/>
-                <!-- Right bars growing up -->
-                <rect class="pl-bar pl-bar-5" x="33" y="8"  width="6" height="32" fill="#3b82f6" rx="0.5"/>
-                <rect class="pl-bar pl-bar-6" x="40" y="14" width="6" height="26" fill="#2563eb" rx="0.5"/>
-                <rect class="pl-bar pl-bar-7" x="47" y="22" width="5" height="18" fill="#1d4ed8" rx="0.5"/>
-                <!-- Basketball bouncing on left peak -->
+        <div class="pl-icon" style="position:relative;overflow:hidden;width:56px;height:44px;">
+            <svg width="56" height="44" viewBox="0 0 56 44" fill="none" style="display:block;">
+                <defs>
+                    <linearGradient id="barGrad1" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stop-color="#40d9e0"/>
+                        <stop offset="100%" stop-color="#00868c"/>
+                    </linearGradient>
+                    <linearGradient id="barGrad2" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stop-color="#00c4cc"/>
+                        <stop offset="100%" stop-color="#007880"/>
+                    </linearGradient>
+                    <linearGradient id="barGrad3" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stop-color="#20ced6"/>
+                        <stop offset="100%" stop-color="#006e76"/>
+                    </linearGradient>
+                    <linearGradient id="scanGrad" x1="0" y1="0" x2="1" y2="0">
+                        <stop offset="0%" stop-color="#40d9e0" stop-opacity="0"/>
+                        <stop offset="50%" stop-color="#40d9e0" stop-opacity="0.7"/>
+                        <stop offset="100%" stop-color="#40d9e0" stop-opacity="0"/>
+                    </linearGradient>
+                </defs>
+                <!-- Bars — V shape rising left to right then back down, teal gradient -->
+                <rect class="pl-bar pl-bar-1" x="0"  y="34" width="6" height="8"  fill="url(#barGrad1)" rx="1"/>
+                <rect class="pl-bar pl-bar-2" x="8"  y="26" width="6" height="16" fill="url(#barGrad1)" rx="1"/>
+                <rect class="pl-bar pl-bar-3" x="16" y="16" width="6" height="26" fill="url(#barGrad2)" rx="1"/>
+                <rect class="pl-bar pl-bar-4" x="24" y="8"  width="6" height="34" fill="url(#barGrad3)" rx="1"/>
+                <rect class="pl-bar pl-bar-5" x="32" y="16" width="6" height="26" fill="url(#barGrad2)" rx="1"/>
+                <rect class="pl-bar pl-bar-6" x="40" y="26" width="6" height="16" fill="url(#barGrad1)" rx="1"/>
+                <rect class="pl-bar pl-bar-7" x="48" y="34" width="6" height="8"  fill="url(#barGrad1)" rx="1"/>
+                <!-- Basketball sitting on center peak -->
                 <g class="pl-bball">
-                    <circle cx="24" cy="6" r="6" fill="#ea580c"/>
-                    <path d="M18 6 Q24 3 30 6" fill="none" stroke="#7c2d12" stroke-width="0.9"/>
-                    <path d="M18 6 Q24 9 30 6" fill="none" stroke="#7c2d12" stroke-width="0.9"/>
-                    <line x1="24" y1="0" x2="24" y2="12" stroke="#7c2d12" stroke-width="0.9"/>
+                    <circle cx="27" cy="5" r="5.5" fill="#f97316"/>
+                    <path d="M21.5 5 Q27 2 32.5 5" fill="none" stroke="#92400e" stroke-width="0.85" stroke-linecap="round"/>
+                    <path d="M21.5 5 Q27 8 32.5 5" fill="none" stroke="#92400e" stroke-width="0.85" stroke-linecap="round"/>
+                    <line x1="27" y1="0" x2="27" y2="10.5" stroke="#92400e" stroke-width="0.85"/>
+                    <!-- Teal highlight glint on ball -->
+                    <circle cx="24.5" cy="3" r="1.2" fill="#40d9e0" opacity="0.55"/>
                 </g>
-                <!-- Baseball bouncing on right peak -->
-                <g class="pl-bbase">
-                    <circle cx="36" cy="6" r="5" fill="#f1f5f9"/>
-                    <path d="M32 4 Q34 6 32 8"  fill="none" stroke="#ef4444" stroke-width="0.9" stroke-linecap="round"/>
-                    <path d="M40 4 Q38 6 40 8"  fill="none" stroke="#ef4444" stroke-width="0.9" stroke-linecap="round"/>
-                </g>
-                <!-- Scan line sweeping across -->
-                <rect class="pl-scan" x="0" y="0" width="3" height="44" fill="#3b82f6" opacity="0.5" rx="1"/>
+                <!-- Scan line sweep — teal -->
+                <rect class="pl-scan" x="0" y="0" width="4" height="44" fill="url(#scanGrad)" rx="2"/>
             </svg>
         </div>
         <div>
             <div class="pl-logo">Prop<span>IQ</span></div>
-            <div class="pl-sub">Sports Prop Analyzer · AI-Powered</div>
+            <div class="pl-sub">Sports Intelligence · AI-Powered</div>
         </div>
     </div>
     <div style="display:flex; align-items:center; gap:10px;">
