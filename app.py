@@ -57,8 +57,8 @@ st.markdown("""
 
     /* Text */
     --text:      #f0f4f8;
-    --text2:     #8a9bb0;
-    --text3:     #4a5a6a;
+    --text2:     #9aaec4;
+    --text3:     #6b7f96;
 
     /* Fonts */
     --font-display: 'Plus Jakarta Sans', sans-serif;
@@ -1513,7 +1513,7 @@ def minutes_restriction_alert(
             f"<div style='font-family:DM Mono;font-size:0.7rem;'>"
             f"<span style='color:{color};font-weight:800;text-transform:uppercase;letter-spacing:0.08em;'>"
             f"Minutes restriction detected</span>"
-            f"<span style='color:#475569;'> · L3 avg {l3_avg:.1f} min vs season avg {season_avg_min:.1f} min "
+            f"<span style='color:#6b7f96;'> · L3 avg {l3_avg:.1f} min vs season avg {season_avg_min:.1f} min "
             f"({drop:+.1f}) — possible injury or load management</span>"
             f"</div>"
             f"</div>"
@@ -1916,7 +1916,8 @@ def espn_get_opp_pts_allowed(opp_abbr: str, _date: str = None) -> Optional[float
                  "x-nba-stats-origin":"stats","x-nba-stats-token":"true","Accept":"application/json"}
         r = _req.get(
             "https://stats.nba.com/stats/leaguedashteamstats",
-            params={"Season":"2025-26","SeasonType":"Playoffs" if _date is None else "Regular Season",
+            params={"Season":"2025-26",
+                    "SeasonType":"Playoffs" if _IS_PLAYOFFS else "Regular Season",
                     "PerMode":"PerGame","MeasureType":"Base","LeagueID":"00"},
             headers=_hdrs, timeout=8
         )
@@ -2860,7 +2861,7 @@ def detect_usage_spike(
         f"<div style='font-family:DM Mono;font-size:0.7rem;'>"
         f"<span style='color:#22c55e;font-weight:800;text-transform:uppercase;"
         f"letter-spacing:0.08em;'>Usage spike detected</span>"
-        f"<span style='color:#475569;'> · {_names} out — {_total} to redistribute</span>"
+        f"<span style='color:#6b7f96;'> · {_names} out — {_total} to redistribute</span>"
         f"</div>"
         f"</div>"
     )
@@ -2894,7 +2895,7 @@ def injury_alert_html(status: str, reason: str) -> str:
         return "", False
 
     reason_short = reason.replace("Injury/Illness - ", "").replace("Injury/Illness -", "").strip()
-    reason_html  = f"<span style='color:#64748b;'> · {reason_short}</span>" if reason_short else ""
+    reason_html  = f"<span style='color:#7d93ab;'> · {reason_short}</span>" if reason_short else ""
 
     html = (
         f"<div style='background:{bg};border:1px solid {border};border-radius:10px;"
@@ -4027,9 +4028,9 @@ def build_points_chart(logs: pd.DataFrame, full_name: str, line: float, avg_pts:
         xaxis=dict(tickmode="array", tickvals=list(range(len(pts))),
                    ticktext=[labels.iloc[i] for i in range(len(pts))],
                    tickangle=-30, showgrid=False,
-                   tickfont=dict(size=10, color="#475569"), linecolor="#1e293b"),
+                   tickfont=dict(size=10, color="#6b7f96"), linecolor="#1e293b"),
         yaxis=dict(title="PTS", showgrid=True, gridcolor="rgba(30,41,59,0.8)",
-                   tickfont=dict(size=10, color="#475569")),
+                   tickfont=dict(size=10, color="#6b7f96")),
         plot_bgcolor="#080c14", paper_bgcolor="#080c14",
         font=dict(color="#e2e8f0"),
         hovermode="x unified",
@@ -4279,28 +4280,28 @@ with st.sidebar:
             <div style='min-width:28px;height:28px;background:#00c4cc;border-radius:8px;display:flex;align-items:center;justify-content:center;font-family:Outfit,sans-serif;font-weight:800;font-size:0.9rem;color:#fff;flex-shrink:0;'>1</div>
             <div>
                 <div style='font-family:Outfit,sans-serif;font-weight:600;color:#f1f5f9;font-size:0.85rem;'>Open PrizePicks and find a prop you like</div>
-                <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#475569;margin-top:3px;'>Example: LeBron James — 22.5 pts — Over</div>
+                <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#6b7f96;margin-top:3px;'>Example: LeBron James — 22.5 pts — Over</div>
             </div>
         </div>
         <div style='display:flex;gap:12px;align-items:flex-start;background:#0d1520;border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:0.75rem 1rem;'>
             <div style='min-width:28px;height:28px;background:#00c4cc;border-radius:8px;display:flex;align-items:center;justify-content:center;font-family:Outfit,sans-serif;font-weight:800;font-size:0.9rem;color:#fff;flex-shrink:0;'>2</div>
             <div>
                 <div style='font-family:Outfit,sans-serif;font-weight:600;color:#f1f5f9;font-size:0.85rem;'>Type the player name, enter the line and pick Over or Under</div>
-                <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#475569;margin-top:3px;'>Always use the standard line — not the goblin (lower) or demon (higher)</div>
+                <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#6b7f96;margin-top:3px;'>Always use the standard line — not the goblin (lower) or demon (higher)</div>
             </div>
         </div>
         <div style='display:flex;gap:12px;align-items:flex-start;background:#0d1520;border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:0.75rem 1rem;'>
             <div style='min-width:28px;height:28px;background:#00c4cc;border-radius:8px;display:flex;align-items:center;justify-content:center;font-family:Outfit,sans-serif;font-weight:800;font-size:0.9rem;color:#fff;flex-shrink:0;'>3</div>
             <div>
                 <div style='font-family:Outfit,sans-serif;font-weight:600;color:#f1f5f9;font-size:0.85rem;'>Hit Analyze Prop and wait ~10 seconds</div>
-                <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#475569;margin-top:3px;'>PropIQ pulls live stats, injuries, matchups, referee data, and more</div>
+                <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#6b7f96;margin-top:3px;'>PropIQ pulls live stats, injuries, matchups, referee data, and more</div>
             </div>
         </div>
         <div style='display:flex;gap:12px;align-items:flex-start;background:#0d1520;border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:0.75rem 1rem;'>
             <div style='min-width:28px;height:28px;background:#10f590;border-radius:8px;display:flex;align-items:center;justify-content:center;font-family:Outfit,sans-serif;font-weight:800;font-size:0.9rem;color:#041a0e;flex-shrink:0;'>4</div>
             <div>
                 <div style='font-family:Outfit,sans-serif;font-weight:600;color:#f1f5f9;font-size:0.85rem;'>Read the verdict — only play Strong Over / Strong Under</div>
-                <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#475569;margin-top:3px;'>Lean picks are OK in 2-leg entries only. Always skip Pass.</div>
+                <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#6b7f96;margin-top:3px;'>Lean picks are OK in 2-leg entries only. Always skip Pass.</div>
             </div>
         </div>
     </div>
@@ -4311,22 +4312,22 @@ with st.sidebar:
     <div style='display:flex;flex-direction:column;gap:6px;'>
         <div style='background:#041a0e;border:1px solid rgba(16,245,144,0.2);border-radius:10px;padding:0.6rem 0.9rem;display:flex;justify-content:space-between;align-items:center;'>
             <div><span style='font-size:1rem;'>🟢</span> <span style='color:#10f590;font-weight:700;font-family:Outfit,sans-serif;'>Strong Over / Strong Under</span></div>
-            <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#475569;text-align:right;'>64%+ hit rate · edge ≥1.5pts<br><span style='color:#10f590;'>Best bets — play these</span></div>
+            <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#6b7f96;text-align:right;'>64%+ hit rate · edge ≥1.5pts<br><span style='color:#10f590;'>Best bets — play these</span></div>
         </div>
         <div style='background:#1a1200;border:1px solid rgba(251,191,36,0.2);border-radius:10px;padding:0.6rem 0.9rem;display:flex;justify-content:space-between;align-items:center;'>
             <div><span style='font-size:1rem;'>🟡</span> <span style='color:#fbbf24;font-weight:700;font-family:Outfit,sans-serif;'>Lean Over</span> &nbsp;<span style='font-size:1rem;'>🟠</span> <span style='color:#f97316;font-weight:700;font-family:Outfit,sans-serif;'>Lean Under</span></div>
-            <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#475569;text-align:right;'>55–63% hit rate<br><span style='color:#fbbf24;'>OK for 2-leg entries only</span></div>
+            <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#6b7f96;text-align:right;'>55–63% hit rate<br><span style='color:#fbbf24;'>OK for 2-leg entries only</span></div>
         </div>
         <div style='background:#111;border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:0.6rem 0.9rem;display:flex;justify-content:space-between;align-items:center;'>
-            <div><span style='font-size:1rem;'>⚪</span> <span style='color:#475569;font-weight:700;font-family:Outfit,sans-serif;'>Pass</span></div>
-            <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#475569;text-align:right;'>No clear edge<br><span style='color:#ef4444;'>Skip this prop</span></div>
+            <div><span style='font-size:1rem;'>⚪</span> <span style='color:#6b7f96;font-weight:700;font-family:Outfit,sans-serif;'>Pass</span></div>
+            <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#6b7f96;text-align:right;'>No clear edge<br><span style='color:#ef4444;'>Skip this prop</span></div>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
     st.markdown("<div class='section-header'>Confidence Score</div>", unsafe_allow_html=True)
     st.markdown("""
-    <div style='font-family:JetBrains Mono,monospace;font-size:0.68rem;color:#475569;line-height:1.9;
+    <div style='font-family:JetBrains Mono,monospace;font-size:0.68rem;color:#6b7f96;line-height:1.9;
                 background:#0d1520;border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:0.75rem 1rem;'>
         The <span style='color:#f1f5f9;'>confidence score (0–100)</span> combines three things:<br>
         &nbsp;&nbsp;<span style='color:#00c4cc;'>●</span> <span style='color:#94a3b8;'>Hit rate</span> — how often has this player cleared this line?<br>
@@ -4344,7 +4345,7 @@ with st.sidebar:
 
     st.markdown("""
     <div style='margin-top:2rem; padding:0.75rem; background:#0c1018; border:1px solid #1a2333;
-                border-radius:8px; font-family:DM Mono; font-size:0.62rem; color:#334155; line-height:1.7;'>
+                border-radius:8px; font-family:DM Mono; font-size:0.62rem; color:#6b7f96; line-height:1.7;'>
         ⚠️ For educational purposes only.<br>Not financial or betting advice.<br>
         Always bet responsibly.
     </div>
@@ -4353,7 +4354,7 @@ with st.sidebar:
     st.markdown("<div class='section-header'>Advanced Tools</div>", unsafe_allow_html=True)
     with st.expander("📊  Backtest Engine"):
         st.markdown("""
-        <div style='font-family:DM Mono;font-size:0.68rem;color:#475569;line-height:1.6;margin-bottom:0.75rem;'>
+        <div style='font-family:DM Mono;font-size:0.68rem;color:#6b7f96;line-height:1.6;margin-bottom:0.75rem;'>
         Simulate PropIQ on a full season to see how often each verdict tier actually hit.
         Use this to validate the model on specific players and lines.
         </div>
@@ -5235,7 +5236,7 @@ if _IS_PLAYOFFS:
         "<div>"
         "<div style='font-family:Outfit,sans-serif;font-size:0.9rem;font-weight:700;"
         "color:#40d9e0;letter-spacing:0.05em;'>PLAYOFF MODE ACTIVE</div>"
-        "<div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#475569;margin-top:2px;'>"
+        "<div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#6b7f96;margin-top:2px;'>"
         "H2H signal boosted · Playoff pace calibrated · Load mgmt warnings off</div>"
         "</div></div>"
         "<div style='font-family:JetBrains Mono,monospace;font-size:0.6rem;color:#00c4cc;"
@@ -5260,7 +5261,7 @@ if _mode == "🎯  Scanner":
         — these are the highest-confidence picks. Change the filter to see more.
         Takes 2–4 minutes to scan the full slate.
         <br><br>
-        <span style='color:#475569;font-size:0.75rem;'>
+        <span style='color:#6b7f96;font-size:0.75rem;'>
         💡 Tip: Run this every evening after 6pm ET when lines are finalized. 
         Use <strong>Strong Only</strong> filter and only play props showing 80%+ adjusted hit rate.
         </span>
@@ -5524,7 +5525,7 @@ if _mode == "🎯  Scanner":
                     f"<div style='font-family:DM Mono;font-size:0.7rem;'>"
                     f"<span style='color:#f97316;font-weight:800;text-transform:uppercase;"
                     f"letter-spacing:0.08em;'>Correlated picks</span>"
-                    f"<span style='color:#475569;'> · {_plist} are all in the same game "
+                    f"<span style='color:#6b7f96;'> · {_plist} are all in the same game "
                     f"({_teams[0]} vs {_teams[1]}) — a blowout tanks all of them</span>"
                     f"</div></div>",
                     unsafe_allow_html=True
@@ -5672,10 +5673,10 @@ with st.expander("⚡  Quick Entry — analyze multiple props at once"):
     # Build 6-row entry table
     _qe_rows = []
     _hc1, _hc2, _hc3, _hc4 = st.columns([3, 1.2, 1, 1])
-    _hc1.markdown("<div style='font-family:DM Mono;font-size:0.65rem;color:#475569;letter-spacing:0.1em;text-transform:uppercase;'>Player</div>", unsafe_allow_html=True)
-    _hc2.markdown("<div style='font-family:DM Mono;font-size:0.65rem;color:#475569;letter-spacing:0.1em;text-transform:uppercase;'>Line</div>", unsafe_allow_html=True)
-    _hc3.markdown("<div style='font-family:DM Mono;font-size:0.65rem;color:#475569;letter-spacing:0.1em;text-transform:uppercase;'>Over/Under</div>", unsafe_allow_html=True)
-    _hc4.markdown("<div style='font-family:DM Mono;font-size:0.65rem;color:#475569;letter-spacing:0.1em;text-transform:uppercase;'>Platform</div>", unsafe_allow_html=True)
+    _hc1.markdown("<div style='font-family:DM Mono;font-size:0.65rem;color:#6b7f96;letter-spacing:0.1em;text-transform:uppercase;'>Player</div>", unsafe_allow_html=True)
+    _hc2.markdown("<div style='font-family:DM Mono;font-size:0.65rem;color:#6b7f96;letter-spacing:0.1em;text-transform:uppercase;'>Line</div>", unsafe_allow_html=True)
+    _hc3.markdown("<div style='font-family:DM Mono;font-size:0.65rem;color:#6b7f96;letter-spacing:0.1em;text-transform:uppercase;'>Over/Under</div>", unsafe_allow_html=True)
+    _hc4.markdown("<div style='font-family:DM Mono;font-size:0.65rem;color:#6b7f96;letter-spacing:0.1em;text-transform:uppercase;'>Platform</div>", unsafe_allow_html=True)
 
     for _ri in range(6):
         _rc1, _rc2, _rc3, _rc4 = st.columns([3, 1.2, 1, 1])
@@ -5815,7 +5816,7 @@ with st.expander("🎯  Parlay Checker — validate your entry before locking"):
         <br>• Warn you about <strong>correlated picks</strong> (same game players)
         <br>• Suggest a <strong>trimmed entry</strong> using only your strongest legs
         <br><br>
-        <span style='color:#475569;font-size:0.75rem;'>
+        <span style='color:#6b7f96;font-size:0.75rem;'>
         💡 Rule of thumb: 3-leg entries with all Strong picks beat 5-leg entries with mixed results every time.
         </span>
     </div>
@@ -5825,9 +5826,9 @@ with st.expander("🎯  Parlay Checker — validate your entry before locking"):
 
     # Entry rows
     _pc_hc1, _pc_hc2, _pc_hc3 = st.columns([3, 1.2, 1])
-    _pc_hc1.markdown("<div style='font-family:DM Mono;font-size:0.65rem;color:#475569;letter-spacing:0.1em;text-transform:uppercase;'>Player</div>", unsafe_allow_html=True)
-    _pc_hc2.markdown("<div style='font-family:DM Mono;font-size:0.65rem;color:#475569;letter-spacing:0.1em;text-transform:uppercase;'>Line</div>", unsafe_allow_html=True)
-    _pc_hc3.markdown("<div style='font-family:DM Mono;font-size:0.65rem;color:#475569;letter-spacing:0.1em;text-transform:uppercase;'>Over/Under</div>", unsafe_allow_html=True)
+    _pc_hc1.markdown("<div style='font-family:DM Mono;font-size:0.65rem;color:#6b7f96;letter-spacing:0.1em;text-transform:uppercase;'>Player</div>", unsafe_allow_html=True)
+    _pc_hc2.markdown("<div style='font-family:DM Mono;font-size:0.65rem;color:#6b7f96;letter-spacing:0.1em;text-transform:uppercase;'>Line</div>", unsafe_allow_html=True)
+    _pc_hc3.markdown("<div style='font-family:DM Mono;font-size:0.65rem;color:#6b7f96;letter-spacing:0.1em;text-transform:uppercase;'>Over/Under</div>", unsafe_allow_html=True)
 
     _pc_rows = []
     for _pi in range(6):
@@ -6102,7 +6103,7 @@ with st.expander("🎯  Parlay Checker — validate your entry before locking"):
                     f"<div style='background:#1c1005;border:1px solid #854d0e;border-left:3px solid #f97316;"
                     f"padding:0.6rem 1rem;margin-bottom:0.4rem;font-family:JetBrains Mono,monospace;font-size:0.68rem;'>"
                     f"⚠️ <span style='color:#f97316;font-weight:700;'>CORRELATED PICKS</span>"
-                    f"<span style='color:#475569;'> · {', '.join(_gps)} are in the same game "
+                    f"<span style='color:#6b7f96;'> · {', '.join(_gps)} are in the same game "
                     f"({_gteams[0]} vs {_gteams[1]}) — a blowout tanks both</span></div>",
                     unsafe_allow_html=True
                 )
@@ -6113,7 +6114,7 @@ with st.expander("🎯  Parlay Checker — validate your entry before locking"):
                     f"<div style='background:#0c1018;border:1px solid #1e3a5f;border-left:3px solid #00c4cc;"
                     f"padding:0.6rem 1rem;margin-bottom:0.4rem;font-family:JetBrains Mono,monospace;font-size:0.68rem;'>"
                     f"⚡ <span style='color:#00c4cc;font-weight:700;'>WEAK LEG</span>"
-                    f"<span style='color:#475569;'> · {_wf['player']} — {_wf['tier']} at {_wf['adj']:.0%} "
+                    f"<span style='color:#6b7f96;'> · {_wf['player']} — {_wf['tier']} at {_wf['adj']:.0%} "
                     f"with {_wf['edge']:+.1f} edge. Consider dropping this leg.</span></div>",
                     unsafe_allow_html=True
                 )
@@ -6155,14 +6156,14 @@ with st.expander("🎯  Parlay Checker — validate your entry before locking"):
                             <div class='verdict-label' style='margin:0;'>{_r["line"]} pts {_r["side"]} · vs {_r["opp"]}</div>
                         </div>
                         <div style='font-size:1.05rem;font-weight:800;color:#f1f5f9;'>{_r["player"]}</div>
-                        <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#475569;margin-top:3px;'>
+                        <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#6b7f96;margin-top:3px;'>
                             {_vol}{_r["matchup"]} def{_ref_note}{_pace_note}</div>
                     </div>
                     <div style='display:flex;gap:1.2rem;flex-wrap:wrap;align-items:center;'>
                         <div>
                             <div class='verdict-label'>Confidence</div>
                             <div style='font-size:1.3rem;font-weight:900;color:{_cc};line-height:1;'>{_conf}</div>
-                            <div style='font-family:JetBrains Mono,monospace;font-size:0.5rem;color:#475569;'>/100</div>
+                            <div style='font-family:JetBrains Mono,monospace;font-size:0.5rem;color:#6b7f96;'>/100</div>
                         </div>
                         <div><div class='verdict-label'>Hit Rate</div>
                              <div style='font-size:1rem;font-weight:700;color:#f1f5f9;'>{_r["adj"]:.0%}</div></div>
@@ -6209,7 +6210,7 @@ st.markdown("""
 <div style='background:#0d1520;border:1px solid rgba(0,196,204,0.15);border-radius:10px;
             padding:0.65rem 1rem;margin-bottom:0.75rem;display:flex;align-items:center;gap:10px;'>
     <span style='font-size:1.1rem;'>💡</span>
-    <span style='font-family:JetBrains Mono,monospace;font-size:0.67rem;color:#475569;'>
+    <span style='font-family:JetBrains Mono,monospace;font-size:0.67rem;color:#6b7f96;'>
         <span style='color:#94a3b8;'>Enter a player from tonight's PrizePicks slate, set the line, choose Over or Under, and hit </span>
         <span style='color:#00c4cc;font-weight:700;'>Analyze Prop</span><span style='color:#94a3b8;'>. Takes ~10 seconds.</span>
     </span>
@@ -6256,7 +6257,7 @@ with col_a:
     # Recent players — quick tap chips
     if st.session_state.recent_players and not player_query:
         st.markdown(
-            "<div style='font-family:DM Mono;font-size:0.58rem;color:#475569;"
+            "<div style='font-family:DM Mono;font-size:0.58rem;color:#6b7f96;"
             "letter-spacing:0.1em;text-transform:uppercase;margin:6px 0 4px 0;'>"
             "Recent</div>",
             unsafe_allow_html=True
@@ -6318,7 +6319,7 @@ if player_query:
 selected_player = _resolved_player if _resolved_player else None
 if not selected_player:
     st.markdown(
-        "<div style='color:#475569;font-family:DM Mono;font-size:0.8rem;"
+        "<div style='color:#6b7f96;font-family:DM Mono;font-size:0.8rem;"
         "margin-top:0.5rem;'>Select a player above to get started.</div>",
         unsafe_allow_html=True
     )
@@ -6375,7 +6376,7 @@ _status_ph = st.empty()  # persistent status placeholder across fetch + parallel
 st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
 
 if not fetch and st.session_state.logs is None:
-    st.markdown("<div style='color:#475569; font-family:DM Mono; font-size:0.8rem; margin-top:1rem;'>↑ Select a player, set the line, then click Analyze Prop.</div>", unsafe_allow_html=True)
+    st.markdown("<div style='color:#6b7f96; font-family:DM Mono; font-size:0.8rem; margin-top:1rem;'>↑ Select a player, set the line, then click Analyze Prop.</div>", unsafe_allow_html=True)
 
 # Loading animation — shows immediately when button is clicked
 if fetch:
@@ -6633,13 +6634,16 @@ if st.session_state.logs is not None:
         except Exception:
             _h2h_full = pd.DataFrame()
 
-        # Split full H2H history into series games vs regular season — outside cache
+        # Split H2H: series games (signal) + reg season (context)
+        # IMPORTANT: h2h_df = ALL history for signal, _reg_h2h_df = reg season only for context
         if _IS_PLAYOFFS and not _h2h_full.empty:
             try:
                 _playoff_start = pd.Timestamp("2026-04-14")
                 _h2h_dates     = pd.to_datetime(_h2h_full["GAME_DATE"], errors="coerce")
-                h2h_df      = _h2h_full[_h2h_dates >= _playoff_start].reset_index(drop=True)
-                _reg_h2h_df = _h2h_full[_h2h_dates <  _playoff_start].reset_index(drop=True)
+                _series_df     = _h2h_full[_h2h_dates >= _playoff_start].reset_index(drop=True)
+                _reg_h2h_df    = _h2h_full[_h2h_dates <  _playoff_start].reset_index(drop=True)
+                # Use series games for signal if we have any; else fall back to reg season
+                h2h_df = _series_df if not _series_df.empty else _reg_h2h_df
             except Exception:
                 h2h_df      = _h2h_full
                 _reg_h2h_df = pd.DataFrame()
@@ -6877,10 +6881,10 @@ if st.session_state.logs is not None:
     st.markdown(f"""
     <div style='background:{_fga_bg};border:1px solid {_fga_border};border-radius:12px;
                 padding:1rem 1.1rem;margin-bottom:0.5rem;'>
-        <div style='font-family:JetBrains Mono,monospace;font-size:0.58rem;color:#475569;
+        <div style='font-family:JetBrains Mono,monospace;font-size:0.58rem;color:#6b7f96;
                     letter-spacing:0.15em;text-transform:uppercase;margin-bottom:8px;'>
             Shot Attempts (L{n_games})
-            <span style='color:#475569;font-size:0.55rem;margin-left:6px;'>
+            <span style='color:#6b7f96;font-size:0.55rem;margin-left:6px;'>
             — attempts = scoring opportunities</span>
         </div>
         <div style='display:flex;gap:2rem;flex-wrap:wrap;align-items:flex-end;'>
@@ -6888,7 +6892,7 @@ if st.session_state.logs is not None:
                 <div style='font-family:Outfit,sans-serif;font-size:2rem;font-weight:800;
                             color:{_fga_trend_color};line-height:1;'>{avg_fga:.1f}</div>
                 <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;
-                            color:#475569;margin-top:3px;'>FGA per game
+                            color:#6b7f96;margin-top:3px;'>FGA per game
                     <span style='color:{_fga_trend_color};margin-left:6px;'>{fga_flag} {_fga_label}</span>
                 </div>
             </div>
@@ -6896,7 +6900,7 @@ if st.session_state.logs is not None:
                 <div style='font-family:Outfit,sans-serif;font-size:2rem;font-weight:800;
                             color:#40d9e0;line-height:1;'>{avg_fta:.1f}</div>
                 <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;
-                            color:#475569;margin-top:3px;'>FTA per game
+                            color:#6b7f96;margin-top:3px;'>FTA per game
                     <span style='color:#40d9e0;margin-left:6px;'>≈ {_fta_pts} pts from FTs</span>
                 </div>
             </div>
@@ -6904,10 +6908,10 @@ if st.session_state.logs is not None:
                 <div style='font-family:Outfit,sans-serif;font-size:2rem;font-weight:800;
                             color:#94a3b8;line-height:1;'>{_fga_pts_per_attempt}</div>
                 <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;
-                            color:#475569;margin-top:3px;'>pts per attempt</div>
+                            color:#6b7f96;margin-top:3px;'>pts per attempt</div>
             </div>
         </div>
-        {f"<div style='font-family:JetBrains Mono,monospace;font-size:0.65rem;color:#475569;margin-top:8px;border-top:1px solid rgba(255,255,255,0.05);padding-top:8px;'>{_fga_playoff_note}</div>" if _fga_playoff_note else ""}
+        {f"<div style='font-family:JetBrains Mono,monospace;font-size:0.65rem;color:#6b7f96;margin-top:8px;border-top:1px solid rgba(255,255,255,0.05);padding-top:8px;'>{_fga_playoff_note}</div>" if _fga_playoff_note else ""}
     </div>
     """, unsafe_allow_html=True)
 
@@ -6948,9 +6952,9 @@ if st.session_state.logs is not None:
 
         pts_line = (
             f"{opp_pts:.1f} pts allowed/game (L15)"
-            f"<span style='font-family:DM Mono; font-size:0.72rem; color:#475569; margin-left:8px;'>league avg {league_avg}</span>"
+            f"<span style='font-family:DM Mono; font-size:0.72rem; color:#6b7f96; margin-left:8px;'>league avg {league_avg}</span>"
             f"{_trend_badge}"
-        ) if opp_pts else "<span style='font-family:DM Mono; font-size:0.8rem; color:#475569;'>Defense data unavailable</span>"
+        ) if opp_pts else "<span style='font-family:DM Mono; font-size:0.8rem; color:#6b7f96;'>Defense data unavailable</span>"
 
         st.markdown(f"""
         <div class='defense-card'>
@@ -6966,7 +6970,7 @@ if st.session_state.logs is not None:
     else:
         st.markdown(
             "<div style='background:#0d1520;border:1px solid rgba(255,255,255,0.06);border-radius:10px;"
-            "padding:0.75rem 1rem;color:#475569;font-family:JetBrains Mono,monospace;font-size:0.68rem;'>"
+            "padding:0.75rem 1rem;color:#6b7f96;font-family:JetBrains Mono,monospace;font-size:0.68rem;'>"
             "Opponent defensive stats not available — matchup set to Neutral</div>",
             unsafe_allow_html=True
         )
@@ -7076,12 +7080,12 @@ if st.session_state.logs is not None:
                 <div class='stat-label'>{_h2h_label}</div>
                 <div style='display:flex;align-items:baseline;gap:12px;margin-top:4px;'>
                     <div class='stat-value' style='color:{sig_color};'>{h2h_avg:.1f}</div>
-                    <div style='font-family:JetBrains Mono,monospace;font-size:0.72rem;color:#475569;'>pts avg</div>
+                    <div style='font-family:JetBrains Mono,monospace;font-size:0.72rem;color:#6b7f96;'>pts avg</div>
                 </div>
                 <div style='font-family:JetBrains Mono,monospace;font-size:0.68rem;color:{sig_color};margin-top:4px;'>
                     {_h2h_meaning} · line {line}
                 </div>
-                {f"<div style='font-family:JetBrains Mono,monospace;font-size:0.6rem;color:#475569;margin-top:5px;border-top:1px solid rgba(255,255,255,0.05);padding-top:5px;'>{_reg_ctx}</div>" if _reg_ctx else ""}
+                {f"<div style='font-family:JetBrains Mono,monospace;font-size:0.6rem;color:#6b7f96;margin-top:5px;border-top:1px solid rgba(255,255,255,0.05);padding-top:5px;'>{_reg_ctx}</div>" if _reg_ctx else ""}
             </div>""", unsafe_allow_html=True)
         else:
             # No games at all — show reg season if available
@@ -7096,9 +7100,9 @@ if st.session_state.logs is not None:
                         <div class='stat-label'>vs {opp_abbr} · reg season ({_reg_n}G)</div>
                         <div style='display:flex;align-items:baseline;gap:12px;margin-top:4px;'>
                             <div class='stat-value' style='color:{_reg_sig_col};'>{_reg_avg:.1f}</div>
-                            <div style='font-family:JetBrains Mono,monospace;font-size:0.72rem;color:#475569;'>pts avg</div>
+                            <div style='font-family:JetBrains Mono,monospace;font-size:0.72rem;color:#6b7f96;'>pts avg</div>
                         </div>
-                        <div style='font-family:JetBrains Mono,monospace;font-size:0.65rem;color:#475569;margin-top:4px;'>
+                        <div style='font-family:JetBrains Mono,monospace;font-size:0.65rem;color:#6b7f96;margin-top:4px;'>
                             Series just started — using reg season history
                         </div>
                     </div>""", unsafe_allow_html=True)
@@ -7106,14 +7110,14 @@ if st.session_state.logs is not None:
                     st.markdown(f"""
                     <div class='stat-card'>
                         <div class='stat-label'>vs {opp_abbr or "opponent"} H2H</div>
-                        <div style='color:#475569;font-size:0.82rem;margin-top:8px;'>Series underway — data loading</div>
+                        <div style='color:#6b7f96;font-size:0.82rem;margin-top:8px;'>Series underway — data loading</div>
                     </div>""", unsafe_allow_html=True)
             else:
                 _h2h_note = "No series data yet" if _IS_PLAYOFFS else ("No H2H data" if opp_abbr else "Opponent not detected")
                 st.markdown(f"""
                 <div class='stat-card'>
                     <div class='stat-label'>vs {opp_abbr or "opponent"} H2H</div>
-                    <div style='color:#475569;font-size:0.82rem;margin-top:8px;'>{_h2h_note}</div>
+                    <div style='color:#6b7f96;font-size:0.82rem;margin-top:8px;'>{_h2h_note}</div>
                 </div>""", unsafe_allow_html=True)
 
     with hb2:
@@ -7160,10 +7164,10 @@ if st.session_state.logs is not None:
                 <div style='font-size:1.5rem;'>{_ri}</div>
                 <div>
                     <div style='font-size:1rem; font-weight:800; color:{_rc};'>{_rl}</div>
-                    <div style='font-family:DM Mono; font-size:0.7rem; color:#475569; margin-top:2px;'>
+                    <div style='font-family:DM Mono; font-size:0.7rem; color:#6b7f96; margin-top:2px;'>
                         {_rsub}
                     </div>
-                    {f"<div style='font-family:DM Mono; font-size:0.65rem; color:#64748b; margin-top:4px;'>{_last_game_info}</div>" if _last_game_info else ""}
+                    {f"<div style='font-family:DM Mono; font-size:0.65rem; color:#7d93ab; margin-top:4px;'>{_last_game_info}</div>" if _last_game_info else ""}
                 </div>
             </div>
         </div>""", unsafe_allow_html=True)
@@ -7189,14 +7193,14 @@ if st.session_state.logs is not None:
             <div class='stat-card' style='border-color:{form_border}; background:linear-gradient(135deg,{form_bg} 0%,#111827 100%);'>
                 <div class='stat-label'>Recent Form vs Season</div>
                 <div style='font-size:1rem; font-weight:800; color:{form_color}; margin-top:6px;'>{streak_label}</div>
-                <div style='font-family:DM Mono; font-size:0.7rem; color:#475569; margin-top:4px;'>{streak_sub}</div>
+                <div style='font-family:DM Mono; font-size:0.7rem; color:#6b7f96; margin-top:4px;'>{streak_sub}</div>
                 <div style='font-family:DM Mono; font-size:0.68rem; color:{form_color}; margin-top:4px;'>{form_verdict}</div>
             </div>""", unsafe_allow_html=True)
         else:
             st.markdown("""
             <div class='stat-card'>
                 <div class='stat-label'>Recent Form vs Season</div>
-                <div style='color:#475569; font-size:0.85rem; margin-top:8px;'>Season data loading...</div>
+                <div style='color:#6b7f96; font-size:0.85rem; margin-top:8px;'>Season data loading...</div>
             </div>""", unsafe_allow_html=True)
 
     with hb4:
@@ -7224,14 +7228,14 @@ if st.session_state.logs is not None:
             <div class='stat-card' style='border-color:{_pborder};background:linear-gradient(135deg,{_pb} 0%,#111827 100%);'>
                 <div class='stat-label'>Game Pace</div>
                 <div style='font-size:1rem;font-weight:800;color:{_pc};margin-top:6px;'>{_plabel}</div>
-                <div style='font-family:DM Mono;font-size:0.7rem;color:#475569;margin-top:4px;'>{_psub}</div>
+                <div style='font-family:DM Mono;font-size:0.7rem;color:#6b7f96;margin-top:4px;'>{_psub}</div>
                 <div style='font-family:DM Mono;font-size:0.68rem;color:{_pc};margin-top:4px;'>{_pverdict}</div>
             </div>""", unsafe_allow_html=True)
         else:
             st.markdown("""
             <div class='stat-card'>
                 <div class='stat-label'>Game Pace</div>
-                <div style='color:#475569;font-size:0.85rem;margin-top:8px;'>Pace data loading...</div>
+                <div style='color:#6b7f96;font-size:0.85rem;margin-top:8px;'>Pace data loading...</div>
             </div>""", unsafe_allow_html=True)
 
     # ── Playoff context ──────────────────────────────────────────
@@ -7256,14 +7260,14 @@ if st.session_state.logs is not None:
                     <div class='stat-label'>Home {venue_note_html if tonight_venue=="Home" else ""}</div>
                     <div style='display:flex; align-items:baseline; gap:12px; margin-top:4px;'>
                         <div class='stat-value' style='color:{hr_color};'>{hr_pct:.0%}</div>
-                        <div style='font-family:DM Mono; font-size:0.72rem; color:#475569;'>hit rate</div>
+                        <div style='font-family:DM Mono; font-size:0.72rem; color:#6b7f96;'>hit rate</div>
                     </div>
-                    <div style='font-family:DM Mono; font-size:0.72rem; color:#475569; margin-top:4px;'>
+                    <div style='font-family:DM Mono; font-size:0.72rem; color:#6b7f96; margin-top:4px;'>
                         {splits.get("home_avg", "N/A")} avg pts · {splits.get("home_games", 0)} games
                     </div>
                 </div>""", unsafe_allow_html=True)
             else:
-                st.markdown("<div class='stat-card'><div class='stat-label'>Home</div><div style='color:#475569; font-size:0.8rem; margin-top:4px;'>Not enough data</div></div>", unsafe_allow_html=True)
+                st.markdown("<div class='stat-card'><div class='stat-label'>Home</div><div style='color:#6b7f96; font-size:0.8rem; margin-top:4px;'>Not enough data</div></div>", unsafe_allow_html=True)
 
         with ha2:
             if splits.get("away_games", 0) >= 2:
@@ -7274,14 +7278,14 @@ if st.session_state.logs is not None:
                     <div class='stat-label'>Away {venue_note_html if tonight_venue=="Away" else ""}</div>
                     <div style='display:flex; align-items:baseline; gap:12px; margin-top:4px;'>
                         <div class='stat-value' style='color:{ar_color};'>{ar_pct:.0%}</div>
-                        <div style='font-family:DM Mono; font-size:0.72rem; color:#475569;'>hit rate</div>
+                        <div style='font-family:DM Mono; font-size:0.72rem; color:#6b7f96;'>hit rate</div>
                     </div>
-                    <div style='font-family:DM Mono; font-size:0.72rem; color:#475569; margin-top:4px;'>
+                    <div style='font-family:DM Mono; font-size:0.72rem; color:#6b7f96; margin-top:4px;'>
                         {splits.get("away_avg", "N/A")} avg pts · {splits.get("away_games", 0)} games
                     </div>
                 </div>""", unsafe_allow_html=True)
             else:
-                st.markdown("<div class='stat-card'><div class='stat-label'>Away</div><div style='color:#475569; font-size:0.8rem; margin-top:4px;'>Not enough data</div></div>", unsafe_allow_html=True)
+                st.markdown("<div class='stat-card'><div class='stat-label'>Away</div><div style='color:#6b7f96; font-size:0.8rem; margin-top:4px;'>Not enough data</div></div>", unsafe_allow_html=True)
 
     # ── Chart ─────────────────────────────────
 
@@ -7312,11 +7316,11 @@ if st.session_state.logs is not None:
             f"border-radius:14px;padding:1rem 1.2rem;margin-bottom:0.5rem;'>"
             f"<div style='display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:0.75rem;'>"
             f"<div>"
-            f"<div style='font-family:JetBrains Mono,monospace;font-size:0.58rem;color:#475569;"
+            f"<div style='font-family:JetBrains Mono,monospace;font-size:0.58rem;color:#6b7f96;"
             f"letter-spacing:0.15em;text-transform:uppercase;margin-bottom:6px;'>Next Game</div>"
             f"<div style='font-family:Outfit,sans-serif;font-size:1.4rem;font-weight:800;"
             f"color:#f1f5f9;line-height:1;'>vs {opp_abbr}"
-            f"<span style='font-size:0.85rem;font-weight:400;color:#475569;margin-left:10px;'>{game_date or ''}</span></div>"
+            f"<span style='font-size:0.85rem;font-weight:400;color:#6b7f96;margin-left:10px;'>{game_date or ''}</span></div>"
             f"<div style='margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;'>"
             f"<span style='font-family:JetBrains Mono,monospace;font-size:0.65rem;color:{_venue_col};"
             f"background:{_venue_col}15;border:1px solid {_venue_col}33;padding:3px 12px;border-radius:999px;'>{_venue_icon}</span>"
@@ -7324,15 +7328,15 @@ if st.session_state.logs is not None:
             f"background:{_def_plain[1]}15;border:1px solid {_def_plain[1]}33;padding:3px 12px;border-radius:999px;'>{_def_plain[0]}</span>"
             f"</div></div>"
             f"<div style='text-align:right;'>"
-            f"<div style='font-family:JetBrains Mono,monospace;font-size:0.7rem;color:#475569;'>{_opp_pts_str}</div>"
-            f"<div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#475569;margin-top:4px;line-height:1.5;'>{_def_plain[2]}</div>"
+            f"<div style='font-family:JetBrains Mono,monospace;font-size:0.7rem;color:#6b7f96;'>{_opp_pts_str}</div>"
+            f"<div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#6b7f96;margin-top:4px;line-height:1.5;'>{_def_plain[2]}</div>"
             f"</div></div></div>",
             unsafe_allow_html=True
         )
     else:
         st.markdown(
             "<div style='background:#0d1520;border:1px solid rgba(255,255,255,0.06);border-radius:14px;"
-            "padding:0.75rem 1rem;color:#475569;font-family:JetBrains Mono,monospace;font-size:0.7rem;'>"
+            "padding:0.75rem 1rem;color:#6b7f96;font-family:JetBrains Mono,monospace;font-size:0.7rem;'>"
             "Next opponent not found — check back closer to tip-off</div>",
             unsafe_allow_html=True
         )
@@ -7376,14 +7380,14 @@ if st.session_state.logs is not None:
             f"padding:0.85rem 1.1rem;margin-bottom:0.5rem;"
             f"display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;'>"
             f"<div>"
-            f"<div style='font-family:JetBrains Mono,monospace;font-size:0.58rem;color:#475569;"
+            f"<div style='font-family:JetBrains Mono,monospace;font-size:0.58rem;color:#6b7f96;"
             f"letter-spacing:0.15em;text-transform:uppercase;margin-bottom:4px;'>Starting Role</div>"
             f"<div style='font-family:Outfit,sans-serif;font-size:1.1rem;font-weight:800;"
             f"color:{_rc};'>{_ric} {_rlbl}</div>"
-            f"<div style='font-family:JetBrains Mono,monospace;font-size:0.63rem;color:#475569;margin-top:3px;'>"
+            f"<div style='font-family:JetBrains Mono,monospace;font-size:0.63rem;color:#6b7f96;margin-top:3px;'>"
             f"{_rsub}</div>"
             f"</div>"
-            f"<div style='font-family:JetBrains Mono,monospace;font-size:0.58rem;color:#475569;"
+            f"<div style='font-family:JetBrains Mono,monospace;font-size:0.58rem;color:#6b7f96;"
             f"text-align:right;max-width:200px;line-height:1.5;'>{_src_txt}</div>"
             f"</div>",
             unsafe_allow_html=True
@@ -7408,9 +7412,9 @@ if st.session_state.logs is not None:
                 f"<div style='display:flex;justify-content:space-between;align-items:flex-start;gap:8px;'>"
                 f"<div style='font-family:Outfit,sans-serif;font-size:0.82rem;font-weight:600;"
                 f"color:#f1f5f9;line-height:1.4;'>{_nhead}</div>"
-                f"<div style='font-family:JetBrains Mono,monospace;font-size:0.58rem;color:#475569;"
+                f"<div style='font-family:JetBrains Mono,monospace;font-size:0.58rem;color:#6b7f96;"
                 f"white-space:nowrap;flex-shrink:0;'>{_ndate}</div></div>"
-                f"{f'<div style="font-family:JetBrains Mono,monospace;font-size:0.65rem;color:#475569;margin-top:4px;line-height:1.5;">{_ndesc[:150]}...</div>' if _ndesc else ''}"
+                f"{f'<div style="font-family:JetBrains Mono,monospace;font-size:0.65rem;color:#6b7f96;margin-top:4px;line-height:1.5;">{_ndesc[:150]}...</div>' if _ndesc else ''}"
                 f"<div style='margin-top:6px;'>{_link_html}</div>"
                 f"</div>",
                 unsafe_allow_html=True
@@ -7430,7 +7434,7 @@ if st.session_state.logs is not None:
             f"padding:0.6rem 1rem;margin-bottom:0.75rem;font-family:JetBrains Mono,monospace;font-size:0.68rem;'>"
             f"<div style='display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;'>"
             f"<div><span style='color:{_ref_col};font-weight:700;'>🧑‍⚖️ TONIGHT'S REFS</span>"
-            f"<span style='color:#475569;margin-left:8px;'>{' · '.join(_ref_names[:3])}</span></div>"
+            f"<span style='color:#6b7f96;margin-left:8px;'>{' · '.join(_ref_names[:3])}</span></div>"
             f"<div><span style='color:{_ref_col};font-weight:700;'>{_ref_lbl}</span>"
             f"<span style='color:#555;margin-left:8px;'>{_ref_note} · league avg {_REF_LEAGUE_AVG_PPG}</span></div>"
             f"</div></div>",
@@ -7616,7 +7620,7 @@ if st.session_state.logs is not None:
             f"<div style='background:#111;border:1px solid #1e2a3a;border-left:4px solid #f97316;"
             f"padding:0.55rem 1rem;margin-bottom:0.5rem;font-family:JetBrains Mono,monospace;font-size:0.68rem;'>"
             f"<span style='color:#f97316;font-weight:700;'>⚠️ GAME {_gnum} OF SERIES</span>"
-            f"<span style='color:#475569;'> · {_gn_notes.get(_gnum, '')}</span>"
+            f"<span style='color:#6b7f96;'> · {_gn_notes.get(_gnum, '')}</span>"
             f"</div>",
             unsafe_allow_html=True
         )
@@ -7680,16 +7684,16 @@ if st.session_state.logs is not None:
         "Lean Over":    ("👍 Lean Over — slight edge, good in 2-leg entries", "#fbbf24", "#1a1200"),
         "Lean Under":   ("👍 Lean Under — slight edge, good in 2-leg entries", "#f97316", "#1a0d00"),
         "Strong Under": ("✅ Strong Under — the model backs this pick", "#ff4560", "#1a0008"),
-        "Pass":         ("⛔ Pass — no clear edge on this prop, skip it", "#475569", "#0d1520"),
+        "Pass":         ("⛔ Pass — no clear edge on this prop, skip it", "#6b7f96", "#0d1520"),
     }
-    _pm = _plain_map.get(_display_tier, ("", "#475569", "#0d1520"))
+    _pm = _plain_map.get(_display_tier, ("", "#6b7f96", "#0d1520"))
     st.markdown(
         f"<div style='background:{_pm[2]};border:1px solid rgba(255,255,255,0.06);"
         f"border-radius:12px;padding:0.75rem 1.1rem;margin-bottom:0.75rem;"
         f"display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;'>"
         f"<span style='font-family:Outfit,sans-serif;font-size:0.95rem;"
         f"font-weight:600;color:{_pm[1]};'>{_pm[0]}</span>"
-        f"<span style='font-family:JetBrains Mono,monospace;font-size:0.65rem;color:#475569;'>"
+        f"<span style='font-family:JetBrains Mono,monospace;font-size:0.65rem;color:#6b7f96;'>"
         f"Confidence {_conf_score}/100 · Adjusted {adjusted:.0%}</span>"
         f"</div>",
         unsafe_allow_html=True
@@ -7699,9 +7703,9 @@ if st.session_state.logs is not None:
     venue_adj_labels = {
         "Boost":   ("▲ Venue Boost",   "#22c55e"),
         "Penalty": ("▼ Venue Penalty", "#ef4444"),
-        "Neutral": ("",                "#475569"),
+        "Neutral": ("",                "#6b7f96"),
     }
-    venue_label_text, venue_label_color = venue_adj_labels.get(venue_adj, ("", "#475569"))
+    venue_label_text, venue_label_color = venue_adj_labels.get(venue_adj, ("", "#6b7f96"))
     venue_badge_html = (
         f"<span style='font-family:DM Mono; font-size:0.7rem; color:{venue_label_color}; "
         f"background:{venue_label_color}18; border:1px solid {venue_label_color}44; "
@@ -7721,7 +7725,7 @@ if st.session_state.logs is not None:
             f"border:1px solid #166534;padding:3px 10px;border-radius:999px;"
             f"display:inline-flex;align-items:center;gap:4px;'>"
             f"📈 Usage ↑ · {_spike_names} out"
-            f"<span style='color:#475569;font-weight:400;'>"
+            f"<span style='color:#6b7f96;font-weight:400;'>"
             f" +{_total_spike_mins:.0f} min</span></span>"
         )
 
@@ -7798,7 +7802,7 @@ if st.session_state.logs is not None:
     else:  # Pass
         _conf_pct  = 0.0
         _conf_label = "No edge"
-        _bar_color  = "#475569"
+        _bar_color  = "#6b7f96"
 
     # Edge strength label
     _abs_edge = abs(line_diff)
@@ -7902,7 +7906,7 @@ if st.session_state.logs is not None:
         f"<div style='position:absolute;top:7px;left:0;right:0;height:4px;background:#1e293b;border-radius:2px;'></div>"
         f"<div style='position:absolute;top:7px;left:0;width:36%;height:4px;background:#ef444422;border-radius:2px 0 0 2px;'></div>"
         f"<div style='position:absolute;top:7px;left:36%;width:9%;height:4px;background:#f9731622;'></div>"
-        f"<div style='position:absolute;top:7px;left:45%;width:10%;height:4px;background:#47556933;'></div>"
+        f"<div style='position:absolute;top:7px;left:45%;width:10%;height:4px;background:#6b7f9633;'></div>"
         f"<div style='position:absolute;top:7px;left:55%;width:9%;height:4px;background:#eab30822;'></div>"
         f"<div style='position:absolute;top:7px;left:64%;width:36%;height:4px;background:#22c55e22;border-radius:0 2px 2px 0;'></div>"
         f"<div style='{_fill_style}'></div>"
@@ -7915,7 +7919,7 @@ if st.session_state.logs is not None:
         f"<div style='position:relative;height:22px;margin-top:5px;font-family:DM Mono;'>"
         f"<span style='position:absolute;left:18%;transform:translateX(-50%);font-size:0.48rem;color:#ef4444;opacity:{_su_op};font-weight:{_su_fw};text-align:center;line-height:1.3;'>Strong<br>Under</span>"
         f"<span style='position:absolute;left:40.5%;transform:translateX(-50%);font-size:0.48rem;color:#f97316;opacity:{_lu_op};font-weight:{_lu_fw};text-align:center;line-height:1.3;'>Lean<br>Under</span>"
-        f"<span style='position:absolute;left:50%;transform:translateX(-50%);font-size:0.48rem;color:#64748b;opacity:{_pa_op};font-weight:{_pa_fw};text-align:center;line-height:1.3;'>Pass</span>"
+        f"<span style='position:absolute;left:50%;transform:translateX(-50%);font-size:0.48rem;color:#7d93ab;opacity:{_pa_op};font-weight:{_pa_fw};text-align:center;line-height:1.3;'>Pass</span>"
         f"<span style='position:absolute;left:59.5%;transform:translateX(-50%);font-size:0.48rem;color:#eab308;opacity:{_lo_op};font-weight:{_lo_fw};text-align:center;line-height:1.3;'>Lean<br>Over</span>"
         f"<span style='position:absolute;left:82%;transform:translateX(-50%);font-size:0.48rem;color:#22c55e;opacity:{_so_op};font-weight:{_so_fw};text-align:center;line-height:1.3;'>Strong<br>Over</span>"
         f"</div>"
@@ -7927,19 +7931,19 @@ if st.session_state.logs is not None:
         f"</div>"
         f"<div style='display:flex;gap:2rem;flex-wrap:wrap;align-items:flex-start;'>"
         f"<div>"
-        f"<div class='verdict-label'>Adjusted Hit Rate <span style='font-size:0.55rem;background:#1e293b;color:#64748b;border-radius:50%;padding:1px 4px;margin-left:3px;cursor:default;' title='% of recent games hitting the line, adjusted for context signals'>i</span></div>"
+        f"<div class='verdict-label'>Adjusted Hit Rate <span style='font-size:0.55rem;background:#1e293b;color:#7d93ab;border-radius:50%;padding:1px 4px;margin-left:3px;cursor:default;' title='% of recent games hitting the line, adjusted for context signals'>i</span></div>"
         f"<div style='font-size:1.4rem;font-weight:800;color:#f1f5f9;'>{_adj_pct_str}</div>"
-        f"<div style='font-family:DM Mono;font-size:0.65rem;color:#475569;margin-top:2px;'>64%+ = Strong · 55%+ = Lean</div>"
+        f"<div style='font-family:DM Mono;font-size:0.65rem;color:#6b7f96;margin-top:2px;'>64%+ = Strong · 55%+ = Lean</div>"
         f"</div>"
         f"<div>"
-        f"<div class='verdict-label'>Edge vs Line <span style='font-size:0.55rem;background:#1e293b;color:#64748b;border-radius:50%;padding:1px 4px;margin-left:3px;cursor:default;' title='Player avg pts minus the line. Larger = more confident the line is beatable'>i</span></div>"
+        f"<div class='verdict-label'>Edge vs Line <span style='font-size:0.55rem;background:#1e293b;color:#7d93ab;border-radius:50%;padding:1px 4px;margin-left:3px;cursor:default;' title='Player avg pts minus the line. Larger = more confident the line is beatable'>i</span></div>"
         f"<div style='font-size:1.4rem;font-weight:800;color:{_edge_num_color};'>{_edge_diff_str}</div>"
         f"<div style='font-family:DM Mono;font-size:0.65rem;color:{_edge_color};margin-top:2px;'>{_edge_label}</div>"
         f"</div>"
         f"<div>"
-        f"<div class='verdict-label'>Consistency <span style='font-size:0.55rem;background:#1e293b;color:#64748b;border-radius:50%;padding:1px 4px;margin-left:3px;cursor:default;' title='% of games pts landed within 3 of the line. Low = unpredictable scorer'>i</span></div>"
+        f"<div class='verdict-label'>Consistency <span style='font-size:0.55rem;background:#1e293b;color:#7d93ab;border-radius:50%;padding:1px 4px;margin-left:3px;cursor:default;' title='% of games pts landed within 3 of the line. Low = unpredictable scorer'>i</span></div>"
         f"<div style='font-size:1.4rem;font-weight:800;color:#f1f5f9;'>{_cons_pct_str}</div>"
-        f"<div style='font-family:DM Mono;font-size:0.65rem;color:#475569;margin-top:2px;'>{_cons_word}</div>"
+        f"<div style='font-family:DM Mono;font-size:0.65rem;color:#6b7f96;margin-top:2px;'>{_cons_word}</div>"
         f"</div>"
         f"</div>"
         f"</div>"
@@ -8022,7 +8026,7 @@ if st.session_state.logs is not None:
 
     with st.expander("🔬  Show full signal breakdown (advanced)"):
         st.markdown("""
-        <div style='font-family:JetBrains Mono,monospace;font-size:0.65rem;color:#475569;
+        <div style='font-family:JetBrains Mono,monospace;font-size:0.65rem;color:#6b7f96;
                     background:#0d1520;border:1px solid rgba(255,255,255,0.06);border-radius:8px;
                     padding:0.65rem 1rem;margin-bottom:0.75rem;line-height:1.8;'>
             This table shows exactly how PropIQ arrived at the final probability.
@@ -8114,29 +8118,29 @@ if st.session_state.logs is not None:
         </div>
         <table style='width:100%; border-collapse:collapse;'>
             <tr>
-                <td style='padding:3px 8px 3px 0; color:#475569;'>Player</td>
+                <td style='padding:3px 8px 3px 0; color:#6b7f96;'>Player</td>
                 <td style='color:#e2e8f0;'>{full_name}</td>
-                <td style='padding:3px 8px; color:#475569;'>Line</td>
+                <td style='padding:3px 8px; color:#6b7f96;'>Line</td>
                 <td style='color:#e2e8f0;'>{line} pts {side}</td>
             </tr>
             <tr>
-                <td style='padding:3px 8px 3px 0; color:#475569;'>Sample</td>
+                <td style='padding:3px 8px 3px 0; color:#6b7f96;'>Sample</td>
                 <td style='color:#e2e8f0;'>L{n_games} · avg {sample_avg_pts:.1f} pts</td>
-                <td style='padding:3px 8px; color:#475569;'>Edge vs line</td>
+                <td style='padding:3px 8px; color:#6b7f96;'>Edge vs line</td>
                 <td style='color:{"#22c55e" if line_diff > 0 else "#ef4444"};'>{line_diff:+.1f} pts</td>
             </tr>
             <tr>
-                <td style='padding:3px 8px 3px 0; color:#475569;'>Raw hit rate</td>
+                <td style='padding:3px 8px 3px 0; color:#6b7f96;'>Raw hit rate</td>
                 <td style='color:#e2e8f0;'>{baseline:.1%}</td>
-                <td style='padding:3px 8px; color:#475569;'>Weighted hit rate</td>
+                <td style='padding:3px 8px; color:#6b7f96;'>Weighted hit rate</td>
                 <td style='color:#e2e8f0;'>{weighted_base:.1%} ← starting point{"  (playoff series boost applied)" if _IS_PLAYOFFS and opp_abbr and _series_cov_n > 0 else ""}</td>
             </tr>
             <tr>
-                <td style='padding:3px 8px 3px 0; color:#475569;'>Consistency</td>
+                <td style='padding:3px 8px 3px 0; color:#6b7f96;'>Consistency</td>
                 <td style='color:{"#22c55e" if consistency>=0.5 else "#eab308" if consistency>=0.35 else "#ef4444"};'>
                     {consistency:.1%} {f"⚠️ low but edge {line_diff:+.1f} > 5pts — override skipped" if not edge_is_tight and consistency < 0.35 else ""}
                 </td>
-                <td style='padding:3px 8px; color:#475569;'>Season avg</td>
+                <td style='padding:3px 8px; color:#6b7f96;'>Season avg</td>
                 <td style='color:#e2e8f0;'>{f"{season_avg:.1f} pts" if season_avg else "N/A"}</td>
             </tr>
         </table>
@@ -8146,7 +8150,7 @@ if st.session_state.logs is not None:
             MULTIPLIER TRACE
         </div>
         <table style='width:100%; border-collapse:collapse;'>
-            <tr style='color:#475569; font-size:0.63rem; border-bottom:1px solid #1a2333;'>
+            <tr style='color:#6b7f96; font-size:0.63rem; border-bottom:1px solid #1a2333;'>
                 <td style='padding:3px 0;'>SIGNAL</td>
                 <td>VALUE</td>
                 <td>ADJUSTMENT</td>
@@ -8158,15 +8162,15 @@ if st.session_state.logs is not None:
 
         rows_html = ""
         for key, val, adj, before, after, delta in steps:
-            impact_color = "#22c55e" if delta > 0.005 else "#ef4444" if delta < -0.005 else "#475569"
+            impact_color = "#22c55e" if delta > 0.005 else "#ef4444" if delta < -0.005 else "#6b7f96"
             mult_display = (f"+{adj:.0%}" if adj > 0 else f"{adj:.0%}" if adj < 0 else "no change")
-            mult_color   = "#22c55e" if adj > 0 else "#ef4444" if adj < 0 else "#475569"
+            mult_color   = "#22c55e" if adj > 0 else "#ef4444" if adj < 0 else "#6b7f96"
             rows_html += f"""
             <tr style='border-bottom:1px solid #111827;'>
                 <td style='padding:4px 0; color:#94a3b8;'>{signal_labels.get(key, key)}</td>
                 <td style='color:#e2e8f0; font-weight:600;'>{val}</td>
                 <td style='color:{mult_color};'>{mult_display}</td>
-                <td style='color:#64748b;'>{before:.1%}</td>
+                <td style='color:#7d93ab;'>{before:.1%}</td>
                 <td style='color:#e2e8f0;'>{after:.1%}</td>
                 <td style='color:{impact_color};'>{delta:+.1%}</td>
             </tr>"""
@@ -8216,27 +8220,27 @@ if st.session_state.logs is not None:
         </div>
         <table style='width:100%; border-collapse:collapse; font-family:DM Mono; font-size:0.72rem;'>
             <tr>
-                <td style='padding:3px 8px 3px 0; color:#475569;'>Adjusted probability</td>
+                <td style='padding:3px 8px 3px 0; color:#6b7f96;'>Adjusted probability</td>
                 <td style='color:#e2e8f0; font-weight:700;'>{adjusted:.1%}</td>
-                <td style='padding:3px 8px; color:#475569;'>Threshold for {_strong_label}</td>
+                <td style='padding:3px 8px; color:#6b7f96;'>Threshold for {_strong_label}</td>
                 <td style='color:#94a3b8;'>{_strong_thresh}</td>
             </tr>
             <tr>
-                <td style='padding:3px 8px 3px 0; color:#475569;'>Edge vs line</td>
+                <td style='padding:3px 8px 3px 0; color:#6b7f96;'>Edge vs line</td>
                 <td style='color:{"#22c55e" if _edge_ok else "#ef4444"};'>{line_diff:+.1f} pts {"✓" if abs(line_diff)>=1.5 else "✗ too small"}</td>
-                <td style='padding:3px 8px; color:#475569;'>Threshold for {_lean_label}</td>
+                <td style='padding:3px 8px; color:#6b7f96;'>Threshold for {_lean_label}</td>
                 <td style='color:#94a3b8;'>{_lean_thresh}</td>
             </tr>
             <tr>
-                <td style='padding:3px 8px 3px 0; color:#475569;'>Consistency check</td>
-                <td colspan='3' style='color:{"#ef4444" if low_cons else "#475569"};'>{cons_note}</td>
+                <td style='padding:3px 8px 3px 0; color:#6b7f96;'>Consistency check</td>
+                <td colspan='3' style='color:{"#ef4444" if low_cons else "#6b7f96"};'>{cons_note}</td>
             </tr>
             <tr>
-                <td style='padding:3px 8px 3px 0; color:#475569;'>Signal cap</td>
-                <td colspan='3' style='color:#475569;'>{"±18pp · playoff mode" if _IS_PLAYOFFS else "±12pp · regular season"}</td>
+                <td style='padding:3px 8px 3px 0; color:#6b7f96;'>Signal cap</td>
+                <td colspan='3' style='color:#6b7f96;'>{"±18pp · playoff mode" if _IS_PLAYOFFS else "±12pp · regular season"}</td>
             </tr>
             <tr style='border-top:1px solid #1a2333; margin-top:4px;'>
-                <td style='padding:6px 8px 3px 0; color:#475569;'>Final tier</td>
+                <td style='padding:6px 8px 3px 0; color:#6b7f96;'>Final tier</td>
                 <td colspan='3' style='font-size:0.9rem; font-weight:800; color:{_tier_color};'>
                     {tier_emoji[tier]} {tier}{_cons_note}
                 </td>
@@ -8334,8 +8338,8 @@ if not st.session_state.tracker:
     st.markdown("""
     <div style='background:#0f172a; border:1px dashed #1e293b; border-radius:12px;
                 padding:1.5rem; text-align:center;'>
-        <div style='font-family:DM Mono; font-size:0.75rem; color:#334155;'>No props tracked yet</div>
-        <div style='font-size:0.85rem; color:#475569; margin-top:4px;'>
+        <div style='font-family:DM Mono; font-size:0.75rem; color:#6b7f96;'>No props tracked yet</div>
+        <div style='font-size:0.85rem; color:#6b7f96; margin-top:4px;'>
             Analyze a player then click ➕ Add to Prop Tracker
         </div>
     </div>
@@ -8373,7 +8377,7 @@ else:
         f"<span style='color:{_wr_color};font-weight:800;'>Win Rate: {_wr}</span>"
         f"<span style='color:#22c55e;'>✅ {_hits} Hit</span>"
         f"<span style='color:#ef4444;'>❌ {_misses} Miss</span>"
-        f"<span style='color:#475569;'>⏳ {_pending} Pending</span>"
+        f"<span style='color:#6b7f96;'>⏳ {_pending} Pending</span>"
         f"</div>",
         unsafe_allow_html=True
     )
@@ -8385,9 +8389,9 @@ else:
         em  = tier_emoji.get(t, "⚪")
         col_card, col_remove = st.columns([11, 1])
         _result       = entry.get("Result", "Pending")
-        _result_color = {"Hit": "#22c55e", "Miss": "#ef4444", "Pending": "#475569"}.get(_result, "#475569")
+        _result_color = {"Hit": "#22c55e", "Miss": "#ef4444", "Pending": "#6b7f96"}.get(_result, "#6b7f96")
         _result_emoji = {"Hit": "✅", "Miss": "❌", "Pending": "⏳"}.get(_result, "⏳")
-        _auto_tag     = "<span style='font-family:DM Mono;font-size:0.55rem;color:#475569;margin-left:6px;'>auto</span>" if entry.get("auto_detected") else ""
+        _auto_tag     = "<span style='font-family:DM Mono;font-size:0.55rem;color:#6b7f96;margin-left:6px;'>auto</span>" if entry.get("auto_detected") else ""
 
         with col_card:
             st.markdown(f"""
@@ -8452,4 +8456,4 @@ else:
 
 
 
-st.markdown("<div style='margin-top:3rem; font-family:DM Mono; font-size:0.65rem; color:#334155; text-align:center;'>PropIQ — For educational purposes only. Not financial or betting advice.</div>", unsafe_allow_html=True)
+st.markdown("<div style='margin-top:3rem; font-family:DM Mono; font-size:0.65rem; color:#6b7f96; text-align:center;'>PropIQ — For educational purposes only. Not financial or betting advice.</div>", unsafe_allow_html=True)
