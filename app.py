@@ -1137,22 +1137,26 @@ def season_str_to_season(season_str: str) -> str:
 @st.cache_data(ttl=43200, show_spinner=False)
 def get_h2h_logs(player_id: int, opp_abbr: str, season: str, _date: str = None) -> pd.DataFrame:
     """
-    Fetch full season logs and filter for games vs opp_abbr.
-    Hard 15s timeout per season, max 3 seasons.
+    Fetch H2H logs vs opponent — regular season + playoff games.
+    - Fetches last 3 regular seasons in parallel
+    - In playoffs, also fetches current season playoff logs separately and merges
+    - Lenient abbreviation matching (NYK/NY, BKN/BK, etc.)
     """
-    empty = pd.DataFrame(columns=["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A","FG3M"])
+    empty = pd.DataFrame(columns=["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A"])
     if not opp_abbr:
         return empty
 
-    _HEADERS = {
-        "Host": "stats.nba.com",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "x-nba-stats-origin": "stats",
-        "x-nba-stats-token": "true",
-        "Referer": "https://www.nba.com/",
-        "Origin": "https://www.nba.com",
+    # Build list of abbreviation variants to match
+    # NBA Stats uses 3-letter codes in MATCHUP field (e.g. "NYK vs. ATL")
+    _ABBR_MAP = {
+        "NY": "NYK", "BK": "BKN", "NO": "NOP", "SA": "SAS",
+        "GS": "GSW", "OKC": "OKC", "PHX": "PHX", "UTA": "UTA",
     }
+    opp_clean = _ABBR_MAP.get(opp_abbr.upper(), opp_abbr.upper())
+    # Match either the 2-letter or 3-letter version
+    def _matches(matchup_str):
+        m = str(matchup_str).upper()
+        return opp_clean in m or opp_abbr.upper() in m
 
     try:
         start_year = int(season.split("-")[0])
@@ -1161,29 +1165,54 @@ def get_h2h_logs(player_id: int, opp_abbr: str, season: str, _date: str = None) 
 
     import concurrent.futures
     all_rows = []
+    _COLS = ["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A"]
 
-    def _fetch_season(yr):
-        try:
-            from nba_api.library.http import NBAStatsHTTP
-            NBAStatsHTTP.nba_response.headers = _HEADERS
-        except Exception:
-            pass
+    def _fetch_season(yr, season_type="Regular Season"):
         season_str = f"{yr}-{str(yr+1)[-2:]}"
-        df = playergamelog.PlayerGameLog(
-            player_id=player_id, season=season_str, timeout=12,
-        ).get_data_frames()[0]
-        df["GAME_DATE"] = pd.to_datetime(df["GAME_DATE"])
-        for c in ["MATCHUP","MIN","PTS","FGA","FTA","FG3A"]:
+        try:
+            df = playergamelog.PlayerGameLog(
+                player_id=player_id,
+                season=season_str,
+                season_type_all_star=season_type,
+                timeout=14,
+            ).get_data_frames()[0]
+        except Exception:
+            # Fallback without season_type param
+            try:
+                df = playergamelog.PlayerGameLog(
+                    player_id=player_id,
+                    season=season_str,
+                    timeout=14,
+                ).get_data_frames()[0]
+            except Exception:
+                return pd.DataFrame(columns=_COLS)
+
+        if df.empty:
+            return pd.DataFrame(columns=_COLS)
+
+        df["GAME_DATE"] = pd.to_datetime(df["GAME_DATE"], errors="coerce")
+        for c in _COLS:
             if c not in df.columns:
                 df[c] = None
-        mask = df["MATCHUP"].astype(str).str.contains(opp_abbr, na=False)
-        return df[mask][["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A"]]
+        mask = df["MATCHUP"].apply(_matches)
+        result = df[mask][_COLS].copy()
+        return result
 
-    # Fetch all 3 seasons in parallel with hard timeout
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:
-        futures = {ex.submit(_fetch_season, yr): yr
-                   for yr in [start_year, start_year - 1, start_year - 2]}
-        for future in concurrent.futures.as_completed(futures, timeout=20):
+    # Fetch last 3 regular seasons in parallel
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+        reg_futures = {ex.submit(_fetch_season, yr, "Regular Season"): yr
+                       for yr in [start_year, start_year - 1, start_year - 2]}
+
+        # In playoffs, also fetch current season playoff logs
+        po_future = None
+        import datetime as _dt2
+        _td2 = _dt2.date.today()
+        _in_po = ((_td2.month == 4 and _td2.day >= 14) or _td2.month == 5 or
+                  (_td2.month == 6 and _td2.day <= 25))
+        if _in_po:
+            po_future = ex.submit(_fetch_season, start_year, "Playoffs")
+
+        for future in concurrent.futures.as_completed(reg_futures, timeout=25):
             try:
                 df = future.result(timeout=15)
                 if not df.empty:
@@ -1191,12 +1220,23 @@ def get_h2h_logs(player_id: int, opp_abbr: str, season: str, _date: str = None) 
             except Exception:
                 pass
 
+        # Get playoff results
+        if po_future:
+            try:
+                po_df = po_future.result(timeout=15)
+                if not po_df.empty:
+                    all_rows.append(po_df)
+            except Exception:
+                pass
+
     if not all_rows:
         return empty
 
-    combined = pd.concat(all_rows).sort_values("GAME_DATE", ascending=False).reset_index(drop=True)
+    combined = pd.concat(all_rows, ignore_index=True)
     combined["GAME_DATE"] = pd.to_datetime(combined["GAME_DATE"], errors="coerce")
-    # Return full history — caller splits into series vs reg season
+    combined = combined.sort_values("GAME_DATE", ascending=False).reset_index(drop=True)
+    # Deduplicate (in case any game appears in both regular + playoff fetch)
+    combined = combined.drop_duplicates(subset=["GAME_DATE","PTS"]).reset_index(drop=True)
     return combined
 
 
@@ -6635,15 +6675,20 @@ if st.session_state.logs is not None:
             _h2h_full = pd.DataFrame()
 
         # Split H2H: series games (signal) + reg season (context)
-        # IMPORTANT: h2h_df = ALL history for signal, _reg_h2h_df = reg season only for context
         if _IS_PLAYOFFS and not _h2h_full.empty:
             try:
                 _playoff_start = pd.Timestamp("2026-04-14")
                 _h2h_dates     = pd.to_datetime(_h2h_full["GAME_DATE"], errors="coerce")
                 _series_df     = _h2h_full[_h2h_dates >= _playoff_start].reset_index(drop=True)
                 _reg_h2h_df    = _h2h_full[_h2h_dates <  _playoff_start].reset_index(drop=True)
-                # Use series games for signal if we have any; else fall back to reg season
-                h2h_df = _series_df if not _series_df.empty else _reg_h2h_df
+                if not _series_df.empty:
+                    # Have series games — use for signal, show reg as footnote
+                    h2h_df = _series_df
+                elif not _reg_h2h_df.empty:
+                    # No series games yet — fall back to reg season for signal
+                    h2h_df = _reg_h2h_df
+                else:
+                    h2h_df = _h2h_full
             except Exception:
                 h2h_df      = _h2h_full
                 _reg_h2h_df = pd.DataFrame()
