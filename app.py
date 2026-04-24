@@ -5096,191 +5096,128 @@ if st.session_state.active_sport == "mlb":
             return empty
 
 
-    @st.cache_data(ttl=900, show_spinner=False)
+    @st.cache_data(ttl=3600, show_spinner=False)
     def mlb_get_savant_stats(player_name: str) -> dict:
         """
-        Fetch real SwStr% and velocity from Baseball Savant.
-        Uses the statcast search / expected stats CSV endpoint.
-        Returns: {swstr_pct, velo, k_pct, bb_pct, xfip}
+        Fetch SwStr%/whiff rate and fastball velocity.
+        3-method fallback: pitch-arsenal-stats CSV → statcast leaderboard → MLB Stats K%
         """
-        empty = {"swstr_pct": None, "velo": None, "k_pct": None,
-                 "bb_pct": None, "xfip": None}
+        empty = {"swstr_pct": None, "velo": None, "k_pct": None, "bb_pct": None}
+        if not player_name: return empty
         try:
             import requests as _req, io, datetime as _dtx
-            _norm   = lambda s: s.lower().strip().replace(".", "").replace("-"," ")
+            _norm   = lambda s: s.lower().strip().replace(".", "").replace("-", " ")
             _target = _norm(player_name)
             _parts  = [p for p in _target.split() if len(p) > 2]
             _last   = _target.split()[-1]
             season  = _dtx.datetime.now().year
-            _HDRS   = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                                     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                       "Referer":    "https://baseballsavant.mlb.com/"}
+            _HDRS   = {
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                              "AppleWebKit/537.36 Chrome/124.0 Safari/537.36",
+                "Referer":    "https://baseballsavant.mlb.com/",
+            }
 
-            # Method 1: Expected stats leaderboard (most reliable CSV)
-            for _yr in [season, season - 1]:
+            def _find_row(df, nc):
+                df["_n2"] = df[nc].astype(str).apply(
+                    lambda n: _norm(" ".join(reversed(n.split(", "))) if ", " in n else n))
+                r = df[df["_n2"] == _target]
+                if r.empty: r = df[df["_n2"].apply(lambda n: all(p in n for p in _parts))]
+                if r.empty: r = df[df["_n2"].apply(lambda n: _last in n)]
+                return r.iloc[0] if not r.empty else None
+
+            def _get(row, df, *cols):
+                for col in cols:
+                    for c in df.columns:
+                        if col.lower() in c.lower() and "exit" not in c.lower():
+                            try:
+                                v = float(row[c])
+                                if not pd.isna(v): return v
+                            except: pass
+                return None
+
+            # Method 1: pitch-arsenal-stats — has avg_speed + whiff_percent
+            for _yr in [season, season-1]:
                 try:
                     r = _req.get(
-                        "https://baseballsavant.mlb.com/leaderboard/expected_statistics",
-                        params={"type":"pitcher","year":_yr,"position":"SP",
-                                "team":"","min":"10","csv":"true"},
-                        headers=_HDRS, timeout=12
-                    )
-                    if not r.ok or len(r.text) < 100:
-                        continue
-
-                    df = pd.read_csv(io.StringIO(r.text))
-                    if df.empty:
-                        continue
-
-                    # Find name column
-                    name_col = next((c for c in df.columns
-                                    if c.lower() in ("last_name, first_name","player_name",
-                                                     "name","fullname","last_name")), None)
-                    if not name_col:
-                        name_col = next((c for c in df.columns
-                                        if "name" in c.lower()), None)
-                    if not name_col:
-                        continue
-
-                    # Normalize names — Savant uses "Last, First" format
-                    df["_norm"] = df[name_col].astype(str).apply(
-                        lambda n: _norm(" ".join(reversed(n.split(", ")))
-                                        if ", " in n else n)
-                    )
-
-                    row = df[df["_norm"] == _target]
-                    if row.empty:
-                        row = df[df["_norm"].apply(
-                            lambda n: all(p in n for p in _parts))]
-                    if row.empty:
-                        row = df[df["_norm"].apply(lambda n: _last in n)]
-                    if row.empty:
-                        continue
-
-                    row = row.iloc[0]
-
-                    def _safe(cols, mult=1.0):
-                        for col in (cols if isinstance(cols, list) else [cols]):
-                            matches = [c for c in df.columns if col.lower() in c.lower()]
-                            for m in matches:
-                                try:
-                                    v = float(row[m])
-                                    if not pd.isna(v):
-                                        return round(v * mult, 3)
-                                except:
-                                    pass
-                        return None
-
-                    result = {
-                        "swstr_pct": _safe(["whiff_percent","whiff_pct","swstr_pct","swstr"], 0.01),
-                        # Fastball velocity — explicitly avoid exit_velocity (batter stat)
-                        "velo":      (_safe(["p_formatted_speed","fastball_avg_speed",
-                                             "fb_velocity","ff_avg_speed","si_avg_speed",
-                                             "release_speed_avg"]) or None),
-                        "k_pct":     _safe(["k_percent","strikeout_percent"], 0.01),
-                        "bb_pct":    _safe(["bb_percent","walk_percent"], 0.01),
-                        "xfip":      _safe(["xfip","p_era","xera"]),
-                    }
-                    # Sanity check velo — fastball should be 80-105mph
-                    # Exit velocity is typically 85-115mph but that's a batter metric
-                    if result.get("velo") and (result["velo"] > 105 or result["velo"] < 75):
-                        result["velo"] = None  # reject implausible value
-                    # Must have at least whiff or velo
-                    if result["swstr_pct"] or result["k_pct"]:
-                        return result
+                        "https://baseballsavant.mlb.com/leaderboard/pitch-arsenal-stats",
+                        params={"type":"pitcher","pitchType":"","year":_yr,
+                                "team":"","min":10,"csv":"true"},
+                        headers=_HDRS, timeout=12)
+                    if not r.ok or len(r.text.strip()) < 200: continue
+                    df = pd.read_csv(io.StringIO(r.text), low_memory=False)
+                    nc = next((c for c in df.columns if "name" in c.lower()), None)
+                    if nc is None or df.empty: continue
+                    row = _find_row(df, nc)
+                    if row is None: continue
+                    velo  = _get(row, df, "avg_speed","mph","velocity","release_speed")
+                    whiff = _get(row, df, "whiff_percent","whiff_pct","whiff","swstr")
+                    if whiff and whiff > 1: whiff = round(whiff/100, 3)
+                    if velo and (velo > 103 or velo < 75): velo = None
+                    if velo or whiff:
+                        return {"swstr_pct": whiff, "velo": velo,
+                                "k_pct": None, "bb_pct": None}
                 except Exception:
                     continue
 
-            # Method 2: Pitch arsenal leaderboard — has fastball velocity
-            try:
-                r2 = _req.get(
-                    "https://baseballsavant.mlb.com/leaderboard/pitch-arsenals",
-                    params={"year":season,"min":10,"type":"pitcher","hand":"","csv":"true"},
-                    headers=_HDRS, timeout=12
-                )
-                if r2.ok and len(r2.text) > 100:
-                    df2 = pd.read_csv(io.StringIO(r2.text))
-                    if not df2.empty:
-                        nc = next((c for c in df2.columns if "name" in c.lower()), None)
-                        if nc:
-                            df2["_norm"] = df2[nc].astype(str).apply(
-                                lambda n: _norm(" ".join(reversed(n.split(", ")))
-                                               if ", " in n else n))
-                            row2 = df2[df2["_norm"].apply(
-                                lambda n: all(p in n for p in _parts))]
-                            if row2.empty:
-                                row2 = df2[df2["_norm"].apply(lambda n: _last in n)]
-                            if not row2.empty:
-                                row2 = row2.iloc[0]
-                                def _s2(cols):
-                                    for c in (cols if isinstance(cols, list) else [cols]):
-                                        ms = [x for x in df2.columns
-                                              if c.lower() in x.lower() and
-                                              "exit" not in x.lower()]
-                                        for m in ms:
-                                            try:
-                                                v = float(row2[m])
-                                                if not pd.isna(v): return round(v, 3)
-                                            except: pass
-                                    return None
-                                _v = _s2(["avg_speed","mph","velocity","fb_speed",
-                                           "ff_speed","si_speed","ft_speed"])
-                                # Pitch arsenal velo sanity check
-                                if _v and (_v > 103 or _v < 75):
-                                    _v = None
-                                return {
-                                    "swstr_pct": _s2(["whiff","swstr"]),
-                                    "velo":      _v,
-                                    "k_pct":     None,
-                                    "bb_pct":    None,
-                                    "xfip":      None,
-                                }
-            except Exception:
-                pass
+            # Method 2: Savant statcast leaderboard
+            for _yr in [season, season-1]:
+                try:
+                    r2 = _req.get(
+                        "https://baseballsavant.mlb.com/leaderboard/statcast",
+                        params={"type":"pitcher","year":_yr,"position":"SP",
+                                "team":"","min":10,"csv":"true"},
+                        headers=_HDRS, timeout=12)
+                    if not r2.ok or len(r2.text.strip()) < 200: continue
+                    df2 = pd.read_csv(io.StringIO(r2.text), low_memory=False)
+                    nc2 = next((c for c in df2.columns if "name" in c.lower()), None)
+                    if nc2 is None or df2.empty: continue
+                    row2 = _find_row(df2, nc2)
+                    if row2 is None: continue
+                    v2 = _get(row2, df2, "avg_speed","p_formatted_speed","release_speed")
+                    w2 = _get(row2, df2, "whiff_percent","swstr_pct","whiff")
+                    k2 = _get(row2, df2, "k_percent","strikeout_percent")
+                    if w2 and w2 > 1: w2 = round(w2/100, 3)
+                    if k2 and k2 > 1: k2 = round(k2/100, 3)
+                    if v2 and (v2 > 103 or v2 < 75): v2 = None
+                    if v2 or w2 or k2:
+                        return {"swstr_pct": w2, "velo": v2, "k_pct": k2, "bb_pct": None}
+                except Exception:
+                    continue
 
-            # Method 3: MLB Stats API season stats as SwStr proxy
-            # Better than nothing when Savant is unavailable
-            try:
-                _pr = _req.get(
-                    "https://statsapi.mlb.com/api/v1/sports/1/players",
-                    params={"season":season,"gameType":"R"}, timeout=8
-                )
-                if _pr.ok:
+            # Method 3: MLB Stats API K% — always works
+            for _yr in [season, season-1]:
+                try:
+                    _pr = _req.get(
+                        "https://statsapi.mlb.com/api/v1/sports/1/players",
+                        params={"season":_yr,"gameType":"R"}, timeout=8)
+                    if not _pr.ok: continue
                     _ppl = _pr.json().get("people",[])
-                    _pp  = next((p for p in _ppl
-                                 if all(pt in _norm(p.get("fullName",""))
-                                        for pt in _parts)), None)
+                    _pp = next((p for p in _ppl
+                               if all(pt in _norm(p.get("fullName",""))
+                                      for pt in _parts)), None)
                     if not _pp:
                         _pp = next((p for p in _ppl
                                    if _last in _norm(p.get("fullName","")) and
                                    p.get("primaryPosition",{}).get("code")=="1"), None)
-                    if _pp:
-                        _sr = _req.get(
-                            f"https://statsapi.mlb.com/api/v1/people/{_pp['id']}/stats",
-                            params={"stats":"season","group":"pitching","season":season},
-                            timeout=8
-                        )
-                        if _sr.ok:
-                            _st = _sr.json().get("stats",[{}])[0].get("splits",[{}])
-                            _st = _st[0].get("stat",{}) if _st else {}
-                            _bf  = int(_st.get("battersFaced",0) or 0)
-                            _ks  = int(_st.get("strikeOuts",0) or 0)
-                            if _bf >= 20:
-                                return {
-                                    "swstr_pct": None,
-                                    "velo":      None,
-                                    "k_pct":     round(_ks/_bf, 3),
-                                    "bb_pct":    None,
-                                    "xfip":      None,
-                                    "_source":   "MLB Stats API K%"
-                                }
-            except Exception:
-                pass
+                    if not _pp: continue
+                    _sr = _req.get(
+                        f"https://statsapi.mlb.com/api/v1/people/{_pp['id']}/stats",
+                        params={"stats":"season","group":"pitching",
+                                "season":_yr,"gameType":"R"}, timeout=8)
+                    if not _sr.ok: continue
+                    _st = _sr.json().get("stats",[{}])[0].get("splits",[{}])
+                    _st = _st[0].get("stat",{}) if _st else {}
+                    _bf = int(_st.get("battersFaced",0) or 0)
+                    _ks = int(_st.get("strikeOuts",0) or 0)
+                    if _bf >= 30:
+                        return {"swstr_pct": None, "velo": None,
+                                "k_pct": round(_ks/_bf, 3), "bb_pct": None}
+                except Exception:
+                    continue
 
         except Exception:
             pass
         return empty
-
 
     @st.cache_data(ttl=900, show_spinner=False)
     def mlb_get_batting_order(opp_abbr: str, game_date: str = "") -> dict:
