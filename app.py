@@ -6018,7 +6018,7 @@ if st.session_state.active_sport == "mlb":
                     )
 
             # Label current vs prior season in table
-            _cur_year = datetime.datetime.now().year
+            import datetime as _dt_mlb; _cur_year = _dt_mlb.datetime.now().year
             _d = mlb_logs.copy()
             _d["HIT"] = _d[_stat].apply(lambda x:"✅" if (mlb_side=="Over" and float(x)>=mlb_line) or (mlb_side=="Under" and float(x)<=mlb_line) else "❌")
             _d["YR"]  = pd.to_datetime(_d["DATE"]).dt.year.astype(str)
