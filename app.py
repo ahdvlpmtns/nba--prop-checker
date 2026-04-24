@@ -5191,12 +5191,11 @@ if st.session_state.active_sport == "mlb":
                 except Exception:
                     continue
 
-            # Method 2: Statcast search by player name
+            # Method 2: Pitch arsenal leaderboard — has fastball velocity
             try:
                 r2 = _req.get(
-                    "https://baseballsavant.mlb.com/leaderboard/statcast",
-                    params={"type":"pitcher","year":season,"position":"","team":"",
-                            "min":"10","csv":"true"},
+                    "https://baseballsavant.mlb.com/leaderboard/pitch-arsenals",
+                    params={"year":season,"min":10,"type":"pitcher","hand":"","csv":"true"},
                     headers=_HDRS, timeout=12
                 )
                 if r2.ok and len(r2.text) > 100:
@@ -5207,18 +5206,73 @@ if st.session_state.active_sport == "mlb":
                             df2["_norm"] = df2[nc].astype(str).apply(
                                 lambda n: _norm(" ".join(reversed(n.split(", ")))
                                                if ", " in n else n))
-                            row2 = df2[df2["_norm"].apply(lambda n: _last in n)]
+                            row2 = df2[df2["_norm"].apply(
+                                lambda n: all(p in n for p in _parts))]
+                            if row2.empty:
+                                row2 = df2[df2["_norm"].apply(lambda n: _last in n)]
                             if not row2.empty:
                                 row2 = row2.iloc[0]
-                                def _s2(c):
-                                    ms = [x for x in df2.columns if c in x.lower()]
-                                    return round(float(row2[ms[0]]),3) if ms else None
+                                def _s2(cols):
+                                    for c in (cols if isinstance(cols, list) else [cols]):
+                                        ms = [x for x in df2.columns
+                                              if c.lower() in x.lower() and
+                                              "exit" not in x.lower()]
+                                        for m in ms:
+                                            try:
+                                                v = float(row2[m])
+                                                if not pd.isna(v): return round(v, 3)
+                                            except: pass
+                                    return None
+                                _v = _s2(["avg_speed","mph","velocity","fb_speed",
+                                           "ff_speed","si_speed","ft_speed"])
+                                # Pitch arsenal velo sanity check
+                                if _v and (_v > 103 or _v < 75):
+                                    _v = None
                                 return {
-                                    "swstr_pct": _s2("whiff") or _s2("swstr"),
-                                    "velo":      _s2("speed") or _s2("velo"),
-                                    "k_pct":     _s2("k_percent"),
-                                    "bb_pct":    _s2("bb_percent"),
+                                    "swstr_pct": _s2(["whiff","swstr"]),
+                                    "velo":      _v,
+                                    "k_pct":     None,
+                                    "bb_pct":    None,
                                     "xfip":      None,
+                                }
+            except Exception:
+                pass
+
+            # Method 3: MLB Stats API season stats as SwStr proxy
+            # Better than nothing when Savant is unavailable
+            try:
+                _pr = _req.get(
+                    "https://statsapi.mlb.com/api/v1/sports/1/players",
+                    params={"season":season,"gameType":"R"}, timeout=8
+                )
+                if _pr.ok:
+                    _ppl = _pr.json().get("people",[])
+                    _pp  = next((p for p in _ppl
+                                 if all(pt in _norm(p.get("fullName",""))
+                                        for pt in _parts)), None)
+                    if not _pp:
+                        _pp = next((p for p in _ppl
+                                   if _last in _norm(p.get("fullName","")) and
+                                   p.get("primaryPosition",{}).get("code")=="1"), None)
+                    if _pp:
+                        _sr = _req.get(
+                            f"https://statsapi.mlb.com/api/v1/people/{_pp['id']}/stats",
+                            params={"stats":"season","group":"pitching","season":season},
+                            timeout=8
+                        )
+                        if _sr.ok:
+                            _st = _sr.json().get("stats",[{}])[0].get("splits",[{}])
+                            _st = _st[0].get("stat",{}) if _st else {}
+                            _bf  = int(_st.get("battersFaced",0) or 0)
+                            _ks  = int(_st.get("strikeOuts",0) or 0)
+                            if _bf >= 20:
+                                return {
+                                    "swstr_pct": None,
+                                    "velo":      None,
+                                    "k_pct":     round(_ks/_bf, 3),
+                                    "bb_pct":    None,
+                                    "xfip":      None,
+                                    "_source":   "MLB Stats API K%"
                                 }
             except Exception:
                 pass
@@ -5963,10 +6017,24 @@ if st.session_state.active_sport == "mlb":
                         unsafe_allow_html=True
                     )
 
-            st.markdown("<div class='section-header'>Last 10 Starts</div>",unsafe_allow_html=True)
+            # Label current vs prior season in table
+            _cur_year = datetime.datetime.now().year
             _d = mlb_logs.copy()
             _d["HIT"] = _d[_stat].apply(lambda x:"✅" if (mlb_side=="Over" and float(x)>=mlb_line) or (mlb_side=="Under" and float(x)<=mlb_line) else "❌")
-            _d["DATE"] = _d["DATE"].dt.strftime("%b %d")
+            _d["YR"]  = pd.to_datetime(_d["DATE"]).dt.year.astype(str)
+            _d["DATE"] = pd.to_datetime(_d["DATE"]).dt.strftime("%b %d")
+            _d["DATE"] = _d.apply(lambda r: r["DATE"] + (" ✦" if str(r["YR"]) != str(_cur_year) else ""), axis=1)
+            _cur_starts  = (pd.to_datetime(mlb_logs["DATE"]).dt.year == _cur_year).sum()
+            _prev_starts = len(mlb_logs) - _cur_starts
+            _season_note = ""
+            if _prev_starts > 0:
+                _season_note = (f"<div style='font-family:JetBrains Mono,monospace;font-size:0.6rem;"
+                                f"color:#ffc107;margin-bottom:6px;'>"
+                                f"⚠️ {_cur_starts} start{'s' if _cur_starts!=1 else ''} in {_cur_year} · "
+                                f"{_prev_starts} from prior season (marked ✦) — early season, small sample</div>")
+            st.markdown("<div class='section-header'>Last 10 Starts</div>", unsafe_allow_html=True)
+            if _season_note:
+                st.markdown(_season_note, unsafe_allow_html=True)
             st.dataframe(_d[["DATE","OPP","IP","K","OUTS","BB","ER","HIT"]],use_container_width=True,hide_index=True)
 
             tier_emoji={"Strong Over":"🟢","Lean Over":"🟡","Strong Under":"🔴","Lean Under":"🟠","Pass":"⚪"}
