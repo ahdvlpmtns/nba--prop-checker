@@ -5172,12 +5172,19 @@ if st.session_state.active_sport == "mlb":
                         return None
 
                     result = {
-                        "swstr_pct": _safe(["whiff_percent","whiff","swstr"], 0.01),
-                        "velo":      _safe(["exit_velocity_avg","launch_speed_avg"]),
-                        "k_pct":     _safe(["k_percent","strikeout"], 0.01),
-                        "bb_pct":    _safe(["bb_percent","walk"], 0.01),
-                        "xfip":      _safe(["xfip","xera"]),
+                        "swstr_pct": _safe(["whiff_percent","whiff_pct","swstr_pct","swstr"], 0.01),
+                        # Fastball velocity — explicitly avoid exit_velocity (batter stat)
+                        "velo":      (_safe(["p_formatted_speed","fastball_avg_speed",
+                                             "fb_velocity","ff_avg_speed","si_avg_speed",
+                                             "release_speed_avg"]) or None),
+                        "k_pct":     _safe(["k_percent","strikeout_percent"], 0.01),
+                        "bb_pct":    _safe(["bb_percent","walk_percent"], 0.01),
+                        "xfip":      _safe(["xfip","p_era","xera"]),
                     }
+                    # Sanity check velo — fastball should be 80-105mph
+                    # Exit velocity is typically 85-115mph but that's a batter metric
+                    if result.get("velo") and (result["velo"] > 105 or result["velo"] < 75):
+                        result["velo"] = None  # reject implausible value
                     # Must have at least whiff or velo
                     if result["swstr_pct"] or result["k_pct"]:
                         return result
@@ -5546,7 +5553,13 @@ if st.session_state.active_sport == "mlb":
             # ── Signal 5: Recent form — L3 vs season avg
             _l3_avg    = pd.to_numeric(mlb_logs.head(3)[_stat], errors="coerce").dropna().mean()
             _form_diff = float(_l3_avg - avg_val) if not pd.isna(_l3_avg) else 0.0
-            _form_adj  = +0.05 if _form_diff >= 1.5 else (-0.05 if _form_diff <= -1.5 else 0.0)
+            # Lower threshold for pitchers — 0.8 K difference is meaningful
+            # (NBA used 1.5 pts but pitchers average 4-7 Ks so 1.5 is too strict)
+            if _form_diff >= 1.2:    _form_adj = +0.05   # trending up
+            elif _form_diff >= 0.6:  _form_adj = +0.02   # slight uptrend
+            elif _form_diff <= -1.2: _form_adj = -0.05   # trending down
+            elif _form_diff <= -0.6: _form_adj = -0.02   # slight downtrend
+            else:                    _form_adj = 0.0
 
             # ── Signal 6: Rest days
             _rest_adj  = 0.0
@@ -5562,51 +5575,71 @@ if st.session_state.active_sport == "mlb":
             # ── Signal 7: K/9 rate — current season, fallback to prior season ──
             _k9 = _pstats.get("k9", 0.0)
 
-            # If current season has very few starts (<5), K/9 is unreliable
-            # Fall back to prior season K/9 from game logs
+            # K/9 fallback priority:
+            # 1. Current season stats API (if 5+ starts)
+            # 2. Prior season stats API (most reliable — full season sample)
+            # 3. Current game logs (last resort — small sample)
+            # 4. Neutral (no adjustment) — never penalize without data
             _k9_source = "2026"
-            if (_k9 == 0.0 or _pstats.get("starts", 0) < 5) and not mlb_logs.empty:
-                try:
-                    # Estimate K/9 from logs: total Ks / total IP * 9
-                    _log_ks  = pd.to_numeric(mlb_logs["K"],    errors="coerce").dropna().sum()
-                    _log_ips = mlb_logs["IP"].apply(lambda x: (
-                        int(str(x).split(".")[0]) + int(str(x).split(".")[1])/3
-                        if "." in str(x) else float(str(x) or 0)
-                    )).sum()
-                    if _log_ips >= 10:  # need at least 10 IP for a meaningful estimate
-                        _k9 = round(_log_ks / _log_ips * 9, 2)
-                        _k9_source = "logs"
-                except Exception:
-                    pass
+            _needs_fallback = (_k9 == 0.0 or _pstats.get("starts", 0) < 5)
 
-                # Also try prior season stats API
-                if _k9 == 0.0:
-                    try:
-                        import requests as _req2, datetime as _dtx2
-                        _pid_r = _req2.get(
-                            "https://statsapi.mlb.com/api/v1/sports/1/players",
-                            params={"season": _dtx2.datetime.now().year, "gameType": "R"},
-                            timeout=8
-                        )
-                        if _pid_r.ok:
-                            _norm2 = lambda s: s.lower().strip()
-                            _ppl   = _pid_r.json().get("people", [])
-                            _pp    = next((p for p in _ppl
-                                          if _norm2(p.get("fullName","")) == _norm2(mlb_pitcher)), None)
-                            if _pp:
+            if _needs_fallback:
+                # Try prior season stats API first (best sample size)
+                try:
+                    import requests as _req2, datetime as _dtx2
+                    _pid_r = _req2.get(
+                        "https://statsapi.mlb.com/api/v1/sports/1/players",
+                        params={"season": _dtx2.datetime.now().year, "gameType": "R"},
+                        timeout=8
+                    )
+                    if _pid_r.ok:
+                        _norm2 = lambda s: s.lower().strip()
+                        _ppl   = _pid_r.json().get("people", [])
+                        _pp    = next((p for p in _ppl
+                                      if _norm2(p.get("fullName","")) == _norm2(mlb_pitcher)), None)
+                        if not _pp:
+                            _last_p = _norm2(mlb_pitcher).split()[-1]
+                            _pp = next((p for p in _ppl
+                                       if _last_p in _norm2(p.get("fullName","")) and
+                                       p.get("primaryPosition",{}).get("code")=="1"), None)
+                        if _pp:
+                            for _prev_yr in [_dtx2.datetime.now().year - 1,
+                                             _dtx2.datetime.now().year - 2]:
                                 _prev = _req2.get(
                                     f"https://statsapi.mlb.com/api/v1/people/{_pp['id']}/stats",
                                     params={"stats":"season","group":"pitching",
-                                            "season": _dtx2.datetime.now().year - 1},
+                                            "season": _prev_yr, "gameType":"R"},
                                     timeout=8
                                 )
                                 if _prev.ok:
-                                    _ps = _prev.json().get("stats",[{}])[0].get("splits",[{}])[0].get("stat",{})
-                                    _ip_s = str(_ps.get("inningsPitched","0"))
-                                    _ip_f = float(_ip_s.split(".")[0]) + float("0."+_ip_s.split(".")[1])/3 if "." in _ip_s else float(_ip_s or 0)
-                                    if _ip_f > 0:
+                                    _ps  = _prev.json().get("stats",[{}])[0].get("splits",[{}])
+                                    _ps  = _ps[0].get("stat",{}) if _ps else {}
+                                    _ip_s = str(_ps.get("inningsPitched","0") or "0")
+                                    try:
+                                        _ip_f = (float(_ip_s.split(".")[0]) +
+                                                 float("0."+_ip_s.split(".")[1])/3
+                                                 if "." in _ip_s else float(_ip_s))
+                                    except:
+                                        _ip_f = 0.0
+                                    if _ip_f >= 30:  # at least 30 IP for reliable K/9
                                         _k9 = round(float(_ps.get("strikeOuts",0)) / _ip_f * 9, 2)
-                                        _k9_source = "2025"
+                                        _k9_source = str(_prev_yr)
+                                        break
+                except Exception:
+                    pass
+
+                # Last resort: estimate from current game logs (small sample — use cautiously)
+                if _k9 == 0.0 and not mlb_logs.empty:
+                    try:
+                        _log_ks = pd.to_numeric(mlb_logs["K"], errors="coerce").dropna().sum()
+                        _log_ips = mlb_logs["IP"].apply(lambda x: (
+                            float(str(x).split(".")[0]) +
+                            float("0."+str(x).split(".")[1])/3
+                            if "." in str(x) else float(str(x) or 0)
+                        )).sum()
+                        if _log_ips >= 15:  # need at least 15 IP — ~3 starts
+                            _k9 = round(_log_ks / _log_ips * 9, 2)
+                            _k9_source = "logs (small sample)"
                     except Exception:
                         pass
 
@@ -5655,6 +5688,9 @@ if st.session_state.active_sport == "mlb":
                     _ip_note = f"Avg {_avg_ip:.1f} IP → ~{_expected_k:.1f} Ks expected"
 
             # ── Signal 9b: Fastball velocity from Savant
+            # Sanity check — pitcher fastball should be 80-103mph
+            if _velo and (_velo > 103 or _velo < 75):
+                _velo = None  # reject exit velocity or other bad data
             _velo_adj = 0.0
             if _velo and _velo > 0:
                 if _velo >= 97:    _velo_adj = +0.05  # elite velocity
