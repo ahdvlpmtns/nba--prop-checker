@@ -5193,10 +5193,13 @@ if st.session_state.active_sport == "mlb":
                     if nc is None or df.empty: continue
                     row = _find_row(df, nc)
                     if row is None: continue
-                    # Log available columns for debugging
-                    _spd_cols = [c for c in df.columns 
-                                 if any(x in c.lower() for x in ["speed","mph","velo","release"])]
+                    # Scan ALL numeric columns for velocity range
+                    _all_cols = list(df.columns)
                     velo = None
+                    # First try obvious speed columns
+                    _spd_cols = [c for c in _all_cols 
+                                 if any(x in c.lower() for x in 
+                                        ["speed","mph","velo","release","fb","ff","si","fc"])]
                     for _sc in _spd_cols:
                         try:
                             _v = float(row[_sc])
@@ -5204,11 +5207,24 @@ if st.session_state.active_sport == "mlb":
                                 velo = round(_v, 1)
                                 break
                         except: pass
+                    # If still no velo, scan ALL numeric columns for MLB velo range
+                    if not velo:
+                        for _sc in _all_cols:
+                            if _sc.startswith("_"): continue
+                            try:
+                                _v = float(row[_sc])
+                                if 82 < _v < 103:  # tighter range to avoid false positives
+                                    velo = round(_v, 1)
+                                    break
+                            except: pass
                     whiff = _get(row, df, "whiff_percent","whiff_pct","whiff","swstr")
                     if whiff and whiff > 1: whiff = round(whiff/100, 3)
+                    # Store column names for debugging
+                    _savant_cols = _all_cols
                     if velo or whiff:
                         return {"swstr_pct": whiff, "velo": velo,
-                                "k_pct": None, "bb_pct": None}
+                                "k_pct": None, "bb_pct": None,
+                                "_cols": _savant_cols}
                 except Exception:
                     continue
 
@@ -5732,13 +5748,17 @@ if st.session_state.active_sport == "mlb":
                     _ip_note = f"Avg {_avg_ip:.1f} IP → ~{_expected_k:.1f} Ks expected"
 
             # ── Signal 9b: Fastball velocity
-            # Primary: MLB Stats API pitchMix (most reliable, same API as K/9)
-            # Fallback: Savant CSV
+            # Priority order: pstats pitchMix → Savant CSV
             if not _velo and _pstats.get("velo"):
                 _velo = _pstats["velo"]
-            # Sanity check — pitcher fastball should be 75-103mph
+            # Sanity check
             if _velo and (_velo > 103 or _velo < 75):
                 _velo = None
+            # Last resort: estimate from K/9 + SwStr% pattern
+            # Pitchers with high K/9 (9+) and low SwStr% tend to have
+            # above-avg velo even if we can't fetch it
+            if not _velo and _k9 >= 9.0:
+                _velo = None  # still don't guess — just leave N/A
             _velo_adj = 0.0
             if _velo and _velo > 0:
                 if _velo >= 97:    _velo_adj = +0.05  # elite velocity
@@ -6127,7 +6147,8 @@ if st.session_state.active_sport == "mlb":
                                                   f"{'Real whiff rate from Savant' if _swstr_real else 'K/BF proxy — Savant data unavailable'}"),
                     ("Fastball velocity",         f"{_velo:.1f}mph" if _velo else "N/A",
                                                   _velo_adj,
-                                                  f"{'Elite velo (97+)' if (_velo or 0)>=97 else 'Hard (94+)' if (_velo or 0)>=94 else 'Avg' if (_velo or 0)>=91 else 'Soft (<91)' if _velo else 'Savant data unavailable'}"),
+                                                  f"{'Elite velo (97+)' if (_velo or 0)>=97 else 'Hard (94+)' if (_velo or 0)>=94 else 'Avg' if (_velo or 0)>=91 else 'Soft (<91)' if _velo else 'N/A — pitchMix & Savant CSV both unavailable'}"
+                                                  + (f" · pstats velo: {_pstats.get('velo','none')}" if not _velo else "")),
                     ("Avg IP/start",              f"{_avg_ip:.1f}" if _avg_ip>0 else "N/A",
                                                   _ip_adj,
                                                   f"{'Deep — more K opportunities' if _avg_ip>=6.5 else 'Average depth' if _avg_ip>=5.0 else '⚠️ Short leash — limits K ceiling'}" + (f" · {_ip_note}" if _ip_note else "")),
