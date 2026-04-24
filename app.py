@@ -5326,31 +5326,25 @@ if st.session_state.active_sport == "mlb":
 
     _mc1,_mc2,_mc3,_mc4 = st.columns([2.5,1,1,1])
     with _mc1:
-        mlb_pitcher_input = st.text_input(
-            "PITCHER — TYPE NAME",
-            placeholder="e.g. Gerrit Cole, Paul Skenes, Tarik Skubal...",
-            key="mlb_pitcher_input",
-            help="Type any MLB starting pitcher — full name or last name"
+        mlb_pitcher = st.selectbox(
+            "PITCHER — TYPE TO SEARCH",
+            options=[""] + _mlb_pitchers,
+            format_func=lambda x: "— type pitcher name to search —" if x == "" else x,
+            key=f"mlb_pitcher_sel_{st.session_state.get('mlb_pitcher_key', 0)}",
         )
-        # Live suggestions from pitcher list
-        if mlb_pitcher_input and len(mlb_pitcher_input) >= 2:
-            _suggestions = [p for p in _mlb_pitchers
-                           if mlb_pitcher_input.lower() in p.lower()][:5]
-            if _suggestions and mlb_pitcher_input.lower() not in [p.lower() for p in _suggestions]:
-                _sel = st.selectbox("Did you mean?", [""] + _suggestions,
-                                    key="mlb_pitcher_suggest",
-                                    format_func=lambda x: "— select —" if x=="" else x)
-                mlb_pitcher = _sel if _sel else mlb_pitcher_input
-            else:
-                mlb_pitcher = mlb_pitcher_input
-        else:
-            mlb_pitcher = mlb_pitcher_input
     with _mc2:
         mlb_prop = st.selectbox("Prop",["Strikeouts","Outs Recorded"],key="mlb_prop_type")
     with _mc3:
         mlb_line = st.number_input("Line",min_value=0.5,max_value=30.0,value=5.5,step=0.5,key="mlb_line")
     with _mc4:
         mlb_side = st.selectbox("Over / Under",["Over","Under"],key="mlb_side")
+
+    # Clear button
+    if mlb_pitcher:
+        if st.button("✕ Clear", key="mlb_clear_pitcher",
+                     help="Clear pitcher selection"):
+            st.session_state.mlb_pitcher_key = st.session_state.get("mlb_pitcher_key", 0) + 1
+            st.rerun()
 
     _tonight = mlb_get_tonight_game(mlb_pitcher) if mlb_pitcher else {}
     mlb_opp  = _tonight.get("opp","")
@@ -5382,8 +5376,11 @@ if st.session_state.active_sport == "mlb":
     mlb_fetch = st.button("⚾  Analyze Pitcher Prop", key="mlb_analyze")
 
     if not mlb_pitcher:
-        st.markdown("<div style='color:#555;font-family:JetBrains Mono,monospace;font-size:0.75rem;"
-                    "margin-top:0.5rem;'>↑ Select a pitcher to get started.</div>",unsafe_allow_html=True)
+        st.markdown(
+            "<div style='color:#6b7f96;font-family:JetBrains Mono,monospace;font-size:0.68rem;"
+            "margin-top:0.4rem;'>↑ Start typing a pitcher name — e.g. Valdez, Skubal, Sproat</div>",
+            unsafe_allow_html=True
+        )
 
     if mlb_fetch and mlb_pitcher:
         _stat = "K" if mlb_prop=="Strikeouts" else "OUTS"
