@@ -5099,87 +5099,126 @@ if st.session_state.active_sport == "mlb":
     @st.cache_data(ttl=900, show_spinner=False)
     def mlb_get_savant_stats(player_name: str) -> dict:
         """
-        Fetch real SwStr% and velocity from Baseball Savant leaderboard CSV.
-        Returns: {swstr_pct, velo, k_pct, bb_pct, xfip, stuff_plus}
+        Fetch real SwStr% and velocity from Baseball Savant.
+        Uses the statcast search / expected stats CSV endpoint.
+        Returns: {swstr_pct, velo, k_pct, bb_pct, xfip}
         """
         empty = {"swstr_pct": None, "velo": None, "k_pct": None,
                  "bb_pct": None, "xfip": None}
         try:
-            import requests as _req, io
-            _norm  = lambda s: s.lower().strip()
+            import requests as _req, io, datetime as _dtx
+            _norm   = lambda s: s.lower().strip().replace(".", "").replace("-"," ")
             _target = _norm(player_name)
             _parts  = [p for p in _target.split() if len(p) > 2]
             _last   = _target.split()[-1]
+            season  = _dtx.datetime.now().year
+            _HDRS   = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                                     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                       "Referer":    "https://baseballsavant.mlb.com/"}
 
-            import datetime as _dtx
-            season = _dtx.datetime.now().year
+            # Method 1: Expected stats leaderboard (most reliable CSV)
+            for _yr in [season, season - 1]:
+                try:
+                    r = _req.get(
+                        "https://baseballsavant.mlb.com/leaderboard/expected_statistics",
+                        params={"type":"pitcher","year":_yr,"position":"SP",
+                                "team":"","min":"10","csv":"true"},
+                        headers=_HDRS, timeout=12
+                    )
+                    if not r.ok or len(r.text) < 100:
+                        continue
 
-            # Baseball Savant pitching leaderboard CSV
-            r = _req.get(
-                "https://baseballsavant.mlb.com/leaderboard/custom",
-                params={
-                    "year":     season,
-                    "type":     "pitcher",
-                    "filter":   "",
-                    "min":      "10",  # min 10 PA
-                    "selections": "p_formatted_speed,p_k_percent,p_bb_percent,xfip,whiff_percent",
-                    "chart":    "false",
-                    "x":        "p_formatted_speed",
-                    "y":        "whiff_percent",
-                    "r":        "no",
-                    "csvonly":  "true",
-                },
-                headers={"User-Agent":"Mozilla/5.0","Referer":"https://baseballsavant.mlb.com/"},
-                timeout=12
-            )
-            if not r.ok or not r.text.strip():
-                # Fallback: standard pitcher leaderboard
+                    df = pd.read_csv(io.StringIO(r.text))
+                    if df.empty:
+                        continue
+
+                    # Find name column
+                    name_col = next((c for c in df.columns
+                                    if c.lower() in ("last_name, first_name","player_name",
+                                                     "name","fullname","last_name")), None)
+                    if not name_col:
+                        name_col = next((c for c in df.columns
+                                        if "name" in c.lower()), None)
+                    if not name_col:
+                        continue
+
+                    # Normalize names — Savant uses "Last, First" format
+                    df["_norm"] = df[name_col].astype(str).apply(
+                        lambda n: _norm(" ".join(reversed(n.split(", ")))
+                                        if ", " in n else n)
+                    )
+
+                    row = df[df["_norm"] == _target]
+                    if row.empty:
+                        row = df[df["_norm"].apply(
+                            lambda n: all(p in n for p in _parts))]
+                    if row.empty:
+                        row = df[df["_norm"].apply(lambda n: _last in n)]
+                    if row.empty:
+                        continue
+
+                    row = row.iloc[0]
+
+                    def _safe(cols, mult=1.0):
+                        for col in (cols if isinstance(cols, list) else [cols]):
+                            matches = [c for c in df.columns if col.lower() in c.lower()]
+                            for m in matches:
+                                try:
+                                    v = float(row[m])
+                                    if not pd.isna(v):
+                                        return round(v * mult, 3)
+                                except:
+                                    pass
+                        return None
+
+                    result = {
+                        "swstr_pct": _safe(["whiff_percent","whiff","swstr"], 0.01),
+                        "velo":      _safe(["exit_velocity_avg","launch_speed_avg"]),
+                        "k_pct":     _safe(["k_percent","strikeout"], 0.01),
+                        "bb_pct":    _safe(["bb_percent","walk"], 0.01),
+                        "xfip":      _safe(["xfip","xera"]),
+                    }
+                    # Must have at least whiff or velo
+                    if result["swstr_pct"] or result["k_pct"]:
+                        return result
+                except Exception:
+                    continue
+
+            # Method 2: Statcast search by player name
+            try:
                 r2 = _req.get(
-                    "https://baseballsavant.mlb.com/leaderboard/expected_statistics",
+                    "https://baseballsavant.mlb.com/leaderboard/statcast",
                     params={"type":"pitcher","year":season,"position":"","team":"",
-                            "min":"q","csv":"true"},
-                    headers={"User-Agent":"Mozilla/5.0"},
-                    timeout=10
+                            "min":"10","csv":"true"},
+                    headers=_HDRS, timeout=12
                 )
-                if not r2.ok: return empty
-                r = r2
+                if r2.ok and len(r2.text) > 100:
+                    df2 = pd.read_csv(io.StringIO(r2.text))
+                    if not df2.empty:
+                        nc = next((c for c in df2.columns if "name" in c.lower()), None)
+                        if nc:
+                            df2["_norm"] = df2[nc].astype(str).apply(
+                                lambda n: _norm(" ".join(reversed(n.split(", ")))
+                                               if ", " in n else n))
+                            row2 = df2[df2["_norm"].apply(lambda n: _last in n)]
+                            if not row2.empty:
+                                row2 = row2.iloc[0]
+                                def _s2(c):
+                                    ms = [x for x in df2.columns if c in x.lower()]
+                                    return round(float(row2[ms[0]]),3) if ms else None
+                                return {
+                                    "swstr_pct": _s2("whiff") or _s2("swstr"),
+                                    "velo":      _s2("speed") or _s2("velo"),
+                                    "k_pct":     _s2("k_percent"),
+                                    "bb_pct":    _s2("bb_percent"),
+                                    "xfip":      None,
+                                }
+            except Exception:
+                pass
 
-            df = pd.read_csv(io.StringIO(r.text))
-            if df.empty: return empty
-
-            # Normalize name column
-            name_col = next((c for c in df.columns
-                            if "name" in c.lower() or "player" in c.lower()), None)
-            if not name_col: return empty
-            df["_norm"] = df[name_col].astype(str).str.lower().str.strip()
-
-            # Match by name
-            row = df[df["_norm"] == _target]
-            if row.empty:
-                row = df[df["_norm"].apply(
-                    lambda n: all(p in n for p in _parts))]
-            if row.empty:
-                row = df[df["_norm"].apply(lambda n: _last in n)]
-            if row.empty:
-                return empty
-
-            row = row.iloc[0]
-
-            def _safe(col, mult=1.0):
-                candidates = [c for c in df.columns if col.lower() in c.lower()]
-                if not candidates: return None
-                try: return round(float(row[candidates[0]]) * mult, 2)
-                except: return None
-
-            return {
-                "swstr_pct": _safe("whiff", 0.01) or _safe("swstr", 0.01),
-                "velo":      _safe("speed") or _safe("velo") or _safe("fb_speed"),
-                "k_pct":     _safe("k_percent", 0.01) or _safe("k%", 0.01),
-                "bb_pct":    _safe("bb_percent", 0.01) or _safe("bb%", 0.01),
-                "xfip":      _safe("xfip"),
-            }
         except Exception:
-            return empty
+            pass
+        return empty
 
 
     @st.cache_data(ttl=900, show_spinner=False)
@@ -5520,14 +5559,67 @@ if st.session_state.active_sport == "mlb":
             except Exception:
                 pass
 
-            # ── Signal 7: K/9 rate (season) — pure strikeout ability
-            _k9     = _pstats.get("k9", 0.0)
+            # ── Signal 7: K/9 rate — current season, fallback to prior season ──
+            _k9 = _pstats.get("k9", 0.0)
+
+            # If current season has very few starts (<5), K/9 is unreliable
+            # Fall back to prior season K/9 from game logs
+            _k9_source = "2026"
+            if (_k9 == 0.0 or _pstats.get("starts", 0) < 5) and not mlb_logs.empty:
+                try:
+                    # Estimate K/9 from logs: total Ks / total IP * 9
+                    _log_ks  = pd.to_numeric(mlb_logs["K"],    errors="coerce").dropna().sum()
+                    _log_ips = mlb_logs["IP"].apply(lambda x: (
+                        int(str(x).split(".")[0]) + int(str(x).split(".")[1])/3
+                        if "." in str(x) else float(str(x) or 0)
+                    )).sum()
+                    if _log_ips >= 10:  # need at least 10 IP for a meaningful estimate
+                        _k9 = round(_log_ks / _log_ips * 9, 2)
+                        _k9_source = "logs"
+                except Exception:
+                    pass
+
+                # Also try prior season stats API
+                if _k9 == 0.0:
+                    try:
+                        import requests as _req2, datetime as _dtx2
+                        _pid_r = _req2.get(
+                            "https://statsapi.mlb.com/api/v1/sports/1/players",
+                            params={"season": _dtx2.datetime.now().year, "gameType": "R"},
+                            timeout=8
+                        )
+                        if _pid_r.ok:
+                            _norm2 = lambda s: s.lower().strip()
+                            _ppl   = _pid_r.json().get("people", [])
+                            _pp    = next((p for p in _ppl
+                                          if _norm2(p.get("fullName","")) == _norm2(mlb_pitcher)), None)
+                            if _pp:
+                                _prev = _req2.get(
+                                    f"https://statsapi.mlb.com/api/v1/people/{_pp['id']}/stats",
+                                    params={"stats":"season","group":"pitching",
+                                            "season": _dtx2.datetime.now().year - 1},
+                                    timeout=8
+                                )
+                                if _prev.ok:
+                                    _ps = _prev.json().get("stats",[{}])[0].get("splits",[{}])[0].get("stat",{})
+                                    _ip_s = str(_ps.get("inningsPitched","0"))
+                                    _ip_f = float(_ip_s.split(".")[0]) + float("0."+_ip_s.split(".")[1])/3 if "." in _ip_s else float(_ip_s or 0)
+                                    if _ip_f > 0:
+                                        _k9 = round(float(_ps.get("strikeOuts",0)) / _ip_f * 9, 2)
+                                        _k9_source = "2025"
+                    except Exception:
+                        pass
+
             _k9_adj = 0.0
-            if _k9 >= 10.5:  _k9_adj = +0.07   # elite swing-and-miss pitcher
-            elif _k9 >= 9.0: _k9_adj = +0.04   # above average
-            elif _k9 >= 7.5: _k9_adj = 0.0     # average
-            elif _k9 >= 6.0: _k9_adj = -0.04   # below average
-            else:            _k9_adj = -0.07   # contact pitcher — lean under
+            if _k9 >= 10.5:  _k9_adj = +0.07
+            elif _k9 >= 9.0: _k9_adj = +0.04
+            elif _k9 >= 7.5: _k9_adj = 0.0
+            elif _k9 >= 6.0: _k9_adj = -0.04
+            elif _k9 > 0:    _k9_adj = -0.07
+            # If still 0 — no data at all — use neutral, don't penalize
+            else:
+                _k9_adj = 0.0
+                _k9_source = "unknown"
 
             # ── Signal 8: Real SwStr% from Baseball Savant (whiff rate)
             # Use Savant real swinging strike % if available, else K/BF proxy
@@ -5929,9 +6021,9 @@ if st.session_state.active_sport == "mlb":
                     ("Rest days",                 f"{_rest_days}d" if _rest_days else "Unknown",
                                                   _rest_adj,
                                                   "Short rest (<4d) = fatigue risk · Extra rest (8d+) = fresh arm"),
-                    ("K/9 rate (season)",         f"{_k9:.1f}" if _k9>0 else "N/A",
+                    (f"K/9 rate ({_k9_source})",   f"{_k9:.1f}" if _k9>0 else "N/A",
                                                   _k9_adj,
-                                                  f"{'Elite' if _k9>=10.5 else 'Above avg' if _k9>=9.0 else 'Average' if _k9>=7.5 else 'Below avg' if _k9>=6.0 else 'Contact pitcher'} — league avg 8.3"),
+                                                  f"{'Elite' if _k9>=10.5 else 'Above avg' if _k9>=9.0 else 'Average' if _k9>=7.5 else 'Below avg' if _k9>=6.0 else 'Below avg'} — league avg 8.3" + (f" · no 2026 data, using {_k9_source}" if _k9_source != "2026" else "")),
                     ("SwStr% / K% " + _swstr_src, f"{_swstr:.1%}" if _swstr else "N/A",
                                                   _swstr_adj,
                                                   f"{'Real whiff rate from Savant' if _swstr_real else 'K/BF proxy — Savant data unavailable'}"),
@@ -5990,14 +6082,29 @@ if st.session_state.active_sport == "mlb":
                     <td style='color:#6b7f96;'>opp K% + park applied</td>
                 </tr>"""
 
+                # Map signal names to their actual values for the trace
+                _sig_vals_map = {
+                    "Home/Away split":  f"{'Home' if _tonight.get('pitcher_side')=='home' else 'Away'}",
+                    "Recent form":      f"L3: {_l3_avg:.1f} vs avg {avg_val:.1f}" if not pd.isna(_l3_avg) else "N/A",
+                    "Rest days":        f"{_rest_days}d" if _rest_days else "N/A",
+                    "K/9 rate":         f"{_k9:.1f} ({_k9_source})" if _k9 > 0 else "N/A",
+                    "SwStr%/K%":        f"{_swstr:.1%}" if _swstr else "N/A",
+                    "Velocity":         f"{_velo:.1f}mph" if _velo else "N/A",
+                    "Avg IP/start":     f"{_avg_ip:.1f} IP" if _avg_ip > 0 else "N/A",
+                    "Umpire zone":      f"{_ump_name.split()[-1]} ({_ump_tend})" if _ump_name else "TBD",
+                    "Weather":          _weather.get("condition","N/A") if _weather else "N/A",
+                    "Batting order":    f"{len(_lineup_order)}/9" if _lineup_order else "Not posted",
+                }
+
                 for _lbl2, _a, _bef, _aft in _mlb_steps:
                     _ac  = "#22c55e" if _a > 0.001 else ("#ef4444" if _a < -0.001 else "#6b7f96")
                     _ic  = "#22c55e" if _aft-_bef > 0.001 else ("#ef4444" if _aft-_bef < -0.001 else "#6b7f96")
                     _ad  = f"+{_a:.0%}" if _a > 0 else (f"{_a:.0%}" if _a < 0 else "no change")
+                    _sv  = _sig_vals_map.get(_lbl2, "—")
                     trace_rows += f"""
                 <tr style='border-bottom:1px solid #0d1520;'>
                     <td style='padding:4px 0;color:#9aaec4;'>{_lbl2}</td>
-                    <td style='color:#e2e8f0;'></td>
+                    <td style='color:#e2e8f0;font-weight:600;'>{_sv}</td>
                     <td style='color:{_ac};'>{_ad}</td>
                     <td style='color:#7d93ab;'>{_bef:.1%}</td>
                     <td style='color:#e2e8f0;'>{_aft:.1%}</td>
