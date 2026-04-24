@@ -5858,6 +5858,238 @@ if st.session_state.active_sport == "mlb":
                 f"<div style='font-family:JetBrains Mono,monospace;font-size:0.6rem;color:#555;'>{_cl}</div></div>"
                 f"</div></div>",unsafe_allow_html=True)
 
+            # ── MLB Signal Debugger ──────────────────────────────────
+            with st.expander("🔬  Show signal breakdown (debug)"):
+                st.markdown("""
+                <div style='font-family:JetBrains Mono,monospace;font-size:0.65rem;color:#6b7f96;
+                            background:#0d1520;border:1px solid rgba(255,255,255,0.06);border-radius:8px;
+                            padding:0.65rem 1rem;margin-bottom:0.75rem;line-height:1.8;'>
+                    This table shows exactly how PropIQ arrived at the final probability for this K prop.
+                    Each row is a signal that pushed the adjusted hit rate up or down.
+                    <span style='color:#00c4cc;'>Positive</span> = favors the Over.
+                    <span style='color:#ef4444;'>Negative</span> = favors the Under.
+                </div>
+                """, unsafe_allow_html=True)
+
+                # ── INPUT TABLE ──────────────────────────────────────────
+                st.markdown(f"""
+                <div style='font-family:JetBrains Mono,monospace;font-size:0.72rem;color:#9aaec4;line-height:1.8;'>
+                <div style='color:#f97316;font-size:0.65rem;letter-spacing:0.15em;text-transform:uppercase;
+                            border-bottom:1px solid #1a2333;padding-bottom:4px;margin-bottom:10px;'>INPUT</div>
+                <table style='width:100%;border-collapse:collapse;'>
+                    <tr>
+                        <td style='padding:3px 8px 3px 0;color:#6b7f96;'>Pitcher</td>
+                        <td style='color:#e2e8f0;'>{mlb_pitcher}</td>
+                        <td style='padding:3px 8px;color:#6b7f96;'>Prop</td>
+                        <td style='color:#e2e8f0;'>{mlb_prop} · {mlb_side} {mlb_line}</td>
+                    </tr>
+                    <tr>
+                        <td style='padding:3px 8px 3px 0;color:#6b7f96;'>Starts (sample)</td>
+                        <td style='color:#e2e8f0;'>L{len(vals)} · avg {avg_val:.1f} {_lbl}</td>
+                        <td style='padding:3px 8px;color:#6b7f96;'>Edge vs line</td>
+                        <td style='color:{"#22c55e" if edge > 0 else "#ef4444"};'>{edge:+.2f}</td>
+                    </tr>
+                    <tr>
+                        <td style='padding:3px 8px 3px 0;color:#6b7f96;'>Raw hit rate</td>
+                        <td style='color:#e2e8f0;'>{whr:.1%} (weighted L10)</td>
+                        <td style='padding:3px 8px;color:#6b7f96;'>Consistency</td>
+                        <td style='color:{"#22c55e" if cons>=0.5 else "#ffc107" if cons>=0.35 else "#ef4444"};'>{cons:.1%} · {"Predictable" if cons>=0.5 else "Variable" if cons>=0.35 else "Volatile"}</td>
+                    </tr>
+                    <tr>
+                        <td style='padding:3px 8px 3px 0;color:#6b7f96;'>Pitcher hand</td>
+                        <td style='color:#e2e8f0;'>{"RHP" if _phand=="R" else "LHP"}</td>
+                        <td style='padding:3px 8px;color:#6b7f96;'>Tonight</td>
+                        <td style='color:#e2e8f0;'>{"vs " + mlb_opp + " · " + ("Home" if _tonight.get("pitcher_side")=="home" else "Away") if mlb_opp else "No game found today"}</td>
+                    </tr>
+                </table>
+
+                <div style='color:#f97316;font-size:0.65rem;letter-spacing:0.15em;text-transform:uppercase;
+                            border-bottom:1px solid #1a2333;padding-bottom:4px;margin:14px 0 10px 0;'>
+                    SIGNAL TRACE — 12 SIGNALS
+                </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+                # ── SIGNAL TRACE TABLE ───────────────────────────────────
+                # Build steps list matching exact formula order
+                _mlb_signals = [
+                    # (label, value, adj_applied, description)
+                    ("Weighted hit rate (base)",  f"{whr:.1%}",           None,        "Starting point — recency-weighted L10 starts"),
+                    ("Opp K% " + (f"vs {'R' if _phand=='R' else 'L'}HP"),
+                                                  f"{okpct:.1%}" if okpct else "N/A",
+                                                  None,
+                                                  f"{'High K lineup' if (okpct or 0)>=0.26 else 'Low K lineup' if (okpct or 0)<=0.18 else 'Average K lineup'}" if okpct else "No opponent data"),
+                    ("Park factor",               psig,                    None,        f"{mlb_home or 'N/A'} · {'run-friendly park' if psig=='Boost' else 'pitcher-friendly park' if psig=='Penalty' else 'neutral park'}"),
+                    ("Home/Away split",            f"{_ha_adj:+.0%}" if _ha_adj != 0 else "Neutral",
+                                                  _ha_adj,
+                                                  "Based on pitcher's H/A K splits from logs"),
+                    ("Recent form (L3 vs avg)",   f"L3 avg {_l3_avg:.1f}" if not pd.isna(_l3_avg) else "N/A",
+                                                  _form_adj,
+                                                  f"{'Trending up' if _form_adj>0 else 'Trending down' if _form_adj<0 else 'Stable'} — L3 vs season avg {avg_val:.1f}"),
+                    ("Rest days",                 f"{_rest_days}d" if _rest_days else "Unknown",
+                                                  _rest_adj,
+                                                  "Short rest (<4d) = fatigue risk · Extra rest (8d+) = fresh arm"),
+                    ("K/9 rate (season)",         f"{_k9:.1f}" if _k9>0 else "N/A",
+                                                  _k9_adj,
+                                                  f"{'Elite' if _k9>=10.5 else 'Above avg' if _k9>=9.0 else 'Average' if _k9>=7.5 else 'Below avg' if _k9>=6.0 else 'Contact pitcher'} — league avg 8.3"),
+                    ("SwStr% / K% " + _swstr_src, f"{_swstr:.1%}" if _swstr else "N/A",
+                                                  _swstr_adj,
+                                                  f"{'Real whiff rate from Savant' if _swstr_real else 'K/BF proxy — Savant data unavailable'}"),
+                    ("Fastball velocity",         f"{_velo:.1f}mph" if _velo else "N/A",
+                                                  _velo_adj,
+                                                  f"{'Elite velo (97+)' if (_velo or 0)>=97 else 'Hard (94+)' if (_velo or 0)>=94 else 'Avg' if (_velo or 0)>=91 else 'Soft (<91)' if _velo else 'Savant data unavailable'}"),
+                    ("Avg IP/start",              f"{_avg_ip:.1f}" if _avg_ip>0 else "N/A",
+                                                  _ip_adj,
+                                                  f"{'Deep — more K opportunities' if _avg_ip>=6.5 else 'Average depth' if _avg_ip>=5.0 else '⚠️ Short leash — limits K ceiling'}" + (f" · {_ip_note}" if _ip_note else "")),
+                    ("Umpire K zone",             f"{_ump_name} ({_ump_tend})" if _ump_name else "TBD",
+                                                  _ump_adj,
+                                                  f"{'Tight zone — more Ks' if _ump_tend=='High' else 'Wide zone — more contact' if _ump_tend=='Low' else 'Average strike zone'}" + (f" · {_ump.get('k_per_game',15.5):.1f} K/g avg" if _ump_name else "")),
+                    ("Weather",                   _weather.get("condition","N/A") if _weather else "N/A",
+                                                  _wx_adj,
+                                                  _wx_note if _wx_note else ("Indoor — irrelevant" if _weather and _weather.get("condition")=="Dome/Retractable" else "No weather data")),
+                    ("Batting order",             f"{len(_lineup_order)}/9 posted" if _lineup_order else "Not posted",
+                                                  _lineup_adj,
+                                                  _lineup_note_txt if _lineup_note_txt else "Lineup not yet posted"),
+                ]
+
+                # Build mlb_apply_adj step trace
+                # Base = whr → then apply: opp_k, park, then individual adjs
+                _mlb_base_adj = mlb_apply_adj(whr, okpct, psig, mlb_side)
+                _mlb_adjs = [_ha_adj, _form_adj, _rest_adj, _k9_adj,
+                             _swstr_adj, _velo_adj, _ip_adj, _ump_adj, _wx_adj, _lineup_adj]
+                _mlb_adj_labels = [
+                    "Home/Away split", "Recent form", "Rest days", "K/9 rate",
+                    "SwStr%/K%", "Velocity", "Avg IP/start", "Umpire zone",
+                    "Weather", "Batting order"
+                ]
+                _mlb_running = _mlb_base_adj
+                _mlb_steps = []
+                for _lbl2, _a in zip(_mlb_adj_labels, _mlb_adjs):
+                    _before = _mlb_running
+                    _mlb_running += _a
+                    _after_clamped = max(0.05, min(0.95, _mlb_running))
+                    _mlb_steps.append((_lbl2, _a, max(0.05,min(0.95,_before)), _after_clamped))
+
+                trace_rows = f"""
+                <div style='font-family:JetBrains Mono,monospace;font-size:0.7rem;color:#9aaec4;'>
+                <table style='width:100%;border-collapse:collapse;'>
+                <tr style='color:#6b7f96;font-size:0.63rem;border-bottom:1px solid #1a2333;'>
+                    <td style='padding:3px 0;'>SIGNAL</td>
+                    <td>VALUE</td>
+                    <td>ADJUSTMENT</td>
+                    <td>BEFORE</td>
+                    <td>AFTER</td>
+                    <td>IMPACT</td>
+                </tr>
+                <tr style='border-bottom:1px solid #0d1520;'>
+                    <td style='padding:4px 0;color:#9aaec4;'>Weighted hit rate (base)</td>
+                    <td style='color:#e2e8f0;font-weight:600;'>{whr:.1%}</td>
+                    <td style='color:#6b7f96;'>starting point</td>
+                    <td style='color:#7d93ab;'>—</td>
+                    <td style='color:#e2e8f0;'>{_mlb_base_adj:.1%}</td>
+                    <td style='color:#6b7f96;'>opp K% + park applied</td>
+                </tr>"""
+
+                for _lbl2, _a, _bef, _aft in _mlb_steps:
+                    _ac  = "#22c55e" if _a > 0.001 else ("#ef4444" if _a < -0.001 else "#6b7f96")
+                    _ic  = "#22c55e" if _aft-_bef > 0.001 else ("#ef4444" if _aft-_bef < -0.001 else "#6b7f96")
+                    _ad  = f"+{_a:.0%}" if _a > 0 else (f"{_a:.0%}" if _a < 0 else "no change")
+                    trace_rows += f"""
+                <tr style='border-bottom:1px solid #0d1520;'>
+                    <td style='padding:4px 0;color:#9aaec4;'>{_lbl2}</td>
+                    <td style='color:#e2e8f0;'></td>
+                    <td style='color:{_ac};'>{_ad}</td>
+                    <td style='color:#7d93ab;'>{_bef:.1%}</td>
+                    <td style='color:#e2e8f0;'>{_aft:.1%}</td>
+                    <td style='color:{_ic};'>{_aft-_bef:+.1%}</td>
+                </tr>"""
+
+                trace_rows += "</table></div>"
+                st.markdown(trace_rows, unsafe_allow_html=True)
+
+                # ── SIGNAL DETAIL TABLE ───────────────────────────────────
+                st.markdown("""
+                <div style='color:#f97316;font-size:0.65rem;letter-spacing:0.15em;text-transform:uppercase;
+                            border-bottom:1px solid #1a2333;padding-bottom:4px;margin:14px 0 10px 0;'>
+                    SIGNAL DETAIL
+                </div>""", unsafe_allow_html=True)
+
+                detail_rows = """
+                <div style='font-family:JetBrains Mono,monospace;font-size:0.68rem;color:#9aaec4;'>
+                <table style='width:100%;border-collapse:collapse;'>
+                <tr style='color:#6b7f96;font-size:0.63rem;border-bottom:1px solid #1a2333;'>
+                    <td style='padding:3px 0;width:22%;'>SIGNAL</td>
+                    <td style='width:18%;'>VALUE</td>
+                    <td style='width:12%;'>ADJ</td>
+                    <td>NOTES</td>
+                </tr>"""
+
+                for _sig_label, _sig_val, _sig_adj, _sig_note in _mlb_signals:
+                    _ac = "#22c55e" if (_sig_adj or 0) > 0.001 else ("#ef4444" if (_sig_adj or 0) < -0.001 else "#6b7f96")
+                    _av = ("+" if (_sig_adj or 0) > 0 else "") + f"{_sig_adj:.0%}" if _sig_adj is not None else "—"
+                    detail_rows += f"""
+                <tr style='border-bottom:1px solid #0d1520;'>
+                    <td style='padding:4px 0;color:#9aaec4;'>{_sig_label}</td>
+                    <td style='color:#e2e8f0;font-weight:600;'>{_sig_val}</td>
+                    <td style='color:{_ac};'>{_av}</td>
+                    <td style='color:#6b7f96;font-size:0.62rem;'>{_sig_note}</td>
+                </tr>"""
+
+                detail_rows += "</table></div>"
+                st.markdown(detail_rows, unsafe_allow_html=True)
+
+                # ── FINAL DECISION ────────────────────────────────────────
+                _mlb_tier_color = (
+                    "#22c55e" if "Strong Over" in tier else
+                    "#ffc107" if "Lean Over" in tier else
+                    "#f97316" if "Lean Under" in tier else
+                    "#ef4444" if "Strong Under" in tier else "#6b7f96"
+                )
+                _mlb_strong_thresh = "≥ 64% AND edge ≥ +1" if mlb_side=="Over" else "≥ 64% AND edge ≤ -1"
+                _mlb_lean_thresh   = "≥ 55% AND edge > 0" if mlb_side=="Over" else "≥ 55% AND edge < 0"
+                _edge_ok_mlb       = (edge >= 1.0 if mlb_side=="Over" else edge <= -1.0)
+
+                st.markdown(f"""
+                <div style='color:#f97316;font-size:0.65rem;letter-spacing:0.15em;text-transform:uppercase;
+                            border-bottom:1px solid #1a2333;padding-bottom:4px;margin:14px 0 10px 0;'>
+                    FINAL DECISION
+                </div>
+                <div style='font-family:JetBrains Mono,monospace;font-size:0.7rem;color:#9aaec4;'>
+                <table style='width:100%;border-collapse:collapse;'>
+                    <tr>
+                        <td style='padding:3px 8px 3px 0;color:#6b7f96;'>Adjusted hit rate</td>
+                        <td style='color:#e2e8f0;font-weight:700;'>{adj:.1%}</td>
+                        <td style='padding:3px 8px;color:#6b7f96;'>Strong threshold</td>
+                        <td style='color:#9aaec4;'>{_mlb_strong_thresh}</td>
+                    </tr>
+                    <tr>
+                        <td style='padding:3px 8px 3px 0;color:#6b7f96;'>Edge vs line</td>
+                        <td style='color:{"#22c55e" if _edge_ok_mlb else "#ef4444"};'>{edge:+.2f} {"✓" if _edge_ok_mlb else "✗ tight"}</td>
+                        <td style='padding:3px 8px;color:#6b7f96;'>Lean threshold</td>
+                        <td style='color:#9aaec4;'>{_mlb_lean_thresh}</td>
+                    </tr>
+                    <tr>
+                        <td style='padding:3px 8px 3px 0;color:#6b7f96;'>Confidence score</td>
+                        <td style='color:{_cc};font-weight:700;'>{_sc}/100</td>
+                        <td style='padding:3px 8px;color:#6b7f96;'>Data signals loaded</td>
+                        <td style='color:#9aaec4;'>
+                            {"✅ K/9" if _k9>0 else "❌ K/9"} ·
+                            {"✅ SwStr%" if _swstr_real else "⚠️ K% proxy"} ·
+                            {"✅ Velo" if _velo else "❌ Velo"} ·
+                            {"✅ Umpire" if _ump_name else "⚠️ TBD"} ·
+                            {"✅ Weather" if _weather and _weather.get("temp_f") else "⚠️ N/A"} ·
+                            {"✅ Lineup" if _lineup_confirmed else "⚠️ TBD"}
+                        </td>
+                    </tr>
+                    <tr style='border-top:1px solid #1a2333;'>
+                        <td style='padding:6px 8px 3px 0;color:#6b7f96;'>VERDICT</td>
+                        <td colspan='3' style='color:{_mlb_tier_color};font-weight:900;
+                            font-size:1.1rem;letter-spacing:-0.5px;'>{tier}</td>
+                    </tr>
+                </table>
+                </div>
+                """, unsafe_allow_html=True)
+
     # ── MLB Slate Scanner ────────────────────────────────────
     st.markdown("<div style='height:1rem'></div>", unsafe_allow_html=True)
     st.markdown("<div class='section-header'>⚾ MLB Pitcher Slate Scanner</div>", unsafe_allow_html=True)
