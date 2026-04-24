@@ -5135,7 +5135,23 @@ if st.session_state.active_sport == "mlb":
                             except: pass
                 return None
 
-            # Method 1: pitch-arsenal-stats — has avg_speed + whiff_percent
+            # Method 0: pybaseball statcast — most accurate, has real SwStr% and velo
+            try:
+                from pybaseball import statcast_pitcher as _scp
+                import datetime as _dtx2
+                _end   = _dtx2.date.today().strftime("%Y-%m-%d")
+                _start = f"{season}-02-01"
+                _scdf  = _scp(_start, _end, _player_id_savant if "_player_id_savant" in dir() else None)
+                if _scdf is not None and not _scdf.empty and len(_scdf) >= 20:
+                    _velo_sc  = round(float(_scdf["release_speed"].dropna().mean()), 1)
+                    _swstr_sc = round(float((_scdf["description"] == "swinging_strike").mean()), 3)
+                    if 75 < _velo_sc < 103:
+                        return {"swstr_pct": _swstr_sc, "velo": _velo_sc,
+                                "k_pct": None, "bb_pct": None}
+            except Exception:
+                pass
+
+            # Method 1: Savant pitch-arsenal-stats — has avg_speed + whiff_percent
             for _yr in [season, season-1]:
                 try:
                     r = _req.get(
@@ -5149,10 +5165,19 @@ if st.session_state.active_sport == "mlb":
                     if nc is None or df.empty: continue
                     row = _find_row(df, nc)
                     if row is None: continue
-                    velo  = _get(row, df, "avg_speed","mph","velocity","release_speed")
+                    # Log available columns for debugging
+                    _spd_cols = [c for c in df.columns 
+                                 if any(x in c.lower() for x in ["speed","mph","velo","release"])]
+                    velo = None
+                    for _sc in _spd_cols:
+                        try:
+                            _v = float(row[_sc])
+                            if 75 < _v < 103:
+                                velo = round(_v, 1)
+                                break
+                        except: pass
                     whiff = _get(row, df, "whiff_percent","whiff_pct","whiff","swstr")
                     if whiff and whiff > 1: whiff = round(whiff/100, 3)
-                    if velo and (velo > 103 or velo < 75): velo = None
                     if velo or whiff:
                         return {"swstr_pct": whiff, "velo": velo,
                                 "k_pct": None, "bb_pct": None}
@@ -5648,7 +5673,7 @@ if st.session_state.active_sport == "mlb":
             # ── Signal 8: Real SwStr% from Baseball Savant (whiff rate)
             # Use Savant real swinging strike % if available, else K/BF proxy
             _swstr     = _swstr_real if _swstr_real else _pstats.get("swstr")
-            _swstr_src = "Savant SwStr%" if _swstr_real else "K/BF proxy"
+            _swstr_src = "Savant SwStr%" if _swstr_real else ("MLB Stats K%" if (_swstr and not _swstr_real) else "K/BF proxy")
             _swstr_adj = 0.0
             if _swstr is not None:
                 # Real SwStr% league avg ~11%. K/BF avg ~21% — different scales
