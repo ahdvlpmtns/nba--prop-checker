@@ -5968,18 +5968,28 @@ if st.session_state.active_sport == "mlb":
                     elif _swstr >= 0.14: _swstr_adj = -0.03
                     else:                _swstr_adj = -0.06
 
-            # ── Signal 9: Avg innings pitched per start — pitch count proxy
-            _avg_ip    = _pstats.get("avg_ip", 5.5)
+            # ── Signal 9: Avg innings pitched — use pitch count if more conservative
+            _avg_ip_raw  = _pstats.get("avg_ip", 5.5)
+            # If we have pitch count data, compute innings from that too
+            _avg_ip_from_pc = round(_pitchcnt.get("avg_pitches",0) / 16.0, 1) if _pitchcnt and _pitchcnt.get("avg_pitches") else None
+            # Use the more conservative (lower) estimate when both available
+            if _avg_ip_from_pc and _avg_ip_from_pc < _avg_ip_raw:
+                _avg_ip = _avg_ip_from_pc
+                _ip_source = "pitch count"
+            else:
+                _avg_ip = _avg_ip_raw
+                _ip_source = "season stats"
             _ip_adj    = 0.0
-            if _avg_ip >= 6.5:    _ip_adj = +0.05   # deep into games = more K opportunities
-            elif _avg_ip >= 5.5:  _ip_adj = +0.02   # average depth
-            elif _avg_ip < 4.5:   _ip_adj = -0.07   # short leash — very hard to hit over
+            if _avg_ip >= 6.5:    _ip_adj = +0.05
+            elif _avg_ip >= 5.5:  _ip_adj = +0.02
+            elif _avg_ip < 4.5:   _ip_adj = -0.07
+            elif _avg_ip < 5.0:   _ip_adj = -0.03
             # Adjust line for expected IP
             _ip_note = ""
             if _avg_ip < 5.0 and mlb_prop == "Strikeouts":
                 _expected_k = round(_avg_ip * (_k9 / 9.0), 1) if _k9 > 0 else None
                 if _expected_k:
-                    _ip_note = f"Avg {_avg_ip:.1f} IP → ~{_expected_k:.1f} Ks expected"
+                    _ip_note = f"Avg {_avg_ip:.1f} IP ({_ip_source}) → ~{_expected_k:.1f} Ks expected"
 
             # ── Signal 9b: Fastball velocity from Savant pitch-arsenal-stats
             # _velo comes from _savant["velo"] set in mlb_get_savant_stats
@@ -6243,7 +6253,7 @@ if st.session_state.active_sport == "mlb":
                 _ip_d = f"{_avg_ip:.1f}" if _avg_ip>0 else "—"
                 st.markdown(f"<div class='stat-card'><div class='stat-label'>Avg IP/Start</div>"
                             f"<div class='stat-value {_ip_c}'>{_ip_d}</div>"
-                            f"<div class='stat-hint'>{'Deep' if _avg_ip>=6.5 else 'Average' if _avg_ip>=5.0 else '⚠️ Short leash'} · pitch count proxy</div></div>",unsafe_allow_html=True)
+                            f"<div class='stat-hint'>{'Deep' if _avg_ip>=6.5 else 'Average' if _avg_ip>=5.0 else '⚠️ Short leash'} · {_ip_source if '_ip_source' in dir() else 'season stats'}</div></div>",unsafe_allow_html=True)
             with _c7:
                 _opp_kd = f"{okpct:.0%}" if okpct else "—"
                 _opp_kc = "green" if (okpct or 0)>=0.26 else ("red" if (okpct or 0)<=0.18 else "yellow")
@@ -6551,7 +6561,7 @@ if st.session_state.active_sport == "mlb":
                     "K/9 rate":         f"{_k9:.1f} ({_k9_source})" if _k9 > 0 else "N/A",
                     "SwStr%/K%":        f"{_swstr:.1%}" if _swstr else "N/A",
                     "Velocity":         f"{_velo:.1f}mph" if _velo else "N/A",
-                    "Avg IP/start":     f"{_avg_ip:.1f} IP" if _avg_ip > 0 else "N/A",
+                    "Avg IP/start":     f"{_avg_ip:.1f} IP ({_ip_source})" if _avg_ip > 0 else "N/A",
                     "Umpire zone":      f"{_ump_name.split()[-1]} ({_ump_tend})" if _ump_name else "TBD",
                     "Weather":          _weather.get("condition","N/A") if _weather else "N/A",
                     "Batting order":    f"{len(_lineup_order)}/9 · {_lhb_count}L/{_rhb_count}R" if _order_hands else (f"{len(_lineup_order)}/9" if _lineup_order else "Not posted"),
