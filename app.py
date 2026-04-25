@@ -5936,15 +5936,26 @@ if st.session_state.active_sport == "mlb":
             elif _k9 >= 7.5: _k9_adj = 0.0
             elif _k9 >= 6.0: _k9_adj = -0.04
             elif _k9 > 0:    _k9_adj = -0.07
-            # If still 0 — no data at all — use neutral, don't penalize
+            # No data — neutral, don't penalize
             else:
                 _k9_adj = 0.0
-                _k9_source = "unknown"
+                _k9_source = "no data"
 
             # ── Signal 8: Real SwStr% from Baseball Savant (whiff rate)
             # Use Savant real swinging strike % if available, else K/BF proxy
             _swstr     = _swstr_real if _swstr_real else _pstats.get("swstr")
             _swstr_src = "Savant SwStr%" if _swstr_real else ("MLB Stats K%" if (_swstr and not _swstr_real) else "K/BF proxy")
+            # Sanity check: real SwStr% should be 5-25%, K/BF ratio is 15-35%
+            # If _swstr_real > 0.25 it's likely the K% not real whiff rate
+            if _swstr_real and _swstr_real > 0.28:
+                _swstr_src  = "Savant K%"  # actually K rate not whiff rate
+                _swstr_real = None          # don't treat as real whiff rate
+                # Re-apply K/BF scale thresholds
+                if _swstr >= 0.28:   _swstr_adj = +0.06
+                elif _swstr >= 0.23: _swstr_adj = +0.03
+                elif _swstr >= 0.18: _swstr_adj = 0.0
+                elif _swstr >= 0.14: _swstr_adj = -0.03
+                else:                _swstr_adj = -0.06
             _swstr_adj = 0.0
             if _swstr is not None:
                 # Real SwStr% league avg ~11%. K/BF avg ~21% — different scales
@@ -6225,9 +6236,12 @@ if st.session_state.active_sport == "mlb":
             with _c3:
                 _k9c = "green" if _k9>=9.0 else ("yellow" if _k9>=7.5 else "red")
                 _k9_display = f"{_k9:.1f}" if _k9>0 else "—"
+                _k9_tier = ("Elite" if _k9>=10.5 else "Above avg" if _k9>=9.0 else
+                            "Average" if _k9>=7.5 else "Below avg" if _k9>=6.0 else
+                            "Contact pitcher" if _k9>0 else "No data yet")
                 st.markdown(f"<div class='stat-card'><div class='stat-label'>K/9 Rate</div>"
                             f"<div class='stat-value {_k9c}'>{_k9_display}</div>"
-                            f"<div class='stat-hint'>League avg 8.3 · {'Elite' if _k9>=10.5 else 'Above avg' if _k9>=9.0 else 'Average' if _k9>=7.5 else 'Contact pitcher'}</div></div>",unsafe_allow_html=True)
+                            f"<div class='stat-hint'>League avg 8.3 · {_k9_tier}</div></div>",unsafe_allow_html=True)
             with _c4:
                 st.markdown(f"<div class='stat-card'><div class='stat-label'>Confidence</div>"
                             f"<div class='stat-value' style='color:{_cc};'>{_sc}</div>"
@@ -6297,9 +6311,10 @@ if st.session_state.active_sport == "mlb":
                         unsafe_allow_html=True
                     )
                 else:
+                    _plat_note = "No career splits yet" if not _platoon.get("vs_l") else "Loading splits..."
                     st.markdown(
-                        "<div class='stat-card'><div class='stat-label'>Platoon K%</div>"
-                        "<div style='color:#6b7f96;font-family:JetBrains Mono,monospace;font-size:0.7rem;margin-top:6px;'>Loading splits...</div></div>",
+                        f"<div class='stat-card'><div class='stat-label'>Platoon K%</div>"
+                        f"<div style='color:#6b7f96;font-family:JetBrains Mono,monospace;font-size:0.7rem;margin-top:6px;'>{_plat_note}</div></div>",
                         unsafe_allow_html=True
                     )
 
@@ -6485,7 +6500,7 @@ if st.session_state.active_sport == "mlb":
                                                   "Short rest (<4d) = fatigue risk · Extra rest (8d+) = fresh arm"),
                     (f"K/9 rate ({_k9_source})",   f"{_k9:.1f}" if _k9>0 else "N/A",
                                                   _k9_adj,
-                                                  f"{'Elite' if _k9>=10.5 else 'Above avg' if _k9>=9.0 else 'Average' if _k9>=7.5 else 'Below avg' if _k9>=6.0 else 'Below avg'} — league avg 8.3" + (f" · no 2026 data, using {_k9_source}" if _k9_source != "2026" else "")),
+                                                  (f"{'Elite' if _k9>=10.5 else 'Above avg' if _k9>=9.0 else 'Average' if _k9>=7.5 else 'Below avg'} — league avg 8.3" + (f" · no 2026 data, using {_k9_source}" if _k9_source not in ("2026","no data") else "")) if _k9>0 else "No prior season data — rookie or debut season · no adjustment applied"),
                     ("SwStr% / K% " + _swstr_src, f"{_swstr:.1%}" if _swstr else "N/A",
                                                   _swstr_adj,
                                                   f"{'Real whiff rate from Savant' if _swstr_real else 'K/BF proxy — Savant data unavailable'}"),
