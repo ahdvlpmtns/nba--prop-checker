@@ -5930,6 +5930,14 @@ if st.session_state.active_sport == "mlb":
         try:    _vtrender = _f_vtrender.result(timeout=12)
         except: _vtrender = {}
 
+        # Initialize all derived signal variables with safe defaults
+        _vtrend_mph = 0.0
+        _vtrend_dir = "Stable"
+        _vtrend_adj = 0.0
+        _is_avail   = _injury.get("is_available", True)
+        _inj_status = _injury.get("status", "Active")
+        _inj_desc   = _injury.get("description", "")
+
         # Re-fetch splits with correct pitcher hand
         if mlb_opp and _phand:
             try:
