@@ -5148,64 +5148,78 @@ if st.session_state.active_sport == "mlb":
                             except: pass
                 return None
 
-            # Method 1: Savant pitch-arsenal-stats per pitch type
-            # Velocity only appears in per-pitch-type rows, not all-pitches aggregate
-            # Try fastball types first (FF=4-seam, SI=sinker, FC=cutter) then others
+            # Method 1a: Savant pitch-movement — has avg_speed + pitch_per (usage)
+            # Columns confirmed: avg_speed, pitches_thrown, total_pitches, pitch_per,
+            #                    pitch_type, pitch_type_name
             _best_velo  = None
             _best_whiff = None
             _best_usage = 0.0
 
             for _yr in [season, season-1]:
-                for _pt in ["SI","FF","FC","CH","SL","CU","ST","FS"]:
-                    try:
-                        r = _req.get(
+                try:
+                    r_mv = _req.get(
+                        "https://baseballsavant.mlb.com/leaderboard/pitch-movement",
+                        params={"year":_yr,"team":"","min":10,"pitch_type":"",
+                                "hand":"","csv":"true"},
+                        headers=_HDRS, timeout=12)
+                    if r_mv.ok and len(r_mv.text.strip()) > 200:
+                        df_mv = pd.read_csv(io.StringIO(r_mv.text), low_memory=False)
+                        nc_mv = next((c for c in df_mv.columns if "name" in c.lower()), None)
+                        if nc_mv and not df_mv.empty:
+                            # Get all rows for this pitcher
+                            df_mv["_n2"] = df_mv[nc_mv].astype(str).apply(
+                                lambda n: _norm(" ".join(reversed(n.split(", ")))
+                                          if ", " in n else n))
+                            pitcher_rows = df_mv[df_mv["_n2"].apply(
+                                lambda n: all(p in n for p in _parts))]
+                            if pitcher_rows.empty:
+                                pitcher_rows = df_mv[df_mv["_n2"].apply(
+                                    lambda n: _last in n)]
+                            if not pitcher_rows.empty:
+                                # Find primary pitch (highest usage %)
+                                for _, pr in pitcher_rows.iterrows():
+                                    try:
+                                        _usage = float(pr.get("pitch_per", 0) or 0)
+                                        _vraw  = pr.get("avg_speed")
+                                        _v     = float(_vraw) if _vraw else 0
+                                        if _usage > _best_usage and 75 < _v < 103:
+                                            _best_usage = _usage
+                                            _best_velo  = round(_v, 1)
+                                    except: pass
+                except Exception:
+                    pass
+
+                # Method 1b: pitch-arsenal-stats — has whiff_percent (no velocity)
+                try:
+                    for _pt in ["FF","SI","SL","CH","FC","CU","ST","FS"]:
+                        r_ar = _req.get(
                             "https://baseballsavant.mlb.com/leaderboard/pitch-arsenal-stats",
                             params={"type":"pitcher","pitchType":_pt,"year":_yr,
                                     "team":"","min":10,"csv":"true"},
                             headers=_HDRS, timeout=10)
-                        if not r.ok or len(r.text.strip()) < 200: continue
-                        df = pd.read_csv(io.StringIO(r.text), low_memory=False)
-                        nc = next((c for c in df.columns if "name" in c.lower()), None)
-                        if nc is None or df.empty: continue
-                        row = _find_row(df, nc)
-                        if row is None: continue
-
-                        # Get usage % to find primary pitch
-                        usage = 0.0
-                        for _uc in df.columns:
-                            if "percent" in _uc.lower() or "usage" in _uc.lower():
-                                try:
-                                    _u = float(row[_uc])
-                                    if 0 < _u <= 100: usage = _u; break
-                                except: pass
-
-                        # Get velocity
-                        velo = None
-                        for _sc in df.columns:
-                            if any(x in _sc.lower() for x in ["speed","mph","velo","release"]):
-                                try:
-                                    _v = float(row[_sc])
-                                    if 75 < _v < 103:
-                                        velo = round(_v, 1); break
-                                except: pass
-
-                        # Get whiff
-                        whiff = _get(row, df, "whiff_percent","whiff_pct","whiff","swstr")
-                        if whiff and whiff > 1: whiff = round(whiff/100, 3)
-
-                        # Keep the pitch with highest usage (primary pitch)
-                        if usage > _best_usage and (velo or whiff):
-                            _best_usage = usage
-                            if velo: _best_velo  = velo
-                            if whiff: _best_whiff = whiff
-
-                    except Exception:
-                        continue
+                        if not r_ar.ok or len(r_ar.text.strip()) < 200: continue
+                        df_ar = pd.read_csv(io.StringIO(r_ar.text), low_memory=False)
+                        nc_ar = next((c for c in df_ar.columns if "name" in c.lower()), None)
+                        if nc_ar is None or df_ar.empty: continue
+                        row_ar = _find_row(df_ar, nc_ar)
+                        if row_ar is None: continue
+                        whiff = _get(row_ar, df_ar, "whiff_percent","whiff_pct","whiff")
+                        usage_ar = float(row_ar.get("pitch_usage", 0) or 0)
+                        if whiff and usage_ar > _best_usage:
+                            if whiff > 1: whiff = round(whiff/100, 3)
+                            _best_whiff = whiff
+                            _best_usage = usage_ar
+                        elif whiff and not _best_whiff:
+                            if whiff > 1: whiff = round(whiff/100, 3)
+                            _best_whiff = whiff
+                        if _best_whiff: break
+                except Exception:
+                    pass
 
                 if _best_velo or _best_whiff:
                     return {"swstr_pct": _best_whiff, "velo": _best_velo,
                             "k_pct": None, "bb_pct": None,
-                            "_source": f"Savant pitch-arsenal {_yr}",
+                            "_source": f"Savant pitch-movement {_yr}",
                             "_usage": _best_usage}
 
             # Method 2: Savant statcast leaderboard
