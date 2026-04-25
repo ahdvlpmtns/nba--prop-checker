@@ -5366,12 +5366,26 @@ if st.session_state.active_sport == "mlb":
         return max(0.05,min(0.95,adj))
 
     def mlb_verdict(adj, edge, side):
-        if side=="Over":
-            if adj>=0.64 and edge>=1.0: return "Strong Over"
-            if adj>=0.55 and edge>0:    return "Lean Over"
+        """
+        Verdict based on adjusted hit rate (primary) + edge as secondary factor.
+        Adjusted hit rate already incorporates all 12 signals including opponent K%,
+        K/9, SwStr%, velocity, etc. — so edge is a soft filter not a gate.
+        
+        Thresholds:
+        Strong: adj >= 0.64 (signals dominant) OR adj >= 0.58 with positive edge
+        Lean:   adj >= 0.52
+        Pass:   everything else
+        """
+        if side == "Over":
+            if adj >= 0.72:              return "Strong Over"   # overwhelming signal — edge irrelevant
+            if adj >= 0.64 and edge >= 0: return "Strong Over"  # strong signal + line not crazy
+            if adj >= 0.64 and edge >= -1.5: return "Lean Over" # strong signal but tight line
+            if adj >= 0.52 and edge > 0: return "Lean Over"     # moderate signal + avg above line
         else:
-            if adj>=0.64 and edge<=-1.0: return "Strong Under"
-            if adj>=0.55 and edge<0:     return "Lean Under"
+            if adj >= 0.72:               return "Strong Under"
+            if adj >= 0.64 and edge <= 0: return "Strong Under"
+            if adj >= 0.64 and edge >= -1.5: return "Lean Under"
+            if adj >= 0.52 and edge < 0:  return "Lean Under"
         return "Pass"
 
     # ── MLB UI ────────────────────────────────────────────────
@@ -5536,10 +5550,6 @@ if st.session_state.active_sport == "mlb":
         except: _savant  = {}
         # Extract velocity from Savant result
         _velo_from_savant = _savant.get("velo") if _savant else None
-        # TEMP DEBUG — show raw Savant return in app
-        _savant_debug = {k:v for k,v in (_savant or {}).items() if not k.startswith("_")}
-        _savant_debug["_source"] = (_savant or {}).get("_source","none")
-        _savant_debug["_usage"]  = (_savant or {}).get("_usage", 0)
         try:    _weather = _f_weather.result(timeout=8) if _f_weather else {}
         except: _weather = {}
         try:    _lineup  = _f_lineup.result(timeout=8) if _f_lineup else {}
@@ -6080,7 +6090,6 @@ if st.session_state.active_sport == "mlb":
 
             # ── MLB Signal Debugger ──────────────────────────────────
             with st.expander("🔬  Show signal breakdown (debug)"):
-                st.caption(f"🔍 Savant raw: {_savant_debug} | velo_from_savant: {_velo_from_savant} | _velo final: {_velo}")
                 st.markdown("""
                 <div style='font-family:JetBrains Mono,monospace;font-size:0.65rem;color:#6b7f96;
                             background:#0d1520;border:1px solid rgba(255,255,255,0.06);border-radius:8px;
@@ -6282,9 +6291,9 @@ if st.session_state.active_sport == "mlb":
                     "#f97316" if "Lean Under" in tier else
                     "#ef4444" if "Strong Under" in tier else "#6b7f96"
                 )
-                _mlb_strong_thresh = "≥ 64% AND edge ≥ +1" if mlb_side=="Over" else "≥ 64% AND edge ≤ -1"
-                _mlb_lean_thresh   = "≥ 55% AND edge > 0" if mlb_side=="Over" else "≥ 55% AND edge < 0"
-                _edge_ok_mlb       = (edge >= 1.0 if mlb_side=="Over" else edge <= -1.0)
+                _mlb_strong_thresh = "≥ 72% (any edge) OR ≥ 64% (edge ≥ -1.5)" if mlb_side=="Over" else "≥ 72% (any edge) OR ≥ 64% (edge ≤ 1.5)"
+                _mlb_lean_thresh   = "≥ 52% AND edge > 0" if mlb_side=="Over" else "≥ 52% AND edge < 0"
+                _edge_ok_mlb       = (edge >= -1.5 if mlb_side=="Over" else edge <= 1.5)
 
                 st.markdown(f"""
                 <div style='color:#f97316;font-size:0.65rem;letter-spacing:0.15em;text-transform:uppercase;
