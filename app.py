@@ -5343,6 +5343,206 @@ if st.session_state.active_sport == "mlb":
         return empty
 
 
+    @st.cache_data(ttl=7200, show_spinner=False)
+    def mlb_get_platoon_splits(pitcher_name: str) -> dict:
+        """
+        Fetch pitcher's K rate vs LHB and RHB.
+        Returns {vs_l: float, vs_r: float, source: str}
+        sitCodes: vl = vs left-handed batters, vr = vs right-handed batters
+        """
+        empty = {"vs_l": None, "vs_r": None, "source": "none"}
+        try:
+            import requests as _req, datetime as _dtx
+            _norm   = lambda s: s.lower().strip().replace(".", "").replace("-", " ")
+            _target = _norm(pitcher_name)
+            _parts  = [p for p in _target.split() if len(p) > 2]
+            _last   = _target.split()[-1]
+            season  = _dtx.datetime.now().year
+
+            # Find player ID
+            for _yr in [season, season - 1]:
+                _pr = _req.get(
+                    "https://statsapi.mlb.com/api/v1/sports/1/players",
+                    params={"season": _yr, "gameType": "R"}, timeout=8
+                )
+                if not _pr.ok: continue
+                _ppl = _pr.json().get("people", [])
+                _pp  = next((p for p in _ppl
+                             if all(pt in _norm(p.get("fullName",""))
+                                    for pt in _parts)), None)
+                if not _pp:
+                    _pp = next((p for p in _ppl
+                               if _last in _norm(p.get("fullName","")) and
+                               p.get("primaryPosition",{}).get("code") == "1"), None)
+                if not _pp: continue
+                pid = _pp["id"]
+
+                # Fetch platoon splits
+                _sr = _req.get(
+                    f"https://statsapi.mlb.com/api/v1/people/{pid}/stats",
+                    params={"stats": "statSplits", "group": "pitching",
+                            "season": _yr, "sitCodes": "vl,vr", "gameType": "R"},
+                    timeout=8
+                )
+                if not _sr.ok: continue
+                splits = _sr.json().get("stats", [{}])[0].get("splits", [])
+                if not splits: continue
+
+                result = {"vs_l": None, "vs_r": None, "source": str(_yr)}
+                for sp in splits:
+                    _desc = sp.get("split", {}).get("description", "").lower()
+                    _st   = sp.get("stat", {})
+                    _ab   = int(_st.get("atBats", 0) or 0)
+                    _k    = int(_st.get("strikeOuts", 0) or 0)
+                    if _ab >= 20:
+                        _kr = round(_k / _ab, 3)
+                        if "left" in _desc:
+                            result["vs_l"] = _kr
+                        elif "right" in _desc:
+                            result["vs_r"] = _kr
+
+                if result["vs_l"] or result["vs_r"]:
+                    return result
+
+        except Exception:
+            pass
+        return empty
+
+
+    @st.cache_data(ttl=900, show_spinner=False)
+    def mlb_get_batting_order_with_hands(opp_abbr: str) -> dict:
+        """
+        Fetch tonight's batting order AND each batter's handedness.
+        Returns lineup with L/R count for platoon weighting.
+        """
+        base = mlb_get_batting_order(opp_abbr)
+        if not base.get("order"):
+            return {**base, "lhb_count": 0, "rhb_count": 0,
+                    "lhb_pct": 0.5, "order_with_hands": []}
+
+        try:
+            import requests as _req
+            import datetime as _dtx
+            season = _dtx.datetime.now().year
+            _pr = _req.get(
+                "https://statsapi.mlb.com/api/v1/sports/1/players",
+                params={"season": season, "gameType": "R"}, timeout=8
+            )
+            if not _pr.ok:
+                return {**base, "lhb_count": 0, "rhb_count": 0,
+                        "lhb_pct": 0.5, "order_with_hands": []}
+
+            all_players = _pr.json().get("people", [])
+            _norm = lambda s: s.lower().strip()
+
+            order_with_hands = []
+            lhb = 0; rhb = 0
+            for name in base["order"][:9]:
+                _parts = [p for p in _norm(name).split() if len(p) > 2]
+                _last  = _norm(name).split()[-1]
+                p = next((x for x in all_players
+                          if all(pt in _norm(x.get("fullName","")) for pt in _parts)), None)
+                if not p:
+                    p = next((x for x in all_players
+                              if _last in _norm(x.get("fullName",""))), None)
+                hand = p.get("batSide", {}).get("code", "R") if p else "R"
+                order_with_hands.append({"name": name, "hand": hand})
+                if hand == "L": lhb += 1
+                else:           rhb += 1
+
+            total = lhb + rhb or 1
+            return {
+                **base,
+                "lhb_count":       lhb,
+                "rhb_count":       rhb,
+                "lhb_pct":         round(lhb / total, 2),
+                "order_with_hands": order_with_hands,
+            }
+        except Exception:
+            return {**base, "lhb_count": 0, "rhb_count": 0,
+                    "lhb_pct": 0.5, "order_with_hands": []}
+
+
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def mlb_estimate_pitch_count(pitcher_name: str, n: int = 5) -> dict:
+        """
+        Estimate tonight's expected pitch count from recent starts.
+        Uses avg pitches/start as proxy for pitch count limit.
+        Early-season pitchers (< 6 starts) often have soft limits.
+        Returns {avg_pitches, min_pitches, starts_analyzed, on_limit: bool, limit_est}
+        """
+        empty = {"avg_pitches": None, "min_pitches": None,
+                 "starts_analyzed": 0, "on_limit": False, "limit_est": None}
+        try:
+            import requests as _req, datetime as _dtx
+            _norm   = lambda s: s.lower().strip().replace(".", "").replace("-", " ")
+            _target = _norm(pitcher_name)
+            _parts  = [p for p in _target.split() if len(p) > 2]
+            _last   = _target.split()[-1]
+            season  = _dtx.datetime.now().year
+
+            # Find player
+            _pr = _req.get(
+                "https://statsapi.mlb.com/api/v1/sports/1/players",
+                params={"season": season, "gameType": "R"}, timeout=8
+            )
+            if not _pr.ok: return empty
+            _ppl = _pr.json().get("people", [])
+            _pp  = next((p for p in _ppl
+                         if all(pt in _norm(p.get("fullName","")) for pt in _parts)), None)
+            if not _pp:
+                _pp = next((p for p in _ppl
+                           if _last in _norm(p.get("fullName","")) and
+                           p.get("primaryPosition",{}).get("code") == "1"), None)
+            if not _pp: return empty
+            pid = _pp["id"]
+
+            # Fetch game logs with numberOfPitches
+            _lr = _req.get(
+                f"https://statsapi.mlb.com/api/v1/people/{pid}/stats",
+                params={"stats": "gameLog", "group": "pitching",
+                        "season": season, "gameType": "R,S", "limit": n + 5},
+                timeout=10
+            )
+            if not _lr.ok: return empty
+            splits = _lr.json().get("stats", [{}])[0].get("splits", [])[:n]
+            if not splits: return empty
+
+            pitch_counts = []
+            for sp in splits:
+                st = sp.get("stat", {})
+                np = int(st.get("numberOfPitches", 0) or 0)
+                if np > 30:  # filter out relief appearances
+                    pitch_counts.append(np)
+
+            if not pitch_counts: return empty
+
+            avg_p = round(sum(pitch_counts) / len(pitch_counts))
+            min_p = min(pitch_counts)
+            n_starts = len(splits)
+
+            # Detect if pitcher is on a soft limit
+            # Indicators: recent starts trending down, early season, or avg < 85 pitches
+            _recent_trend = (pitch_counts[0] - pitch_counts[-1]) if len(pitch_counts) >= 3 else 0
+            on_limit = (
+                avg_p < 80 or          # clearly limited
+                (n_starts <= 4 and avg_p < 90) or  # early season small sample
+                min_p < 65             # had at least one very short outing
+            )
+            limit_est = avg_p if on_limit else None
+
+            return {
+                "avg_pitches":     avg_p,
+                "min_pitches":     min_p,
+                "starts_analyzed": n_starts,
+                "on_limit":        on_limit,
+                "limit_est":       limit_est,
+                "pitch_trend":     _recent_trend,
+            }
+        except Exception:
+            return empty
+
+
     def mlb_weighted_hr(logs, line, stat, side):
         vals = pd.to_numeric(logs[stat], errors="coerce").dropna().reset_index(drop=True)
         n = len(vals)
@@ -5529,14 +5729,16 @@ if st.session_state.active_sport == "mlb":
 
         # Parallel fetch all new signals
         import concurrent.futures as _cfu
-        with _cfu.ThreadPoolExecutor(max_workers=7) as _mex:
+        with _cfu.ThreadPoolExecutor(max_workers=10) as _mex:
             _f_pstats   = _mex.submit(mlb_get_pitcher_season_stats, mlb_pitcher)
             _f_phand    = _mex.submit(mlb_get_pitcher_hand, mlb_pitcher)
             _f_ump      = _mex.submit(mlb_get_umpire_k_tendency, mlb_home) if mlb_home else None
             _f_splits   = _mex.submit(mlb_get_opp_k_rate_splits, mlb_opp, "R") if mlb_opp else None
             _f_savant   = _mex.submit(mlb_get_savant_stats, mlb_pitcher)
             _f_weather  = _mex.submit(mlb_get_weather, mlb_home) if mlb_home else None
-            _f_lineup   = _mex.submit(mlb_get_batting_order, mlb_opp) if mlb_opp else None
+            _f_lineup   = _mex.submit(mlb_get_batting_order_with_hands, mlb_opp) if mlb_opp else None
+            _f_platoon  = _mex.submit(mlb_get_platoon_splits, mlb_pitcher)
+            _f_pitches  = _mex.submit(mlb_estimate_pitch_count, mlb_pitcher)
 
         try:    _pstats  = _f_pstats.result(timeout=12)
         except: _pstats  = {}
@@ -5552,8 +5754,12 @@ if st.session_state.active_sport == "mlb":
         _velo_from_savant = _savant.get("velo") if _savant else None
         try:    _weather = _f_weather.result(timeout=8) if _f_weather else {}
         except: _weather = {}
-        try:    _lineup  = _f_lineup.result(timeout=8) if _f_lineup else {}
-        except: _lineup  = {}
+        try:    _lineup   = _f_lineup.result(timeout=8) if _f_lineup else {}
+        except: _lineup   = {}
+        try:    _platoon  = _f_platoon.result(timeout=10)
+        except: _platoon  = {}
+        try:    _pitchcnt = _f_pitches.result(timeout=10)
+        except: _pitchcnt = {}
 
         # Re-fetch splits with correct pitcher hand
         if mlb_opp and _phand:
@@ -5805,21 +6011,55 @@ if st.session_state.active_sport == "mlb":
                 if _wx_impact == "Helps Over":  _wx_adj = -0.04
                 elif _wx_impact == "Hurts Over": _wx_adj = +0.05
 
-            # ── Signal 12: Batting order / lineup strength
-            _lineup_confirmed = _lineup.get("confirmed", False) if _lineup else False
-            _lineup_order     = _lineup.get("order", []) if _lineup else []
-            _lineup_note_txt  = _lineup.get("lineup_note","") if _lineup else ""
-            _lineup_adj       = 0.0
-            # Partial lineup (< 7 posted) = uncertain — mild penalty on strong picks
+            # ── Signal 12: Batting order + platoon composition ─────────────
+            _lineup_confirmed  = _lineup.get("confirmed", False) if _lineup else False
+            _lineup_order      = _lineup.get("order", []) if _lineup else []
+            _lineup_note_txt   = _lineup.get("lineup_note","") if _lineup else ""
+            _lhb_count         = _lineup.get("lhb_count", 0) if _lineup else 0
+            _rhb_count         = _lineup.get("rhb_count", 0) if _lineup else 0
+            _lhb_pct           = _lineup.get("lhb_pct", 0.5) if _lineup else 0.5
+            _order_hands       = _lineup.get("order_with_hands", []) if _lineup else []
+            _lineup_adj        = 0.0
+
+            # Platoon signal — use pitcher's actual vsL/vsR K rate vs tonight's mix
+            _platoon_vs_l  = _platoon.get("vs_l") if _platoon else None
+            _platoon_vs_r  = _platoon.get("vs_r") if _platoon else None
+            _platoon_adj   = 0.0
+            if _lineup_confirmed and _order_hands and _platoon_vs_l and _platoon_vs_r:
+                # Weighted K rate for tonight's actual lineup
+                _lineup_kr = (_lhb_pct * _platoon_vs_l +
+                              (1 - _lhb_pct) * _platoon_vs_r)
+                # Vs blended opponent K% from splits
+                _opp_kr_blended = ((_splits.get("vs_l",0) or 0) * _lhb_pct +
+                                   (_splits.get("vs_r",0) or 0) * (1-_lhb_pct))
+                # Divergence from overall K% — if lineup is more favorable/unfavorable
+                _opp_kr_overall = _splits.get("overall") or (okpct if okpct else 0.22)
+                if _opp_kr_overall > 0:
+                    _platoon_div = (_lineup_kr / _opp_kr_overall) - 1.0
+                    _platoon_adj = max(-0.06, min(0.06, _platoon_div * 0.25))
+
+            # Pitch count estimate
+            _pc_avg    = _pitchcnt.get("avg_pitches") if _pitchcnt else None
+            _pc_limit  = _pitchcnt.get("on_limit", False) if _pitchcnt else False
+            _pc_est    = _pitchcnt.get("limit_est") if _pitchcnt else None
+            _pc_adj    = 0.0
+            if _pc_avg:
+                if _pc_avg >= 100:    _pc_adj = +0.03  # goes deep — more K opportunities
+                elif _pc_avg >= 90:   _pc_adj = +0.01  # average depth
+                elif _pc_avg < 75:    _pc_adj = -0.08  # very short — hard to hit over
+                elif _pc_avg < 85:    _pc_adj = -0.04  # limited
+
+            # Partial lineup penalty
             if _lineup_order and len(_lineup_order) < 7:
-                _lineup_adj = -0.02  # uncertainty penalty
+                _lineup_adj = -0.02
 
             # ── Apply all 12 signals
             adj = mlb_apply_adj(whr, okpct, psig, mlb_side)
             adj = max(0.05, min(0.95, adj
                       + _ha_adj + _form_adj + _rest_adj
                       + _k9_adj + _swstr_adj + _velo_adj + _ip_adj
-                      + _ump_adj + _wx_adj + _lineup_adj))
+                      + _ump_adj + _wx_adj + _lineup_adj
+                      + _platoon_adj + _pc_adj))
             tier = mlb_verdict(adj, edge, mlb_side)
 
             # Consistency
@@ -5896,6 +6136,20 @@ if st.session_state.active_sport == "mlb":
             _side_txt = _tonight.get("pitcher_side","")
             if _side_txt:
                 _pills.append(f"<span class='flag-pill flat'>{'🏠 Home' if _side_txt=='home' else '✈️ Away'} start · {_phand}HP</span>")
+
+            # Platoon composition
+            if _platoon_vs_l and _platoon_vs_r and _order_hands:
+                _pl_flag = "up" if _platoon_adj > 0.01 else ("down" if _platoon_adj < -0.01 else "flat")
+                _pl_txt  = f"🎯 {_lhb_count}L/{_rhb_count}R lineup · vsL:{_platoon_vs_l:.0%} vsR:{_platoon_vs_r:.0%}"
+                _pills.append(f"<span class='flag-pill {_pl_flag}'>{_pl_txt}</span>")
+            elif _platoon_vs_l and _platoon_vs_r:
+                _pills.append(f"<span class='flag-pill flat'>↕️ vsL:{_platoon_vs_l:.0%} vsR:{_platoon_vs_r:.0%} · lineup TBD</span>")
+
+            # Pitch count estimate
+            if _pc_avg:
+                _pc_flag = "down" if _pc_limit else ("up" if _pc_avg >= 100 else "flat")
+                _pc_warn = f"⚠️ ~{_pc_avg}p limit — K ceiling capped" if _pc_limit else f"📊 ~{_pc_avg} pitches avg ({_pitchcnt.get('starts_analyzed',0)} starts)"
+                _pills.append(f"<span class='flag-pill {_pc_flag}'>{_pc_warn}</span>")
 
             # Velocity
             if _velo and _velo > 0:
@@ -6135,7 +6389,7 @@ if st.session_state.active_sport == "mlb":
 
                 <div style='color:#f97316;font-size:0.65rem;letter-spacing:0.15em;text-transform:uppercase;
                             border-bottom:1px solid #1a2333;padding-bottom:4px;margin:14px 0 10px 0;'>
-                    SIGNAL TRACE — 12 SIGNALS
+                    SIGNAL TRACE — 14 SIGNALS
                 </div>
                 </div>
                 """, unsafe_allow_html=True)
@@ -6187,11 +6441,12 @@ if st.session_state.active_sport == "mlb":
                 # Base = whr → then apply: opp_k, park, then individual adjs
                 _mlb_base_adj = mlb_apply_adj(whr, okpct, psig, mlb_side)
                 _mlb_adjs = [_ha_adj, _form_adj, _rest_adj, _k9_adj,
-                             _swstr_adj, _velo_adj, _ip_adj, _ump_adj, _wx_adj, _lineup_adj]
+                             _swstr_adj, _velo_adj, _ip_adj, _ump_adj, _wx_adj,
+                             _lineup_adj, _platoon_adj, _pc_adj]
                 _mlb_adj_labels = [
                     "Home/Away split", "Recent form", "Rest days", "K/9 rate",
                     "SwStr%/K%", "Velocity", "Avg IP/start", "Umpire zone",
-                    "Weather", "Batting order"
+                    "Weather", "Batting order", "Platoon matchup", "Pitch count est"
                 ]
                 _mlb_running = _mlb_base_adj
                 _mlb_steps = []
@@ -6232,7 +6487,9 @@ if st.session_state.active_sport == "mlb":
                     "Avg IP/start":     f"{_avg_ip:.1f} IP" if _avg_ip > 0 else "N/A",
                     "Umpire zone":      f"{_ump_name.split()[-1]} ({_ump_tend})" if _ump_name else "TBD",
                     "Weather":          _weather.get("condition","N/A") if _weather else "N/A",
-                    "Batting order":    f"{len(_lineup_order)}/9" if _lineup_order else "Not posted",
+                    "Batting order":    f"{len(_lineup_order)}/9 · {_lhb_count}L/{_rhb_count}R" if _order_hands else (f"{len(_lineup_order)}/9" if _lineup_order else "Not posted"),
+                    "Platoon matchup":  f"vsL:{_platoon_vs_l:.1%} vsR:{_platoon_vs_r:.1%} · {_lhb_count}L/{_rhb_count}R tonight" if (_platoon_vs_l and _platoon_vs_r) else "Lineup TBD",
+                    "Pitch count est":  f"~{_pc_avg} pitches avg · {'⚠️ On limit' if _pc_limit else 'No limit detected'}" if _pc_avg else "N/A",
                 }
 
                 for _lbl2, _a, _bef, _aft in _mlb_steps:
@@ -6324,7 +6581,9 @@ if st.session_state.active_sport == "mlb":
                             {"✅ Velo" if _velo else "❌ Velo"} ·
                             {"✅ Umpire" if _ump_name else "⚠️ TBD"} ·
                             {"✅ Weather" if _weather and _weather.get("temp_f") else "⚠️ N/A"} ·
-                            {"✅ Lineup" if _lineup_confirmed else "⚠️ TBD"}
+                            {"✅ Lineup" if _lineup_confirmed else "⚠️ TBD"} ·
+                            {"✅ Platoon" if (_platoon_vs_l and _platoon_vs_r) else "⚠️ N/A"} ·
+                            {"✅ PitchCnt" if _pc_avg else "⚠️ N/A"}
                         </td>
                     </tr>
                     <tr style='border-top:1px solid #1a2333;'>
