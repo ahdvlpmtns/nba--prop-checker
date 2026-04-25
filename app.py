@@ -4818,53 +4818,9 @@ if st.session_state.active_sport == "mlb":
             bf    = int(stat.get("battersFaced", 0) or 0)
             swstr = round(float(stat.get("strikeOuts",0)) / max(bf,1), 3) if bf > 0 else None
 
-            # Fetch average fastball velocity via pitchMix stat type
-            velo = None
-            try:
-                pm = _req.get(
-                    f"https://statsapi.mlb.com/api/v1/people/{pid}/stats",
-                    params={"stats": "pitchMix", "group": "pitching",
-                            "season": datetime.datetime.now().year,
-                            "gameType": "R"},
-                    timeout=8
-                )
-                if pm.ok:
-                    pm_splits = pm.json().get("stats",[{}])[0].get("splits",[])
-                    # pitchMix returns one row per pitch type — find the primary pitch
-                    # (sinker or 4-seam) and get its avg speed
-                    best_pct  = 0
-                    for sp in pm_splits:
-                        _s    = sp.get("stat", {})
-                        _pct  = float(_s.get("percentage", 0) or 0)
-                        _spd  = float(_s.get("avgSpeed", 0) or 0)
-                        if _pct > best_pct and 75 < _spd < 103:
-                            best_pct = _pct
-                            velo     = round(_spd, 1)
-                # Fallback: try prior season if current has no data
-                if not velo:
-                    pm2 = _req.get(
-                        f"https://statsapi.mlb.com/api/v1/people/{pid}/stats",
-                        params={"stats": "pitchMix", "group": "pitching",
-                                "season": datetime.datetime.now().year - 1,
-                                "gameType": "R"},
-                        timeout=8
-                    )
-                    if pm2.ok:
-                        pm2_splits = pm2.json().get("stats",[{}])[0].get("splits",[])
-                        best_pct2  = 0
-                        for sp in pm2_splits:
-                            _s   = sp.get("stat", {})
-                            _pct = float(_s.get("percentage", 0) or 0)
-                            _spd = float(_s.get("avgSpeed", 0) or 0)
-                            if _pct > best_pct2 and 75 < _spd < 103:
-                                best_pct2 = _pct
-                                velo      = round(_spd, 1)
-            except Exception:
-                pass
-
             return {"k9": k9, "swstr": swstr, "bb9": bb9, "era": era,
                     "avg_ip": avg_ip, "whip": whip, "ip_total": ip_f,
-                    "starts": starts, "velo": velo}
+                    "starts": starts}
         except Exception:
             return empty
 
@@ -5248,7 +5204,9 @@ if st.session_state.active_sport == "mlb":
 
                 if _best_velo or _best_whiff:
                     return {"swstr_pct": _best_whiff, "velo": _best_velo,
-                            "k_pct": None, "bb_pct": None}
+                            "k_pct": None, "bb_pct": None,
+                            "_source": f"Savant pitch-arsenal {_yr}",
+                            "_usage": _best_usage}
 
             # Method 2: Savant statcast leaderboard
             for _yr in [season, season-1]:
@@ -5562,6 +5520,8 @@ if st.session_state.active_sport == "mlb":
         except: _splits  = {}
         try:    _savant  = _f_savant.result(timeout=12)
         except: _savant  = {}
+        # Extract velocity from Savant result
+        _velo_from_savant = _savant.get("velo") if _savant else None
         try:    _weather = _f_weather.result(timeout=8) if _f_weather else {}
         except: _weather = {}
         try:    _lineup  = _f_lineup.result(timeout=8) if _f_lineup else {}
@@ -5786,18 +5746,11 @@ if st.session_state.active_sport == "mlb":
                 if _expected_k:
                     _ip_note = f"Avg {_avg_ip:.1f} IP → ~{_expected_k:.1f} Ks expected"
 
-            # ── Signal 9b: Fastball velocity
-            # Priority order: pstats pitchMix → Savant CSV
-            if not _velo and _pstats.get("velo"):
-                _velo = _pstats["velo"]
-            # Sanity check
+            # ── Signal 9b: Fastball velocity from Savant pitch-arsenal-stats
+            # _velo comes from _savant["velo"] set in mlb_get_savant_stats
+            # Sanity check — fastball 75-103mph range
             if _velo and (_velo > 103 or _velo < 75):
                 _velo = None
-            # Last resort: estimate from K/9 + SwStr% pattern
-            # Pitchers with high K/9 (9+) and low SwStr% tend to have
-            # above-avg velo even if we can't fetch it
-            if not _velo and _k9 >= 9.0:
-                _velo = None  # still don't guess — just leave N/A
             _velo_adj = 0.0
             if _velo and _velo > 0:
                 if _velo >= 97:    _velo_adj = +0.05  # elite velocity
