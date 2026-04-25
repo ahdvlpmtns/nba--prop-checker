@@ -5550,6 +5550,168 @@ if st.session_state.active_sport == "mlb":
             return empty
 
 
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def mlb_get_velocity_trend(pitcher_name: str, n_recent: int = 4) -> dict:
+        """
+        Detect velocity trend from recent game logs vs season avg.
+        A pitcher losing 2+ mph is a red flag regardless of K/9.
+        Returns: {avg_velo, recent_velo, trend_mph, trend: "Up"/"Down"/"Stable", source}
+        """
+        empty = {"avg_velo": None, "recent_velo": None, "trend_mph": 0.0,
+                 "trend": "Stable", "source": "none"}
+        try:
+            import requests as _req, io, datetime as _dtx
+            _norm  = lambda s: s.lower().strip().replace(".", "").replace("-", " ")
+            _target = _norm(pitcher_name)
+            _parts  = [p for p in _target.split() if len(p) > 2]
+            _last   = _target.split()[-1]
+            season  = _dtx.datetime.now().year
+            _HDRS   = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                                     "AppleWebKit/537.36 Chrome/124.0 Safari/537.36",
+                       "Referer": "https://baseballsavant.mlb.com/"}
+
+            # Fetch pitch-movement data — has per-start velocity
+            # We'll fetch all pitch types and get avg_speed across starts
+            all_speeds = []
+            for _pt in ["FF", "SI", "FC"]:  # fastball pitch types only
+                try:
+                    r = _req.get(
+                        "https://baseballsavant.mlb.com/leaderboard/pitch-movement",
+                        params={"year": season, "team": "", "min": 1,
+                                "pitch_type": _pt, "hand": "", "csv": "true"},
+                        headers=_HDRS, timeout=10
+                    )
+                    if not r.ok or len(r.text) < 200: continue
+                    df = pd.read_csv(io.StringIO(r.text), low_memory=False)
+                    nc = next((c for c in df.columns if "name" in c.lower()), None)
+                    if nc is None: continue
+                    df["_n"] = df[nc].astype(str).apply(
+                        lambda n: _norm(" ".join(reversed(n.split(", ")))
+                                  if ", " in n else n))
+                    rows = df[df["_n"].apply(lambda n: all(p in n for p in _parts))]
+                    if rows.empty:
+                        rows = df[df["_n"].apply(lambda n: _last in n)]
+                    if rows.empty: continue
+                    for _, row in rows.iterrows():
+                        spd = row.get("avg_speed")
+                        try:
+                            v = float(spd)
+                            if 75 < v < 103: all_speeds.append(v)
+                        except: pass
+                    if all_speeds: break
+                except Exception: continue
+
+            if not all_speeds: return empty
+
+            avg_v = round(sum(all_speeds) / len(all_speeds), 1)
+
+            # Compare to prior season for trend
+            prior_v = None
+            for _pt in ["FF", "SI"]:
+                try:
+                    r2 = _req.get(
+                        "https://baseballsavant.mlb.com/leaderboard/pitch-movement",
+                        params={"year": season - 1, "team": "", "min": 1,
+                                "pitch_type": _pt, "hand": "", "csv": "true"},
+                        headers=_HDRS, timeout=10
+                    )
+                    if not r2.ok: continue
+                    df2 = pd.read_csv(io.StringIO(r2.text), low_memory=False)
+                    nc2 = next((c for c in df2.columns if "name" in c.lower()), None)
+                    if nc2 is None: continue
+                    df2["_n"] = df2[nc2].astype(str).apply(
+                        lambda n: _norm(" ".join(reversed(n.split(", ")))
+                                  if ", " in n else n))
+                    rows2 = df2[df2["_n"].apply(lambda n: all(p in n for p in _parts))]
+                    if rows2.empty:
+                        rows2 = df2[df2["_n"].apply(lambda n: _last in n)]
+                    if not rows2.empty:
+                        v2 = float(rows2.iloc[0].get("avg_speed", 0) or 0)
+                        if 75 < v2 < 103:
+                            prior_v = v2
+                            break
+                except Exception: continue
+
+            trend_mph = round(avg_v - prior_v, 1) if prior_v else 0.0
+            if trend_mph >= 1.0:      trend = "Up"
+            elif trend_mph <= -1.0:   trend = "Down"
+            else:                     trend = "Stable"
+
+            return {
+                "avg_velo":    avg_v,
+                "prior_velo":  prior_v,
+                "trend_mph":   trend_mph,
+                "trend":       trend,
+                "source":      f"{season} vs {season-1}" if prior_v else str(season),
+            }
+        except Exception:
+            return empty
+
+
+    @st.cache_data(ttl=1800, show_spinner=False)
+    def mlb_get_injury_status(pitcher_name: str) -> dict:
+        """
+        Check if pitcher is on IL or has injury designation.
+        Uses ESPN MLB injuries endpoint + MLB Stats API transactions.
+        Returns: {status: "Active"/"IL-10"/"IL-15"/"IL-60"/"DTD"/"Out",
+                  description: str, is_available: bool}
+        """
+        empty = {"status": "Active", "description": "", "is_available": True}
+        try:
+            import requests as _req
+            _norm   = lambda s: s.lower().strip()
+            _target = _norm(pitcher_name)
+            _parts  = [p for p in _target.split() if len(p) > 2]
+            _last   = _target.split()[-1]
+
+            # ESPN injuries endpoint
+            r = _req.get(
+                "https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/injuries",
+                params={"limit": 200}, timeout=8
+            )
+            if r.ok:
+                injuries = r.json().get("injuries", [])
+                for inj in injuries:
+                    name = _norm(inj.get("athlete", {}).get("displayName", ""))
+                    if not (all(p in name for p in _parts) or
+                            (_last in name and len(_last) > 4)):
+                        continue
+                    status = inj.get("status", "")
+                    desc   = inj.get("shortComment") or inj.get("longComment", "")
+                    is_avail = status.lower() not in ("out", "injured reserve",
+                                                       "day-to-day", "questionable")
+                    return {
+                        "status":       status,
+                        "description":  str(desc)[:120] if desc else "",
+                        "is_available": is_avail,
+                    }
+
+            # MLB Stats API transactions fallback
+            import datetime as _dtx
+            today = _dtx.date.today().strftime("%Y-%m-%d")
+            wk_ago = (_dtx.date.today() - _dtx.timedelta(days=14)).strftime("%Y-%m-%d")
+            r2 = _req.get(
+                "https://statsapi.mlb.com/api/v1/transactions",
+                params={"startDate": wk_ago, "endDate": today, "sportId": 1},
+                timeout=8
+            )
+            if r2.ok:
+                for t in r2.json().get("transactions", []):
+                    pname = _norm(t.get("person", {}).get("fullName", ""))
+                    if not (all(p in pname for p in _parts) or _last in pname):
+                        continue
+                    desc = t.get("typeDesc", "")
+                    if any(x in desc.lower() for x in ["il", "injured", "disabled"]):
+                        return {
+                            "status":       desc,
+                            "description":  t.get("description", "")[:120],
+                            "is_available": False,
+                        }
+        except Exception:
+            pass
+        return empty
+
+
     def mlb_weighted_hr(logs, line, stat, side):
         vals = pd.to_numeric(logs[stat], errors="coerce").dropna().reset_index(drop=True)
         n = len(vals)
@@ -5730,7 +5892,7 @@ if st.session_state.active_sport == "mlb":
 
         # Parallel fetch all new signals
         import concurrent.futures as _cfu
-        with _cfu.ThreadPoolExecutor(max_workers=10) as _mex:
+        with _cfu.ThreadPoolExecutor(max_workers=12) as _mex:
             _f_pstats   = _mex.submit(mlb_get_pitcher_season_stats, mlb_pitcher)
             _f_phand    = _mex.submit(mlb_get_pitcher_hand, mlb_pitcher)
             _f_ump      = _mex.submit(mlb_get_umpire_k_tendency, mlb_home) if mlb_home else None
@@ -5740,6 +5902,8 @@ if st.session_state.active_sport == "mlb":
             _f_lineup   = _mex.submit(mlb_get_batting_order_with_hands, mlb_opp) if mlb_opp else None
             _f_platoon  = _mex.submit(mlb_get_platoon_splits, mlb_pitcher)
             _f_pitches  = _mex.submit(mlb_estimate_pitch_count, mlb_pitcher)
+            _f_injury   = _mex.submit(mlb_get_injury_status, mlb_pitcher)
+            _f_vtrender = _mex.submit(mlb_get_velocity_trend, mlb_pitcher)
 
         try:    _pstats  = _f_pstats.result(timeout=12)
         except: _pstats  = {}
@@ -5761,6 +5925,10 @@ if st.session_state.active_sport == "mlb":
         except: _platoon  = {}
         try:    _pitchcnt = _f_pitches.result(timeout=10)
         except: _pitchcnt = {}
+        try:    _injury   = _f_injury.result(timeout=8)
+        except: _injury   = {"status": "Active", "description": "", "is_available": True}
+        try:    _vtrender = _f_vtrender.result(timeout=12)
+        except: _vtrender = {}
 
         # Re-fetch splits with correct pitcher hand
         if mlb_opp and _phand:
@@ -6097,7 +6265,7 @@ if st.session_state.active_sport == "mlb":
             adj = mlb_apply_adj(whr, okpct, psig, mlb_side)
             adj = max(0.05, min(0.95, adj
                       + _ha_adj + _form_adj + _rest_adj
-                      + _k9_adj + _swstr_adj + _velo_adj + _ip_adj
+                      + _k9_adj + _swstr_adj + _velo_adj + _vtrend_adj + _ip_adj
                       + _ump_adj + _wx_adj + _lineup_adj
                       + _platoon_adj + _pc_adj))
             tier = mlb_verdict(adj, edge, mlb_side,
@@ -6228,6 +6396,28 @@ if st.session_state.active_sport == "mlb":
             if _ip_note:
                 _pills.append(f"<span class='flag-pill down'>⚠️ {_ip_note}</span>")
 
+            # ── Injury / Status Banner ─────────────────────────────────
+            _inj_status = _injury.get("status","Active")
+            _inj_desc   = _injury.get("description","")
+            _is_avail   = _injury.get("is_available", True)
+            if not _is_avail or _inj_status.lower() not in ("active","","available"):
+                _inj_col = "#ff3d5c" if not _is_avail else "#ffc107"
+                _inj_bg  = "rgba(255,61,92,0.1)" if not _is_avail else "rgba(255,193,7,0.08)"
+                _inj_bdr = "rgba(255,61,92,0.35)" if not _is_avail else "rgba(255,193,7,0.3)"
+                _inj_icon = "🚫" if not _is_avail else "⚠️"
+                st.markdown(
+                    f"<div style='background:{_inj_bg};border:1px solid {_inj_bdr};"
+                    f"border-left:4px solid {_inj_col};border-radius:0 12px 12px 0;"
+                    f"padding:0.75rem 1.1rem;margin-bottom:0.75rem;'>"
+                    f"<div style='font-family:Plus Jakarta Sans,sans-serif;font-weight:800;"
+                    f"color:{_inj_col};font-size:0.9rem;'>{_inj_icon} {_inj_status}"
+                    f"{'— DO NOT BET' if not _is_avail else ''}</div>"
+                    f"<div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;"
+                    f"color:#9aaec4;margin-top:3px;'>{_inj_desc}</div>"
+                    f"</div>",
+                    unsafe_allow_html=True
+                )
+
             st.markdown("<div class='section-header'>Key Stats</div>", unsafe_allow_html=True)
             _c1,_c2,_c3,_c4 = st.columns(4)
             with _c1:
@@ -6282,6 +6472,40 @@ if st.session_state.active_sport == "mlb":
                 st.markdown(f"<div class='stat-card'><div class='stat-label'>Umpire Zone</div>"
                             f"<div class='stat-value {_ump_c}' style='font-size:1.4rem;'>{_ump_d}</div>"
                             f"<div class='stat-hint'>{_ump_tend} K zone · {_ump_kpg:.1f} K/g avg</div></div>",unsafe_allow_html=True)
+
+            # Row 3 — Velocity trend card added
+            _c9b, _c10b, _c11, _c12 = st.columns(4)
+            with _c11:
+                if _vtrender.get("avg_velo"):
+                    _vt_col = "green" if _vtrend_dir=="Up" else ("red" if _vtrend_dir=="Down" else "yellow")
+                    _vt_icon = "📈" if _vtrend_dir=="Up" else ("📉" if _vtrend_dir=="Down" else "➡️")
+                    _vt_diff = f"{_vtrend_mph:+.1f}mph vs {_vtrender.get('prior_velo',''):.0f}" if _vtrender.get("prior_velo") else ""
+                    st.markdown(
+                        f"<div class='stat-card'>"
+                        f"<div class='stat-label'>Velocity Trend</div>"
+                        f"<div class='stat-value {_vt_col}' style='font-size:1.4rem;'>{_vt_icon} {_vtrend_dir}</div>"
+                        f"<div class='stat-hint'>{_vtrender.get('avg_velo',0):.1f}mph this season"
+                        f"{(' · ' + _vt_diff) if _vt_diff else ''}</div>"
+                        f"</div>", unsafe_allow_html=True
+                    )
+                else:
+                    st.markdown(
+                        "<div class='stat-card'><div class='stat-label'>Velocity Trend</div>"
+                        "<div style='color:#6b7f96;font-family:JetBrains Mono,monospace;font-size:0.7rem;margin-top:6px;'>No trend data</div></div>",
+                        unsafe_allow_html=True
+                    )
+            with _c12:
+                # Injury status card
+                _inj_c2 = "red" if not _is_avail else ("yellow" if _inj_status.lower() not in ("active","","available") else "green")
+                _inj_lbl = _inj_status if _inj_status else "Active"
+                st.markdown(
+                    f"<div class='stat-card'>"
+                    f"<div class='stat-label'>Injury Status</div>"
+                    f"<div class='stat-value {_inj_c2}' style='font-size:1.1rem;font-weight:800;'>"
+                    f"{'🚫' if not _is_avail else '✅' if _inj_lbl in ('Active','') else '⚠️'} {_inj_lbl or 'Active'}</div>"
+                    f"<div class='stat-hint'>{_inj_desc[:60] if _inj_desc else 'No reported issues'}</div>"
+                    f"</div>", unsafe_allow_html=True
+                )
 
             # Row 3 — Pitch Count + Platoon
             _c9, _c10 = st.columns(2)
@@ -6419,15 +6643,60 @@ if st.session_state.active_sport == "mlb":
             with st.expander(_log_label, expanded=False):
                 if _season_note:
                     st.markdown(_season_note, unsafe_allow_html=True)
-                st.dataframe(
-                    _d[["DATE","OPP","IP","K","BB","ER","HIT"]],
-                    use_container_width=True,
-                    hide_index=True,
-                    height=min(len(_d) * 38 + 40, 340)
+                # Compact HTML table — tighter rows, cleaner look
+                _rows_html = ""
+                for _, row in _d.iterrows():
+                    _hit_col = "#00e896" if row["HIT"] == "✅" else "#ff3d5c"
+                    _hit_sym = row["HIT"]
+                    _rows_html += (
+                        f"<tr style='border-bottom:1px solid rgba(255,255,255,0.04);'>"
+                        f"<td style='padding:5px 8px;color:#9aaec4;font-size:0.68rem;white-space:nowrap;'>{row['DATE']}</td>"
+                        f"<td style='padding:5px 8px;color:#f0f4f8;font-size:0.68rem;font-weight:600;'>{row['OPP']}</td>"
+                        f"<td style='padding:5px 8px;color:#6b7f96;font-size:0.65rem;'>{row['IP']}</td>"
+                        f"<td style='padding:5px 8px;color:#f0f4f8;font-size:0.72rem;font-weight:800;text-align:center;'>{int(row['K'])}</td>"
+                        f"<td style='padding:5px 8px;color:#6b7f96;font-size:0.65rem;text-align:center;'>{int(row['BB'])}</td>"
+                        f"<td style='padding:5px 8px;color:#6b7f96;font-size:0.65rem;text-align:center;'>{int(row['ER'])}</td>"
+                        f"<td style='padding:5px 8px;color:{_hit_col};font-size:0.75rem;text-align:center;'>{_hit_sym}</td>"
+                        f"</tr>"
+                    )
+                st.markdown(
+                    f"<table style='width:100%;border-collapse:collapse;font-family:JetBrains Mono,monospace;'>"
+                    f"<thead><tr style='border-bottom:1px solid rgba(255,255,255,0.1);'>"
+                    f"<th style='padding:4px 8px;color:#6b7f96;font-size:0.58rem;letter-spacing:0.1em;text-align:left;font-weight:600;'>DATE</th>"
+                    f"<th style='padding:4px 8px;color:#6b7f96;font-size:0.58rem;letter-spacing:0.1em;text-align:left;font-weight:600;'>OPP</th>"
+                    f"<th style='padding:4px 8px;color:#6b7f96;font-size:0.58rem;letter-spacing:0.1em;font-weight:600;'>IP</th>"
+                    f"<th style='padding:4px 8px;color:#6b7f96;font-size:0.58rem;letter-spacing:0.1em;text-align:center;font-weight:600;'>K</th>"
+                    f"<th style='padding:4px 8px;color:#6b7f96;font-size:0.58rem;letter-spacing:0.1em;text-align:center;font-weight:600;'>BB</th>"
+                    f"<th style='padding:4px 8px;color:#6b7f96;font-size:0.58rem;letter-spacing:0.1em;text-align:center;font-weight:600;'>ER</th>"
+                    f"<th style='padding:4px 8px;color:#6b7f96;font-size:0.58rem;letter-spacing:0.1em;text-align:center;font-weight:600;'>HIT</th>"
+                    f"</tr></thead>"
+                    f"<tbody>{_rows_html}</tbody>"
+                    f"</table>",
+                    unsafe_allow_html=True
                 )
 
             tier_emoji={"Strong Over":"🟢","Lean Over":"🟡","Strong Under":"🔴","Lean Under":"🟠","Pass":"⚪"}
             _cl="Predictable" if cons>=0.5 else ("Variable" if cons>=0.35 else "Volatile")
+            # ── Share text ────────────────────────────────────────────
+            _share_emoji = {"Strong Over":"🟢","Lean Over":"🟡","Strong Under":"🔴","Lean Under":"🟠","Pass":"⚪"}.get(tier,"⚪")
+            _share_lines = [
+                f"{_share_emoji} {mlb_pitcher} {mlb_side.upper()} {mlb_line} {_lbl.upper()}S",
+                f"PropIQ {_sc}/100 · {tier} · {adj:.0%} adj hit rate",
+            ]
+            if _velo and _swstr:
+                _share_lines.append(f"K/9: {_k9:.1f} · SwStr: {_swstr:.0%} · Velo: {_velo:.1f}mph")
+            _share_lines.append("#PropIQ #MLB #PrizePicks")
+            _share_txt = chr(10).join(_share_lines)
+
+            if not _is_avail:
+                st.markdown(
+                    "<div style='background:rgba(255,61,92,0.15);border:2px solid #ff3d5c;"
+                    "border-radius:12px;padding:0.75rem 1rem;margin-bottom:0.75rem;text-align:center;"
+                    "font-family:Plus Jakarta Sans,sans-serif;font-weight:800;color:#ff3d5c;font-size:1rem;'>"
+                    "🚫 PITCHER ON IL / INJURED — DO NOT BET THIS PROP</div>",
+                    unsafe_allow_html=True
+                )
+
             st.markdown("<div class='section-header'>Verdict</div>",unsafe_allow_html=True)
             st.markdown(
                 f"<div class='verdict-banner {css}'>"
@@ -6442,6 +6711,11 @@ if st.session_state.active_sport == "mlb":
                 f"<div><div class='verdict-label'>Consistency</div><div style='font-size:1.4rem;font-weight:800;color:#f0f0f0;'>{cons:.0%}</div>"
                 f"<div style='font-family:JetBrains Mono,monospace;font-size:0.6rem;color:#555;'>{_cl}</div></div>"
                 f"</div></div>",unsafe_allow_html=True)
+
+            # Share button
+            with st.expander("📤 Share this pick", expanded=False):
+                st.code(_share_txt, language=None)
+                st.caption("Copy and paste into Discord, group chats, or social media")
 
             # ── MLB Signal Debugger ──────────────────────────────────
             with st.expander("🔬  Show signal breakdown (debug)"):
