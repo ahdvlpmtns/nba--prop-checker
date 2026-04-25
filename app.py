@@ -923,27 +923,161 @@ div[data-testid="stDataFrame"] {
 .stat-card:nth-child(4) { animation-delay: 0.16s; }
 
 /* ── Mobile ── */
+/* ── Mobile — iPhone-first layout ── */
 @media (max-width: 768px) {
+    /* Layout */
     .block-container {
-        padding-left: 0.6rem !important;
-        padding-right: 0.6rem !important;
+        padding-left: 0.5rem !important;
+        padding-right: 0.5rem !important;
         padding-top: 0 !important;
-        padding-bottom: 5rem !important;
+        padding-bottom: 6rem !important;
+        max-width: 100% !important;
     }
-    .pl-logo { font-size: 1.65rem !important; letter-spacing: -1.5px !important; }
-    .stat-value { font-size: 1.75rem !important; }
-    .verdict-tier { font-size: 2.2rem !important; }
-    .verdict-banner { padding: 1.1rem 1.1rem; border-radius: var(--r-md); }
-    div[data-testid="stColumn"] { padding: 0 3px !important; }
-    .stButton > button {
-        padding: 1rem 1.2rem !important;
-        min-height: 52px !important;
-        font-size: 0.88rem !important;
+    /* Header */
+    .pl-header { padding: 0.7rem 0.9rem !important; }
+    .pl-logo { font-size: 1.5rem !important; letter-spacing: -1.5px !important; }
+    .pl-sub { display: none !important; }
+    .pl-icon { width: 40px !important; height: 32px !important; }
+    .pl-badge { font-size: 0.5rem !important; padding: 3px 10px !important; }
+
+    /* Ticker */
+    .pl-ticker-wrap { height: 28px !important; }
+    .pl-ticker-scroll { font-size: 0.55rem !important; }
+    .pl-ticker-label { font-size: 0.48rem !important; padding: 0 8px !important; }
+
+    /* Score cards — full horizontal scroll, tighter */
+    .score-card { min-width: 130px !important; padding: 6px 10px !important; }
+    .score-card-teams { font-size: 0.7rem !important; }
+    .score-card-score { font-size: 0.95rem !important; }
+
+    /* Stat cards — force 2-col grid on mobile instead of 4 */
+    div[data-testid="stColumn"] { padding: 0 2px !important; }
+    .stat-card {
+        border-radius: var(--r-sm) !important;
+        padding: 0.75rem 0.8rem !important;
+        margin-bottom: 0.4rem !important;
+    }
+    .stat-value { font-size: 1.6rem !important; letter-spacing: -1px !important; }
+    .stat-label { font-size: 0.5rem !important; }
+    .stat-hint { font-size: 0.55rem !important; }
+
+    /* Verdict */
+    .verdict-banner {
+        padding: 1rem 1rem !important;
         border-radius: var(--r-md) !important;
+        flex-direction: column !important;
+        gap: 0.75rem !important;
     }
-    .stat-card { border-radius: var(--r-sm) !important; padding: 0.85rem 0.9rem !important; }
-    .pl-header { padding: 0.8rem 1rem !important; }
+    .verdict-tier { font-size: 2rem !important; letter-spacing: -1.5px !important; }
+
+    /* Buttons — thumb-friendly */
+    .stButton > button {
+        padding: 1rem 1rem !important;
+        min-height: 54px !important;
+        font-size: 0.85rem !important;
+        border-radius: var(--r-md) !important;
+        letter-spacing: 0.04em !important;
+    }
+
+    /* Pills — wrap properly */
+    .flag-row { gap: 4px !important; }
+    .flag-pill { font-size: 0.55rem !important; padding: 3px 8px !important; }
+
+    /* Section headers */
+    .section-header { font-size: 0.55rem !important; margin: 1.5rem 0 0.6rem !important; }
+
+    /* Inputs — bigger touch targets */
+    div[data-testid="stNumberInput"] input { font-size: 1.1rem !important; }
+    div[data-testid="stSelectbox"] > div > div { font-size: 0.9rem !important; }
+
+    /* Expanders */
+    div[data-testid="stExpander"] summary { font-size: 0.82rem !important; }
+
+    /* Game context cards */
+    .score-strip { gap: 6px !important; padding: 6px 0 10px 0 !important; }
+
+    /* Parlay cards */
+    .parlay-leg { padding: 0.75rem 0.9rem !important; }
 }
+
+/* Very small phones */
+@media (max-width: 390px) {
+    .pl-logo { font-size: 1.3rem !important; }
+    .stat-value { font-size: 1.4rem !important; }
+    .score-card { min-width: 115px !important; }
+}
+
+/* ── Parlay Builder ── */
+.parlay-builder {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    overflow: hidden;
+    margin-bottom: 1rem;
+}
+.parlay-header {
+    background: linear-gradient(135deg, rgba(0,196,204,0.12), rgba(0,196,204,0.04));
+    border-bottom: 1px solid rgba(0,196,204,0.15);
+    padding: 0.85rem 1.2rem;
+    display: flex; justify-content: space-between; align-items: center;
+}
+.parlay-leg {
+    padding: 0.85rem 1.2rem;
+    border-bottom: 1px solid var(--border);
+    display: flex; justify-content: space-between; align-items: center;
+    gap: 12px; flex-wrap: wrap;
+    transition: background 0.2s;
+    animation: fadeSlideUp 0.3s ease both;
+}
+.parlay-leg:hover { background: rgba(255,255,255,0.02); }
+.parlay-leg:last-child { border-bottom: none; }
+.parlay-leg-name {
+    font-family: var(--font-display);
+    font-size: 0.88rem; font-weight: 700;
+    color: var(--text);
+}
+.parlay-leg-pick {
+    font-family: var(--font-mono);
+    font-size: 0.62rem; font-weight: 600;
+    color: var(--accent);
+    background: rgba(0,196,204,0.08);
+    border: 1px solid rgba(0,196,204,0.2);
+    padding: 2px 10px; border-radius: var(--r-full);
+}
+.parlay-leg-conf {
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    white-space: nowrap;
+}
+.parlay-remove {
+    background: rgba(255,61,92,0.1);
+    border: 1px solid rgba(255,61,92,0.2);
+    color: #ff3d5c;
+    font-size: 0.65rem; cursor: pointer;
+    padding: 2px 8px; border-radius: var(--r-sm);
+    font-family: var(--font-mono);
+    transition: all 0.15s;
+}
+.parlay-remove:hover { background: rgba(255,61,92,0.2); }
+.parlay-summary {
+    background: rgba(0,196,204,0.06);
+    border-top: 1px solid rgba(0,196,204,0.15);
+    padding: 0.85rem 1.2rem;
+}
+.parlay-odds {
+    font-family: var(--font-display);
+    font-size: 1.6rem; font-weight: 900;
+    color: var(--accent); letter-spacing: -1px;
+}
+.parlay-risk-badge {
+    font-family: var(--font-mono);
+    font-size: 0.58rem; font-weight: 700;
+    padding: 3px 10px; border-radius: var(--r-full);
+    letter-spacing: 0.06em;
+}
+.parlay-risk-low    { background: rgba(0,232,150,0.12); color: var(--green);  border: 1px solid rgba(0,232,150,0.25); }
+.parlay-risk-medium { background: rgba(255,193,7,0.1);  color: var(--yellow); border: 1px solid rgba(255,193,7,0.25); }
+.parlay-risk-high   { background: rgba(255,61,92,0.1);  color: var(--red);    border: 1px solid rgba(255,61,92,0.25); }
 
 /* ── Model note ── */
 .model-note {
@@ -4812,6 +4946,97 @@ with st.sidebar:
         st.cache_data.clear()
         st.success("Cache cleared!")
 
+
+    # ── Parlay Builder ────────────────────────────────────────
+    _legs = st.session_state.get("parlay_legs", [])
+    st.markdown(
+        f"<div class='section-header'>🎯 My Parlay ({len(_legs)}/6)</div>",
+        unsafe_allow_html=True
+    )
+
+    if not _legs:
+        st.markdown(
+            "<div style='background:rgba(0,196,204,0.05);border:1px dashed rgba(0,196,204,0.2);"
+            "border-radius:10px;padding:0.85rem;text-align:center;"
+            "font-family:JetBrains Mono,monospace;font-size:0.6rem;color:#6b7f96;'>"
+            "No picks added yet<br>"
+            "<span style='font-size:0.54rem;'>Hit ➕ Add to Parlay after any verdict</span>"
+            "</div>",
+            unsafe_allow_html=True
+        )
+    else:
+        for _i, _leg in enumerate(_legs):
+            _vc = {"Strong Over":"#00e896","Lean Over":"#ffc107",
+                   "Strong Under":"#ff3d5c","Lean Under":"#f97316"}.get(_leg["verdict"],"#6b7f96")
+            _ve = {"Strong Over":"🟢","Lean Over":"🟡",
+                   "Strong Under":"🔴","Lean Under":"🟠"}.get(_leg["verdict"],"⚪")
+            _leg_cols = st.columns([8,1])
+            with _leg_cols[0]:
+                st.markdown(
+                    f"<div class='parlay-leg'>"
+                    f"<div style='flex:1;'>"
+                    f"<div class='parlay-leg-name'>{_leg['player']}</div>"
+                    f"<div style='display:flex;gap:5px;margin-top:3px;flex-wrap:wrap;align-items:center;'>"
+                    f"<span class='parlay-leg-pick'>{_ve} {_leg['side']} {_leg['line']}</span>"
+                    f"<span class='parlay-leg-conf' style='color:{_vc};'>{_leg['adj']}%</span>"
+                    f"<span style='font-family:JetBrains Mono,monospace;font-size:0.52rem;"
+                    f"color:#6b7f96;background:rgba(255,255,255,0.04);padding:1px 5px;"
+                    f"border-radius:4px;'>{_leg.get('sport','')}</span>"
+                    f"</div></div></div>",
+                    unsafe_allow_html=True
+                )
+            with _leg_cols[1]:
+                if st.button("✕", key=f"rm_{_i}", help="Remove this pick"):
+                    st.session_state.parlay_legs.pop(_i)
+                    st.rerun()
+
+        # Combined stats
+        _combined_prob = 1.0
+        for _l in _legs:
+            _combined_prob *= (_l["adj"] / 100.0)
+        _combined_pct = round(_combined_prob * 100, 1)
+        _decimal = round(1.0 / max(_combined_prob, 0.001), 2)
+        _american = (f"+{round((_decimal-1)*100)}"
+                     if _decimal >= 2.0
+                     else f"-{round(100/max(_decimal-1,0.001))}")
+
+        _all_strong = all("Strong" in l["verdict"] for l in _legs)
+        _correlated = len(set(l["sport"] for l in _legs)) == 1 and len(_legs) > 2
+        if _combined_pct >= 20 and _all_strong: _risk="parlay-risk-low";  _rlbl="✅ Strong"
+        elif _combined_pct >= 8:                _risk="parlay-risk-medium";_rlbl="🟡 Moderate"
+        else:                                   _risk="parlay-risk-high";  _rlbl="🔴 Risky"
+
+        st.markdown(
+            f"<div class='parlay-summary'>"
+            f"<div style='display:flex;justify-content:space-between;align-items:center;'>"
+            f"<div><div style='font-family:JetBrains Mono,monospace;font-size:0.52rem;"
+            f"color:#6b7f96;'>COMBINED</div>"
+            f"<div class='parlay-odds'>{_combined_pct}%</div></div>"
+            f"<div style='text-align:right;'>"
+            f"<div style='font-family:JetBrains Mono,monospace;font-size:0.52rem;color:#6b7f96;'>ODDS</div>"
+            f"<div style='font-family:Plus Jakarta Sans,sans-serif;font-size:1.1rem;"
+            f"font-weight:800;color:#f0f4f8;'>{_american}</div></div></div>"
+            f"<div style='margin-top:8px;display:flex;gap:5px;flex-wrap:wrap;'>"
+            f"<span class='parlay-risk-badge {_risk}'>{_rlbl}</span>"
+            f"{'<span class="parlay-risk-badge parlay-risk-medium">⚠️ Correlated</span>' if _correlated else ''}"
+            f"</div></div>",
+            unsafe_allow_html=True
+        )
+
+        # Share
+        with st.expander("📤 Share Parlay"):
+            _pl = ["🎯 PropIQ Parlay"] + [
+                f"{'🟢' if 'Strong Over' in l['verdict'] else '🟡' if 'Lean Over' in l['verdict'] else '🔴' if 'Strong Under' in l['verdict'] else '🟠'} "
+                f"{l['player']} {l['side']} {l['line']} ({l['adj']}%)"
+                for l in _legs
+            ] + [f"Combined: {_combined_pct}% · {_american}", "#PropIQ #PrizePicks"]
+            st.code("\n".join(_pl), language=None)
+
+        if st.button("🗑️ Clear Parlay", key="clear_all_parlay", use_container_width=True):
+            st.session_state.parlay_legs = []
+            st.rerun()
+
+    st.markdown("---")
     st.markdown("""
     <div style='margin-top:2rem; padding:0.75rem; background:#0c1018; border:1px solid #1a2333;
                 border-radius:8px; font-family:DM Mono; font-size:0.62rem; color:#6b7f96; line-height:1.7;'>
@@ -7179,6 +7404,36 @@ if st.session_state.active_sport == "mlb":
                 f"<div><div class='verdict-label'>Consistency</div><div style='font-size:1.4rem;font-weight:800;color:#f0f0f0;'>{cons:.0%}</div>"
                 f"<div style='font-family:JetBrains Mono,monospace;font-size:0.6rem;color:#555;'>{_cl}</div></div>"
                 f"</div></div>",unsafe_allow_html=True)
+
+            # ── Add to Parlay button ────────────────────────────────
+            if tier not in ("Pass",):
+                _mpc1, _mpc2 = st.columns([3,1])
+                with _mpc2:
+                    if st.button("➕ Add to Parlay",
+                                 key=f"mlb_parlay_{mlb_pitcher}_{mlb_line}",
+                                 use_container_width=True):
+                        _new_mlb_leg = {
+                            "player":     mlb_pitcher,
+                            "prop":       f"{mlb_prop} {mlb_side}",
+                            "line":       mlb_line,
+                            "side":       mlb_side,
+                            "verdict":    tier,
+                            "confidence": _sc,
+                            "adj":        round(adj * 100, 1),
+                            "sport":      "MLB",
+                            "added":      __import__("datetime").datetime.now().strftime("%I:%M %p"),
+                        }
+                        _exists = any(
+                            l["player"] == mlb_pitcher and l["line"] == mlb_line
+                            for l in st.session_state.parlay_legs
+                        )
+                        if not _exists and len(st.session_state.parlay_legs) < 6:
+                            st.session_state.parlay_legs.append(_new_mlb_leg)
+                            st.toast(f"✅ {mlb_pitcher} added to parlay!", icon="🎯")
+                        elif _exists:
+                            st.toast("Already in parlay", icon="⚠️")
+                        else:
+                            st.toast("Parlay full (6 legs max)", icon="🚫")
 
             # Share button
             with st.expander("📤 Share this pick", expanded=False):
@@ -10815,6 +11070,38 @@ if st.session_state.logs is not None:
         """, unsafe_allow_html=True)
 
 
+
+
+    # ── Add to Parlay ─────────────────────────────────────
+    if verdict_tier not in ("Pass",):
+        _atp_col1, _atp_col2 = st.columns([3,1])
+        with _atp_col2:
+            if st.button("➕ Add to Parlay",
+                         key=f"nba_parlay_{full_name}_{line}_{side}",
+                         use_container_width=True):
+                import datetime as _dtnow
+                _new_leg = {
+                    "player":     full_name,
+                    "prop":       f"Points {side}",
+                    "line":       float(line),
+                    "side":       side,
+                    "verdict":    verdict_tier,
+                    "confidence": _conf_score,
+                    "adj":        round(adjusted * 100, 1),
+                    "sport":      "NBA",
+                    "added":      _dtnow.datetime.now().strftime("%I:%M %p"),
+                }
+                _exists = any(
+                    l["player"] == full_name and abs(l["line"] - float(line)) < 0.1
+                    for l in st.session_state.parlay_legs
+                )
+                if not _exists and len(st.session_state.parlay_legs) < 6:
+                    st.session_state.parlay_legs.append(_new_leg)
+                    st.toast(f"✅ {full_name} added to parlay!", icon="🎯")
+                elif _exists:
+                    st.toast("Already in parlay", icon="⚠️")
+                else:
+                    st.toast("Parlay full (6 legs max)", icon="🚫")
 
     # ── Share + Add to Tracker ───────────────
     _share_col, _tracker_col = st.columns(2)
