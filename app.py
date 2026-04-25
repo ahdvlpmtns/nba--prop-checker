@@ -5522,6 +5522,10 @@ if st.session_state.active_sport == "mlb":
         except: _savant  = {}
         # Extract velocity from Savant result
         _velo_from_savant = _savant.get("velo") if _savant else None
+        # TEMP DEBUG — show raw Savant return in app
+        _savant_debug = {k:v for k,v in (_savant or {}).items() if not k.startswith("_")}
+        _savant_debug["_source"] = (_savant or {}).get("_source","none")
+        _savant_debug["_usage"]  = (_savant or {}).get("_usage", 0)
         try:    _weather = _f_weather.result(timeout=8) if _f_weather else {}
         except: _weather = {}
         try:    _lineup  = _f_lineup.result(timeout=8) if _f_lineup else {}
@@ -6062,6 +6066,7 @@ if st.session_state.active_sport == "mlb":
 
             # ── MLB Signal Debugger ──────────────────────────────────
             with st.expander("🔬  Show signal breakdown (debug)"):
+                st.caption(f"🔍 Savant raw: {_savant_debug} | velo_from_savant: {_velo_from_savant} | _velo final: {_velo}")
                 st.markdown("""
                 <div style='font-family:JetBrains Mono,monospace;font-size:0.65rem;color:#6b7f96;
                             background:#0d1520;border:1px solid rgba(255,255,255,0.06);border-radius:8px;
