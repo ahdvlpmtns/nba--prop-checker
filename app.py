@@ -6412,10 +6412,19 @@ if st.session_state.active_sport == "mlb":
                                 f"color:#ffc107;margin-bottom:6px;'>"
                                 f"⚠️ {_cur_starts} start{'s' if _cur_starts!=1 else ''} in {_cur_year} · "
                                 f"{_prev_starts} from prior season (marked ✦) — early season, small sample</div>")
-            st.markdown("<div class='section-header'>Last 10 Starts</div>", unsafe_allow_html=True)
-            if _season_note:
-                st.markdown(_season_note, unsafe_allow_html=True)
-            st.dataframe(_d[["DATE","OPP","IP","K","OUTS","BB","ER","HIT"]],use_container_width=True,hide_index=True)
+            # ── Minimized game log — collapsed by default ─────────────
+            _hit_count  = _d["HIT"].eq("✅").sum() if "HIT" in _d.columns else 0
+            _total_g    = len(_d)
+            _log_label  = f"📋 Last {_total_g} Starts — {_hit_count}/{_total_g} hit · avg {avg_val:.1f} {_lbl}"
+            with st.expander(_log_label, expanded=False):
+                if _season_note:
+                    st.markdown(_season_note, unsafe_allow_html=True)
+                st.dataframe(
+                    _d[["DATE","OPP","IP","K","BB","ER","HIT"]],
+                    use_container_width=True,
+                    hide_index=True,
+                    height=min(len(_d) * 38 + 40, 340)
+                )
 
             tier_emoji={"Strong Over":"🟢","Lean Over":"🟡","Strong Under":"🔴","Lean Under":"🟠","Pass":"⚪"}
             _cl="Predictable" if cons>=0.5 else ("Variable" if cons>=0.35 else "Volatile")
