@@ -6043,11 +6043,30 @@ if st.session_state.active_sport == "mlb":
             _pc_limit  = _pitchcnt.get("on_limit", False) if _pitchcnt else False
             _pc_est    = _pitchcnt.get("limit_est") if _pitchcnt else None
             _pc_adj    = 0.0
+            _pc_k_ceiling = None  # expected max Ks given pitch count
+
             if _pc_avg:
-                if _pc_avg >= 100:    _pc_adj = +0.03  # goes deep — more K opportunities
-                elif _pc_avg >= 90:   _pc_adj = +0.01  # average depth
-                elif _pc_avg < 75:    _pc_adj = -0.08  # very short — hard to hit over
-                elif _pc_avg < 85:    _pc_adj = -0.04  # limited
+                # Estimate K ceiling: pitchers throw ~15-17 pitches/inning
+                # K rate roughly 1 K per 3-4 batters faced
+                _innings_est    = _pc_avg / 16.0          # avg pitches per inning
+                _batters_est    = _innings_est * 3.0      # batters per inning
+                _k_rate_overall = (_k9 / 9.0) if _k9 > 0 else 0.24
+                _pc_k_ceiling   = round(_batters_est * _k_rate_overall, 1)
+
+                # Base adj from pitch count
+                if _pc_avg >= 100:    _pc_adj = +0.03
+                elif _pc_avg >= 90:   _pc_adj = +0.01
+                elif _pc_avg < 75:    _pc_adj = -0.08
+                elif _pc_avg < 85:    _pc_adj = -0.04
+
+                # Extra penalty if K ceiling is at or below the line
+                # This catches the case where even a perfect outing can't hit over
+                if _pc_k_ceiling and mlb_prop == "Strikeouts":
+                    _ceiling_gap = _pc_k_ceiling - mlb_line
+                    if _ceiling_gap <= 0:        # ceiling is at or below line
+                        _pc_adj = min(_pc_adj, -0.15)  # heavy additional penalty
+                    elif _ceiling_gap <= 0.5:    # very tight ceiling
+                        _pc_adj = min(_pc_adj, -0.10)
 
             # Partial lineup penalty
             if _lineup_order and len(_lineup_order) < 7:
@@ -6147,8 +6166,13 @@ if st.session_state.active_sport == "mlb":
 
             # Pitch count estimate
             if _pc_avg:
-                _pc_flag = "down" if _pc_limit else ("up" if _pc_avg >= 100 else "flat")
-                _pc_warn = f"⚠️ ~{_pc_avg}p limit — K ceiling capped" if _pc_limit else f"📊 ~{_pc_avg} pitches avg ({_pitchcnt.get('starts_analyzed',0)} starts)"
+                _pc_flag = "down" if (_pc_limit or (_pc_k_ceiling and _pc_k_ceiling <= mlb_line)) else ("up" if _pc_avg >= 100 else "flat")
+                if _pc_k_ceiling and _pc_k_ceiling <= mlb_line:
+                    _pc_warn = f"🚫 ~{_pc_avg}p → ~{_pc_k_ceiling:.1f}K ceiling ≤ line {mlb_line} — hard cap"
+                elif _pc_limit:
+                    _pc_warn = f"⚠️ ~{_pc_avg}p limit → ~{_pc_k_ceiling:.1f}K ceiling"
+                else:
+                    _pc_warn = f"📊 ~{_pc_avg}p avg → ~{_pc_k_ceiling:.1f}K est ({_pitchcnt.get('starts_analyzed',0)} starts)"
                 _pills.append(f"<span class='flag-pill {_pc_flag}'>{_pc_warn}</span>")
 
             # Velocity
@@ -6489,7 +6513,7 @@ if st.session_state.active_sport == "mlb":
                     "Weather":          _weather.get("condition","N/A") if _weather else "N/A",
                     "Batting order":    f"{len(_lineup_order)}/9 · {_lhb_count}L/{_rhb_count}R" if _order_hands else (f"{len(_lineup_order)}/9" if _lineup_order else "Not posted"),
                     "Platoon matchup":  f"vsL:{_platoon_vs_l:.1%} vsR:{_platoon_vs_r:.1%} · {_lhb_count}L/{_rhb_count}R tonight" if (_platoon_vs_l and _platoon_vs_r) else "Lineup TBD",
-                    "Pitch count est":  f"~{_pc_avg} pitches avg · {'⚠️ On limit' if _pc_limit else 'No limit detected'}" if _pc_avg else "N/A",
+                    "Pitch count est":  f"~{_pc_avg}p → ~{_pc_k_ceiling:.1f} K ceiling · {'⚠️ On limit' if _pc_limit else 'No limit detected'}" if _pc_avg else "N/A",
                 }
 
                 for _lbl2, _a, _bef, _aft in _mlb_steps:
