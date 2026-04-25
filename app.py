@@ -5592,69 +5592,62 @@ if st.session_state.active_sport == "mlb":
     # ── MLB UI ────────────────────────────────────────────────
     st.markdown("<div class='section-header'>⚾ MLB Pitcher Prop Analyzer</div>", unsafe_allow_html=True)
 
-    _mlb_pitchers = sorted(set([
-        # NL West
-        "Yoshinobu Yamamoto","Tyler Glasnow","Roki Sasaki","Bobby Miller","River Ryan",  # LAD
-        "Dylan Cease","Yu Darvish","Michael King","Randy Vasquez","Matt Waldron",          # SDP
-        "Logan Webb","Robbie Ray","Kyle Harrison","Keaton Winn","Hayden Birdsong",         # SFG
-        "Corbin Burnes","Jordan Montgomery","Zac Gallen","Eduardo Rodriguez","Merrill Kelly",# ARI / SFG
-        "Kyle Freeland","Austin Gomber","Ryan Feltner","Dakota Hudson",                    # COL
-        # NL East
-        "Zack Wheeler","Aaron Nola","Cristopher Sanchez","Jesus Luzardo","Tyler Phillips", # PHI
-        "Spencer Strider","Max Fried","Reynaldo Lopez","Charlie Morton","AJ Smith-Shawver",# ATL
-        "Kodai Senga","Sean Manaea","Clay Holmes","Frankie Montas","Griffin McGarry",      # NYM
-        "MacKenzie Gore","Jake Irvin","Mitchell Parker","DJ Herz","Trevor Williams",       # WSN
-        "Sandy Alcantara","Braxton Garrett","Cal Quantrill","Roddery Munoz",               # MIA
-        # NL Central
-        "Shota Imanaga","Matthew Boyd","Colin Rea","Jameson Taillon","Justin Steele",      # CHC
-        "Corbin Burnes","Freddy Peralta","Jacob Misiorowski","Quinn Priester",             # MIL
-        "Sonny Gray","Miles Mikolas","Lance Lynn","Matthew Liberatore","Andre Pallante",   # STL
-        "Paul Skenes","Mitch Keller","Bubba Chandler","Marco Gonzales","Bailey Falter",   # PIT
-        "Hunter Greene","Andrew Abbott","Nick Lodolo","Brady Singer","Rhett Lowder",       # CIN
-        # AL East
-        "Gerrit Cole","Carlos Rodon","Luis Gil","Clarke Schmidt","Will Warren",            # NYY
-        "Garrett Crochet","Tanner Houck","Kutter Crawford","Richard Fitts","Nick Pivetta", # BOS
-        "Grayson Rodriguez","Zach Eflin","Trevor Rogers","Dean Kremer","Albert Suarez",    # BAL
-        "Kevin Gausman","Chris Bassitt","Bowden Francis","Yariel Rodriguez","Erik Swanson",# TOR
-        "Taj Bradley","Shane McClanahan","Zack Littell","Ryan Pepiot","Drew Rasmussen",   # TBR
-        # AL Central
-        "Tarik Skubal","Casey Mize","Jackson Jobe","Reese Olson","Keider Montero",        # DET
-        "Pablo Lopez","Joe Ryan","Bailey Ober","David Festa","Chris Paddack",             # MIN
-        "Tanner Bibee","Matthew Boyd","Gavin Williams","Ben Lively","Joey Cantillo",      # CLE
-        "Seth Lugo","Cole Ragans","Michael Wacha","Alec Marsh","Kris Bubic",              # KCR
-        "Garrett Crochet","Chris Flexen","Jonathan Cannon","Davis Martin","Erick Fedde",   # CHW
-        # AL West
-        "Framber Valdez","Hunter Brown","Ronel Blanco","Spencer Arrighetti","Lance McCullers Jr.", # HOU
-        "Luis Castillo","George Kirby","Logan Gilbert","Bryan Woo","Bryce Miller",        # SEA
-        "Nathan Eovaldi","Andrew Heaney","Michael Lorenzen","Cody Bradford","Kumar Rocker",# TEX
-        "JP Sears","Luis Medina","Joey Estes","Mitch Spence","Jeffrey Springs",           # ATH
-        "Tyler Anderson","Patrick Sandoval","Griffin Canning","Reid Detmers","Jose Soriano",# LAA
-        # Notable starters / top arms
-        "Chris Sale","Yu Darvish","Max Scherzer","Justin Verlander","Shohei Ohtani",
-        "Blake Snell","Lucas Giolito","Yusei Kikuchi","Cam Schlittler",
-        # Recent call-ups / active arms
-        "Brandon Sproat","Jacob Misiorowski","Chad Patrick","DL Hall",
-        "Jose Soriano","Parker Messick","Ryan Pepiot","Landen Roupp",
-        "Bailey Falter","Rhett Lowder","Cade Povich","Hurston Waldrep",
-        "Spencer Jones","Bowden Francis","Kumar Rocker","Jackson Jobe",
-        # LAD / Brooklyn arms
-        "Emmett Sheehan","River Ryan","Justin Wrobleski","Ben Casparius",
-        # Additional active starters missing from list
-        "Taj Bradley","Shane McClanahan","Zack Littell","Drew Rasmussen",
-        "Michael Wacha","Seth Lugo","Cole Ragans","Alec Marsh",
-        "MacKenzie Gore","Jake Irvin","Mitchell Parker","DJ Herz",
-        "Sandy Alcantara","Braxton Garrett","Cal Quantrill","Jesus Luzardo",
-        "Aaron Civale","Andrew Abbott","Nick Lodolo","Hunter Greene",
-        "Graham Ashcraft","Clarke Schmidt","Nestor Cortes","Carlos Rodon",
-        "Dylan Cease","Michael King","Randy Vasquez","Matt Waldron",
-        "Hayden Birdsong","Keaton Winn","Kyle Harrison","Robbie Ray",
-        "Logan Webb","Logan Gilbert","George Kirby","Bryan Woo",
-        "Luis Castillo","Bryce Miller","Marco Gonzales","Chris Flexen",
-        "Lance McCullers Jr.","Spencer Arrighetti","Ronel Blanco",
-        "Hunter Brown","Framber Valdez","Justin Verlander","Jose Urquidy",
-        "Cristopher Sanchez","Aaron Nola","Zack Wheeler","Jesus Luzardo",
-        "Max Fried","Reynaldo Lopez","Spencer Strider","Charlie Morton",
-    ]))
+    # ── Dynamic pitcher list from MLB Stats API ──────────────────────────────
+    @st.cache_data(ttl=86400, show_spinner=False)  # refresh once a day
+    def _mlb_fetch_pitcher_list() -> list:
+        """
+        Fetch all active MLB pitchers from the roster API.
+        Falls back to a hardcoded seed list if the API is unavailable.
+        """
+        import requests as _req, datetime as _dtx
+        season = _dtx.datetime.now().year
+        pitchers = set()
+        try:
+            # Fetch all active players for the current season
+            for _gt in ["R", "S"]:
+                r = _req.get(
+                    "https://statsapi.mlb.com/api/v1/sports/1/players",
+                    params={"season": season, "gameType": _gt},
+                    timeout=12
+                )
+                if r.ok:
+                    for p in r.json().get("people", []):
+                        pos = p.get("primaryPosition", {}).get("code", "")
+                        if pos in ("1", "P"):  # pitchers only
+                            name = p.get("fullName", "").strip()
+                            if name and len(name) > 3:
+                                pitchers.add(name)
+                    if pitchers:
+                        break
+        except Exception:
+            pass
+
+        # Always include key names as seed in case API is slow/unavailable
+        _seed = [
+            "Tarik Skubal","Paul Skenes","Yoshinobu Yamamoto","Tyler Glasnow",
+            "Zack Wheeler","Aaron Nola","Gerrit Cole","Shota Imanaga",
+            "Logan Webb","Dylan Cease","Hunter Greene","Framber Valdez",
+            "Emmett Sheehan","Brandon Sproat","Noah Schultz","Joey Cantillo",
+            "Garrett Crochet","Trevor Rogers","Luis Castillo","George Kirby",
+            "Spencer Strider","Max Fried","Reynaldo Lopez","Chris Sale",
+            "Yu Darvish","Michael King","Freddy Peralta","Corbin Burnes",
+            "MacKenzie Gore","Pablo Lopez","Joe Ryan","Bailey Ober",
+            "Tanner Bibee","Seth Lugo","Cole Ragans","Logan Gilbert",
+            "Bryan Woo","Lance McCullers Jr.","Hunter Brown","Ronel Blanco",
+            "Nathan Eovaldi","Kumar Rocker","JP Sears","Luis Medina",
+            "Patrick Sandoval","Reid Detmers","Tyler Anderson","Sandy Alcantara",
+            "Braxton Garrett","Jesus Luzardo","Kodai Senga","Sean Manaea",
+            "Cristopher Sanchez","Zac Gallen","Eduardo Rodriguez","Merrill Kelly",
+            "Jordan Montgomery","Graham Ashcraft","Nick Lodolo","Andrew Abbott",
+            "Mitch Keller","Marco Gonzales","Taj Bradley","Shane McClanahan",
+        ]
+        for n in _seed:
+            pitchers.add(n)
+
+        return sorted(pitchers)
+
+    _mlb_pitchers = _mlb_fetch_pitcher_list()
+
 
     _mc1,_mc2,_mc3,_mc4 = st.columns([2.5,1,1,1])
     with _mc1:
