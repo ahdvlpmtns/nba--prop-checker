@@ -6046,12 +6046,11 @@ if st.session_state.active_sport == "mlb":
             _pc_k_ceiling = None  # expected max Ks given pitch count
 
             if _pc_avg:
-                # Estimate K ceiling: pitchers throw ~15-17 pitches/inning
-                # K rate roughly 1 K per 3-4 batters faced
-                _innings_est    = _pc_avg / 16.0          # avg pitches per inning
-                _batters_est    = _innings_est * 3.0      # batters per inning
-                _k_rate_overall = (_k9 / 9.0) if _k9 > 0 else 0.24
-                _pc_k_ceiling   = round(_batters_est * _k_rate_overall, 1)
+                # Estimate K ceiling from pitch count
+                # ~16 pitches/inning, K/9 = Ks per 9 innings → K per inning = K/9 ÷ 9
+                _innings_est    = _pc_avg / 16.0           # estimated innings
+                _k_per_inn      = (_k9 / 9.0) if _k9 > 0 else (avg_val / max(_avg_ip, 1.0))
+                _pc_k_ceiling   = round(_innings_est * _k_per_inn, 1)
 
                 # Base adj from pitch count
                 if _pc_avg >= 100:    _pc_adj = +0.03
@@ -6256,6 +6255,47 @@ if st.session_state.active_sport == "mlb":
                 st.markdown(f"<div class='stat-card'><div class='stat-label'>Umpire Zone</div>"
                             f"<div class='stat-value {_ump_c}' style='font-size:1.4rem;'>{_ump_d}</div>"
                             f"<div class='stat-hint'>{_ump_tend} K zone · {_ump_kpg:.1f} K/g avg</div></div>",unsafe_allow_html=True)
+
+            # Row 3 — Pitch Count + Platoon
+            _c9, _c10 = st.columns(2)
+            with _c9:
+                if _pc_avg:
+                    _pc_c  = "red" if (_pc_k_ceiling and _pc_k_ceiling <= mlb_line) else ("yellow" if _pc_limit else ("green" if _pc_avg >= 100 else "yellow"))
+                    _pc_lbl = "🚫 Hard Cap" if (_pc_k_ceiling and _pc_k_ceiling <= mlb_line) else ("⚠️ On Limit" if _pc_limit else "Normal Depth")
+                    st.markdown(
+                        f"<div class='stat-card'>"
+                        f"<div class='stat-label'>Pitch Count Est.</div>"
+                        f"<div class='stat-value {_pc_c}' style='font-size:1.6rem;'>~{_pc_avg}p</div>"
+                        f"<div class='stat-hint'>~{_pc_k_ceiling:.1f}K ceiling · {_pc_lbl}</div>"
+                        f"</div>",
+                        unsafe_allow_html=True
+                    )
+                else:
+                    st.markdown(
+                        "<div class='stat-card'><div class='stat-label'>Pitch Count Est.</div>"
+                        "<div style='color:#6b7f96;font-family:JetBrains Mono,monospace;font-size:0.7rem;margin-top:6px;'>No data yet</div></div>",
+                        unsafe_allow_html=True
+                    )
+            with _c10:
+                if _platoon_vs_l and _platoon_vs_r:
+                    _hand_fav   = "LHB" if _platoon_vs_l > _platoon_vs_r else "RHB"
+                    _hand_c     = "green" if max(_platoon_vs_l, _platoon_vs_r) >= 0.28 else "yellow"
+                    _phand_desc = f"vsL: {_platoon_vs_l:.0%} · vsR: {_platoon_vs_r:.0%}"
+                    st.markdown(
+                        f"<div class='stat-card'>"
+                        f"<div class='stat-label'>Platoon K%</div>"
+                        f"<div class='stat-value {_hand_c}' style='font-size:1.4rem;'>{_phand_desc}</div>"
+                        f"<div class='stat-hint'>Favors {'lefties' if _hand_fav=='LHB' else 'righties'}"
+                        f"{f' · {_lhb_count}L/{_rhb_count}R tonight' if _order_hands else ' · lineup TBD'}</div>"
+                        f"</div>",
+                        unsafe_allow_html=True
+                    )
+                else:
+                    st.markdown(
+                        "<div class='stat-card'><div class='stat-label'>Platoon K%</div>"
+                        "<div style='color:#6b7f96;font-family:JetBrains Mono,monospace;font-size:0.7rem;margin-top:6px;'>Loading splits...</div></div>",
+                        unsafe_allow_html=True
+                    )
 
             # Consistency
             cc2 = "green" if cons>=0.5 else ("yellow" if cons>=0.35 else "red")
