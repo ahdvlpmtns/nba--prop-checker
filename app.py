@@ -4490,22 +4490,7 @@ st.markdown("""
         <span class="pl-badge">V5.0</span>
     </div>
 </div>
-<!-- Dynamic ticker populated by Python below -->
-<div id="propiq-ticker-static" class="pl-ticker-wrap">
-    <div class="pl-ticker-label">
-        <div class="pl-ticker-dot"></div>&nbsp;LIVE
-    </div>
-    <div class="pl-ticker-scroll" id="ticker-content">
-        <span class="pl-ticker-live"><div class="pl-ticker-dot"></div>LIVE</span>
-        NBA PLAYOFFS 2026
-        <span class="pl-ticker-sep">|</span>
-        MLB 2026
-        <span class="pl-ticker-sep">|</span>
-        <span class="pl-ticker-hot">PropIQ · 14 signals · AI-powered</span>
-        <span class="pl-ticker-sep">|</span>
-        Loading live data...
-    </div>
-</div>
+
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
@@ -4628,17 +4613,12 @@ for s in _all_scores:
         )
 
 # Add headlines
-for h in _headlines[:4]:
-    _ticker_items.append(
-        f'<span class="pl-ticker-hot">📰 {h[:80]}{"..." if len(h)>80 else ""}</span>'
-    )
+for h in _headlines[:5]:
+    # Clean headline — no prefix, just the text
+    _hl_clean = h[:90] + ("…" if len(h) > 90 else "")
+    _ticker_items.append(f'<span style="color:#9aaec4;">{_hl_clean}</span>')
 
-# Add PropIQ promo items
-_ticker_items += [
-    '<span class="pl-ticker-hot">🎯 PropIQ · 14-signal NBA + 14-signal MLB model</span>',
-    '📊 Tracking 400+ active player props tonight',
-    '⚡ Real-time pitcher velocity · umpire zones · weather · platoon splits',
-]
+# No promo items — keep ticker clean with just game and news data
 
 _sep = '<span class="pl-ticker-sep">·</span>'
 _ticker_content = _sep.join(_ticker_items)
