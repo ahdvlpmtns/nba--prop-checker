@@ -5179,54 +5179,63 @@ if st.session_state.active_sport == "mlb":
                             except: pass
                 return None
 
-            # Method 1: Savant pitch-arsenal-stats — has avg_speed + whiff_percent
+            # Method 1: Savant pitch-arsenal-stats per pitch type
+            # Velocity only appears in per-pitch-type rows, not all-pitches aggregate
+            # Try fastball types first (FF=4-seam, SI=sinker, FC=cutter) then others
+            _best_velo  = None
+            _best_whiff = None
+            _best_usage = 0.0
+
             for _yr in [season, season-1]:
-                try:
-                    r = _req.get(
-                        "https://baseballsavant.mlb.com/leaderboard/pitch-arsenal-stats",
-                        params={"type":"pitcher","pitchType":"","year":_yr,
-                                "team":"","min":10,"csv":"true"},
-                        headers=_HDRS, timeout=12)
-                    if not r.ok or len(r.text.strip()) < 200: continue
-                    df = pd.read_csv(io.StringIO(r.text), low_memory=False)
-                    nc = next((c for c in df.columns if "name" in c.lower()), None)
-                    if nc is None or df.empty: continue
-                    row = _find_row(df, nc)
-                    if row is None: continue
-                    # Scan ALL numeric columns for velocity range
-                    _all_cols = list(df.columns)
-                    velo = None
-                    # First try obvious speed columns
-                    _spd_cols = [c for c in _all_cols 
-                                 if any(x in c.lower() for x in 
-                                        ["speed","mph","velo","release","fb","ff","si","fc"])]
-                    for _sc in _spd_cols:
-                        try:
-                            _v = float(row[_sc])
-                            if 75 < _v < 103:
-                                velo = round(_v, 1)
-                                break
-                        except: pass
-                    # If still no velo, scan ALL numeric columns for MLB velo range
-                    if not velo:
-                        for _sc in _all_cols:
-                            if _sc.startswith("_"): continue
-                            try:
-                                _v = float(row[_sc])
-                                if 82 < _v < 103:  # tighter range to avoid false positives
-                                    velo = round(_v, 1)
-                                    break
-                            except: pass
-                    whiff = _get(row, df, "whiff_percent","whiff_pct","whiff","swstr")
-                    if whiff and whiff > 1: whiff = round(whiff/100, 3)
-                    # Store column names for debugging
-                    _savant_cols = _all_cols
-                    if velo or whiff:
-                        return {"swstr_pct": whiff, "velo": velo,
-                                "k_pct": None, "bb_pct": None,
-                                "_cols": _savant_cols}
-                except Exception:
-                    continue
+                for _pt in ["SI","FF","FC","CH","SL","CU","ST","FS"]:
+                    try:
+                        r = _req.get(
+                            "https://baseballsavant.mlb.com/leaderboard/pitch-arsenal-stats",
+                            params={"type":"pitcher","pitchType":_pt,"year":_yr,
+                                    "team":"","min":10,"csv":"true"},
+                            headers=_HDRS, timeout=10)
+                        if not r.ok or len(r.text.strip()) < 200: continue
+                        df = pd.read_csv(io.StringIO(r.text), low_memory=False)
+                        nc = next((c for c in df.columns if "name" in c.lower()), None)
+                        if nc is None or df.empty: continue
+                        row = _find_row(df, nc)
+                        if row is None: continue
+
+                        # Get usage % to find primary pitch
+                        usage = 0.0
+                        for _uc in df.columns:
+                            if "percent" in _uc.lower() or "usage" in _uc.lower():
+                                try:
+                                    _u = float(row[_uc])
+                                    if 0 < _u <= 100: usage = _u; break
+                                except: pass
+
+                        # Get velocity
+                        velo = None
+                        for _sc in df.columns:
+                            if any(x in _sc.lower() for x in ["speed","mph","velo","release"]):
+                                try:
+                                    _v = float(row[_sc])
+                                    if 75 < _v < 103:
+                                        velo = round(_v, 1); break
+                                except: pass
+
+                        # Get whiff
+                        whiff = _get(row, df, "whiff_percent","whiff_pct","whiff","swstr")
+                        if whiff and whiff > 1: whiff = round(whiff/100, 3)
+
+                        # Keep the pitch with highest usage (primary pitch)
+                        if usage > _best_usage and (velo or whiff):
+                            _best_usage = usage
+                            if velo: _best_velo  = velo
+                            if whiff: _best_whiff = whiff
+
+                    except Exception:
+                        continue
+
+                if _best_velo or _best_whiff:
+                    return {"swstr_pct": _best_whiff, "velo": _best_velo,
+                            "k_pct": None, "bb_pct": None}
 
             # Method 2: Savant statcast leaderboard
             for _yr in [season, season-1]:
