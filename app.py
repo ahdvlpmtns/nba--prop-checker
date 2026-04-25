@@ -5565,27 +5565,28 @@ if st.session_state.active_sport == "mlb":
         adj += {"Boost":+0.04,"Neutral":0.0,"Penalty":-0.04}.get(park,0.0)*(1 if side=="Over" else -1)
         return max(0.05,min(0.95,adj))
 
-    def mlb_verdict(adj, edge, side):
+    def mlb_verdict(adj, edge, side, pc_ceiling=None, line=None):
         """
         Verdict based on adjusted hit rate (primary) + edge as secondary factor.
-        Adjusted hit rate already incorporates all 12 signals including opponent K%,
-        K/9, SwStr%, velocity, etc. — so edge is a soft filter not a gate.
-        
-        Thresholds:
-        Strong: adj >= 0.64 (signals dominant) OR adj >= 0.58 with positive edge
-        Lean:   adj >= 0.52
-        Pass:   everything else
+        pc_ceiling: estimated max Ks from pitch count — caps verdict if below line.
         """
+        # Pitch count hard cap — if ceiling ≤ line, maximum verdict is Lean
+        _ceiling_capped = (pc_ceiling is not None and line is not None and
+                           pc_ceiling <= line)
+
         if side == "Over":
-            if adj >= 0.72:              return "Strong Over"   # overwhelming signal — edge irrelevant
-            if adj >= 0.64 and edge >= 0: return "Strong Over"  # strong signal + line not crazy
-            if adj >= 0.64 and edge >= -1.5: return "Lean Over" # strong signal but tight line
-            if adj >= 0.52 and edge > 0: return "Lean Over"     # moderate signal + avg above line
+            if not _ceiling_capped:
+                if adj >= 0.72:               return "Strong Over"
+                if adj >= 0.64 and edge >= 0: return "Strong Over"
+            # Ceiling capped or borderline — max Lean Over
+            if adj >= 0.64 and edge >= -1.5:  return "Lean Over"
+            if adj >= 0.52 and edge > 0:      return "Lean Over"
         else:
-            if adj >= 0.72:               return "Strong Under"
-            if adj >= 0.64 and edge <= 0: return "Strong Under"
-            if adj >= 0.64 and edge >= -1.5: return "Lean Under"
-            if adj >= 0.52 and edge < 0:  return "Lean Under"
+            if not _ceiling_capped:
+                if adj >= 0.72:                return "Strong Under"
+                if adj >= 0.64 and edge <= 0:  return "Strong Under"
+            if adj >= 0.64 and edge <= 1.5:    return "Lean Under"
+            if adj >= 0.52 and edge < 0:       return "Lean Under"
         return "Pass"
 
     # ── MLB UI ────────────────────────────────────────────────
@@ -6078,7 +6079,9 @@ if st.session_state.active_sport == "mlb":
                       + _k9_adj + _swstr_adj + _velo_adj + _ip_adj
                       + _ump_adj + _wx_adj + _lineup_adj
                       + _platoon_adj + _pc_adj))
-            tier = mlb_verdict(adj, edge, mlb_side)
+            tier = mlb_verdict(adj, edge, mlb_side,
+                              pc_ceiling=_pc_k_ceiling,
+                              line=mlb_line)
 
             # Consistency
             cv   = vals.std() / avg_val if avg_val > 0 else 1.0
@@ -6790,7 +6793,8 @@ if st.session_state.active_sport == "mlb":
                     _okpct = mlb_get_opp_k_rate(_opp) if _opp else None
                     _psig  = mlb_park_signal(_home) if _home else "Neutral"
                     _adj   = mlb_apply_adj(_whr, _okpct, _psig, "Over")
-                    _tier  = mlb_verdict(_adj, _edge, "Over")
+                    _tier  = mlb_verdict(_adj, _edge, "Over",
+                                         pc_ceiling=None, line=_ln)
                     _cv    = _vals.std()/_avg if _avg>0 else 1.0
                     _cons  = max(0.1, min(0.95, 1.0-_cv*0.8))
                     # MLB: hit rate dominates — edge is less reliable predictor
