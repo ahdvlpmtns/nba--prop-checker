@@ -235,8 +235,8 @@ html, body, [class*="css"] {
 /* ── Ticker ── */
 /* ── Scrolling News Ticker ── */
 @keyframes tickerScroll {
-    0%   { transform: translateX(100%); }
-    100% { transform: translateX(-100%); }
+    0%   { transform: translateX(0); }
+    100% { transform: translateX(-50%); }
 }
 @keyframes liveFlash {
     0%, 100% { opacity: 1; background: #ff3d5c; }
@@ -292,7 +292,7 @@ html, body, [class*="css"] {
 }
 .pl-ticker-scroll {
     display: flex;
-    animation: tickerScroll 40s linear infinite;
+    animation: tickerScroll 60s linear infinite;
     white-space: nowrap;
     padding-left: 80px;
     font-family: var(--font-mono);
@@ -301,6 +301,7 @@ html, body, [class*="css"] {
     letter-spacing: 0.08em;
     gap: 0;
     align-items: center;
+    will-change: transform;
 }
 .pl-ticker-scroll:hover { animation-play-state: paused; }
 .pl-ticker-sep {
@@ -4643,15 +4644,24 @@ _sep = '<span class="pl-ticker-sep">·</span>'
 _ticker_content = _sep.join(_ticker_items)
 
 # Inject dynamic ticker content via JavaScript
+# Calculate animation duration based on content length
+# ~12px per character at 0.6rem, 60px/sec feels like broadcast TV
+_ticker_char_count = len(' '.join([
+    s.get("away","") + s.get("home","") for s in _all_scores
+] + _headlines[:4]))
+_ticker_duration = max(45, min(90, _ticker_char_count // 3))
+
+# Build two copies for seamless loop (translateX -50% trick)
+_ticker_double = (f'<span>{_ticker_content}</span>'
+                  f'<span style="padding-left:60px;">{_ticker_content}</span>')
+
 st.markdown(f"""
 <div class="pl-ticker-wrap">
     <div class="pl-ticker-label">
         <div class="pl-ticker-dot"></div>&nbsp;LIVE
     </div>
-    <div class="pl-ticker-scroll">
-        {_ticker_content}
-        {_sep}
-        {_ticker_content}
+    <div class="pl-ticker-scroll" style="animation-duration:{_ticker_duration}s;">
+        {_ticker_double}
     </div>
 </div>
 """, unsafe_allow_html=True)
