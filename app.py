@@ -5044,17 +5044,22 @@ if st.session_state.active_sport == "mlb":
             wdirs   = hours.get("winddirection_10m", [])
             wcodes  = hours.get("weathercode", [])
 
-            # Find game-time hour (7-8 PM ET typical first pitch)
+            # Find game-time hour — try all common MLB start times
             import datetime as _dtx
             _today  = _dtx.date.today().strftime("%Y-%m-%d")
-            _target = f"{_today}T19:00"  # 7 PM ET
-            _idx    = next((i for i, t in enumerate(times) if t == _target), None)
-            if _idx is None:
-                # Try 6 PM or 8 PM
-                for _h in ["T18:00", "T20:00", "T17:00"]:
+            _tmrw   = (_dtx.date.today() + _dtx.timedelta(days=1)).strftime("%Y-%m-%d")
+            _idx    = None
+            # Try today's game times first, then tomorrow (late night games)
+            for _date_try in [_today, _tmrw]:
+                for _h in ["T19:00","T18:00","T20:00","T17:00","T21:00","T13:00","T16:00"]:
                     _idx = next((i for i, t in enumerate(times)
-                                 if t == f"{_today}{_h}"), None)
+                                 if t == f"{_date_try}{_h}"), None)
                     if _idx is not None: break
+                if _idx is not None: break
+            # Last resort: find the next available future hour
+            if _idx is None:
+                now_str = _dtx.datetime.now().strftime("%Y-%m-%dT%H:00")
+                _idx = next((i for i, t in enumerate(times) if t >= now_str), None)
             if _idx is None or _idx >= len(temps):
                 return empty
 
@@ -5508,7 +5513,7 @@ if st.session_state.active_sport == "mlb":
             _lr = _req.get(
                 f"https://statsapi.mlb.com/api/v1/people/{pid}/stats",
                 params={"stats": "gameLog", "group": "pitching",
-                        "season": season, "gameType": "R,S", "limit": n + 5},
+                        "season": season, "gameType": "R", "limit": n + 5},
                 timeout=10
             )
             if not _lr.ok: return empty
@@ -5517,9 +5522,20 @@ if st.session_state.active_sport == "mlb":
 
             pitch_counts = []
             for sp in splits:
-                st = sp.get("stat", {})
-                np = int(st.get("numberOfPitches", 0) or 0)
-                if np > 30:  # filter out relief appearances
+                st   = sp.get("stat", {})
+                np   = int(st.get("numberOfPitches", 0) or 0)
+                date = sp.get("date", "")[:10]
+                # Exclude spring training (before March 27) and relief appearances
+                # Spring Training pitchers throw 40-65 pitches intentionally — not real data
+                is_spring = False
+                try:
+                    import datetime as _dt3
+                    _gdate = _dt3.date.fromisoformat(date)
+                    # Spring Training ends ~March 26 every year
+                    is_spring = _gdate.month < 4 and _gdate.day < 27
+                except Exception:
+                    pass
+                if np > 65 and not is_spring:  # real starts only (65+ pitches, not spring)
                     pitch_counts.append(np)
 
             if not pitch_counts: return empty
@@ -6481,8 +6497,8 @@ if st.session_state.active_sport == "mlb":
                             f"<div class='stat-value {_ump_c}' style='font-size:1.4rem;'>{_ump_d}</div>"
                             f"<div class='stat-hint'>{_ump_tend} K zone · {_ump_kpg:.1f} K/g avg</div></div>",unsafe_allow_html=True)
 
-            # Row 3 — Velocity trend card added
-            _c9b, _c10b, _c11, _c12 = st.columns(4)
+            # Row 3 — Velocity trend + Injury status
+            _c11, _c12 = st.columns(2)
             with _c11:
                 if _vtrender.get("avg_velo"):
                     _vt_col = "green" if _vtrend_dir=="Up" else ("red" if _vtrend_dir=="Down" else "yellow")
@@ -6515,8 +6531,8 @@ if st.session_state.active_sport == "mlb":
                     f"</div>", unsafe_allow_html=True
                 )
 
-            # Row 3 — Pitch Count + Platoon
-            _c9, _c10 = st.columns(2)
+            # Row 3 — Pitch Count + Platoon (equal columns)
+            _c9, _c10 = st.columns([1, 1])
             with _c9:
                 if _pc_avg:
                     _pc_c  = "red" if (_pc_k_ceiling and _pc_k_ceiling <= mlb_line) else ("yellow" if _pc_limit else ("green" if _pc_avg >= 100 else "yellow"))
