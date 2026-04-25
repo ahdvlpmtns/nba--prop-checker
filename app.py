@@ -16,7 +16,7 @@ import streamlit as st
 
 st.set_page_config(
     page_title="PropIQ — Sports Intelligence",
-    page_icon="🎯",
+    page_icon="propiq_favicon.png",
     layout="wide",
 )
 
@@ -25,6 +25,7 @@ st.set_page_config(
 # ─────────────────────────────────────────────
 
 st.markdown("""
+<link rel="icon" type="image/png" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAENElEQVR4nO1bW2wUVRj+zsxeZvai2bRNK/Wh9E0pJBJDgVJigsQYFfpgfNBAa3wDohEINEBqJKkaA8YXY0zTBI0hWHlAEaMSY5SbkUZf5KmA1kpgiaVcOuzuXHlodtuzc+tS3LNnZ763//v/PXO+b/5/dnYyS1ABMo0tViX1rDD13zUy31rfQl5Eu8HPDMErybt4wF+Dozv1INwJTt1g64B6FQ84axP8CuoN5Ro9rwFBQMmAIJz9IuZqFcqJoKCoORwB1htgDRLE9p+LwHdAaADrDbBGaADrDbBGpBoHmTr2jSOf6Xm+Gof3xP/eAW7i/XLVQuBHIDSA9QZYoyoXwfni1vCnMBsaSnFieAjx41+51pvNzSisWw996TKYLY/ATKdBVBXkzm1ExsYQHT2P2KlfAEN3XaOmDJg3xAhyvX3IP/cCIIpUyopEYCUSUJtboK7pRu6VTUh+eBCRC386LsXfCAgCpvcNIL+hxybeCWZTE+7sH4TWudIxz10H5F7eBO2J5RQXHT0P6YvDEMfHAUmG2rkSuc19sNLpmQJRhPLmTjz0+lYI17PUZ7nqADOTQWHDRoqLjv6G1OB+RMbGZub/9i3ET36P9MBeQJ+dfUuSkH/xJduaXBmgrV4DKxajuMTwEGDZH2mIf11G/MeTFKd2rwUEWvKCR2Dqnfcc+cye/oUubYPe0UHF4j/jEK5eda2P/noOhWeeLcWWLMNY3A7x0sUSt6AOcBPvl7tfmI1NVCxOTHjWi1euOKzRSMVcjYAlJ2iikPesJ/mcfY1kkoq5MoDk7tJEXPKstyTZTuZp0/gyYHKSio1FizzrjdZWGydmr1ExVwZEy+7mjLbFMBsaXaoBrXMVFRNFgfj3OMXxZcDZ04CmzRKEINfb51hrtLWhsO5piov9/JPtdwFXd4LC5CSkb08gv7GnxKlrnwJEEdLRLyH+OwFLlqGu6ERu86tANFqqI9PTkI6O2NbkygAAkD87BL29HfrSZSVO7eqG2tXt/iFNQ/Lg+xBu3LCluBoBAIChI/32AOInjgOm6VsuZLNID+xF9I/fHfPcdQAAQNeRGPoE0tfHZp4HLOmA2foozFQKiMxKIoqC9O4dEG7edF2qpgx4+LXeiuqFbBby4c8pTl3VBWVXP0AIrGQSyu49SL21D0RVHdfwNGBq+05HPvPBgYo2Wk3Ezp2B9fFHuLtlGwBAf+xxKLv6kXp3EDAMW73rNcBNvF+uFhD/4TuqM7QnV0DZ9gZA7C/F1dQIPEhII0cgjRzxrePvW+ABIzSA9QZYIzSA9QZYIzSA9QZYIzSA9QZYw9UAr/v9Ys7r2X8x5/UaTC28IkOAYL4sDcz8gyQcAdYbYA0BqOx/dvWComahnAgC5moNR2BuEIQuKNdo64B6NsFJm6fYerk/8DqpnteAeugGPw0VCeSlIyo5cfcArZlFd+RS15kAAAAASUVORK5CYII=">
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800;900&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&family=JetBrains+Mono:wght@400;500;700&display=swap');
 
