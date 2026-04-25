@@ -4491,12 +4491,25 @@ if st.session_state.active_sport == "mlb":
                         )
                         if _sr.ok:
                             _res = _sr.json().get("people", [])
+                            # Exact match first
                             _match = next(
                                 (p for p in _res
                                  if _last in _norm(p.get("fullName","")) and
                                  (_first in _norm(p.get("fullName","")) or not _first)),
-                                _res[0] if _res else None
+                                None
                             )
+                            # Fuzzy fallback — handles 1-char typos (Emmet→Emmett)
+                            if not _match and _res:
+                                def _close(a, b):
+                                    a, b = a.lower(), b.lower()
+                                    if len(a) >= 4 and len(b) >= 4:
+                                        return a[:4] == b[:4] or a in b or b in a
+                                    return a == b
+                                _match = next(
+                                    (p for p in _res
+                                     if _close(p.get("fullName","").split()[-1], _last)),
+                                    _res[0] if len(_res) == 1 else None
+                                )
                             if _match:
                                 pid = _match["id"]
                                 break
@@ -5437,6 +5450,23 @@ if st.session_state.active_sport == "mlb":
         "Jose Soriano","Parker Messick","Ryan Pepiot","Landen Roupp",
         "Bailey Falter","Rhett Lowder","Cade Povich","Hurston Waldrep",
         "Spencer Jones","Bowden Francis","Kumar Rocker","Jackson Jobe",
+        # LAD / Brooklyn arms
+        "Emmett Sheehan","River Ryan","Justin Wrobleski","Ben Casparius",
+        # Additional active starters missing from list
+        "Taj Bradley","Shane McClanahan","Zack Littell","Drew Rasmussen",
+        "Michael Wacha","Seth Lugo","Cole Ragans","Alec Marsh",
+        "MacKenzie Gore","Jake Irvin","Mitchell Parker","DJ Herz",
+        "Sandy Alcantara","Braxton Garrett","Cal Quantrill","Jesus Luzardo",
+        "Aaron Civale","Andrew Abbott","Nick Lodolo","Hunter Greene",
+        "Graham Ashcraft","Clarke Schmidt","Nestor Cortes","Carlos Rodon",
+        "Dylan Cease","Michael King","Randy Vasquez","Matt Waldron",
+        "Hayden Birdsong","Keaton Winn","Kyle Harrison","Robbie Ray",
+        "Logan Webb","Logan Gilbert","George Kirby","Bryan Woo",
+        "Luis Castillo","Bryce Miller","Marco Gonzales","Chris Flexen",
+        "Lance McCullers Jr.","Spencer Arrighetti","Ronel Blanco",
+        "Hunter Brown","Framber Valdez","Justin Verlander","Jose Urquidy",
+        "Cristopher Sanchez","Aaron Nola","Zack Wheeler","Jesus Luzardo",
+        "Max Fried","Reynaldo Lopez","Spencer Strider","Charlie Morton",
     ]))
 
     _mc1,_mc2,_mc3,_mc4 = st.columns([2.5,1,1,1])
