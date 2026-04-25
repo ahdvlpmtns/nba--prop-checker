@@ -233,22 +233,237 @@ html, body, [class*="css"] {
 }
 
 /* ── Ticker ── */
-.pl-ticker {
-    background: var(--bg2);
-    border-bottom: 1px solid var(--border);
-    padding: 0.4rem 1.4rem;
-    font-family: var(--font-mono);
-    font-size: 0.58rem; color: var(--text3);
-    letter-spacing: 0.12em;
-    display: flex; gap: 1.5rem;
-    margin-bottom: 1.5rem;
+/* ── Scrolling News Ticker ── */
+@keyframes tickerScroll {
+    0%   { transform: translateX(100%); }
+    100% { transform: translateX(-100%); }
 }
-.pl-ticker-item { display: flex; gap: 6px; align-items: center; }
+@keyframes liveFlash {
+    0%, 100% { opacity: 1; background: #ff3d5c; }
+    50%       { opacity: 0.6; background: #ff6b6b; }
+}
+@keyframes scoreUpdate {
+    0%   { transform: scale(1); }
+    50%  { transform: scale(1.05); color: var(--accent); }
+    100% { transform: scale(1); }
+}
+@keyframes hotBadge {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(0,196,204,0); }
+    50%       { box-shadow: 0 0 12px 4px rgba(0,196,204,0.3); }
+}
+@keyframes fadeSlideUp {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+.pl-ticker-wrap {
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    overflow: hidden;
+    position: relative;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    margin-bottom: 0;
+}
+.pl-ticker-wrap::before {
+    content: '';
+    position: absolute; left: 0; top: 0; bottom: 0; width: 60px;
+    background: linear-gradient(90deg, var(--bg), transparent);
+    z-index: 2;
+}
+.pl-ticker-wrap::after {
+    content: '';
+    position: absolute; right: 0; top: 0; bottom: 0; width: 60px;
+    background: linear-gradient(-90deg, var(--bg), transparent);
+    z-index: 2;
+}
+.pl-ticker-label {
+    position: absolute; left: 0; top: 0; bottom: 0;
+    background: var(--accent);
+    color: #000d0e;
+    font-family: var(--font-mono);
+    font-size: 0.55rem; font-weight: 800;
+    letter-spacing: 0.15em;
+    padding: 0 12px;
+    display: flex; align-items: center;
+    z-index: 3;
+    white-space: nowrap;
+}
+.pl-ticker-scroll {
+    display: flex;
+    animation: tickerScroll 40s linear infinite;
+    white-space: nowrap;
+    padding-left: 80px;
+    font-family: var(--font-mono);
+    font-size: 0.6rem;
+    color: var(--text2);
+    letter-spacing: 0.08em;
+    gap: 0;
+    align-items: center;
+}
+.pl-ticker-scroll:hover { animation-play-state: paused; }
+.pl-ticker-sep {
+    color: var(--accent);
+    margin: 0 16px;
+    opacity: 0.5;
+}
+.pl-ticker-hot {
+    color: var(--green);
+    font-weight: 700;
+}
+.pl-ticker-warn {
+    color: var(--yellow);
+    font-weight: 700;
+}
+.pl-ticker-live {
+    display: inline-flex; align-items: center; gap: 5px;
+    background: rgba(255,61,92,0.15);
+    border: 1px solid rgba(255,61,92,0.3);
+    border-radius: 4px;
+    padding: 1px 7px;
+    font-size: 0.52rem; font-weight: 800;
+    color: #ff3d5c;
+    letter-spacing: 0.1em;
+    margin-right: 8px;
+}
 .pl-ticker-dot {
     width: 5px; height: 5px; border-radius: 50%;
-    background: var(--accent);
-    animation: blink 2s ease-in-out infinite;
+    background: #ff3d5c;
+    animation: liveFlash 1s ease-in-out infinite;
 }
+
+/* ── Score Cards ── */
+.score-strip {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    padding: 8px 0 12px 0;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    margin-bottom: 0.5rem;
+}
+.score-strip::-webkit-scrollbar { display: none; }
+.score-card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 8px 14px;
+    min-width: 160px;
+    flex-shrink: 0;
+    cursor: default;
+    transition: border-color 0.2s, transform 0.15s;
+}
+.score-card:hover {
+    border-color: rgba(0,196,204,0.3);
+    transform: translateY(-1px);
+}
+.score-card.live {
+    border-color: rgba(255,61,92,0.3);
+    background: linear-gradient(135deg, rgba(255,61,92,0.05), var(--bg2));
+}
+.score-card-teams {
+    font-family: var(--font-display);
+    font-size: 0.78rem; font-weight: 800;
+    color: var(--text);
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 3px;
+}
+.score-card-score {
+    font-family: var(--font-display);
+    font-size: 1.1rem; font-weight: 900;
+    color: var(--accent);
+    display: flex; justify-content: space-between;
+    letter-spacing: -0.5px;
+}
+.score-card-meta {
+    font-family: var(--font-mono);
+    font-size: 0.52rem; color: var(--text3);
+    margin-top: 3px;
+    display: flex; justify-content: space-between;
+}
+.score-card-live-badge {
+    font-family: var(--font-mono);
+    font-size: 0.48rem; font-weight: 800;
+    color: #ff3d5c; letter-spacing: 0.1em;
+    display: flex; align-items: center; gap: 3px;
+}
+
+/* ── Hot Pick Cards ── */
+.hot-pick-card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    padding: 0.85rem 1rem;
+    transition: border-color 0.2s, transform 0.15s, box-shadow 0.2s;
+    animation: fadeSlideUp 0.3s ease both;
+    position: relative;
+}
+.hot-pick-card:hover {
+    border-color: rgba(0,196,204,0.25);
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-md);
+}
+.hot-pick-card.strong {
+    border-color: rgba(0,232,150,0.2);
+    background: linear-gradient(135deg, rgba(0,232,150,0.04), var(--bg2));
+}
+.hot-pick-card.strong::before {
+    content: '🔥 HOT';
+    position: absolute; top: -1px; right: 12px;
+    background: var(--green);
+    color: #000;
+    font-family: var(--font-mono);
+    font-size: 0.48rem; font-weight: 800;
+    padding: 2px 8px;
+    border-radius: 0 0 6px 6px;
+    letter-spacing: 0.1em;
+    animation: hotBadge 2s ease-in-out infinite;
+}
+
+/* ── Probability Bar ── */
+.prob-bar-wrap {
+    background: rgba(255,255,255,0.05);
+    border-radius: var(--r-full);
+    height: 6px; overflow: hidden;
+    margin-top: 6px;
+}
+.prob-bar-fill {
+    height: 100%;
+    border-radius: var(--r-full);
+    transition: width 1s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ── Confidence Meter ── */
+.conf-meter-wrap {
+    position: relative;
+    display: flex; align-items: center; gap: 12px;
+    margin-top: 8px;
+}
+.conf-meter-track {
+    flex: 1; height: 8px;
+    background: rgba(255,255,255,0.06);
+    border-radius: var(--r-full);
+    overflow: hidden;
+}
+.conf-meter-fill {
+    height: 100%;
+    border-radius: var(--r-full);
+    background: linear-gradient(90deg, var(--accent2), var(--accent), var(--accent3));
+    transition: width 1.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+    box-shadow: 0 0 8px var(--accent-glow);
+}
+.conf-meter-val {
+    font-family: var(--font-display);
+    font-size: 1rem; font-weight: 900;
+    min-width: 36px; text-align: right;
+}
+
+/* ── Ticker original (keep for backward compat) ── */
+.pl-ticker {
+    display: none; /* replaced by pl-ticker-wrap */
+}
+.pl-ticker-item { display: flex; gap: 6px; align-items: center; }
 
 /* ── Section Headers ── */
 .section-header {
@@ -4274,13 +4489,230 @@ st.markdown("""
         <span class="pl-badge">V5.0</span>
     </div>
 </div>
-<div class="pl-ticker">
-    <div class="pl-ticker-item">
-        <div class="pl-ticker-dot"></div>
-        <span>LIVE · NBA PLAYOFFS 2026 · MLB 2026</span>
+<!-- Dynamic ticker populated by Python below -->
+<div id="propiq-ticker-static" class="pl-ticker-wrap">
+    <div class="pl-ticker-label">
+        <div class="pl-ticker-dot"></div>&nbsp;LIVE
+    </div>
+    <div class="pl-ticker-scroll" id="ticker-content">
+        <span class="pl-ticker-live"><div class="pl-ticker-dot"></div>LIVE</span>
+        NBA PLAYOFFS 2026
+        <span class="pl-ticker-sep">|</span>
+        MLB 2026
+        <span class="pl-ticker-sep">|</span>
+        <span class="pl-ticker-hot">PropIQ · 14 signals · AI-powered</span>
+        <span class="pl-ticker-sep">|</span>
+        Loading live data...
     </div>
 </div>
 """, unsafe_allow_html=True)
+
+# ─────────────────────────────────────────────
+# Live Data — Ticker + Score Cards
+# ─────────────────────────────────────────────
+@st.cache_data(ttl=60, show_spinner=False)
+def fetch_live_data() -> dict:
+    """
+    Fetch live scores, news headlines, and injuries for the dynamic ticker.
+    Cached 60 seconds — refreshes every minute automatically.
+    """
+    import requests as _req, datetime as _dtx
+    result = {"scores": [], "headlines": [], "mlb_scores": []}
+    _HDRS = {"User-Agent": "Mozilla/5.0"}
+    today = _dtx.date.today().strftime("%Y%m%d")
+
+    # NBA scores
+    try:
+        r = _req.get(
+            "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard",
+            params={"dates": today}, headers=_HDRS, timeout=6
+        )
+        if r.ok:
+            for ev in r.json().get("events", [])[:8]:
+                comp  = ev.get("competitions", [{}])[0]
+                comps = comp.get("competitors", [])
+                status = ev.get("status", {}).get("type", {})
+                state  = status.get("state", "pre")  # pre, in, post
+                period = ev.get("status", {}).get("period", 0)
+                clock  = ev.get("status", {}).get("displayClock", "")
+                if len(comps) >= 2:
+                    home = comps[0] if comps[0].get("homeAway") == "home" else comps[1]
+                    away = comps[1] if comps[1].get("homeAway") == "away" else comps[0]
+                    result["scores"].append({
+                        "sport":   "NBA",
+                        "home":    home.get("team", {}).get("abbreviation", ""),
+                        "away":    away.get("team", {}).get("abbreviation", ""),
+                        "home_score": home.get("score", ""),
+                        "away_score": away.get("score", ""),
+                        "state":   state,
+                        "period":  period,
+                        "clock":   clock,
+                        "series":  comp.get("series", {}).get("summary", ""),
+                    })
+    except Exception:
+        pass
+
+    # MLB scores
+    try:
+        r2 = _req.get(
+            "https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard",
+            params={"dates": today}, headers=_HDRS, timeout=6
+        )
+        if r2.ok:
+            for ev in r2.json().get("events", [])[:10]:
+                comp  = ev.get("competitions", [{}])[0]
+                comps = comp.get("competitors", [])
+                status = ev.get("status", {}).get("type", {})
+                state  = status.get("state", "pre")
+                inning = ev.get("status", {}).get("period", 0)
+                clock  = ev.get("status", {}).get("displayClock", "")
+                if len(comps) >= 2:
+                    home = next((c for c in comps if c.get("homeAway") == "home"), comps[0])
+                    away = next((c for c in comps if c.get("homeAway") == "away"), comps[1])
+                    result["mlb_scores"].append({
+                        "sport":   "MLB",
+                        "home":    home.get("team", {}).get("abbreviation", ""),
+                        "away":    away.get("team", {}).get("abbreviation", ""),
+                        "home_score": home.get("score", ""),
+                        "away_score": away.get("score", ""),
+                        "state":   state,
+                        "inning":  inning,
+                        "clock":   clock,
+                    })
+    except Exception:
+        pass
+
+    # Sports headlines for ticker
+    try:
+        r3 = _req.get(
+            "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/news",
+            params={"limit": 10}, headers=_HDRS, timeout=6
+        )
+        if r3.ok:
+            for a in r3.json().get("articles", [])[:6]:
+                hl = a.get("headline", "")
+                if hl and len(hl) > 10:
+                    result["headlines"].append(hl)
+    except Exception:
+        pass
+
+    return result
+
+# Fetch live data
+_live = fetch_live_data()
+_all_scores = _live.get("scores", []) + _live.get("mlb_scores", [])
+_headlines  = _live.get("headlines", [])
+
+# ── Build dynamic scrolling ticker ──────────────────────────────────────────
+_ticker_items = []
+for s in _all_scores:
+    _sport_icon = "🏀" if s["sport"] == "NBA" else "⚾"
+    if s["state"] == "in":
+        _period_lbl = (f"Q{s['period']} {s['clock']}" if s["sport"] == "NBA"
+                      else f"Inn {s['inning']}")
+        _ticker_items.append(
+            f'<span class="pl-ticker-live"><div class="pl-ticker-dot"></div>LIVE</span>'
+            f'{_sport_icon} {s["away"]} {s["away_score"]} - {s["home_score"]} {s["home"]} '
+            f'<span style="color:#6b7f96;font-size:0.52rem;margin-left:4px;">{_period_lbl}</span>'
+        )
+    elif s["state"] == "post":
+        _ticker_items.append(
+            f'{_sport_icon} FINAL: {s["away"]} {s["away_score"]} - {s["home_score"]} {s["home"]}'
+            + (f' <span style="color:#6b7f96;font-size:0.52rem;">({s.get("series","")})</span>'
+               if s.get("series") else "")
+        )
+    else:
+        _ticker_items.append(
+            f'{_sport_icon} {s["away"]} @ {s["home"]} — Tonight'
+        )
+
+# Add headlines
+for h in _headlines[:4]:
+    _ticker_items.append(
+        f'<span class="pl-ticker-hot">📰 {h[:80]}{"..." if len(h)>80 else ""}</span>'
+    )
+
+# Add PropIQ promo items
+_ticker_items += [
+    '<span class="pl-ticker-hot">🎯 PropIQ · 14-signal NBA + 14-signal MLB model</span>',
+    '📊 Tracking 400+ active player props tonight',
+    '⚡ Real-time pitcher velocity · umpire zones · weather · platoon splits',
+]
+
+_sep = '<span class="pl-ticker-sep">·</span>'
+_ticker_content = _sep.join(_ticker_items)
+
+# Inject dynamic ticker content via JavaScript
+st.markdown(f"""
+<div class="pl-ticker-wrap">
+    <div class="pl-ticker-label">
+        <div class="pl-ticker-dot"></div>&nbsp;LIVE
+    </div>
+    <div class="pl-ticker-scroll">
+        {_ticker_content}
+        {_sep}
+        {_ticker_content}
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
+# ── Score Cards Row ─────────────────────────────────────────────────────────
+if _all_scores:
+    _active = [s for s in _all_scores if s["state"] == "in"]
+    _upcoming = [s for s in _all_scores if s["state"] == "pre"]
+    _final = [s for s in _all_scores if s["state"] == "post"]
+    _display_scores = (_active + _upcoming + _final)[:8]
+
+    if _display_scores:
+        _cards_html = ""
+        for s in _display_scores:
+            _sport_icon = "🏀" if s["sport"] == "NBA" else "⚾"
+            _is_live    = s["state"] == "in"
+            _is_final   = s["state"] == "post"
+            _card_class = "score-card live" if _is_live else "score-card"
+            _status_lbl = ""
+            if _is_live:
+                _period_lbl = (f"Q{s['period']} {s['clock']}" if s["sport"] == "NBA"
+                              else f"Inn {s['inning']}")
+                _status_lbl = (f'<div class="score-card-live-badge">'
+                               f'<div class="pl-ticker-dot" style="background:#ff3d5c;'
+                               f'animation:liveFlash 1s ease-in-out infinite;'
+                               f'width:4px;height:4px;border-radius:50%;"></div>'
+                               f'LIVE · {_period_lbl}</div>')
+            elif _is_final:
+                _status_lbl = '<span style="color:#6b7f96;font-size:0.5rem;">FINAL</span>'
+            else:
+                _status_lbl = '<span style="color:#6b7f96;font-size:0.5rem;">TONIGHT</span>'
+
+            _hs = s.get("home_score","") or "–"
+            _as = s.get("away_score","") or "–"
+            _series = s.get("series","")
+
+            _cards_html += f"""
+            <div class="{_card_class}">
+                <div class="score-card-teams">
+                    <span>{_sport_icon} {s['away']}</span>
+                    {_status_lbl}
+                </div>
+                <div class="score-card-score">
+                    <span style="color:{'var(--text)' if not _is_live else 'var(--accent)'}">
+                        {_as}
+                    </span>
+                    <span style="color:var(--text3);font-size:0.7rem;align-self:center;">@</span>
+                    <span style="color:{'var(--text)' if not _is_live else 'var(--accent)'}">
+                        {_hs}
+                    </span>
+                </div>
+                <div class="score-card-meta">
+                    <span>{s['home']}</span>
+                    <span style="color:#6b7f96">{_series}</span>
+                </div>
+            </div>"""
+
+        st.markdown(
+            f"<div class='score-strip'>{_cards_html}</div>",
+            unsafe_allow_html=True
+        )
 
 # ─────────────────────────────────────────────
 # Sport Switcher
@@ -6721,6 +7153,28 @@ if st.session_state.active_sport == "mlb":
                     unsafe_allow_html=True
                 )
 
+            # ── Probability bar + confidence meter ──────────────
+            _mlb_bar_pct = min(100, int(adj * 100))
+            _mlb_bar_col = ("#00e896" if tier in ("Strong Over","Lean Over")
+                            else "#ff3d5c" if tier in ("Strong Under","Lean Under")
+                            else "#6b7f96")
+            st.markdown(
+                f"<div style='margin-bottom:0.75rem;'>"
+                f"<div style='display:flex;justify-content:space-between;"
+                f"font-family:JetBrains Mono,monospace;font-size:0.56rem;color:#6b7f96;margin-bottom:5px;'>"
+                f"<span>Model probability</span>"
+                f"<span style='color:{_mlb_bar_col};font-weight:700;'>{_mlb_bar_pct}%</span></div>"
+                f"<div class='prob-bar-wrap' style='height:8px;'>"
+                f"<div class='prob-bar-fill' style='width:{_mlb_bar_pct}%;"
+                f"background:linear-gradient(90deg,{_mlb_bar_col}99,{_mlb_bar_col});'></div>"
+                f"</div>"
+                f"<div class='conf-meter-wrap' style='margin-top:8px;'>"
+                f"<div style='font-family:JetBrains Mono,monospace;font-size:0.52rem;color:#6b7f96;'>CONF</div>"
+                f"<div class='conf-meter-track'><div class='conf-meter-fill' style='width:{_sc}%;'></div></div>"
+                f"<div class='conf-meter-val' style='color:{{"#00c4cc" if _sc>=80 else "#ffc107" if _sc>=65 else "#f97316"}};'>"
+                f"{_sc}</div></div></div>",
+                unsafe_allow_html=True
+            )
             st.markdown("<div class='section-header'>Verdict</div>",unsafe_allow_html=True)
             st.markdown(
                 f"<div class='verdict-banner {css}'>"
@@ -9784,12 +10238,38 @@ if st.session_state.logs is not None:
     _pm = _plain_map.get(_display_tier, ("", "#6b7f96", "#0d1520"))
     st.markdown(
         f"<div style='background:{_pm[2]};border:1px solid rgba(255,255,255,0.06);"
-        f"border-radius:12px;padding:0.75rem 1.1rem;margin-bottom:0.75rem;"
+        f"border-radius:12px;padding:0.75rem 1.1rem;margin-bottom:0.5rem;"
         f"display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;'>"
         f"<span style='font-family:Outfit,sans-serif;font-size:0.95rem;"
         f"font-weight:600;color:{_pm[1]};'>{_pm[0]}</span>"
         f"<span style='font-family:JetBrains Mono,monospace;font-size:0.65rem;color:#6b7f96;'>"
         f"Confidence {_conf_score}/100 · Adjusted {adjusted:.0%}</span>"
+        f"</div>",
+        unsafe_allow_html=True
+    )
+
+    # ── Animated probability bar ─────────────────────────────────
+    _bar_pct = min(100, int(adjusted * 100))
+    _bar_col = (_pm[1] if _pm[1] != "#6b7f96" else "#6b7f96")
+    st.markdown(
+        f"<div style='margin-bottom:0.75rem;'>"
+        f"<div style='display:flex;justify-content:space-between;"
+        f"font-family:JetBrains Mono,monospace;font-size:0.56rem;color:#6b7f96;"
+        f"margin-bottom:5px;'>"
+        f"<span>Model probability</span>"
+        f"<span style='color:{_bar_col};font-weight:700;'>{_bar_pct}%</span></div>"
+        f"<div class='prob-bar-wrap' style='height:8px;'>"
+        f"<div class='prob-bar-fill' style='width:{_bar_pct}%;"
+        f"background:linear-gradient(90deg,{_bar_col}99,{_bar_col});'></div>"
+        f"</div>"
+        f"<div class='conf-meter-wrap' style='margin-top:8px;'>"
+        f"<div style='font-family:JetBrains Mono,monospace;font-size:0.52rem;color:#6b7f96;white-space:nowrap;'>CONF</div>"
+        f"<div class='conf-meter-track'>"
+        f"<div class='conf-meter-fill' style='width:{_conf_score}%;'></div>"
+        f"</div>"
+        f"<div class='conf-meter-val' style='color:{'#00c4cc' if _conf_score>=80 else '#ffc107' if _conf_score>=65 else '#f97316'};'>"
+        f"{_conf_score}</div>"
+        f"</div>"
         f"</div>",
         unsafe_allow_html=True
     )
