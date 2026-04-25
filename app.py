@@ -292,7 +292,7 @@ html, body, [class*="css"] {
 }
 .pl-ticker-scroll {
     display: flex;
-    animation: tickerScroll 60s linear infinite;
+    animation: tickerScroll 100s linear infinite;
     white-space: nowrap;
     padding-left: 80px;
     font-family: var(--font-mono);
@@ -4629,7 +4629,7 @@ _ticker_content = _sep.join(_ticker_items)
 _ticker_char_count = len(' '.join([
     s.get("away","") + s.get("home","") for s in _all_scores
 ] + _headlines[:4]))
-_ticker_duration = max(45, min(90, _ticker_char_count // 3))
+_ticker_duration = max(80, min(160, _ticker_char_count // 2))
 
 # Build two copies for seamless loop (translateX -50% trick)
 _ticker_double = (f'<span>{_ticker_content}</span>'
