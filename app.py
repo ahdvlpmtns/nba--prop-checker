@@ -7825,9 +7825,41 @@ if st.session_state.active_sport == "mlb":
                             st.toast("Parlay full (6 legs max)", icon="🚫")
 
             # Share button
-            with st.expander("📤 Share this pick", expanded=False):
-                st.code(_share_txt, language=None)
-                st.caption("Copy and paste into Discord, group chats, or social media")
+            _mlb_share_col, _mlb_track_col = st.columns(2)
+            with _mlb_share_col:
+                with st.expander("📤 Share this pick", expanded=False):
+                    st.code(_share_txt, language=None)
+                    st.caption("Copy and paste into Discord, group chats, or social media")
+            with _mlb_track_col:
+                if st.button("➕ Add to Prop Tracker", key=f"mlb_tracker_{mlb_pitcher}_{mlb_line}",
+                             use_container_width=True):
+                    import datetime as _mbt
+                    _mlb_entry = {
+                        "Player":      mlb_pitcher,
+                        "Line":        f"{mlb_line} {_lbl} {mlb_side}",
+                        "Opponent":    mlb_opp or "—",
+                        "Matchup":     tier,
+                        "Venue":       mlb_home or "—",
+                        "Avg PTS":     avg_val,
+                        "Hit Rate":    f"{whr:.0%}",
+                        "Adjusted":    f"{adj:.0%}",
+                        "Consistency": f"{cons:.0%}",
+                        "Verdict":     tier,
+                        "Result":      "Pending",
+                        "Sport":       "MLB",
+                    }
+                    _mlb_existing = [i for i, e in enumerate(st.session_state.tracker)
+                                     if e["Player"] == mlb_pitcher and
+                                     e["Line"] == f"{mlb_line} {_lbl} {mlb_side}"]
+                    if _mlb_existing:
+                        st.session_state.tracker[_mlb_existing[0]] = _mlb_entry
+                        st.success(f"Updated {mlb_pitcher} in tracker.")
+                    else:
+                        _new_id = save_to_supabase(st.session_state.session_id, _mlb_entry)
+                        if _new_id:
+                            _mlb_entry["id"] = _new_id
+                        st.session_state.tracker.append(_mlb_entry)
+                        st.success(f"✅ {mlb_pitcher} added to tracker!")
 
             # ── MLB Signal Debugger ──────────────────────────────────
             with st.expander("🔬  Show signal breakdown (debug)"):
@@ -9105,6 +9137,448 @@ if st.session_state.active_sport == "edge":
             "</div></div>",
             unsafe_allow_html=True
         )
+
+
+    # ═══════════════════════════════════════════════════════
+    # MLB BATTER STRIKEOUTS ANALYZER
+    # ═══════════════════════════════════════════════════════
+
+    st.markdown("---")
+    st.markdown("<div class='section-header'>🏏 MLB Batter Strikeouts Analyzer</div>",
+                unsafe_allow_html=True)
+    st.markdown(
+        "<div style='font-family:DM Sans,sans-serif;font-size:0.82rem;color:#9aaec4;"
+        "margin-bottom:1rem;'>Analyze whether a batter will go Over or Under their "
+        "strikeout line. Uses the batter's K rate, the pitcher's stuff, park factor, "
+        "lineup spot, and recent form.</div>",
+        unsafe_allow_html=True
+    )
+
+    # ── Batter data functions ────────────────────────────────────────────
+
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def batter_get_season_stats(player_name: str) -> dict:
+        """Fetch batter season stats from MLB Stats API — K%, BB%, AVG, PA."""
+        import requests as _req, datetime as _dtx
+        empty = {"k_pct": None, "bb_pct": None, "avg": None, "pa": 0, "name": player_name}
+        _norm   = lambda s: s.lower().strip().replace(".", "").replace("-", " ")
+        _target = _norm(player_name)
+        _parts  = [p for p in _target.split() if len(p) > 2]
+        season  = _dtx.datetime.now().year
+        try:
+            r = _req.get(
+                "https://statsapi.mlb.com/api/v1/sports/1/players",
+                params={"season": season, "gameType": "R"}, timeout=6
+            )
+            if not r.ok: return empty
+            _ppl = r.json().get("people", [])
+            _pp  = next((p for p in _ppl
+                         if all(pt in _norm(p.get("fullName","")) for pt in _parts)
+                         and p.get("primaryPosition",{}).get("code") not in ("1","P")), None)
+            if not _pp:
+                _pp = next((p for p in _ppl
+                           if _parts[-1] in _norm(p.get("fullName",""))
+                           and p.get("primaryPosition",{}).get("code") not in ("1","P")), None)
+            if not _pp: return empty
+            pid = _pp["id"]
+            r2 = _req.get(
+                f"https://statsapi.mlb.com/api/v1/people/{pid}/stats",
+                params={"stats": "season", "group": "hitting",
+                        "season": season, "gameType": "R"}, timeout=6
+            )
+            if not r2.ok: return empty
+            st = r2.json().get("stats",[{}])[0].get("splits",[{}])
+            if not st: return empty
+            _s  = st[0].get("stat", {})
+            _pa = int(_s.get("plateAppearances", 0) or 0)
+            _so = int(_s.get("strikeOuts", 0) or 0)
+            _bb = int(_s.get("baseOnBalls", 0) or 0)
+            return {
+                "k_pct":    round(_so / max(_pa, 1), 3),
+                "bb_pct":   round(_bb / max(_pa, 1), 3),
+                "avg":      float(_s.get("avg", 0) or 0),
+                "pa":       _pa,
+                "k_total":  _so,
+                "name":     _pp.get("fullName", player_name),
+                "pid":      pid,
+                "hand":     _pp.get("batSide", {}).get("code", "R"),
+            }
+        except Exception:
+            return empty
+
+
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def batter_get_game_logs(player_name: str, n: int = 15) -> list:
+        """Get batter game logs — returns list of K per game."""
+        import requests as _req, datetime as _dtx
+        _norm   = lambda s: s.lower().strip().replace(".", "").replace("-", " ")
+        _target = _norm(player_name)
+        _parts  = [p for p in _target.split() if len(p) > 2]
+        season  = _dtx.datetime.now().year
+        try:
+            r = _req.get(
+                "https://statsapi.mlb.com/api/v1/sports/1/players",
+                params={"season": season, "gameType": "R"}, timeout=6
+            )
+            if not r.ok: return []
+            _ppl = r.json().get("people", [])
+            _pp  = next((p for p in _ppl
+                         if all(pt in _norm(p.get("fullName","")) for pt in _parts)
+                         and p.get("primaryPosition",{}).get("code") not in ("1","P")), None)
+            if not _pp: return []
+            pid = _pp["id"]
+            r2 = _req.get(
+                f"https://statsapi.mlb.com/api/v1/people/{pid}/stats",
+                params={"stats": "gameLog", "group": "hitting",
+                        "season": season, "gameType": "R", "limit": n}, timeout=6
+            )
+            if not r2.ok: return []
+            ks = []
+            for sp in r2.json().get("stats",[{}])[0].get("splits",[]):
+                _st = sp.get("stat", {})
+                _ab = int(_st.get("atBats", 0) or 0)
+                if _ab == 0: continue  # skip no-AB games
+                ks.append(int(_st.get("strikeOuts", 0) or 0))
+            return ks
+        except Exception:
+            return []
+
+
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def batter_get_savant_stats(player_name: str) -> dict:
+        """Get batter K% and hard hit% from Baseball Savant."""
+        import requests as _req, io
+        empty = {"k_pct": None, "hard_hit_pct": None, "exit_velo": None}
+        _norm   = lambda s: s.lower().strip().replace(".", "").replace("-", " ")
+        _target = _norm(player_name)
+        _parts  = [p for p in _target.split() if len(p) > 2]
+        _last   = _target.split()[-1]
+        try:
+            r = _req.get(
+                "https://baseballsavant.mlb.com/leaderboard/custom",
+                params={"year": "2026", "type": "batter", "filter": "",
+                        "min": "50", "selections": "k_percent,hard_hit_percent,"
+                               "exit_velocity_avg", "csv": "true"},
+                headers={"User-Agent": "Mozilla/5.0", "Referer": "https://baseballsavant.mlb.com/"},
+                timeout=10
+            )
+            if not r.ok or len(r.text) < 200: return empty
+            import pandas as _pd2
+            df = _pd2.read_csv(io.StringIO(r.text), low_memory=False)
+            _nc = next((c for c in df.columns if "name" in c.lower()), None)
+            if not _nc: return empty
+            df["_n"] = df[_nc].astype(str).apply(
+                lambda x: _norm(" ".join(reversed(x.split(", ")))
+                          if ", " in x else x))
+            rows = df[df["_n"].apply(lambda x: all(p in x for p in _parts))]
+            if rows.empty:
+                rows = df[df["_n"].apply(lambda x: _last in x)]
+            if rows.empty: return empty
+            row = rows.iloc[0]
+            return {
+                "k_pct":        float(row.get("k_percent", 0) or 0) / 100,
+                "hard_hit_pct": float(row.get("hard_hit_percent", 0) or 0) / 100,
+                "exit_velo":    float(row.get("exit_velocity_avg", 0) or 0),
+            }
+        except Exception:
+            return empty
+
+
+    # ── Batter UI ─────────────────────────────────────────────────────────
+    _bat_c1, _bat_c2, _bat_c3, _bat_c4 = st.columns([3, 1.5, 1, 1])
+    with _bat_c1:
+        batter_name = st.text_input(
+            "BATTER — TYPE NAME",
+            placeholder="e.g. Francisco Lindor, Yordan Alvarez",
+            key="batter_name_input",
+            label_visibility="collapsed"
+        )
+    with _bat_c2:
+        bat_pitcher = st.text_input(
+            "OPPOSING PITCHER",
+            placeholder="Pitcher name (optional)",
+            key="bat_pitcher_input",
+            label_visibility="collapsed"
+        )
+    with _bat_c3:
+        bat_line = st.number_input(
+            "K Line", min_value=0.5, max_value=5.0,
+            value=1.5, step=0.5, key="bat_line_input"
+        )
+    with _bat_c4:
+        bat_side = st.selectbox("O/U", ["Over","Under"], key="bat_side_input")
+
+    bat_fetch = st.button("⚡ Analyze Batter Strikeouts",
+                          key="bat_analyze", type="primary")
+
+    if bat_fetch and batter_name:
+        with st.spinner(f"Analyzing {batter_name}..."):
+            import concurrent.futures as _bat_cfe
+
+            with _bat_cfe.ThreadPoolExecutor(max_workers=4) as _bex:
+                _f_bat_stats  = _bex.submit(batter_get_season_stats, batter_name)
+                _f_bat_logs   = _bex.submit(batter_get_game_logs, batter_name, 15)
+                _f_bat_savant = _bex.submit(batter_get_savant_stats, batter_name)
+                _f_bat_pitcher = (_bex.submit(mlb_get_savant_stats, bat_pitcher)
+                                  if bat_pitcher else None)
+
+            _bat_stats  = _f_bat_stats.result(timeout=10)
+            _bat_logs   = _f_bat_logs.result(timeout=10)
+            _bat_savant = _f_bat_savant.result(timeout=12)
+            _bat_pitcher_stats = (_f_bat_pitcher.result(timeout=10)
+                                  if _f_bat_pitcher else {})
+
+        if not _bat_logs or len(_bat_logs) < 3:
+            st.error(f"Could not find game logs for {batter_name}. "
+                     "Check the spelling or try their full name.")
+        else:
+            import numpy as _bnp
+            _bvals = _bnp.array(_bat_logs, dtype=float)
+            _bavg  = round(float(_bvals.mean()), 2)
+            _bn    = len(_bvals)
+
+            # ── Weighted hit rate ────────────────────────────
+            _bwts  = _bnp.array([1.5 if i < 3 else 1.0 for i in range(_bn)])
+            _bhits = (_bvals >= bat_line) if bat_side == "Over" else (_bvals <= bat_line)
+            _bwhr  = float((_bhits * _bwts).sum() / _bwts.sum())
+            _bcons = float(_bhits.mean())
+            _badj  = _bwhr
+
+            # ── Signal 1: Season K% vs league avg 22% ────────
+            _bk9_adj  = 0.0
+            _bk9_note = "No data"
+            _bk_pct   = _bat_savant.get("k_pct") or _bat_stats.get("k_pct")
+            if _bk_pct:
+                _lg_k = 0.22
+                _kdiff = _bk_pct - _lg_k
+                if _kdiff >= 0.10:   _bk9_adj = +0.08  # high K batter
+                elif _kdiff >= 0.06: _bk9_adj = +0.05
+                elif _kdiff >= 0.03: _bk9_adj = +0.02
+                elif _kdiff <= -0.10:_bk9_adj = -0.08  # contact hitter
+                elif _kdiff <= -0.06:_bk9_adj = -0.05
+                elif _kdiff <= -0.03:_bk9_adj = -0.02
+                _bk9_note = (f"{_bk_pct:.1%} K rate · "
+                             f"{'High K' if _kdiff>0.05 else 'Low K' if _kdiff<-0.05 else 'Average'}")
+
+            # ── Signal 2: L3 recent form ─────────────────────
+            _bl3_adj  = 0.0
+            _bl3      = float(_bvals[:3].mean())
+            _bdiff    = _bl3 - _bavg
+            if _bdiff >= 0.8:    _bl3_adj = +0.05
+            elif _bdiff >= 0.4:  _bl3_adj = +0.02
+            elif _bdiff <= -0.8: _bl3_adj = -0.05
+            elif _bdiff <= -0.4: _bl3_adj = -0.02
+
+            # ── Signal 3: Opposing pitcher stuff ─────────────
+            _bpit_adj  = 0.0
+            _bpit_note = "No pitcher specified"
+            if bat_pitcher and _bat_pitcher_stats:
+                _pit_k9    = _bat_pitcher_stats.get("k9") or _bat_pitcher_stats.get("so9")
+                _pit_swstr = _bat_pitcher_stats.get("swstr") or _bat_pitcher_stats.get("whiff_pct")
+                if _pit_k9:
+                    if _pit_k9 >= 11.0:   _bpit_adj += 0.07  # elite K pitcher
+                    elif _pit_k9 >= 9.5:  _bpit_adj += 0.04
+                    elif _pit_k9 >= 8.0:  _bpit_adj += 0.01
+                    elif _pit_k9 <= 6.5:  _bpit_adj -= 0.04  # soft pitcher
+                    _bpit_note = f"Pitcher K/9: {_pit_k9:.1f}"
+                if _pit_swstr and _pit_swstr < 0.25:
+                    if _pit_swstr >= 0.14: _bpit_adj += 0.03
+                    elif _pit_swstr >= 0.12: _bpit_adj += 0.01
+
+            # ── Signal 4: Edge vs line ────────────────────────
+            _bedge_adj = 0.0
+            _bedge     = _bavg - bat_line
+            if bat_side == "Over":
+                if _bedge >= 0.5:    _bedge_adj = +0.04
+                elif _bedge >= 0.2:  _bedge_adj = +0.02
+                elif _bedge <= -0.8: _bedge_adj = -0.06
+                elif _bedge <= -0.4: _bedge_adj = -0.03
+            else:
+                if _bedge <= -0.5:   _bedge_adj = +0.04
+                elif _bedge <= -0.2: _bedge_adj = +0.02
+                elif _bedge >= 0.8:  _bedge_adj = -0.06
+                elif _bedge >= 0.4:  _bedge_adj = -0.03
+
+            # ── Signal 5: Consistency ─────────────────────────
+            _bcon_adj = 0.0
+            if _bcons >= 0.75: _bcon_adj = +0.03
+            elif _bcons >= 0.65: _bcon_adj = +0.01
+            elif _bcons <= 0.35: _bcon_adj = -0.04
+            elif _bcons <= 0.45: _bcon_adj = -0.02
+
+            # ── Apply all signals ─────────────────────────────
+            _badj = max(0.05, min(0.95,
+                        _bwhr + _bk9_adj + _bl3_adj + _bpit_adj
+                        + _bedge_adj + _bcon_adj))
+
+            # ── Verdict ───────────────────────────────────────
+            if bat_side == "Over":
+                if _badj >= 0.72:              _bverdict = "Strong Over"
+                elif _badj >= 0.63 and _bedge >= -0.5: _bverdict = "Lean Over"
+                elif _badj >= 0.55 and _bedge > 0:     _bverdict = "Lean Over"
+                else:                          _bverdict = "Pass"
+            else:
+                if _badj >= 0.72:              _bverdict = "Strong Under"
+                elif _badj >= 0.63 and _bedge <= 0.5:  _bverdict = "Lean Under"
+                elif _badj >= 0.55 and _bedge < 0:     _bverdict = "Lean Under"
+                else:                          _bverdict = "Pass"
+
+            _bcscore = min(99, int(
+                max(0, (_badj - 0.5) / 0.45) * 65 +
+                min(abs(_bedge) / 2.0, 1.0) * 25 +
+                _bcons * 10
+            ))
+
+            _bvcss = {"Strong Over":"green","Lean Over":"yellow",
+                      "Lean Under":"orange","Strong Under":"red","Pass":"gray"}
+            _bvemoji = {"Strong Over":"🟢","Lean Over":"🟡",
+                        "Lean Under":"🟠","Strong Under":"🔴","Pass":"⚪"}
+
+            # ── Key stats cards ───────────────────────────────
+            st.markdown("<div class='section-header'>Key Stats</div>",
+                        unsafe_allow_html=True)
+            _bs1, _bs2, _bs3, _bs4 = st.columns(4)
+            with _bs1:
+                st.markdown(
+                    f"<div class='stat-card'><div class='stat-label'>Season Avg K/Game</div>"
+                    f"<div class='stat-value {'green' if _bavg >= bat_line else 'red'}'"
+                    f" style='font-size:2rem;'>{_bavg}</div>"
+                    f"<div class='stat-hint'>Line {bat_line} · edge {_bedge:+.1f}</div>"
+                    f"</div>", unsafe_allow_html=True
+                )
+            with _bs2:
+                _bkc = "green" if (_bk_pct or 0) > 0.24 else "red" if (_bk_pct or 0) < 0.18 else "yellow"
+                st.markdown(
+                    f"<div class='stat-card'><div class='stat-label'>K Rate (Savant)</div>"
+                    f"<div class='stat-value {_bkc}'>{f'{_bk_pct:.1%}' if _bk_pct else 'N/A'}</div>"
+                    f"<div class='stat-hint'>League avg 22%</div>"
+                    f"</div>", unsafe_allow_html=True
+                )
+            with _bs3:
+                st.markdown(
+                    f"<div class='stat-card'><div class='stat-label'>Hit Rate (L{_bn})</div>"
+                    f"<div class='stat-value {'green' if _bcons>=0.65 else 'yellow' if _bcons>=0.5 else 'red'}'>"
+                    f"{_bcons:.0%}</div>"
+                    f"<div class='stat-hint'>{int(_bcons*_bn)}/{_bn} games {bat_side}</div>"
+                    f"</div>", unsafe_allow_html=True
+                )
+            with _bs4:
+                st.markdown(
+                    f"<div class='stat-card'><div class='stat-label'>Confidence</div>"
+                    f"<div class='stat-value {'green' if _bcscore>=75 else 'yellow' if _bcscore>=55 else 'red'}'>"
+                    f"{_bcscore}</div>"
+                    f"<div class='stat-hint'>5 signals · {_bn} games</div>"
+                    f"</div>", unsafe_allow_html=True
+                )
+
+            # ── Probability bar ───────────────────────────────
+            _bbar_col = ("#00e896" if "Over" in _bverdict else
+                         "#ff3d5c" if "Under" in _bverdict else "#6b7f96")
+            _bbar_pct = min(100, int(_badj * 100))
+            st.markdown(
+                f"<div style='margin:0.75rem 0;'>"
+                f"<div style='display:flex;justify-content:space-between;"
+                f"font-family:JetBrains Mono,monospace;font-size:0.56rem;"
+                f"color:#6b7f96;margin-bottom:5px;'>"
+                f"<span>Model probability</span>"
+                f"<span style='color:{_bbar_col};font-weight:700;'>{_bbar_pct}%</span></div>"
+                f"<div class='prob-bar-wrap' style='height:8px;'>"
+                f"<div class='prob-bar-fill' style='width:{_bbar_pct}%;"
+                f"background:linear-gradient(90deg,{_bbar_col}99,{_bbar_col});'></div>"
+                f"</div></div>",
+                unsafe_allow_html=True
+            )
+
+            # ── Verdict banner ────────────────────────────────
+            st.markdown("<div class='section-header'>Verdict</div>",
+                        unsafe_allow_html=True)
+            _bcss = _bvcss.get(_bverdict, "gray")
+            st.markdown(
+                f"<div class='verdict-banner {_bcss}'>"
+                f"<div><div class='verdict-label'>"
+                f"{_bat_stats.get('name', batter_name)} · {bat_line} K · {bat_side}</div>"
+                f"<div class='verdict-tier {_bcss}'>"
+                f"{_bvemoji.get(_bverdict,'⚪')} {_bverdict}</div></div>"
+                f"<div style='display:flex;gap:2rem;flex-wrap:wrap;'>"
+                f"<div><div class='verdict-label'>Adj Probability</div>"
+                f"<div style='font-size:1.8rem;font-weight:900;color:{_bbar_col};'>"
+                f"{_badj:.0%}</div></div>"
+                f"<div><div class='verdict-label'>Confidence</div>"
+                f"<div style='font-size:1.8rem;font-weight:900;"
+                f"color:{'#00c4cc' if _bcscore>=75 else '#ffc107' if _bcscore>=55 else '#f97316'};'>"
+                f"{_bcscore}</div></div>"
+                f"</div></div>",
+                unsafe_allow_html=True
+            )
+
+            # ── Signal breakdown ──────────────────────────────
+            with st.expander("🔬 Signal Breakdown"):
+                _bsig_rows = [
+                    ("Weighted hit rate", f"{_bwhr:.1%}", "—", "Starting point"),
+                    ("Season K rate", _bk9_note, f"{_bk9_adj:+.0%}", "vs league avg 22%"),
+                    ("Recent form (L3)", f"L3: {_bl3:.2f} vs avg {_bavg}", f"{_bl3_adj:+.0%}",
+                     "Trending up" if _bdiff > 0.3 else "Trending down" if _bdiff < -0.3 else "Stable"),
+                    ("Opposing pitcher", _bpit_note, f"{_bpit_adj:+.0%}",
+                     "Elite K pitcher" if _bpit_adj >= 0.06 else "Soft contact pitcher" if _bpit_adj <= -0.04 else "Average"),
+                    ("Edge vs line", f"avg {_bavg} vs line {bat_line}", f"{_bedge_adj:+.0%}",
+                     f"{'Over' if bat_side=='Over' else 'Under'} edge: {_bedge:+.2f}"),
+                    ("Consistency", f"{_bcons:.0%}", f"{_bcon_adj:+.0%}",
+                     f"{int(_bcons*_bn)}/{_bn} games hit"),
+                ]
+                _bsig_html = "".join(
+                    f"<tr style='border-bottom:1px solid rgba(255,255,255,0.04);'>"
+                    f"<td style='padding:6px 10px;color:#6b7f96;font-size:0.68rem;'>{r[0]}</td>"
+                    f"<td style='padding:6px 10px;color:#f0f4f8;font-size:0.7rem;font-weight:600;'>{r[1]}</td>"
+                    f"<td style='padding:6px 10px;color:{'#00e896' if '+' in r[2] else '#ff3d5c' if '-' in r[2] else '#6b7f96'};font-size:0.7rem;font-weight:700;'>{r[2]}</td>"
+                    f"<td style='padding:6px 10px;color:#9aaec4;font-size:0.65rem;'>{r[3]}</td>"
+                    f"</tr>"
+                    for r in _bsig_rows
+                )
+                st.markdown(
+                    f"<table style='width:100%;border-collapse:collapse;"
+                    f"font-family:JetBrains Mono,monospace;'>"
+                    f"<thead><tr style='border-bottom:1px solid rgba(255,255,255,0.1);'>"
+                    f"<th style='padding:4px 10px;color:#6b7f96;font-size:0.56rem;text-align:left;letter-spacing:0.1em;'>SIGNAL</th>"
+                    f"<th style='padding:4px 10px;color:#6b7f96;font-size:0.56rem;text-align:left;letter-spacing:0.1em;'>VALUE</th>"
+                    f"<th style='padding:4px 10px;color:#6b7f96;font-size:0.56rem;text-align:left;letter-spacing:0.1em;'>ADJ</th>"
+                    f"<th style='padding:4px 10px;color:#6b7f96;font-size:0.56rem;text-align:left;letter-spacing:0.1em;'>NOTES</th>"
+                    f"</tr></thead><tbody>{_bsig_html}</tbody></table>",
+                    unsafe_allow_html=True
+                )
+
+            # ── Add to parlay ─────────────────────────────────
+            if _bverdict != "Pass":
+                _bpc1, _bpc2 = st.columns([3,1])
+                with _bpc2:
+                    if st.button("➕ Add to Parlay", key=f"bat_parlay_{batter_name}_{bat_line}",
+                                 use_container_width=True):
+                        import datetime as _bdt
+                        _bleg = {
+                            "player":     _bat_stats.get("name", batter_name),
+                            "prop":       f"Batter K {bat_side}",
+                            "line":       bat_line,
+                            "side":       bat_side,
+                            "verdict":    _bverdict,
+                            "confidence": _bcscore,
+                            "adj":        round(_badj * 100, 1),
+                            "sport":      "MLB",
+                            "added":      _bdt.datetime.now().strftime("%I:%M %p"),
+                        }
+                        _bdup = any(
+                            l["player"] == _bleg["player"] and
+                            abs(l["line"] - bat_line) < 0.1
+                            for l in st.session_state.parlay_legs
+                        )
+                        if not _bdup and len(st.session_state.parlay_legs) < 6:
+                            st.session_state.parlay_legs.append(_bleg)
+                            st.toast(f"✅ {batter_name} added!", icon="🎯")
+                        elif _bdup:
+                            st.toast("Already in parlay", icon="⚠️")
+                        else:
+                            st.toast("Parlay full", icon="🚫")
+
+    elif bat_fetch and not batter_name:
+        st.warning("Enter a batter name first.")
 
     st.stop()
 
@@ -12315,6 +12789,7 @@ if st.session_state.logs is not None:
                         "Consistency": f"{consistency:.0%}",
                         "Verdict":     tier,
                         "Result":      "Pending",
+                        "Sport":       "NBA",
                     }
                     existing = [i for i, e in enumerate(st.session_state.tracker)
                                 if e["Player"] == full_name and e["Line"] == f"{line} {side}"]
@@ -12372,21 +12847,45 @@ else:
     if _auto_updated:
         st.rerun()
 
-    # Win rate summary
+    # Win rate summary — overall + by sport
     _hits    = sum(1 for e in st.session_state.tracker if e.get("Result") == "Hit")
     _misses  = sum(1 for e in st.session_state.tracker if e.get("Result") == "Miss")
     _pending = sum(1 for e in st.session_state.tracker if e.get("Result", "Pending") == "Pending")
     _settled = _hits + _misses
     _wr      = f"{_hits/_settled:.0%}" if _settled > 0 else "—"
-    _wr_color = "#22c55e" if _settled > 0 and _hits/_settled >= 0.6 else ("#ef4444" if _settled > 0 and _hits/_settled < 0.4 else "#eab308")
+    _wr_color = ("#22c55e" if _settled > 0 and _hits/_settled >= 0.6
+                 else "#ef4444" if _settled > 0 and _hits/_settled < 0.4
+                 else "#eab308")
+
+    # Sport-specific records
+    _mlb_entries = [e for e in st.session_state.tracker if e.get("Sport","") == "MLB"]
+    _nba_entries = [e for e in st.session_state.tracker if e.get("Sport","") == "NBA"]
+    _mlb_h = sum(1 for e in _mlb_entries if e.get("Result") == "Hit")
+    _mlb_m = sum(1 for e in _mlb_entries if e.get("Result") == "Miss")
+    _nba_h = sum(1 for e in _nba_entries if e.get("Result") == "Hit")
+    _nba_m = sum(1 for e in _nba_entries if e.get("Result") == "Miss")
+
+    _sport_breakdown = ""
+    if _mlb_h + _mlb_m > 0:
+        _mlb_wr = f"{_mlb_h/(_mlb_h+_mlb_m):.0%}"
+        _sport_breakdown += (f"<span style='color:#9aaec4;margin-left:12px;'>"
+                             f"⚾ MLB {_mlb_h}-{_mlb_m} ({_mlb_wr})</span>")
+    if _nba_h + _nba_m > 0:
+        _nba_wr = f"{_nba_h/(_nba_h+_nba_m):.0%}"
+        _sport_breakdown += (f"<span style='color:#9aaec4;margin-left:12px;'>"
+                             f"🏀 NBA {_nba_h}-{_nba_m} ({_nba_wr})</span>")
 
     st.markdown(
-        f"<div style='display:flex;gap:1.5rem;flex-wrap:wrap;margin-bottom:0.75rem;"
-        f"font-family:DM Mono;font-size:0.7rem;'>"
-        f"<span style='color:{_wr_color};font-weight:800;'>Win Rate: {_wr}</span>"
-        f"<span style='color:#22c55e;'>✅ {_hits} Hit</span>"
-        f"<span style='color:#ef4444;'>❌ {_misses} Miss</span>"
+        f"<div style='background:rgba(0,196,204,0.05);border:1px solid rgba(0,196,204,0.15);"
+        f"border-radius:10px;padding:0.75rem 1rem;margin-bottom:0.75rem;"
+        f"display:flex;flex-wrap:wrap;align-items:center;gap:12px;"
+        f"font-family:JetBrains Mono,monospace;font-size:0.68rem;'>"
+        f"<span style='color:{_wr_color};font-weight:800;font-size:0.85rem;'>"
+        f"Overall: {_hits}-{_misses} ({_wr})</span>"
+        f"<span style='color:#22c55e;'>✅ {_hits}</span>"
+        f"<span style='color:#ef4444;'>❌ {_misses}</span>"
         f"<span style='color:#6b7f96;'>⏳ {_pending} Pending</span>"
+        f"{_sport_breakdown}"
         f"</div>",
         unsafe_allow_html=True
     )
