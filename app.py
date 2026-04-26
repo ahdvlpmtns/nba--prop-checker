@@ -43,6 +43,15 @@ div[data-testid="stStatusWidget"] { display: none; }
 /* Speed up initial render */
 div[data-testid="stSkeleton"] { display: none; }
 
+/* ── Hide sidebar completely — full width main content ── */
+section[data-testid="stSidebar"] { display: none !important; }
+button[data-testid="baseButton-header"] { display: none !important; }
+.main .block-container {
+    max-width: 100% !important;
+    padding-left: 2rem !important;
+    padding-right: 2rem !important;
+}
+
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800;900&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&family=JetBrains+Mono:wght@400;500;700&display=swap');
 
 /* ══════════════════════════════════════════
@@ -4918,191 +4927,8 @@ st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
 # Sidebar
 # ─────────────────────────────────────────────
 
-with st.sidebar:
-    st.markdown("""
-    <div style='padding:0.5rem 0 1rem 0; border-bottom:2px solid #00c4cc; margin-bottom:1rem;'>
-        <div style='font-family:Barlow Condensed,sans-serif; font-size:1.3rem; font-weight:900; color:#f0f0f0; letter-spacing:-0.5px; text-transform:uppercase; margin-bottom:2px;'>Prop<span style="color:#00c4cc;">IQ</span></div>
-        <div style='font-family:JetBrains Mono,monospace; font-size:0.55rem; color:#555; letter-spacing:0.18em; text-transform:uppercase;'>Sports Prop Analyzer</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.markdown("<div class='section-header'>How To Use PropIQ</div>", unsafe_allow_html=True)
-    st.markdown("""
-    <div style='display:flex;flex-direction:column;gap:8px;'>
-        <div style='display:flex;gap:12px;align-items:flex-start;background:#0d1520;border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:0.75rem 1rem;'>
-            <div style='min-width:28px;height:28px;background:#00c4cc;border-radius:8px;display:flex;align-items:center;justify-content:center;font-family:Outfit,sans-serif;font-weight:800;font-size:0.9rem;color:#fff;flex-shrink:0;'>1</div>
-            <div>
-                <div style='font-family:Outfit,sans-serif;font-weight:600;color:#f1f5f9;font-size:0.85rem;'>Open PrizePicks and find a prop you like</div>
-                <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#6b7f96;margin-top:3px;'>Example: LeBron James — 22.5 pts — Over</div>
-            </div>
-        </div>
-        <div style='display:flex;gap:12px;align-items:flex-start;background:#0d1520;border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:0.75rem 1rem;'>
-            <div style='min-width:28px;height:28px;background:#00c4cc;border-radius:8px;display:flex;align-items:center;justify-content:center;font-family:Outfit,sans-serif;font-weight:800;font-size:0.9rem;color:#fff;flex-shrink:0;'>2</div>
-            <div>
-                <div style='font-family:Outfit,sans-serif;font-weight:600;color:#f1f5f9;font-size:0.85rem;'>Type the player name, enter the line and pick Over or Under</div>
-                <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#6b7f96;margin-top:3px;'>Always use the standard line — not the goblin (lower) or demon (higher)</div>
-            </div>
-        </div>
-        <div style='display:flex;gap:12px;align-items:flex-start;background:#0d1520;border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:0.75rem 1rem;'>
-            <div style='min-width:28px;height:28px;background:#00c4cc;border-radius:8px;display:flex;align-items:center;justify-content:center;font-family:Outfit,sans-serif;font-weight:800;font-size:0.9rem;color:#fff;flex-shrink:0;'>3</div>
-            <div>
-                <div style='font-family:Outfit,sans-serif;font-weight:600;color:#f1f5f9;font-size:0.85rem;'>Hit Analyze Prop and wait ~10 seconds</div>
-                <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#6b7f96;margin-top:3px;'>PropIQ pulls live stats, injuries, matchups, referee data, and more</div>
-            </div>
-        </div>
-        <div style='display:flex;gap:12px;align-items:flex-start;background:#0d1520;border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:0.75rem 1rem;'>
-            <div style='min-width:28px;height:28px;background:#10f590;border-radius:8px;display:flex;align-items:center;justify-content:center;font-family:Outfit,sans-serif;font-weight:800;font-size:0.9rem;color:#041a0e;flex-shrink:0;'>4</div>
-            <div>
-                <div style='font-family:Outfit,sans-serif;font-weight:600;color:#f1f5f9;font-size:0.85rem;'>Read the verdict — only play Strong Over / Strong Under</div>
-                <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#6b7f96;margin-top:3px;'>Lean picks are OK in 2-leg entries only. Always skip Pass.</div>
-            </div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.markdown("<div class='section-header'>Verdict Guide</div>", unsafe_allow_html=True)
-    st.markdown("""
-    <div style='display:flex;flex-direction:column;gap:6px;'>
-        <div style='background:#041a0e;border:1px solid rgba(16,245,144,0.2);border-radius:10px;padding:0.6rem 0.9rem;display:flex;justify-content:space-between;align-items:center;'>
-            <div><span style='font-size:1rem;'>🟢</span> <span style='color:#10f590;font-weight:700;font-family:Outfit,sans-serif;'>Strong Over / Strong Under</span></div>
-            <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#6b7f96;text-align:right;'>64%+ hit rate · edge ≥1.5pts<br><span style='color:#10f590;'>Best bets — play these</span></div>
-        </div>
-        <div style='background:#1a1200;border:1px solid rgba(251,191,36,0.2);border-radius:10px;padding:0.6rem 0.9rem;display:flex;justify-content:space-between;align-items:center;'>
-            <div><span style='font-size:1rem;'>🟡</span> <span style='color:#fbbf24;font-weight:700;font-family:Outfit,sans-serif;'>Lean Over</span> &nbsp;<span style='font-size:1rem;'>🟠</span> <span style='color:#f97316;font-weight:700;font-family:Outfit,sans-serif;'>Lean Under</span></div>
-            <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#6b7f96;text-align:right;'>55–63% hit rate<br><span style='color:#fbbf24;'>OK for 2-leg entries only</span></div>
-        </div>
-        <div style='background:#111;border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:0.6rem 0.9rem;display:flex;justify-content:space-between;align-items:center;'>
-            <div><span style='font-size:1rem;'>⚪</span> <span style='color:#6b7f96;font-weight:700;font-family:Outfit,sans-serif;'>Pass</span></div>
-            <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#6b7f96;text-align:right;'>No clear edge<br><span style='color:#ef4444;'>Skip this prop</span></div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.markdown("<div class='section-header'>Confidence Score</div>", unsafe_allow_html=True)
-    st.markdown("""
-    <div style='font-family:JetBrains Mono,monospace;font-size:0.68rem;color:#6b7f96;line-height:1.9;
-                background:#0d1520;border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:0.75rem 1rem;'>
-        The <span style='color:#f1f5f9;'>confidence score (0–100)</span> combines three things:<br>
-        &nbsp;&nbsp;<span style='color:#00c4cc;'>●</span> <span style='color:#94a3b8;'>Hit rate</span> — how often has this player cleared this line?<br>
-        &nbsp;&nbsp;<span style='color:#00c4cc;'>●</span> <span style='color:#94a3b8;'>Edge</span> — how far is their average above/below the line?<br>
-        &nbsp;&nbsp;<span style='color:#00c4cc;'>●</span> <span style='color:#94a3b8;'>Consistency</span> — do they score reliably or all over the place?<br><br>
-        <span style='color:#10f590;'>80+</span> = elite pick &nbsp;·&nbsp; <span style='color:#fbbf24;'>65–79</span> = solid &nbsp;·&nbsp; <span style='color:#ef4444;'>below 65</span> = skip
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.markdown("<div class='section-header'>Settings</div>", unsafe_allow_html=True)
-    manual_mode = st.checkbox("Manual input fallback", help="Enter points manually if NBA API is unavailable")
-    if st.button("🔄 Clear Cache"):
-        st.cache_data.clear()
-        st.success("Cache cleared!")
-
-
-    # ── Parlay Builder ────────────────────────────────────────
-    _legs = st.session_state.get("parlay_legs", [])
-    st.markdown(
-        f"<div class='section-header'>🎯 My Parlay ({len(_legs)}/6)</div>",
-        unsafe_allow_html=True
-    )
-
-    if not _legs:
-        st.markdown(
-            "<div style='background:rgba(0,196,204,0.05);border:1px dashed rgba(0,196,204,0.2);"
-            "border-radius:10px;padding:0.85rem;text-align:center;"
-            "font-family:JetBrains Mono,monospace;font-size:0.6rem;color:#6b7f96;'>"
-            "No picks added yet<br>"
-            "<span style='font-size:0.54rem;'>Hit ➕ Add to Parlay after any verdict</span>"
-            "</div>",
-            unsafe_allow_html=True
-        )
-    else:
-        for _i, _leg in enumerate(_legs):
-            _vc = {"Strong Over":"#00e896","Lean Over":"#ffc107",
-                   "Strong Under":"#ff3d5c","Lean Under":"#f97316"}.get(_leg["verdict"],"#6b7f96")
-            _ve = {"Strong Over":"🟢","Lean Over":"🟡",
-                   "Strong Under":"🔴","Lean Under":"🟠"}.get(_leg["verdict"],"⚪")
-            _leg_cols = st.columns([8,1])
-            with _leg_cols[0]:
-                st.markdown(
-                    f"<div class='parlay-leg'>"
-                    f"<div style='flex:1;'>"
-                    f"<div class='parlay-leg-name'>{_leg['player']}</div>"
-                    f"<div style='display:flex;gap:5px;margin-top:3px;flex-wrap:wrap;align-items:center;'>"
-                    f"<span class='parlay-leg-pick'>{_ve} {_leg['side']} {_leg['line']}</span>"
-                    f"<span class='parlay-leg-conf' style='color:{_vc};'>{_leg['adj']}%</span>"
-                    f"<span style='font-family:JetBrains Mono,monospace;font-size:0.52rem;"
-                    f"color:#6b7f96;background:rgba(255,255,255,0.04);padding:1px 5px;"
-                    f"border-radius:4px;'>{_leg.get('sport','')}</span>"
-                    f"</div></div></div>",
-                    unsafe_allow_html=True
-                )
-            with _leg_cols[1]:
-                if st.button("✕", key=f"rm_{_i}", help="Remove this pick"):
-                    st.session_state.parlay_legs.pop(_i)
-                    st.rerun()
-
-        # Combined stats
-        _combined_prob = 1.0
-        for _l in _legs:
-            _combined_prob *= (_l["adj"] / 100.0)
-        _combined_pct = round(_combined_prob * 100, 1)
-        _decimal = round(1.0 / max(_combined_prob, 0.001), 2)
-        _american = (f"+{round((_decimal-1)*100)}"
-                     if _decimal >= 2.0
-                     else f"-{round(100/max(_decimal-1,0.001))}")
-
-        _all_strong = all("Strong" in l["verdict"] for l in _legs)
-        _correlated = len(set(l["sport"] for l in _legs)) == 1 and len(_legs) > 2
-        if _combined_pct >= 20 and _all_strong: _risk="parlay-risk-low";  _rlbl="✅ Strong"
-        elif _combined_pct >= 8:                _risk="parlay-risk-medium";_rlbl="🟡 Moderate"
-        else:                                   _risk="parlay-risk-high";  _rlbl="🔴 Risky"
-
-        st.markdown(
-            f"<div class='parlay-summary'>"
-            f"<div style='display:flex;justify-content:space-between;align-items:center;'>"
-            f"<div><div style='font-family:JetBrains Mono,monospace;font-size:0.52rem;"
-            f"color:#6b7f96;'>COMBINED</div>"
-            f"<div class='parlay-odds'>{_combined_pct}%</div></div>"
-            f"<div style='text-align:right;'>"
-            f"<div style='font-family:JetBrains Mono,monospace;font-size:0.52rem;color:#6b7f96;'>ODDS</div>"
-            f"<div style='font-family:Plus Jakarta Sans,sans-serif;font-size:1.1rem;"
-            f"font-weight:800;color:#f0f4f8;'>{_american}</div></div></div>"
-            f"<div style='margin-top:8px;display:flex;gap:5px;flex-wrap:wrap;'>"
-            f"<span class='parlay-risk-badge {_risk}'>{_rlbl}</span>"
-            f"{'<span class="parlay-risk-badge parlay-risk-medium">⚠️ Correlated</span>' if _correlated else ''}"
-            f"</div></div>",
-            unsafe_allow_html=True
-        )
-
-        # Share
-        with st.expander("📤 Share Parlay"):
-            _pl = ["🎯 PropIQ Parlay"] + [
-                f"{'🟢' if 'Strong Over' in l['verdict'] else '🟡' if 'Lean Over' in l['verdict'] else '🔴' if 'Strong Under' in l['verdict'] else '🟠'} "
-                f"{l['player']} {l['side']} {l['line']} ({l['adj']}%)"
-                for l in _legs
-            ] + [f"Combined: {_combined_pct}% · {_american}", "#PropIQ #PrizePicks"]
-            st.code("\n".join(_pl), language=None)
-
-        if st.button("🗑️ Clear Parlay", key="clear_all_parlay", use_container_width=True):
-            st.session_state.parlay_legs = []
-            st.rerun()
-
-    st.markdown("---")
-    st.markdown("""
-    <div style='margin-top:2rem; padding:0.75rem; background:#0c1018; border:1px solid #1a2333;
-                border-radius:8px; font-family:DM Mono; font-size:0.62rem; color:#6b7f96; line-height:1.7;'>
-        ⚠️ For educational purposes only.<br>Not financial or betting advice.<br>
-        Always bet responsibly.
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.markdown("<div class='section-header'>Advanced Tools</div>", unsafe_allow_html=True)
-    with st.expander("📊  Backtest Engine"):
-        st.markdown("""
-        <div style='font-family:DM Mono;font-size:0.68rem;color:#6b7f96;line-height:1.6;margin-bottom:0.75rem;'>
-        Simulate PropIQ on a full season to see how often each verdict tier actually hit.
-        Use this to validate the model on specific players and lines.
-        </div>
-        """, unsafe_allow_html=True)
+# Sidebar removed — manual_mode defaults to False
+manual_mode = False
 
 # ─────────────────────────────────────────────
 # Mode selector
