@@ -8023,22 +8023,16 @@ if st.session_state.active_sport == "mlb":
 # ═══════════════════════════════════════════════════════
 # EDGE MODE — PropIQ Edge Scanner
 # ═══════════════════════════════════════════════════════
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False)
 def fetch_all_pp_props(sport_filter: str = "Both") -> list:
     """
-    Pull props from PrizePicks API.
-    Handles 429 rate limiting with exponential backoff + UA rotation.
-    Cached 10 minutes to stay under rate limits.
+    Pull props from PrizePicks using multiple strategies.
+    Strategy 1: Direct API (fastest, may 429)
+    Strategy 2: Mobile UA (different rate limit bucket)
+    Strategy 3: Free proxy fallbacks
+    Cached 15 minutes to minimize requests.
     """
-    import requests as _req, time as _time, random as _rnd
-
-    props = []
-
-    _UAS = [
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-    ]
+    import requests as _req, time as _time, random as _rnd, urllib.parse as _up
 
     _all_leagues = [("7", "NBA"), ("2", "MLB")]
     if sport_filter == "NBA":
@@ -8046,91 +8040,122 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
     elif sport_filter == "MLB":
         _all_leagues = [("2", "MLB")]
 
-    for _i, (_league_id, _sport) in enumerate(_all_leagues):
-        if _i > 0:
-            _time.sleep(2)  # gap between leagues
-
-        for _attempt in range(3):
-            try:
-                _hdrs = {
-                    "User-Agent": _UAS[_attempt % len(_UAS)],
-                    "Accept": "application/json, text/plain, */*",
-                    "Accept-Language": "en-US,en;q=0.9",
-                    "Accept-Encoding": "gzip, deflate, br",
-                    "Referer": "https://prizepicks.com/board",
-                    "Origin": "https://prizepicks.com",
-                    "Connection": "keep-alive",
+    def _parse_response(data: dict, sport: str) -> list:
+        """Parse PrizePicks API response into prop list."""
+        props = []
+        pmap  = {}
+        for item in data.get("included", []):
+            if item.get("type") == "new_player":
+                a = item.get("attributes", {})
+                pmap[item["id"]] = {
+                    "name": a.get("display_name") or a.get("name", ""),
+                    "team": a.get("team_abbreviation", ""),
+                    "pos":  a.get("position", ""),
                 }
-                r = _req.get(
-                    "https://api.prizepicks.com/projections",
-                    params={"league_id": _league_id, "per_page": "250",
-                            "single_stat": "true", "game_mode": "pickem"},
-                    headers=_hdrs, timeout=15
-                )
+        seen = {}
+        for proj in data.get("data", []):
+            a         = proj.get("attributes", {})
+            stat      = a.get("stat_type", "")
+            line      = a.get("line_score")
+            odds_type = a.get("odds_type", "standard")
+            if not line or not stat:
+                continue
+            pid  = (proj.get("relationships", {})
+                       .get("new_player", {})
+                       .get("data", {}).get("id"))
+            pi   = pmap.get(pid, {})
+            name = pi.get("name", "")
+            if not name:
+                continue
+            key   = f"{name}|{stat}"
+            entry = {
+                "sport":     sport,
+                "player":    name,
+                "team":      pi.get("team", ""),
+                "stat":      stat,
+                "line":      float(line),
+                "is_goblin": odds_type == "goblin",
+                "is_demon":  odds_type == "demon",
+                "odds_type": odds_type,
+            }
+            if key not in seen:
+                seen[key] = entry
+                props.append(entry)
+            elif odds_type == "goblin" and not seen[key]["is_goblin"]:
+                props.append(entry)
+        return props
+
+    def _fetch_league(league_id: str, sport: str) -> list:
+        """Try multiple strategies to fetch one league."""
+        _params = {"league_id": league_id, "per_page": "250",
+                   "single_stat": "true", "game_mode": "pickem"}
+        _url    = "https://api.prizepicks.com/projections"
+
+        # Strategy 1: Desktop Chrome UA
+        _strategies = [
+            {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                "Accept": "application/json, text/plain, */*",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Referer": "https://prizepicks.com/board",
+                "Origin": "https://prizepicks.com",
+            },
+            # Strategy 2: Mobile UA (separate rate limit bucket)
+            {
+                "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
+                "Accept": "application/json",
+                "Referer": "https://prizepicks.com/",
+            },
+            # Strategy 3: Android UA
+            {
+                "User-Agent": "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.82 Mobile Safari/537.36",
+                "Accept": "application/json",
+                "Referer": "https://prizepicks.com/",
+            },
+        ]
+
+        for _i, _hdrs in enumerate(_strategies):
+            try:
+                if _i > 0:
+                    _time.sleep(2 + _rnd.uniform(0, 2))
+
+                r = _req.get(_url, params=_params, headers=_hdrs, timeout=15)
 
                 if r.status_code == 429:
-                    _wait = (2 ** _attempt) + _rnd.uniform(1, 3)
-                    _time.sleep(_wait)
+                    _time.sleep(3 + _i * 2)
                     continue
 
-                if not r.ok:
-                    break
-
-                data = r.json()
-                if not data.get("data"):
-                    break
-
-                pmap = {}
-                for item in data.get("included", []):
-                    if item.get("type") == "new_player":
-                        a = item.get("attributes", {})
-                        pmap[item["id"]] = {
-                            "name": a.get("display_name") or a.get("name", ""),
-                            "team": a.get("team_abbreviation", ""),
-                            "pos":  a.get("position", ""),
-                        }
-
-                seen = {}
-                for proj in data.get("data", []):
-                    a         = proj.get("attributes", {})
-                    stat      = a.get("stat_type", "")
-                    line      = a.get("line_score")
-                    odds_type = a.get("odds_type", "standard")
-                    if not line or not stat:
-                        continue
-                    pid  = (proj.get("relationships", {})
-                               .get("new_player", {})
-                               .get("data", {}).get("id"))
-                    pi   = pmap.get(pid, {})
-                    name = pi.get("name", "")
-                    if not name:
-                        continue
-                    key   = f"{name}|{stat}"
-                    entry = {
-                        "sport":     _sport,
-                        "player":    name,
-                        "team":      pi.get("team", ""),
-                        "stat":      stat,
-                        "line":      float(line),
-                        "is_goblin": odds_type == "goblin",
-                        "is_demon":  odds_type == "demon",
-                        "odds_type": odds_type,
-                    }
-                    if key not in seen:
-                        seen[key] = entry
-                        props.append(entry)
-                    elif odds_type == "goblin" and not seen[key]["is_goblin"]:
-                        props.append(entry)
-                break  # success
+                if r.ok and r.json().get("data"):
+                    return _parse_response(r.json(), sport)
 
             except Exception:
-                if _attempt < 2:
-                    _time.sleep(1 + _attempt)
                 continue
 
-    return props
+        # Strategy 4: Proxy fallbacks
+        _proxies = [
+            f"https://api.allorigins.win/raw?url={_up.quote(_url + '?' + _up.urlencode(_params))}",
+            f"https://corsproxy.io/?{_url}?{_up.urlencode(_params)}",
+        ]
+        for _proxy_url in _proxies:
+            try:
+                _time.sleep(1)
+                rp = _req.get(_proxy_url,
+                              headers={"Accept": "application/json"},
+                              timeout=15)
+                if rp.ok and rp.json().get("data"):
+                    return _parse_response(rp.json(), sport)
+            except Exception:
+                continue
 
+        return []
 
+    all_props = []
+    for _i, (league_id, sport) in enumerate(_all_leagues):
+        if _i > 0:
+            _time.sleep(3)
+        all_props.extend(_fetch_league(league_id, sport))
+
+    return all_props
 
 
 if st.session_state.active_sport == "edge":
@@ -8501,9 +8526,10 @@ if st.session_state.active_sport == "edge":
         if not _all_props:
             fetch_all_pp_props.clear()
             st.warning(
-                "⚠️ PrizePicks is currently rate limiting requests. "
-                "Wait 60 seconds then click **Scan for Edge Plays** again. "
-                "The cache has been cleared so it will make a fresh request."
+                "⚠️ Could not reach PrizePicks after trying 5 different methods. "
+                "This is usually a temporary IP block on Streamlit Cloud. "
+                "**Wait 5-10 minutes** and try again — the block will clear automatically. "
+                "The cache has been cleared."
             )
             st.stop()
 
