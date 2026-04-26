@@ -11,6 +11,7 @@ serverAddress = "0.0.0.0"
 [client]
 showErrorDetails = false
 toolbarMode = "minimal"
+showSidebarNavigation = false
 
 [theme]
 base = "dark"
