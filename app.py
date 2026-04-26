@@ -33,6 +33,16 @@ st.markdown(
 
 st.markdown("""
 <style>
+/* Hide Streamlit loading screen and branding */
+#MainMenu { visibility: hidden; }
+header { visibility: hidden; }
+footer { visibility: hidden; }
+div[data-testid="stDecoration"] { display: none; }
+div[data-testid="stStatusWidget"] { display: none; }
+.stDeployButton { display: none; }
+/* Speed up initial render */
+div[data-testid="stSkeleton"] { display: none; }
+
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800;900&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&family=JetBrains+Mono:wght@400;500;700&display=swap');
 
 /* ══════════════════════════════════════════
@@ -1107,7 +1117,7 @@ for key, default in [
     ("logs", None), ("ai_analysis", None), ("ai_error", None),
     ("defense_data", None), ("tracker", []), ("active_tab", "player"),
     ("recent_players", []), ("supabase_loaded", False), ("show_share", False),
-    ("active_sport", "nba"), ("edge_results", []), ("edge_running", False), ("edge_jump_player", None), ("edge_jump_pitcher", None), ("edge_jump_line", None), ("edge_jump_side", "Over"), ("edge_jump_prop", "Strikeouts"),
+    ("active_sport", "nba"), ("edge_results", []), ("edge_running", False), ("edge_manual_props", []), ("edge_manual_props", []), ("edge_jump_player", None), ("edge_jump_pitcher", None), ("edge_jump_line", None), ("edge_jump_side", "Over"), ("edge_jump_prop", "Strikeouts"),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -8023,137 +8033,81 @@ if st.session_state.active_sport == "mlb":
 # ═══════════════════════════════════════════════════════
 # EDGE MODE — PropIQ Edge Scanner
 # ═══════════════════════════════════════════════════════
-@st.cache_data(ttl=900, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def fetch_all_pp_props(sport_filter: str = "Both") -> list:
-    """
-    Pull props from PrizePicks using curl_cffi which impersonates
-    Chrome's TLS fingerprint — bypasses Cloudflare bot detection.
-    Falls back to cloudscraper, then requests on failure.
-    Cached 15 minutes.
-    """
-    import time as _time
+    """Simple PrizePicks fetch — exact headers that were working."""
+    import requests as _req
+    props = []
 
     _all_leagues = [("7", "NBA"), ("2", "MLB")]
-    if sport_filter == "NBA":
-        _all_leagues = [("7", "NBA")]
-    elif sport_filter == "MLB":
-        _all_leagues = [("2", "MLB")]
+    if sport_filter == "NBA":  _all_leagues = [("7", "NBA")]
+    elif sport_filter == "MLB": _all_leagues = [("2", "MLB")]
 
-    def _parse(data: dict, sport: str) -> list:
-        props = []
-        pmap  = {}
-        for item in data.get("included", []):
-            if item.get("type") == "new_player":
-                a = item.get("attributes", {})
-                pmap[item["id"]] = {
-                    "name": a.get("display_name") or a.get("name", ""),
-                    "team": a.get("team_abbreviation", ""),
-                    "pos":  a.get("position", ""),
-                }
-        seen = {}
-        for proj in data.get("data", []):
-            a         = proj.get("attributes", {})
-            stat      = a.get("stat_type", "")
-            line      = a.get("line_score")
-            odds_type = a.get("odds_type", "standard")
-            if not line or not stat:
+    for _league_id, _sport in _all_leagues:
+        for _ua in [
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        ]:
+            try:
+                r = _req.get(
+                    "https://api.prizepicks.com/projections",
+                    params={"league_id": _league_id, "per_page": "250", "single_stat": "true"},
+                    headers={
+                        "User-Agent": _ua,
+                        "Accept": "application/json, text/plain, */*",
+                        "Accept-Language": "en-US,en;q=0.9",
+                        "Referer": "https://prizepicks.com/",
+                        "Origin": "https://prizepicks.com",
+                    },
+                    timeout=15
+                )
+                if not r.ok:
+                    continue
+                data = r.json()
+                if not data.get("data"):
+                    continue
+
+                pmap = {}
+                for item in data.get("included", []):
+                    if item.get("type") == "new_player":
+                        a = item.get("attributes", {})
+                        pmap[item["id"]] = {
+                            "name": a.get("display_name") or a.get("name", ""),
+                            "team": a.get("team_abbreviation", ""),
+                            "pos":  a.get("position", ""),
+                        }
+                seen = {}
+                for proj in data.get("data", []):
+                    a         = proj.get("attributes", {})
+                    stat      = a.get("stat_type", "")
+                    line      = a.get("line_score")
+                    odds_type = a.get("odds_type", "standard")
+                    if not line or not stat: continue
+                    pid  = (proj.get("relationships", {})
+                               .get("new_player", {})
+                               .get("data", {}).get("id"))
+                    pi   = pmap.get(pid, {})
+                    name = pi.get("name", "")
+                    if not name: continue
+                    key   = f"{name}|{stat}"
+                    entry = {
+                        "sport": _sport, "player": name,
+                        "team": pi.get("team", ""), "stat": stat,
+                        "line": float(line),
+                        "is_goblin": odds_type == "goblin",
+                        "is_demon":  odds_type == "demon",
+                        "odds_type": odds_type,
+                    }
+                    if key not in seen:
+                        seen[key] = entry
+                        props.append(entry)
+                    elif odds_type == "goblin" and not seen[key]["is_goblin"]:
+                        props.append(entry)
+                break  # success — stop trying UAs
+            except Exception:
                 continue
-            pid  = (proj.get("relationships", {})
-                       .get("new_player", {})
-                       .get("data", {}).get("id"))
-            pi   = pmap.get(pid, {})
-            name = pi.get("name", "")
-            if not name:
-                continue
-            key   = f"{name}|{stat}"
-            entry = {
-                "sport":     sport,
-                "player":    name,
-                "team":      pi.get("team", ""),
-                "stat":      stat,
-                "line":      float(line),
-                "is_goblin": odds_type == "goblin",
-                "is_demon":  odds_type == "demon",
-                "odds_type": odds_type,
-            }
-            if key not in seen:
-                seen[key] = entry
-                props.append(entry)
-            elif odds_type == "goblin" and not seen[key]["is_goblin"]:
-                props.append(entry)
-        return props
 
-    def _fetch_league(league_id: str, sport: str) -> list:
-        _params = {
-            "league_id":   league_id,
-            "per_page":    "250",
-            "single_stat": "true",
-            "game_mode":   "pickem",
-        }
-        _hdrs = {
-            "Accept":          "application/json, text/plain, */*",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Referer":         "https://prizepicks.com/board",
-            "Origin":          "https://prizepicks.com",
-        }
-        _url = "https://api.prizepicks.com/projections"
-
-        # Strategy 1: curl_cffi session — handles CF JS challenge properly
-        try:
-            from curl_cffi import requests as _cffi_req
-            # Use a session so cookies (cf_clearance) persist across requests
-            with _cffi_req.Session(impersonate="chrome124") as _sess:
-                # First hit the main page to get CF cookies
-                _sess.get("https://prizepicks.com/board",
-                          headers={**_hdrs, "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"},
-                          timeout=20)
-                _time.sleep(1)
-                # Now hit the API with CF cookies in place
-                r = _sess.get(_url, params=_params, headers=_hdrs, timeout=20)
-                if r.ok:
-                    try:
-                        _data = r.json()
-                        if _data.get("data"):
-                            return _parse(_data, sport)
-                    except Exception:
-                        pass  # Got HTML instead of JSON — CF challenge not cleared
-        except Exception:
-            pass
-
-        # Strategy 2: cloudscraper — handles CF JS challenges
-        try:
-            import cloudscraper as _cs
-            scraper = _cs.create_scraper(browser={"browser": "chrome", "platform": "windows"})
-            r = scraper.get(_url, params=_params, headers=_hdrs, timeout=20)
-            if r.ok and r.json().get("data"):
-                return _parse(r.json(), sport)
-        except Exception:
-            pass
-
-        # Strategy 3: requests with strong headers (may work on fresh IPs)
-        try:
-            import requests as _req
-            for _ua in [
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-                "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
-            ]:
-                _h = {**_hdrs, "User-Agent": _ua}
-                r = _req.get(_url, params=_params, headers=_h, timeout=15)
-                if r.ok and r.json().get("data"):
-                    return _parse(r.json(), sport)
-                _time.sleep(2)
-        except Exception:
-            pass
-
-        return []
-
-    all_props = []
-    for _i, (league_id, sport) in enumerate(_all_leagues):
-        if _i > 0:
-            _time.sleep(2)
-        all_props.extend(_fetch_league(league_id, sport))
-
-    return all_props
+    return props
 
 
 if st.session_state.active_sport == "edge":
@@ -8492,68 +8446,19 @@ if st.session_state.active_sport == "edge":
         unsafe_allow_html=True
     )
 
-    _ec_btn_col1, _ec_btn_col2, _ec_btn_col3 = st.columns([2, 1, 1])
+    _ec_btn_col1, _ec_btn_col2 = st.columns([3, 1])
     with _ec_btn_col1:
-        _run_edge = st.button(
-            "🔍  Scan for Edge Plays",
-            key="run_edge_scanner",
-            type="primary",
-            use_container_width=True
-        )
+        _run_edge = st.button("🔍  Scan for Edge Plays", key="run_edge_scanner",
+                              type="primary", use_container_width=True)
     with _ec_btn_col2:
-        if st.button("🔄 Clear Cache", key="edge_clear_cache",
-                     use_container_width=True):
+        if st.button("🔄 Clear Cache", key="edge_clear_cache", use_container_width=True):
             try:
                 fetch_all_pp_props.clear()
             except Exception:
                 st.cache_data.clear()
             st.session_state.edge_results = []
-            st.toast("Cache cleared — ready to scan fresh", icon="✅")
+            st.toast("Cache cleared", icon="✅")
             st.rerun()
-    with _ec_btn_col3:
-        if st.button("🛠 Debug API", key="edge_debug",
-                     use_container_width=True):
-            import requests as _dr, time as _dt
-            _url = "https://api.prizepicks.com/projections"
-            _p   = {"league_id": "2", "per_page": "5", "single_stat": "true"}
-            _debug_out = {}
-
-            # Test 1: curl_cffi with session
-            try:
-                from curl_cffi import requests as _cffi
-                with _cffi.Session(impersonate="chrome124") as _sess:
-                    _sess.get("https://prizepicks.com/board", timeout=15)
-                    _dt.sleep(1)
-                    _r = _sess.get(_url, params=_p, timeout=15)
-                    _preview = _r.text[:80].replace("\n","")
-                    try:
-                        _dcount = len(_r.json().get("data", []))
-                        _debug_out["curl_cffi"] = f"HTTP {_r.status_code} · {len(_r.text)} bytes · data={_dcount}"
-                    except Exception:
-                        _debug_out["curl_cffi"] = f"HTTP {_r.status_code} · {len(_r.text)} bytes · NOT JSON · {_preview}"
-            except Exception as _e:
-                _debug_out["curl_cffi"] = f"ERROR: {_e}"
-
-            # Test 2: cloudscraper
-            try:
-                import cloudscraper as _csc
-                _s = _csc.create_scraper()
-                _r2 = _s.get(_url, params=_p, timeout=15)
-                _debug_out["cloudscraper"] = f"HTTP {_r2.status_code} · {len(_r2.text)} bytes"
-            except Exception as _e:
-                _debug_out["cloudscraper"] = f"ERROR: {_e}"
-
-            # Test 3: plain requests
-            try:
-                _r3 = _dr.get(_url, params=_p,
-                    headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0",
-                             "Referer": "https://prizepicks.com/"},
-                    timeout=15)
-                _debug_out["requests"] = f"HTTP {_r3.status_code} · {len(_r3.text)} bytes"
-            except Exception as _e:
-                _debug_out["requests"] = f"ERROR: {_e}"
-
-            st.code("\n".join(f"{k}: {v}" for k,v in _debug_out.items()))
 
     if _run_edge:
         st.session_state.edge_results = []
@@ -8568,10 +8473,8 @@ if st.session_state.active_sport == "edge":
         if not _all_props:
             fetch_all_pp_props.clear()
             st.warning(
-                "⚠️ Could not reach PrizePicks after trying 5 different methods. "
-                "This is usually a temporary IP block on Streamlit Cloud. "
-                "**Wait 5-10 minutes** and try again — the block will clear automatically. "
-                "The cache has been cleared."
+                "⚠️ PrizePicks is temporarily blocking server requests (Cloudflare). "
+                "This resolves on its own — **try again in a few hours**. Cache cleared."
             )
             st.stop()
 
