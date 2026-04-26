@@ -8359,12 +8359,21 @@ if st.session_state.active_sport == "edge":
         unsafe_allow_html=True
     )
 
-    _run_edge = st.button(
-        "🔍  Scan for Edge Plays",
-        key="run_edge_scanner",
-        type="primary",
-        use_container_width=False
-    )
+    _ec_btn_col1, _ec_btn_col2 = st.columns([2, 1])
+    with _ec_btn_col1:
+        _run_edge = st.button(
+            "🔍  Scan for Edge Plays",
+            key="run_edge_scanner",
+            type="primary",
+            use_container_width=True
+        )
+    with _ec_btn_col2:
+        if st.button("🔄 Clear Cache", key="edge_clear_cache",
+                     use_container_width=True):
+            fetch_all_pp_props.clear()
+            st.session_state.edge_results = []
+            st.toast("Cache cleared — ready to scan fresh", icon="✅")
+            st.rerun()
 
     if _run_edge:
         st.session_state.edge_results = []
@@ -8373,7 +8382,12 @@ if st.session_state.active_sport == "edge":
             _all_props = fetch_all_pp_props(sport_filter=_edge_sport)
 
         if not _all_props:
-            st.error("Could not fetch PrizePicks slate. Try again in a moment.")
+            # Clear cache so next attempt makes a fresh request
+            fetch_all_pp_props.clear()
+            st.error(
+                "Could not fetch PrizePicks slate. "
+                "The cache was cleared — please click **Scan for Edge Plays** again."
+            )
             st.stop()
 
 
