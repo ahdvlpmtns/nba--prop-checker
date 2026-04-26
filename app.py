@@ -11890,9 +11890,13 @@ if st.session_state.logs is not None:
             <tr style='border-top:1px solid #1a2333; margin-top:4px;'>
                 <td style='padding:6px 8px 3px 0; color:#6b7f96;'>Final tier</td>
                 <td colspan='3' style='font-size:0.9rem; font-weight:800; color:{_tier_color};'>
-                    {tier_emoji[tier]} {tier}{_cons_note}
+                    {tier_emoji[_display_tier]} {_display_tier}{_cons_note}
+                    {"&nbsp;<span style='font-size:0.62rem;font-weight:400;color:#6b7f96;'>(auto-flipped to stronger side)</span>" if _auto_flipped else ""}
                 </td>
             </tr>
+            {"<tr><td style='padding:3px 8px 3px 0;color:#6b7f96;'>Probability note</td>" +
+             "<td colspan='3' style='color:#ffc107;font-size:0.65rem;'>Signals pushed above 100% — capped at 95% max. Last signals show 0% impact due to cap.</td></tr>"
+             if adjusted >= 0.95 else ""}
         </table>
         </div>
         """, unsafe_allow_html=True)
