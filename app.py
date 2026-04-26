@@ -792,7 +792,8 @@ button[data-testid="baseButton-primary"][key="tab_scanner"] {
 
 /* ── Sport Switcher ── */
 button[data-testid="baseButton-primary"][key="sport_nba"],
-button[data-testid="baseButton-primary"][key="sport_mlb"] {
+button[data-testid="baseButton-primary"][key="sport_mlb"],
+button[data-testid="baseButton-primary"][key="sport_edge"] {
     background: linear-gradient(135deg, var(--accent), var(--accent2)) !important;
     color: #000d0e !important; border: none !important;
     clip-path: none !important; border-radius: var(--r-sm) !important;
@@ -803,12 +804,14 @@ button[data-testid="baseButton-primary"][key="sport_mlb"] {
     transition: all 0.2s !important;
 }
 button[data-testid="baseButton-primary"][key="sport_nba"]:hover,
-button[data-testid="baseButton-primary"][key="sport_mlb"]:hover {
+button[data-testid="baseButton-primary"][key="sport_mlb"]:hover,
+button[data-testid="baseButton-primary"][key="sport_edge"]:hover {
     transform: translateY(-2px) !important;
     box-shadow: 0 6px 24px rgba(0,196,204,0.5) !important;
 }
 button[data-testid="baseButton-secondary"][key="sport_nba"],
-button[data-testid="baseButton-secondary"][key="sport_mlb"] {
+button[data-testid="baseButton-secondary"][key="sport_mlb"],
+button[data-testid="baseButton-secondary"][key="sport_edge"] {
     background: var(--bg2) !important; color: var(--text3) !important;
     border: 1px solid var(--border) !important;
     clip-path: none !important; border-radius: var(--r-sm) !important;
@@ -818,7 +821,8 @@ button[data-testid="baseButton-secondary"][key="sport_mlb"] {
     transition: all 0.2s !important;
 }
 button[data-testid="baseButton-secondary"][key="sport_nba"]:hover,
-button[data-testid="baseButton-secondary"][key="sport_mlb"]:hover {
+button[data-testid="baseButton-secondary"][key="sport_mlb"]:hover,
+button[data-testid="baseButton-secondary"][key="sport_edge"]:hover {
     background: var(--bg3) !important; color: var(--accent) !important;
     border-color: rgba(0,196,204,0.4) !important;
     transform: translateY(-2px) !important;
@@ -1103,7 +1107,7 @@ for key, default in [
     ("logs", None), ("ai_analysis", None), ("ai_error", None),
     ("defense_data", None), ("tracker", []), ("active_tab", "player"),
     ("recent_players", []), ("supabase_loaded", False), ("show_share", False),
-    ("active_sport", "nba"),
+    ("active_sport", "nba"), ("edge_results", []), ("edge_running", False),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -2005,7 +2009,7 @@ def espn_get_player_news(player_name: str) -> list:
         return []
 
 
-@st.cache_data(ttl=1800, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False)
 def espn_get_player_role(player_name: str, team_abbr: str) -> dict:
     """
     Detect if a player is a starter or bench player.
@@ -2026,6 +2030,31 @@ def espn_get_player_role(player_name: str, team_abbr: str) -> dict:
     empty = {"role": "Unknown", "source": None, "game_info": "", "starter_confirmed": False, "depth_pos": None}
     if not player_name or not team_abbr:
         return empty
+
+    # ── Known franchise starters — always override API data ───────────────
+    # These players are categorically starters regardless of what the API returns
+    _KNOWN_STARTERS = {
+        # All-Stars / franchise players who never come off the bench
+        "nikola jokic", "lebron james", "stephen curry", "kevin durant",
+        "giannis antetokounmpo", "luka doncic", "jayson tatum", "jaylen brown",
+        "tyrese haliburton", "shai gilgeous-alexander", "donovan mitchell",
+        "devin booker", "anthony davis", "kawhi leonard", "paul george",
+        "damian lillard", "joel embiid", "james harden", "trae young",
+        "zion williamson", "ja morant", "bam adebayo", "pascal siakam",
+        "darius garland", "evan mobley", "jarrett allen", "jalen brunson",
+        "karl-anthony towns", "julius randle", "anthony edwards",
+        "rudy gobert", "mike conley", "andrew wiggins", "klay thompson",
+        "draymond green", "chris paul", "demar derozan", "zach lavine",
+        "lauri markkanen", "walker kessler", "collin sexton", "victor wembanyama",
+        "chet holmgren", "jalen williams", "luguentz dort", "scottie barnes",
+        "RJ barrett", "immanuel quickley", "josh hart", "og anunoby",
+    }
+    _norm_check = player_name.lower().strip()
+    if any(_norm_check == s or _norm_check.split()[-1] == s.split()[-1]
+           and _norm_check.split()[0][0] == s.split()[0][0]
+           for s in _KNOWN_STARTERS):
+        return {"role": "Starter", "source": "known_starter",
+                "game_info": "", "starter_confirmed": True, "depth_pos": 1}
 
     try:
         import pytz, requests as _req
@@ -3609,6 +3638,7 @@ def get_todays_referees(game_team_abbr: Optional[str]) -> Tuple[List[str], str]:
         return [], ""
 
 
+@st.cache_data(ttl=7200, show_spinner=False)
 def referee_signal(
     player_team: Optional[str],
     side: str,
@@ -3652,6 +3682,7 @@ def referee_signal(
     return "Neutral", crew_avg, clean_refs
 
 
+@st.cache_data(ttl=1800, show_spinner=False)
 def get_opponent_injury_report(
     opp_abbr: Optional[str],
     player_position: Optional[str] = None,
@@ -4841,7 +4872,7 @@ if _all_scores:
 # ─────────────────────────────────────────────
 # Sport Switcher
 # ─────────────────────────────────────────────
-_sp1, _sp2, _sp3 = st.columns([1, 1, 3])
+_sp1, _sp2, _sp3, _sp4 = st.columns([1, 1, 1, 2])
 with _sp1:
     if st.button(
         "🏀  NBA",
@@ -4859,6 +4890,15 @@ with _sp2:
         type="primary" if st.session_state.active_sport == "mlb" else "secondary"
     ):
         st.session_state.active_sport = "mlb"
+        st.rerun()
+with _sp3:
+    if st.button(
+        "🎯  EDGE",
+        key="sport_edge",
+        use_container_width=True,
+        type="primary" if st.session_state.active_sport == "edge" else "secondary"
+    ):
+        st.session_state.active_sport = "edge"
         st.rerun()
 
 
@@ -7970,8 +8010,535 @@ if st.session_state.active_sport == "mlb":
     st.stop()
 
 
+# ═══════════════════════════════════════════════════════
+# EDGE MODE — PropIQ Edge Scanner
+# ═══════════════════════════════════════════════════════
+if st.session_state.active_sport == "edge":
+
+    @st.cache_data(ttl=300, show_spinner=False)
+    def fetch_all_pp_props() -> list:
+        """
+        Pull ALL props from PrizePicks API — NBA + MLB, standard + goblin.
+        Returns unified list with sport, player, stat, line, is_goblin, is_demon.
+        """
+        import requests as _req
+        props = []
+        HDRS  = {"User-Agent": "Mozilla/5.0", "Accept": "application/json",
+                 "Referer": "https://prizepicks.com/"}
+
+        # League IDs: 7=NBA, 2=MLB
+        for _league_id, _sport in [("7", "NBA"), ("2", "MLB")]:
+            try:
+                r = _req.get(
+                    "https://api.prizepicks.com/projections",
+                    params={"league_id": _league_id, "per_page": "500",
+                            "single_stat": "true"},
+                    headers=HDRS, timeout=12
+                )
+                if not r.ok:
+                    continue
+                data = r.json()
+
+                # Build player map
+                pmap = {}
+                for item in data.get("included", []):
+                    if item.get("type") == "new_player":
+                        a = item.get("attributes", {})
+                        pmap[item["id"]] = {
+                            "name": a.get("display_name") or a.get("name", ""),
+                            "team": a.get("team_abbreviation", ""),
+                            "pos":  a.get("position", ""),
+                        }
+
+                # Parse projections
+                seen = {}  # player+stat → best line
+                for proj in data.get("data", []):
+                    a        = proj.get("attributes", {})
+                    stat     = a.get("stat_type", "")
+                    line     = a.get("line_score")
+                    odds_type = a.get("odds_type", "standard")  # standard, goblin, demon
+                    if not line or not stat:
+                        continue
+
+                    pid  = (proj.get("relationships", {})
+                               .get("new_player", {})
+                               .get("data", {})
+                               .get("id"))
+                    pi   = pmap.get(pid, {})
+                    name = pi.get("name", "")
+                    if not name:
+                        continue
+
+                    key = f"{name}|{stat}"
+                    entry = {
+                        "sport":     _sport,
+                        "player":    name,
+                        "team":      pi.get("team", ""),
+                        "stat":      stat,
+                        "line":      float(line),
+                        "is_goblin": odds_type == "goblin",
+                        "is_demon":  odds_type == "demon",
+                        "odds_type": odds_type,
+                    }
+
+                    # Keep standard line but also track goblin if exists
+                    if key not in seen:
+                        seen[key] = entry
+                    elif odds_type == "goblin" and not seen[key]["is_goblin"]:
+                        # Add goblin as separate entry
+                        props.append(entry)
+                        continue
+                    else:
+                        continue
+
+                    props.append(entry)
+
+            except Exception:
+                continue
+
+        return props
+
+
+    def run_nba_edge_check(player_name: str, line: float, stat: str,
+                           team: str, side: str = "Over") -> dict | None:
+        """Run NBA PropIQ model on one player. Returns edge dict or None."""
+        try:
+            _nid, _fn = nba_find_player(player_name)
+            if not _nid:
+                return None
+            _season = "2025-26"
+            _logs   = nba_get_game_logs(_nid, _season, n=15, _date=_cache_date())
+            _logs   = _merge_playoff_logs(_logs, _nid, _season, 15)
+            if _logs is None or _logs.empty or len(_logs) < 3:
+                return None
+
+            # Determine stat column
+            _stat_map = {
+                "points": "PTS", "pts": "PTS",
+                "rebounds": "REB", "reb": "REB",
+                "assists": "AST", "ast": "AST",
+                "3-pointers made": "FG3M", "3 pointers made": "FG3M",
+                "fantasy score": None,
+            }
+            _col = _stat_map.get(stat.lower())
+            if not _col or _col not in _logs.columns:
+                # Try to find it
+                _col = next((c for c in _logs.columns
+                             if stat.upper() in c.upper()), None)
+                if not _col:
+                    return None
+
+            _wb   = weighted_hit_rate(_logs, line, side, opp_abbr=None)
+            _avgv = pd.to_numeric(_logs[_col], errors="coerce").dropna().mean()
+            _cons = consistency_score(_logs, line)
+
+            # Quick signal adjustments (lightweight — no API calls)
+            _adj = _wb
+            # Form signal
+            _l3 = pd.to_numeric(_logs.head(3)[_col], errors="coerce").dropna().mean()
+            if not pd.isna(_l3):
+                _diff = _l3 - _avgv
+                if _diff >= 2:    _adj += 0.05
+                elif _diff >= 1:  _adj += 0.02
+                elif _diff <= -2: _adj -= 0.05
+                elif _diff <= -1: _adj -= 0.02
+
+            # Clamp
+            _adj = max(0.05, min(0.95, _adj))
+
+            return {
+                "sport":   "NBA",
+                "player":  _fn or player_name,
+                "stat":    stat,
+                "line":    line,
+                "side":    side,
+                "adj":     round(_adj * 100, 1),
+                "avg":     round(_avgv, 1),
+                "edge_raw": round(_avgv - line, 2),
+                "cons":    round(_cons * 100, 1),
+                "samples": len(_logs),
+            }
+        except Exception:
+            return None
+
+
+    def run_mlb_edge_check(pitcher_name: str, line: float,
+                           stat: str, side: str = "Over") -> dict | None:
+        """Run MLB PropIQ model on one pitcher. Lightweight version."""
+        try:
+            _logs = mlb_get_pitcher_logs(pitcher_name, n=10)
+            if _logs.empty or len(_logs) < 3:
+                return None
+
+            _stat_col = "K" if "strikeout" in stat.lower() else "OUTS"
+            if _stat_col not in _logs.columns:
+                return None
+
+            _vals = pd.to_numeric(_logs[_stat_col], errors="coerce").dropna()
+            if len(_vals) < 3:
+                return None
+
+            _avg  = _vals.mean()
+            _whr  = mlb_weighted_hr(_logs, line, _stat_col, side)
+            _cons = (_vals >= line if side == "Over" else _vals <= line).mean()
+
+            # Form
+            _l3   = _vals.head(3).mean()
+            _adj  = _whr
+            _diff = _l3 - _avg
+            if _diff >= 1.2:    _adj += 0.05
+            elif _diff >= 0.6:  _adj += 0.02
+            elif _diff <= -1.2: _adj -= 0.05
+            elif _diff <= -0.6: _adj -= 0.02
+
+            _adj = max(0.05, min(0.95, _adj))
+
+            return {
+                "sport":    "MLB",
+                "player":   pitcher_name,
+                "stat":     stat,
+                "line":     line,
+                "side":     side,
+                "adj":      round(_adj * 100, 1),
+                "avg":      round(_avg, 1),
+                "edge_raw": round(_avg - line, 2),
+                "cons":     round(_cons * 100, 1),
+                "samples":  len(_vals),
+            }
+        except Exception:
+            return None
+
+
+    # ── UI ────────────────────────────────────────────────────────────────
+    st.markdown("<div class='section-header'>🎯 PropIQ Edge Scanner</div>",
+                unsafe_allow_html=True)
+
+    st.markdown("""
+    <div style='background:rgba(0,196,204,0.05);border:1px solid rgba(0,196,204,0.15);
+    border-radius:12px;padding:0.85rem 1.1rem;margin-bottom:1rem;
+    font-family:DM Sans,sans-serif;font-size:0.82rem;color:#9aaec4;line-height:1.7;'>
+        Scans every available prop on PrizePicks — NBA + MLB — and ranks by
+        <strong style='color:#f0f4f8;'>edge</strong>: how much PropIQ's model probability
+        exceeds your breakeven. <br>
+        🔴 <strong>Goblin</strong> lines are highlighted — sometimes PrizePicks prices them
+        too low, making them the best value on the board.
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Controls
+    _ec1, _ec2, _ec3, _ec4 = st.columns([1.5, 1, 1, 1])
+    with _ec1:
+        _edge_sport = st.selectbox(
+            "Sport filter",
+            ["Both", "NBA", "MLB"],
+            key="edge_sport_filter",
+            label_visibility="collapsed"
+        )
+    with _ec2:
+        _edge_stat = st.selectbox(
+            "Stat filter",
+            ["All Stats", "Points", "Strikeouts", "Rebounds", "Assists"],
+            key="edge_stat_filter",
+            label_visibility="collapsed"
+        )
+    with _ec3:
+        _edge_min = st.selectbox(
+            "Min edge",
+            ["Any edge", "+10%", "+15%", "+20%", "+25%"],
+            key="edge_min_filter",
+            label_visibility="collapsed"
+        )
+    with _ec4:
+        _include_goblin = st.checkbox("Include goblins", value=True, key="edge_goblins")
+
+    _min_edge_val = {
+        "Any edge": 0, "+10%": 10, "+15%": 15, "+20%": 20, "+25%": 25
+    }.get(_edge_min, 0)
+
+    # Breakeven thresholds by entry size
+    st.markdown(
+        "<div style='font-family:JetBrains Mono,monospace;font-size:0.58rem;"
+        "color:#6b7f96;margin-bottom:0.75rem;'>"
+        "Breakeven: 2-pick = 50% &nbsp;·&nbsp; 3-pick = 59.4% &nbsp;·&nbsp; "
+        "4-pick = 63.3% &nbsp;·&nbsp; 5-pick = 65.9%"
+        "</div>",
+        unsafe_allow_html=True
+    )
+
+    _run_edge = st.button(
+        "🔍  Scan for Edge Plays",
+        key="run_edge_scanner",
+        type="primary",
+        use_container_width=False
+    )
+
+    if _run_edge:
+        st.session_state.edge_results = []
+
+        with st.spinner("Fetching PrizePicks slate..."):
+            _all_props = fetch_all_pp_props()
+
+        if not _all_props:
+            st.error("Could not fetch PrizePicks slate. Try again in a moment.")
+            st.stop()
+
+        # Filter by sport and stat
+        _filtered = _all_props
+        if _edge_sport != "Both":
+            _filtered = [p for p in _filtered if p["sport"] == _edge_sport]
+        if _edge_stat != "All Stats":
+            _filtered = [p for p in _filtered
+                        if _edge_stat.lower() in p["stat"].lower()]
+        if not _include_goblin:
+            _filtered = [p for p in _filtered if not p["is_goblin"]]
+
+        # Deduplicate: keep best line per player+stat+sport
+        # (standard line preferred unless goblin is being included)
+        _deduped = {}
+        for p in _filtered:
+            _k = f"{p['sport']}|{p['player']}|{p['stat']}"
+            if _k not in _deduped:
+                _deduped[_k] = p
+            elif p["is_goblin"] and not _deduped[_k]["is_goblin"]:
+                # Keep goblin as separate entry with different key
+                _deduped[f"{_k}|goblin"] = p
+        _filtered = list(_deduped.values())
+
+        st.info(f"Analyzing {len(_filtered)} props across NBA + MLB...")
+        _prog    = st.progress(0)
+        _status  = st.empty()
+        _results = []
+
+        import concurrent.futures as _cfe
+
+        def _check_prop(prop):
+            try:
+                if prop["sport"] == "NBA":
+                    # Only run Points for now (most reliable)
+                    if "point" not in prop["stat"].lower():
+                        return None
+                    return run_nba_edge_check(
+                        prop["player"], prop["line"],
+                        prop["stat"], prop["team"], "Over"
+                    )
+                elif prop["sport"] == "MLB":
+                    if "strikeout" not in prop["stat"].lower():
+                        return None
+                    return run_mlb_edge_check(
+                        prop["player"], prop["line"], prop["stat"], "Over"
+                    )
+            except Exception:
+                return None
+
+        _total = len(_filtered)
+        _done  = 0
+
+        with _cfe.ThreadPoolExecutor(max_workers=6) as _ex:
+            _fmap = {_ex.submit(_check_prop, p): p for p in _filtered}
+            for _fut in _cfe.as_completed(_fmap):
+                _done += 1
+                _prog.progress(min(_done / max(_total, 1), 1.0))
+                _prop_ref = _fmap[_fut]
+                _status.markdown(
+                    f"<span style='font-family:JetBrains Mono,monospace;"
+                    f"font-size:0.62rem;color:#6b7f96;'>Analyzing "
+                    f"{_prop_ref['player']}...</span>",
+                    unsafe_allow_html=True
+                )
+                try:
+                    _res = _fut.result(timeout=15)
+                    if _res:
+                        # Attach goblin flag from original prop
+                        _res["is_goblin"] = _prop_ref.get("is_goblin", False)
+                        _res["is_demon"]  = _prop_ref.get("is_demon", False)
+                        _results.append(_res)
+                except Exception:
+                    pass
+
+        _prog.empty()
+        _status.empty()
+        st.session_state.edge_results = _results
+
+    # ── Display Results ───────────────────────────────────────────────────
+    _results = st.session_state.get("edge_results", [])
+
+    if _results:
+        # Filter by minimum edge (vs 50% breakeven for 2-pick)
+        _breakeven = 50.0
+        _with_edge = []
+        for r in _results:
+            _edge_pct = r["adj"] - _breakeven
+            if _edge_pct >= _min_edge_val:
+                r["edge_pct"] = round(_edge_pct, 1)
+                _with_edge.append(r)
+
+        # Sort: goblins first within same tier, then by adj desc
+        _with_edge.sort(key=lambda r: (
+            -r["adj"],
+            -r["edge_pct"],
+            0 if r.get("is_goblin") else 1
+        ))
+
+        if not _with_edge:
+            st.markdown(
+                "<div style='text-align:center;color:#6b7f96;font-family:JetBrains Mono,"
+                "monospace;font-size:0.75rem;padding:2rem;'>No plays found above the "
+                f"minimum {_edge_min} edge threshold. Try lowering the filter.</div>",
+                unsafe_allow_html=True
+            )
+        else:
+            # Summary strip
+            _strong  = [r for r in _with_edge if r["adj"] >= 72]
+            _lean    = [r for r in _with_edge if 63 <= r["adj"] < 72]
+            _goblins = [r for r in _with_edge if r.get("is_goblin")]
+            st.markdown(
+                f"<div style='display:flex;gap:12px;flex-wrap:wrap;"
+                f"margin-bottom:1rem;font-family:JetBrains Mono,monospace;'>"
+                f"<div style='background:rgba(0,232,150,0.1);border:1px solid rgba(0,232,150,0.25);"
+                f"border-radius:8px;padding:6px 14px;font-size:0.65rem;color:#00e896;'>"
+                f"🔥 {len(_strong)} Strong plays</div>"
+                f"<div style='background:rgba(255,193,7,0.1);border:1px solid rgba(255,193,7,0.25);"
+                f"border-radius:8px;padding:6px 14px;font-size:0.65rem;color:#ffc107;'>"
+                f"🟡 {len(_lean)} Lean plays</div>"
+                f"<div style='background:rgba(255,61,92,0.1);border:1px solid rgba(255,61,92,0.25);"
+                f"border-radius:8px;padding:6px 14px;font-size:0.65rem;color:#ff3d5c;'>"
+                f"🔴 {len(_goblins)} Goblin value plays</div>"
+                f"<div style='background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);"
+                f"border-radius:8px;padding:6px 14px;font-size:0.65rem;color:#6b7f96;'>"
+                f"Total: {len(_with_edge)} plays</div>"
+                f"</div>",
+                unsafe_allow_html=True
+            )
+
+            # Render each result as a card
+            for _r in _with_edge:
+                _sport_icon = "🏀" if _r["sport"] == "NBA" else "⚾"
+                _is_strong  = _r["adj"] >= 72
+                _is_lean    = 63 <= _r["adj"] < 72
+                _tier_lbl   = ("Strong Over" if _is_strong else
+                               "Lean Over"   if _is_lean  else "Edge Play")
+                _tier_col   = ("#00e896" if _is_strong else
+                               "#ffc107" if _is_lean  else "#9aaec4")
+                _tier_bg    = ("rgba(0,232,150,0.06)" if _is_strong else
+                               "rgba(255,193,7,0.05)" if _is_lean  else
+                               "rgba(255,255,255,0.02)")
+                _border_col = (_tier_col + "33")
+                _goblin_tag = (
+                    "<span style='background:rgba(255,61,92,0.15);"
+                    "border:1px solid rgba(255,61,92,0.3);border-radius:4px;"
+                    "padding:1px 7px;font-size:0.55rem;color:#ff3d5c;"
+                    "font-weight:700;margin-left:6px;'>🔴 GOBLIN</span>"
+                    if _r.get("is_goblin") else ""
+                )
+                _bar_w = min(100, int(_r["adj"]))
+
+                st.markdown(
+                    f"<div style='background:{_tier_bg};"
+                    f"border:1px solid {_border_col};"
+                    f"border-left:4px solid {_tier_col};"
+                    f"border-radius:0 12px 12px 0;"
+                    f"padding:0.9rem 1.1rem;margin-bottom:0.6rem;"
+                    f"animation:fadeSlideUp 0.3s ease both;'>"
+
+                    # Row 1: player + tier badge
+                    f"<div style='display:flex;justify-content:space-between;"
+                    f"align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:6px;'>"
+                    f"<div style='display:flex;align-items:center;gap:8px;'>"
+                    f"<span style='font-size:1.1rem;'>{_sport_icon}</span>"
+                    f"<div>"
+                    f"<span style='font-family:Plus Jakarta Sans,sans-serif;"
+                    f"font-size:0.95rem;font-weight:800;color:#f0f4f8;'>"
+                    f"{_r['player']}</span>{_goblin_tag}"
+                    f"<div style='font-family:JetBrains Mono,monospace;"
+                    f"font-size:0.6rem;color:#6b7f96;margin-top:2px;'>"
+                    f"{_r['sport']} · {_r['stat']} · Over {_r['line']}</div>"
+                    f"</div></div>"
+                    f"<div style='text-align:right;'>"
+                    f"<div style='font-family:Plus Jakarta Sans,sans-serif;"
+                    f"font-size:0.82rem;font-weight:800;color:{_tier_col};'>"
+                    f"{_tier_lbl}</div>"
+                    f"<div style='font-family:JetBrains Mono,monospace;"
+                    f"font-size:0.6rem;color:#6b7f96;'>"
+                    f"+{_r['edge_pct']}% vs 50% breakeven</div>"
+                    f"</div></div>"
+
+                    # Row 2: stats
+                    f"<div style='display:flex;gap:16px;flex-wrap:wrap;"
+                    f"font-family:JetBrains Mono,monospace;font-size:0.62rem;"
+                    f"color:#9aaec4;margin-bottom:8px;'>"
+                    f"<span>Model: <strong style='color:{_tier_col};'>"
+                    f"{_r['adj']}%</strong></span>"
+                    f"<span>Avg: <strong style='color:#f0f4f8;'>{_r['avg']}</strong></span>"
+                    f"<span>Edge: <strong style='color:{"#00e896" if _r["edge_raw"] > 0 else "#ff3d5c"};'>"
+                    f"{_r['edge_raw']:+.1f}</strong></span>"
+                    f"<span>Consistency: <strong style='color:#f0f4f8;'>{_r['cons']}%</strong></span>"
+                    f"<span style='color:#6b7f96;'>{_r['samples']} starts/games</span>"
+                    f"</div>"
+
+                    # Probability bar
+                    f"<div style='background:rgba(255,255,255,0.05);border-radius:4px;"
+                    f"height:4px;overflow:hidden;'>"
+                    f"<div style='width:{_bar_w}%;height:100%;background:{_tier_col};"
+                    f"border-radius:4px;'></div></div>"
+                    f"</div>",
+                    unsafe_allow_html=True
+                )
+
+                # Add to parlay button
+                if _is_strong or _is_lean:
+                    _bp_col = st.columns([4, 1])
+                    with _bp_col[1]:
+                        if st.button(
+                            "➕ Parlay",
+                            key=f"edge_parlay_{_r['player']}_{_r['line']}",
+                            use_container_width=True
+                        ):
+                            _new_leg = {
+                                "player":     _r["player"],
+                                "prop":       f"{_r['stat']} Over",
+                                "line":       _r["line"],
+                                "side":       "Over",
+                                "verdict":    _tier_lbl,
+                                "confidence": int(_r["adj"]),
+                                "adj":        _r["adj"],
+                                "sport":      _r["sport"],
+                                "added":      __import__("datetime").datetime.now().strftime("%I:%M %p"),
+                            }
+                            _dup = any(
+                                l["player"] == _r["player"] and abs(l["line"] - _r["line"]) < 0.1
+                                for l in st.session_state.parlay_legs
+                            )
+                            if not _dup and len(st.session_state.parlay_legs) < 6:
+                                st.session_state.parlay_legs.append(_new_leg)
+                                st.toast(f"✅ {_r['player']} added!", icon="🎯")
+                            elif _dup:
+                                st.toast("Already in parlay", icon="⚠️")
+                            else:
+                                st.toast("Parlay full", icon="🚫")
+
+    elif st.session_state.get("edge_results") is not None and st.session_state.edge_results == []:
+        pass  # Just ran, nothing found — already handled above
+    else:
+        # First open — show instructions
+        st.markdown(
+            "<div style='background:rgba(0,196,204,0.04);border:1px dashed rgba(0,196,204,0.2);"
+            "border-radius:12px;padding:2rem;text-align:center;'>"
+            "<div style='font-family:Plus Jakarta Sans,sans-serif;font-size:1.1rem;"
+            "font-weight:700;color:#f0f4f8;margin-bottom:8px;'>Ready to scan</div>"
+            "<div style='font-family:JetBrains Mono,monospace;font-size:0.65rem;"
+            "color:#6b7f96;line-height:1.8;'>"
+            "Hit <strong style='color:#00c4cc;'>Scan for Edge Plays</strong> to pull tonight's "
+            "full PrizePicks slate and rank every prop by model edge.<br>"
+            "Best time to run: after 6pm ET when lines are finalized."
+            "</div></div>",
+            unsafe_allow_html=True
+        )
+
+    st.stop()
+
+
 # ── NBA Mode guard — stop here if MLB or Soccer selected ─────
-if st.session_state.active_sport != "nba":
+if st.session_state.active_sport not in ("nba",):
     st.stop()
 
 # ── Tab switcher ────────────────────────────────────────────
@@ -9405,7 +9972,7 @@ if st.session_state.logs is not None:
 
     # ── Fire slow calls in parallel ──────────────────────────────
     import concurrent.futures as _cf
-    with _cf.ThreadPoolExecutor(max_workers=8) as _pool:
+    with _cf.ThreadPoolExecutor(max_workers=5) as _pool:
         _f_matchup  = _pool.submit(classify_matchup_espn, opp_abbr)
         _f_h2h      = _pool.submit(get_h2h_logs, player_id, opp_abbr, season_str_clean) if opp_abbr else None
         _f_season   = _pool.submit(nba_get_full_season_logs_cached, player_id, season_str_clean)
