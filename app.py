@@ -8257,7 +8257,8 @@ if st.session_state.active_sport == "edge":
     with _ec2:
         _edge_stat = st.selectbox(
             "Stat filter",
-            ["All Stats", "Points", "Strikeouts", "Rebounds", "Assists"],
+            ["All Stats", "Points", "Strikeouts", "Rebounds", "Assists",
+             "Hits", "Total Bases", "Hits+Runs+RBIs", "Earned Runs Allowed"],
             key="edge_stat_filter",
             label_visibility="collapsed"
         )
@@ -8302,21 +8303,7 @@ if st.session_state.active_sport == "edge":
             st.error("Could not fetch PrizePicks slate. Try again in a moment.")
             st.stop()
 
-        # ── Debug: show raw API response ──────────────────────────────
-        _debug_by_sport = {}
-        for _p in _all_props:
-            _key = f"{_p['sport']}:{_p['stat']}"
-            _debug_by_sport[_key] = _debug_by_sport.get(_key, 0) + 1
-        _debug_lines = ["sport:stat — count"] + [
-            f"  {k}: {v}" for k,v in sorted(_debug_by_sport.items())
-        ]
-        with st.expander("🔍 Debug — raw API response (remove after testing)", expanded=True):
-            st.code(
-                "Total fetched: " + str(len(_all_props)) + chr(10) +
-                "Sport filter: " + _edge_sport + chr(10) +
-                "Stat filter:  " + _edge_stat + chr(10) + chr(10) +
-                chr(10).join(_debug_lines)
-            )
+
 
         # ── Filter BEFORE analysis — only pass matching props to threads ──
         _filtered = _all_props
@@ -8328,11 +8315,15 @@ if st.session_state.active_sport == "edge":
         # Stat filter — applied BEFORE threading so we don't spin up
         # 484 threads for 20 actual props
         _STAT_MAP = {
-            "Points":      lambda s: "point" in s.lower(),
-            "Strikeouts":  lambda s: "strikeout" in s.lower(),
-            "Rebounds":    lambda s: "rebound" in s.lower() or s.lower() == "reb",
-            "Assists":     lambda s: "assist" in s.lower() and "player" not in s.lower(),
-            "All Stats":   lambda s: True,
+            "Points":               lambda s: s.lower() in ("points", "pts"),
+            "Strikeouts":           lambda s: s.lower() == "pitcher strikeouts",
+            "Rebounds":             lambda s: "rebound" in s.lower() or s.lower() == "reb",
+            "Assists":              lambda s: s.lower() in ("assists", "ast"),
+            "Hits":                 lambda s: s.lower() == "hits",
+            "Total Bases":          lambda s: s.lower() == "total bases",
+            "Hits+Runs+RBIs":       lambda s: s.lower() in ("hits+runs+rbis", "h+r+rbi"),
+            "Earned Runs Allowed":  lambda s: s.lower() == "earned runs allowed",
+            "All Stats":            lambda s: True,
         }
         _stat_fn = _STAT_MAP.get(_edge_stat, lambda s: True)
         _filtered = [p for p in _filtered if _stat_fn(p["stat"])]
@@ -8358,7 +8349,12 @@ if st.session_state.active_sport == "edge":
         # Build human-readable label
         _sport_lbl = _edge_sport if _edge_sport != "Both" else "NBA + MLB"
         _stat_lbl  = _edge_stat if _edge_stat != "All Stats" else "all stats"
-        st.info(f"Analyzing {len(_filtered)} {_stat_lbl} props — {_sport_lbl}...")
+        # Map display name to actual PP stat string for clarity
+        _pp_stat_actual = {
+            "Strikeouts": "Pitcher Strikeouts",
+            "Points": "Points",
+        }.get(_edge_stat, _edge_stat)
+        st.info(f"Analyzing {len(_filtered)} props ({_pp_stat_actual}) — {_sport_lbl}...")
 
         _prog    = st.progress(0)
         _status  = st.empty()
@@ -8375,8 +8371,10 @@ if st.session_state.active_sport == "edge":
                         prop["stat"], prop["team"], "Over"
                     )
                 elif prop["sport"] == "MLB":
+                    # Normalize stat name — PrizePicks uses "Pitcher Strikeouts"
+                    _norm_stat = "Strikeouts" if "strikeout" in prop["stat"].lower() else prop["stat"]
                     return run_mlb_edge_check(
-                        prop["player"], prop["line"], prop["stat"], "Over"
+                        prop["player"], prop["line"], _norm_stat, "Over"
                     )
             except Exception:
                 return None
