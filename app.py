@@ -8120,7 +8120,10 @@ if st.session_state.active_sport == "edge":
 
     def run_nba_edge_check(player_name: str, line: float, stat: str,
                            team: str, side: str = "Over") -> dict | None:
-        """Run NBA PropIQ model on one player. Returns edge dict or None."""
+        """
+        NBA edge check — uses cached game logs + 5 fast signals.
+        Matches individual analyzer more closely for consistent results.
+        """
         try:
             _nid, _fn = nba_find_player(player_name)
             if not _nid:
@@ -8131,64 +8134,98 @@ if st.session_state.active_sport == "edge":
             if _logs is None or _logs.empty or len(_logs) < 3:
                 return None
 
-            # Determine stat column
+            # Stat column map — handle all PrizePicks stat name variations
             _stat_map = {
-                "points": "PTS", "pts": "PTS",
-                "rebounds": "REB", "reb": "REB",
-                "assists": "AST", "ast": "AST",
-                "3-pointers made": "FG3M", "3 pointers made": "FG3M",
-                "fantasy score": None,
+                "points":           "PTS",
+                "pts":              "PTS",
+                "rebounds":         "REB",
+                "total rebounds":   "REB",
+                "assists":          "AST",
+                "3-pointers made":  "FG3M",
+                "3 pointers made":  "FG3M",
+                "3-point field goals made": "FG3M",
+                "steals":           "STL",
+                "blocks":           "BLK",
+                "turnovers":        "TO",
             }
             _col = _stat_map.get(stat.lower())
             if not _col or _col not in _logs.columns:
-                # Try to find it
                 _col = next((c for c in _logs.columns
-                             if stat.upper() in c.upper()), None)
+                             if stat.upper()[:3] in c.upper()), None)
                 if not _col:
                     return None
 
+            _vals = pd.to_numeric(_logs[_col], errors="coerce").dropna()
+            if len(_vals) < 3:
+                return None
+
+            _avgv = float(_vals.mean())
             _wb   = weighted_hit_rate(_logs, line, side, opp_abbr=None)
-            _avgv = pd.to_numeric(_logs[_col], errors="coerce").dropna().mean()
             _cons = consistency_score(_logs, line)
 
-            # Quick signal adjustments (lightweight — no API calls)
+            # ── Signal 1: weighted hit rate (base) ────────────────────
             _adj = _wb
-            # Form signal
-            _l3 = pd.to_numeric(_logs.head(3)[_col], errors="coerce").dropna().mean()
-            if not pd.isna(_l3):
-                _diff = _l3 - _avgv
-                if _diff >= 2:    _adj += 0.05
-                elif _diff >= 1:  _adj += 0.02
-                elif _diff <= -2: _adj -= 0.05
-                elif _diff <= -1: _adj -= 0.02
 
-            # Clamp
+            # ── Signal 2: L3 form ─────────────────────────────────────
+            _l3 = float(_vals.head(3).mean())
+            _diff = _l3 - _avgv
+            if _diff >= 3:    _adj += 0.07
+            elif _diff >= 2:  _adj += 0.05
+            elif _diff >= 1:  _adj += 0.02
+            elif _diff <= -3: _adj -= 0.07
+            elif _diff <= -2: _adj -= 0.05
+            elif _diff <= -1: _adj -= 0.02
+
+            # ── Signal 3: season avg vs line (edge quality) ───────────
+            _edge = _avgv - line
+            if _edge >= 4:    _adj += 0.06
+            elif _edge >= 2:  _adj += 0.03
+            elif _edge >= 1:  _adj += 0.01
+            elif _edge <= -4: _adj -= 0.06
+            elif _edge <= -2: _adj -= 0.03
+            elif _edge <= -1: _adj -= 0.01
+
+            # ── Signal 4: consistency ─────────────────────────────────
+            if _cons >= 0.75:  _adj += 0.03
+            elif _cons >= 0.65: _adj += 0.01
+            elif _cons <= 0.40: _adj -= 0.03
+            elif _cons <= 0.30: _adj -= 0.05
+
+            # ── Signal 5: minutes stability (proxy for role) ──────────
+            if "MIN" in _logs.columns:
+                _mins = pd.to_numeric(_logs["MIN"], errors="coerce").dropna()
+                if len(_mins) >= 5:
+                    _min_cv = float(_mins.std() / _mins.mean()) if _mins.mean() > 0 else 1
+                    if _min_cv < 0.1:   _adj += 0.02   # very consistent minutes
+                    elif _min_cv > 0.3: _adj -= 0.02   # erratic minutes = risky
+
             _adj = max(0.05, min(0.95, _adj))
 
             return {
-                "sport":   "NBA",
-                "player":  _fn or player_name,
-                "stat":    stat,
-                "line":    line,
-                "side":    side,
-                "adj":     round(_adj * 100, 1),
-                "avg":     round(_avgv, 1),
-                "edge_raw": round(_avgv - line, 2),
-                "cons":    round(_cons * 100, 1),
-                "samples": len(_logs),
+                "sport":    "NBA",
+                "player":   _fn or player_name,
+                "stat":     stat,
+                "line":     line,
+                "side":     side,
+                "adj":      round(_adj * 100, 1),
+                "avg":      round(_avgv, 1),
+                "edge_raw": round(_edge, 2),
+                "cons":     round(_cons * 100, 1),
+                "samples":  len(_vals),
             }
         except Exception:
             return None
 
 
     @st.cache_data(ttl=3600, show_spinner=False)
-    def _scanner_get_pitcher_k_logs(pitcher_name: str) -> list:
+    def _scanner_get_pitcher_data(pitcher_name: str) -> dict:
         """
-        Ultra-fast pitcher log fetch for the scanner.
-        Single API call, 5s timeout, returns list of K totals only.
-        Uses st.cache_data so repeat calls within 1hr are instant.
+        Fast pitcher data fetch for the scanner.
+        Two API calls, 5s timeout each.
+        Returns K logs + season K/9 + avg IP — everything needed for 6-signal model.
         """
         import requests as _req, datetime as _dtx
+        empty = {"ks": [], "k9": None, "avg_ip": None, "avg_pitches": None, "sample": 0}
         _norm   = lambda s: s.lower().strip().replace(".", "").replace("-", " ")
         _target = _norm(pitcher_name)
         _parts  = [p for p in _target.split() if len(p) > 2]
@@ -8196,14 +8233,14 @@ if st.session_state.active_sport == "edge":
         season  = _dtx.datetime.now().year
 
         try:
-            # Step 1: find player ID from active roster
+            # Step 1: find player ID
             r = _req.get(
                 "https://statsapi.mlb.com/api/v1/sports/1/players",
                 params={"season": season, "gameType": "R"},
-                timeout=5  # hard 5s timeout
+                timeout=5
             )
             if not r.ok:
-                return []
+                return empty
 
             _ppl = r.json().get("people", [])
             _pp  = next((p for p in _ppl
@@ -8213,76 +8250,127 @@ if st.session_state.active_sport == "edge":
                            if _last in _norm(p.get("fullName","")) and
                            p.get("primaryPosition",{}).get("code") == "1"), None)
             if not _pp:
-                return []
+                return empty
 
             pid = _pp["id"]
 
-            # Step 2: get game logs — single call, R season only
+            # Step 2: game logs — get K, IP, pitch count per start
             r2 = _req.get(
                 f"https://statsapi.mlb.com/api/v1/people/{pid}/stats",
                 params={"stats": "gameLog", "group": "pitching",
-                        "season": season, "gameType": "R", "limit": 10},
+                        "season": season, "gameType": "R", "limit": 12},
                 timeout=5
             )
             if not r2.ok:
-                return []
+                return empty
 
             splits = r2.json().get("stats", [{}])[0].get("splits", [])
 
-            # Return just K values for each start
-            ks = []
+            ks, ips, pitches = [], [], []
             for s in splits:
-                st = s.get("stat", {})
+                st   = s.get("stat", {})
                 date = s.get("date", "")
-                np_val = int(st.get("numberOfPitches", 0) or 0)
-                # Skip non-starts and spring training
-                if np_val < 40:
-                    continue
+                np_v = int(st.get("numberOfPitches", 0) or 0)
+                if np_v < 40:
+                    continue  # skip bullpen appearances
                 try:
-                    import datetime as _dtx2
-                    if _dtx2.date.fromisoformat(date[:10]).month < 4:
-                        continue
+                    if _dtx.date.fromisoformat(date[:10]).month < 4:
+                        continue  # skip spring training
                 except Exception:
                     pass
                 ks.append(int(st.get("strikeOuts", 0) or 0))
+                # Parse IP (stored as float e.g. 5.1 = 5 innings + 1 out)
+                _ip_raw = float(st.get("inningsPitched", 0) or 0)
+                _ip_full = int(_ip_raw) + ((_ip_raw % 1) * 10 / 3)
+                ips.append(_ip_full)
+                pitches.append(np_v)
 
-            return ks
+            if not ks:
+                return empty
+
+            # Season K/9 from totals (more reliable than per-game avg)
+            _ip_tot = sum(ips) if ips else 0
+            _k_tot  = sum(ks)
+            _k9     = round((_k_tot / _ip_tot * 9), 1) if _ip_tot >= 10 else None
+            _avg_ip = round(sum(ips) / len(ips), 1) if ips else None
+            _avg_pc = round(sum(pitches) / len(pitches), 0) if pitches else None
+
+            return {
+                "ks":          ks,
+                "k9":          _k9,
+                "avg_ip":      _avg_ip,
+                "avg_pitches": _avg_pc,
+                "sample":      len(ks),
+            }
 
         except Exception:
-            return []
+            return empty
 
 
     def run_mlb_edge_check(pitcher_name: str, line: float,
                            stat: str, side: str = "Over") -> dict | None:
         """
-        Scanner-optimized edge check. Uses fast single-call log fetch.
-        Returns result in <5 seconds or None.
+        MLB scanner edge check — 6 signals using cached game log data.
+        Matches full analyzer more closely without extra API calls.
         """
         try:
-            _ks = _scanner_get_pitcher_k_logs(pitcher_name)
+            _data = _scanner_get_pitcher_data(pitcher_name)
+            _ks   = _data.get("ks", [])
             if not _ks or len(_ks) < 3:
                 return None
 
             import numpy as _np
             _vals = _np.array(_ks, dtype=float)
-            _avg  = round(float(_vals.mean()), 1)
-
-            # Weighted hit rate (recent games count more)
             _n    = len(_vals)
+            _avg  = round(float(_vals.mean()), 1)
+            _k9   = _data.get("k9")
+            _avg_ip  = _data.get("avg_ip")
+            _avg_pc  = _data.get("avg_pitches")
+
+            # ── Signal 1: Weighted hit rate (base) ───────────────────
             _wts  = _np.array([1.5 if i < 3 else 1.0 for i in range(_n)])
             _hits = (_vals >= line) if side == "Over" else (_vals <= line)
             _whr  = round(float((_hits * _wts).sum() / _wts.sum()), 3)
-
             _cons = round(float(_hits.mean()), 3)
-
-            # Form signal
-            _l3   = float(_vals[:3].mean())
             _adj  = _whr
+
+            # ── Signal 2: L3 form (trending up/down?) ────────────────
+            _l3   = float(_vals[:3].mean())
             _diff = _l3 - _avg
-            if _diff >= 1.2:    _adj += 0.05
-            elif _diff >= 0.6:  _adj += 0.02
-            elif _diff <= -1.2: _adj -= 0.05
-            elif _diff <= -0.6: _adj -= 0.02
+            if _diff >= 1.5:    _adj += 0.05
+            elif _diff >= 0.8:  _adj += 0.02
+            elif _diff <= -1.5: _adj -= 0.05
+            elif _diff <= -0.8: _adj -= 0.02
+
+            # ── Signal 3: K/9 rate vs league avg 8.3 ─────────────────
+            if _k9:
+                if _k9 >= 11.0:   _adj += 0.07   # elite
+                elif _k9 >= 9.5:  _adj += 0.04   # above avg
+                elif _k9 >= 8.0:  _adj += 0.01   # avg
+                elif _k9 >= 6.5:  _adj -= 0.03   # below avg
+                else:             _adj -= 0.06   # poor
+
+            # ── Signal 4: Avg IP / pitch count ceiling ────────────────
+            if _avg_ip:
+                if _avg_ip >= 6.0:   _adj += 0.02   # deep into games
+                elif _avg_ip >= 5.0: _adj += 0.01
+                elif _avg_ip <= 3.5: _adj -= 0.07   # short leash
+                elif _avg_ip <= 4.5: _adj -= 0.03
+
+            # ── Signal 5: Edge vs line (avg above/below line) ─────────
+            _edge = _avg - line
+            if _edge >= 2.5:    _adj += 0.05
+            elif _edge >= 1.5:  _adj += 0.03
+            elif _edge >= 0.5:  _adj += 0.01
+            elif _edge <= -2.5: _adj -= 0.05
+            elif _edge <= -1.5: _adj -= 0.03
+            elif _edge <= -0.5: _adj -= 0.01
+
+            # ── Signal 6: Consistency ─────────────────────────────────
+            if _cons >= 0.75:  _adj += 0.03
+            elif _cons >= 0.65: _adj += 0.01
+            elif _cons <= 0.35: _adj -= 0.04
+            elif _cons <= 0.45: _adj -= 0.02
 
             _adj = max(0.05, min(0.95, _adj))
 
@@ -8294,9 +8382,11 @@ if st.session_state.active_sport == "edge":
                 "side":     side,
                 "adj":      round(_adj * 100, 1),
                 "avg":      _avg,
-                "edge_raw": round(_avg - line, 2),
+                "edge_raw": round(_edge, 2),
                 "cons":     round(_cons * 100, 1),
                 "samples":  _n,
+                "k9":       _k9,
+                "avg_ip":   _avg_ip,
             }
         except Exception:
             return None
@@ -8402,7 +8492,7 @@ if st.session_state.active_sport == "edge":
         # Stat filter — applied BEFORE threading so we don't spin up
         # 484 threads for 20 actual props
         _STAT_MAP = {
-            "Points":               lambda s: s.lower() in ("points", "pts"),
+            "Points":               lambda s: s.lower() in ("points", "pts", "point"),
             "Strikeouts":           lambda s: s.lower() == "pitcher strikeouts",
             "Rebounds":             lambda s: "rebound" in s.lower() or s.lower() == "reb",
             "Assists":              lambda s: s.lower() in ("assists", "ast"),
