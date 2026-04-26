@@ -43,13 +43,30 @@ div[data-testid="stStatusWidget"] { display: none; }
 /* Speed up initial render */
 div[data-testid="stSkeleton"] { display: none; }
 
-/* ── Hide sidebar completely — full width main content ── */
-section[data-testid="stSidebar"] { display: none !important; }
-button[data-testid="baseButton-header"] { display: none !important; }
+/* ── Full width — no sidebar at all ── */
+section[data-testid="stSidebar"],
+section[data-testid="stSidebar"] > div,
+button[data-testid="collapsedControl"],
+button[data-testid="baseButton-header"] {
+    display: none !important;
+    width: 0 !important;
+    min-width: 0 !important;
+    max-width: 0 !important;
+    visibility: hidden !important;
+}
 .main .block-container {
-    max-width: 100% !important;
-    padding-left: 2rem !important;
-    padding-right: 2rem !important;
+    max-width: 1200px !important;
+    padding-left: 1.5rem !important;
+    padding-right: 1.5rem !important;
+    margin: 0 auto !important;
+}
+/* Remove the gap left by collapsed sidebar */
+.stApp > .main {
+    margin-left: 0 !important;
+    padding-left: 0 !important;
+}
+[data-testid="stAppViewContainer"] > .main {
+    padding-left: 0 !important;
 }
 
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800;900&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&family=JetBrains+Mono:wght@400;500;700&display=swap');
