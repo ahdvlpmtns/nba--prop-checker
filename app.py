@@ -8181,29 +8181,102 @@ if st.session_state.active_sport == "edge":
             return None
 
 
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def _scanner_get_pitcher_k_logs(pitcher_name: str) -> list:
+        """
+        Ultra-fast pitcher log fetch for the scanner.
+        Single API call, 5s timeout, returns list of K totals only.
+        Uses st.cache_data so repeat calls within 1hr are instant.
+        """
+        import requests as _req, datetime as _dtx
+        _norm   = lambda s: s.lower().strip().replace(".", "").replace("-", " ")
+        _target = _norm(pitcher_name)
+        _parts  = [p for p in _target.split() if len(p) > 2]
+        _last   = _target.split()[-1]
+        season  = _dtx.datetime.now().year
+
+        try:
+            # Step 1: find player ID from active roster
+            r = _req.get(
+                "https://statsapi.mlb.com/api/v1/sports/1/players",
+                params={"season": season, "gameType": "R"},
+                timeout=5  # hard 5s timeout
+            )
+            if not r.ok:
+                return []
+
+            _ppl = r.json().get("people", [])
+            _pp  = next((p for p in _ppl
+                         if all(pt in _norm(p.get("fullName","")) for pt in _parts)), None)
+            if not _pp:
+                _pp = next((p for p in _ppl
+                           if _last in _norm(p.get("fullName","")) and
+                           p.get("primaryPosition",{}).get("code") == "1"), None)
+            if not _pp:
+                return []
+
+            pid = _pp["id"]
+
+            # Step 2: get game logs — single call, R season only
+            r2 = _req.get(
+                f"https://statsapi.mlb.com/api/v1/people/{pid}/stats",
+                params={"stats": "gameLog", "group": "pitching",
+                        "season": season, "gameType": "R", "limit": 10},
+                timeout=5
+            )
+            if not r2.ok:
+                return []
+
+            splits = r2.json().get("stats", [{}])[0].get("splits", [])
+
+            # Return just K values for each start
+            ks = []
+            for s in splits:
+                st = s.get("stat", {})
+                date = s.get("date", "")
+                np_val = int(st.get("numberOfPitches", 0) or 0)
+                # Skip non-starts and spring training
+                if np_val < 40:
+                    continue
+                try:
+                    import datetime as _dtx2
+                    if _dtx2.date.fromisoformat(date[:10]).month < 4:
+                        continue
+                except Exception:
+                    pass
+                ks.append(int(st.get("strikeOuts", 0) or 0))
+
+            return ks
+
+        except Exception:
+            return []
+
+
     def run_mlb_edge_check(pitcher_name: str, line: float,
                            stat: str, side: str = "Over") -> dict | None:
-        """Run MLB PropIQ model on one pitcher. Lightweight — uses cached logs."""
+        """
+        Scanner-optimized edge check. Uses fast single-call log fetch.
+        Returns result in <5 seconds or None.
+        """
         try:
-            # Use smaller n=8 for speed — scanner doesn't need full 10 games
-            _logs = mlb_get_pitcher_logs(pitcher_name, n=8)
-            if _logs is None or _logs.empty or len(_logs) < 3:
+            _ks = _scanner_get_pitcher_k_logs(pitcher_name)
+            if not _ks or len(_ks) < 3:
                 return None
 
-            _stat_col = "K" if "strikeout" in stat.lower() else "OUTS"
-            if _stat_col not in _logs.columns:
-                return None
+            import numpy as _np
+            _vals = _np.array(_ks, dtype=float)
+            _avg  = round(float(_vals.mean()), 1)
 
-            _vals = pd.to_numeric(_logs[_stat_col], errors="coerce").dropna()
-            if len(_vals) < 3:
-                return None
+            # Weighted hit rate (recent games count more)
+            _n    = len(_vals)
+            _wts  = _np.array([1.5 if i < 3 else 1.0 for i in range(_n)])
+            _hits = (_vals >= line) if side == "Over" else (_vals <= line)
+            _whr  = round(float((_hits * _wts).sum() / _wts.sum()), 3)
 
-            _avg  = _vals.mean()
-            _whr  = mlb_weighted_hr(_logs, line, _stat_col, side)
-            _cons = (_vals >= line if side == "Over" else _vals <= line).mean()
+            _cons = round(float(_hits.mean()), 3)
 
-            # Form
-            _l3   = _vals.head(3).mean()
+            # Form signal
+            _l3   = float(_vals[:3].mean())
             _adj  = _whr
             _diff = _l3 - _avg
             if _diff >= 1.2:    _adj += 0.05
@@ -8220,10 +8293,10 @@ if st.session_state.active_sport == "edge":
                 "line":     line,
                 "side":     side,
                 "adj":      round(_adj * 100, 1),
-                "avg":      round(_avg, 1),
+                "avg":      _avg,
                 "edge_raw": round(_avg - line, 2),
                 "cons":     round(_cons * 100, 1),
-                "samples":  len(_vals),
+                "samples":  _n,
             }
         except Exception:
             return None
@@ -8382,8 +8455,8 @@ if st.session_state.active_sport == "edge":
         _total = max(len(_filtered), 1)
         _done  = 0
 
-        # Fewer workers for MLB (slow logs) vs NBA (fast cache)
-        _workers = 4 if _edge_sport == "MLB" else (8 if _edge_sport == "NBA" else 5)
+        # MLB uses cached single-call fetch — can handle more workers
+        _workers = 8 if _edge_sport == "MLB" else (8 if _edge_sport == "NBA" else 8)
 
         with _cfe.ThreadPoolExecutor(max_workers=_workers) as _ex:
             _fmap = {_ex.submit(_check_prop, p): p for p in _filtered}
