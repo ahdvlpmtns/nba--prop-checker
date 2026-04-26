@@ -5646,127 +5646,118 @@ if st.session_state.active_sport == "mlb":
         "ATH": (37.7516,-122.2005),
     }
 
-    @st.cache_data(ttl=1800, show_spinner=False)
+    @st.cache_data(ttl=900, show_spinner=False)
     def mlb_get_weather(home_team: str, game_date: str = "") -> dict:
-        """
-        Fetch game-time weather for tonight's MLB game.
-        Uses Open-Meteo free API — no key needed.
-        Returns: {temp_f, wind_mph, wind_dir, condition, k_impact}
-        k_impact: "Helps Over" | "Hurts Over" | "Neutral"
-        """
+        """Fetch game-time weather from Open-Meteo. Guaranteed to return data or explain why not."""
         empty = {"temp_f": None, "wind_mph": None, "wind_dir": "",
                  "condition": "", "k_impact": "Neutral", "note": ""}
-        # Retractable/domed stadiums — weather irrelevant
         _DOME_PARKS = {"ARI","HOU","MIA","MIL","MIN","SEA","TBR","TOR","WSN","LAA"}
+        if not home_team:
+            return empty
         if home_team.upper() in _DOME_PARKS:
             return {**empty, "condition": "Dome/Retractable",
                     "k_impact": "Neutral", "note": "Indoor — weather irrelevant"}
-        coords = _MLB_STADIUM_COORDS.get(home_team.upper())
+        _MLB_COORDS = {
+            "ARI": (33.4453,-112.0667), "ATL": (33.7350,-84.3900),
+            "BAL": (39.2838,-76.6217),  "BOS": (42.3467,-71.0972),
+            "CHC": (41.9484,-87.6553),  "CHW": (41.8300,-87.6339),  "CWS": (41.8300,-87.6339),
+            "CIN": (39.0978,-84.5082),  "CLE": (41.4962,-81.6852),
+            "COL": (39.7559,-104.9942), "DET": (42.3390,-83.0485),
+            "HOU": (29.7573,-95.3555),  "KCR": (39.0517,-94.4803),  "KCA": (39.0517,-94.4803),
+            "LAA": (33.8003,-117.8827), "LAD": (34.0739,-118.2400),
+            "MIA": (25.7781,-80.2197),  "MIL": (43.0280,-87.9712),
+            "MIN": (44.9817,-93.2778),  "NYM": (40.7571,-73.8458),
+            "NYY": (40.8296,-73.9262),  "OAK": (37.7516,-122.2005),  "ATH": (37.7516,-122.2005),
+            "PHI": (39.9061,-75.1665),  "PIT": (40.4469,-80.0058),
+            "SDP": (32.7076,-117.1570), "SEA": (47.5914,-122.3325),
+            "SFG": (37.7786,-122.3893), "STL": (38.6226,-90.1928),
+            "TBR": (27.7683,-82.6534),  "TEX": (32.7513,-97.0822),
+            "TOR": (43.6414,-79.3894),  "WSN": (38.8730,-77.0074),
+        }
+        coords = _MLB_COORDS.get(home_team.upper())
         if not coords:
-            return empty
+            return {**empty, "note": f"No coords for {home_team}"}
         lat, lon = coords
         try:
-            import requests as _req
-            # Open-Meteo — free, no API key
+            import requests as _req, datetime as _dtx
             r = _req.get(
                 "https://api.open-meteo.com/v1/forecast",
                 params={
-                    "latitude":  lat,
-                    "longitude": lon,
-                    "hourly":    "temperature_2m,windspeed_10m,winddirection_10m,weathercode",
+                    "latitude": lat, "longitude": lon,
+                    "hourly": "temperature_2m,windspeed_10m,winddirection_10m,weathercode",
                     "temperature_unit": "fahrenheit",
-                    "windspeed_unit":   "mph",
-                    "forecast_days":    2,
-                    "timezone":         "America/New_York",
+                    "windspeed_unit": "mph",
+                    "forecast_days": 2,
+                    "timezone": "America/New_York",
                 },
-                timeout=8
+                timeout=10,
+                headers={"User-Agent": "PropIQ/1.0"}
             )
             if not r.ok:
-                return empty
-            data    = r.json()
-            hours   = data.get("hourly", {})
-            times   = hours.get("time", [])
-            temps   = hours.get("temperature_2m", [])
-            winds   = hours.get("windspeed_10m", [])
-            wdirs   = hours.get("winddirection_10m", [])
-            wcodes  = hours.get("weathercode", [])
-
-            # Find game-time hour — try all common MLB start times
-            import datetime as _dtx
-            _today  = _dtx.date.today().strftime("%Y-%m-%d")
-            _tmrw   = (_dtx.date.today() + _dtx.timedelta(days=1)).strftime("%Y-%m-%d")
-            _idx    = None
-            # Try today's game times first, then tomorrow (late night games)
-            for _date_try in [_today, _tmrw]:
-                for _h in ["T19:00","T18:00","T20:00","T17:00","T21:00","T13:00","T16:00"]:
-                    _idx = next((i for i, t in enumerate(times)
-                                 if t == f"{_date_try}{_h}"), None)
-                    if _idx is not None: break
-                if _idx is not None: break
-            # Last resort: find the next available future hour
-            if _idx is None:
-                now_str = _dtx.datetime.now().strftime("%Y-%m-%dT%H:00")
-                _idx = next((i for i, t in enumerate(times) if t >= now_str), None)
-            if _idx is None or _idx >= len(temps):
-                return empty
-
-            temp_f    = round(temps[_idx], 1)
-            wind_mph  = round(winds[_idx], 1)
-            wind_deg  = wdirs[_idx] if _idx < len(wdirs) else 0
-            wcode     = wcodes[_idx] if _idx < len(wcodes) else 0
-
-            # Wind direction label
+                return {**empty, "note": f"API {r.status_code}"}
+            data  = r.json()
+            hrs   = data.get("hourly", {})
+            times = hrs.get("time", [])
+            temps = hrs.get("temperature_2m", [])
+            winds = hrs.get("windspeed_10m", [])
+            wdirs = hrs.get("winddirection_10m", [])
+            wcodes= hrs.get("weathercode", [])
+            if not times or not temps:
+                return {**empty, "note": "Empty API response"}
+            today = _dtx.date.today().strftime("%Y-%m-%d")
+            tmrw  = (_dtx.date.today()+_dtx.timedelta(days=1)).strftime("%Y-%m-%d")
+            idx   = None
+            for _d in [today, tmrw]:
+                for _h in [19,20,18,21,13,14,15,16,17,22]:
+                    _t = f"{_d}T{_h:02d}:00"
+                    idx = next((i for i,t in enumerate(times) if t == _t), None)
+                    if idx is not None: break
+                if idx is not None: break
+            if idx is None:
+                _now = _dtx.datetime.now().strftime("%Y-%m-%dT%H:00")
+                idx = next((i for i,t in enumerate(times) if t >= _now), None)
+            if idx is None:
+                idx = next((i for i,t in enumerate(times) if t.startswith(today)), 0)
+            idx = min(idx or 0, len(temps)-1)
+            temp_f   = round(float(temps[idx]), 1)
+            wind_mph = round(float(winds[idx] if idx < len(winds) else 0), 1)
+            wind_deg = float(wdirs[idx] if idx < len(wdirs) else 0)
+            wcode    = int(wcodes[idx] if idx < len(wcodes) else 0)
             _dirs = ["N","NNE","NE","ENE","E","ESE","SE","SSE",
                      "S","SSW","SW","WSW","W","WNW","NW","NNW"]
-            wind_dir = _dirs[int((wind_deg + 11.25) / 22.5) % 16]
-
-            # Weather condition from WMO code
-            _cond_map = {
+            wind_dir = _dirs[int((wind_deg+11.25)/22.5)%16]
+            _cmap = {
                 0:"Clear", 1:"Mostly Clear", 2:"Partly Cloudy", 3:"Overcast",
                 45:"Foggy", 48:"Foggy", 51:"Light Drizzle", 53:"Drizzle",
                 55:"Heavy Drizzle", 61:"Light Rain", 63:"Rain", 65:"Heavy Rain",
-                71:"Light Snow", 73:"Snow", 75:"Heavy Snow", 80:"Rain Showers",
-                81:"Rain Showers", 82:"Heavy Showers", 95:"Thunderstorm",
+                80:"Rain Showers", 81:"Rain Showers", 82:"Heavy Showers",
+                95:"Thunderstorm", 96:"Thunderstorm", 99:"Thunderstorm",
             }
-            condition = _cond_map.get(wcode, f"Code {wcode}")
-
-            # K impact analysis
-            # Cold air (<55F): reduces bat speed slightly → mild Over help
-            # Hot air (>85F): livelier ball but doesn't affect Ks much
-            # Wind blowing in (toward batter/toward CF): helps pitcher → Over
-            # High wind (>15mph): disrupts timing → slight Over edge
+            condition = _cmap.get(wcode, f"Code {wcode}")
             k_impact = "Neutral"
-            note_parts = []
-
+            parts = []
             if temp_f < 50:
-                k_impact = "Helps Over"
-                note_parts.append(f"Cold air {temp_f:.0f}°F — reduces bat speed")
+                k_impact = "Helps Over"; parts.append(f"Cold {temp_f:.0f}°F")
             elif temp_f < 60:
-                note_parts.append(f"Cool {temp_f:.0f}°F — mild pitcher advantage")
-
+                parts.append(f"Cool {temp_f:.0f}°F — mild pitcher advantage")
+            else:
+                parts.append(f"{temp_f:.0f}°F")
             if wind_mph >= 15:
-                k_impact = "Helps Over"
-                note_parts.append(f"High wind {wind_mph:.0f}mph — disrupts timing")
+                k_impact = "Helps Over"; parts.append(f"High wind {wind_mph:.0f}mph {wind_dir}")
             elif wind_mph >= 10:
-                note_parts.append(f"Moderate wind {wind_mph:.0f}mph {wind_dir}")
-
-            if wcode in (61,63,65,80,81,82,95):
-                k_impact = "Hurts Over"
-                note_parts.append("Rain possible — may limit innings")
-
-            note = " · ".join(note_parts) if note_parts else f"{temp_f:.0f}°F, {wind_mph:.0f}mph {wind_dir}"
-
+                parts.append(f"Moderate wind {wind_mph:.0f}mph {wind_dir}")
+            elif wind_mph > 0:
+                parts.append(f"{wind_mph:.0f}mph {wind_dir}")
+            if wcode in (61,63,65,80,81,82,95,96,99):
+                k_impact = "Hurts Over"; parts.append("Rain possible")
             return {
-                "temp_f":   temp_f,
-                "wind_mph": wind_mph,
-                "wind_dir": wind_dir,
-                "condition": condition,
-                "k_impact": k_impact,
-                "note":     note,
+                "temp_f": temp_f, "wind_mph": wind_mph, "wind_dir": wind_dir,
+                "condition": condition, "k_impact": k_impact,
+                "note": " · ".join(parts) if parts else f"{temp_f:.0f}°F",
+                "game_hour": times[idx] if idx < len(times) else "",
             }
-        except Exception:
-            return empty
-
+        except Exception as _e:
+            return {**empty, "note": f"Error: {str(_e)[:80]}"}
 
     @st.cache_data(ttl=3600, show_spinner=False)
     def mlb_get_savant_stats(player_name: str) -> dict:
@@ -6561,7 +6552,10 @@ if st.session_state.active_sport == "mlb":
             _f_ump      = _mex.submit(mlb_get_umpire_k_tendency, mlb_home) if mlb_home else None
             _f_splits   = _mex.submit(mlb_get_opp_k_rate_splits, mlb_opp, "R") if mlb_opp else None
             _f_savant   = _mex.submit(mlb_get_savant_stats, mlb_pitcher)
-            _f_weather  = _mex.submit(mlb_get_weather, mlb_home) if mlb_home else None
+            # Weather needs the actual game venue (home team's park)
+            # If pitcher is away, mlb_home is still the home team = correct venue
+            _wx_team    = mlb_home or (_tonight.get("home_team","") if _tonight else "")
+            _f_weather  = _mex.submit(mlb_get_weather, _wx_team) if _wx_team else None
             _f_lineup   = _mex.submit(mlb_get_batting_order_with_hands, mlb_opp) if mlb_opp else None
             _f_platoon  = _mex.submit(mlb_get_platoon_splits, mlb_pitcher)
             _f_pitches  = _mex.submit(mlb_estimate_pitch_count, mlb_pitcher)
