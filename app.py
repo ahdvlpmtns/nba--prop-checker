@@ -8023,99 +8023,107 @@ if st.session_state.active_sport == "mlb":
 # ═══════════════════════════════════════════════════════
 # EDGE MODE — PropIQ Edge Scanner
 # ═══════════════════════════════════════════════════════
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_all_pp_props(sport_filter: str = "Both") -> list:
+    """
+    Pull props from PrizePicks API — filtered by sport for speed.
+    sport_filter: "Both" | "NBA" | "MLB"
+    Cached 5 minutes per sport combination.
+    """
+    import requests as _req
+    props  = []
+    errors = []
+    HDRS = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://prizepicks.com/",
+        "Origin": "https://prizepicks.com",
+    }
+    # League IDs: 7=NBA, 2=MLB
+    _all_leagues = [("7", "NBA"), ("2", "MLB")]
+    if sport_filter == "NBA":
+        _all_leagues = [("7", "NBA")]
+    elif sport_filter == "MLB":
+        _all_leagues = [("2", "MLB")]
+
+    for _league_id, _sport in _all_leagues:
+        try:
+            r = _req.get(
+                "https://api.prizepicks.com/projections",
+                params={"league_id": _league_id, "per_page": "500",
+                        "single_stat": "true"},
+                headers=HDRS, timeout=12
+            )
+            if not r.ok:
+                continue
+            data = r.json()
+
+            # Build player map
+            pmap = {}
+            for item in data.get("included", []):
+                if item.get("type") == "new_player":
+                    a = item.get("attributes", {})
+                    pmap[item["id"]] = {
+                        "name": a.get("display_name") or a.get("name", ""),
+                        "team": a.get("team_abbreviation", ""),
+                        "pos":  a.get("position", ""),
+                    }
+
+            # Parse projections
+            seen = {}  # player+stat → best line
+            for proj in data.get("data", []):
+                a        = proj.get("attributes", {})
+                stat     = a.get("stat_type", "")
+                line     = a.get("line_score")
+                odds_type = a.get("odds_type", "standard")  # standard, goblin, demon
+                if not line or not stat:
+                    continue
+
+                pid  = (proj.get("relationships", {})
+                           .get("new_player", {})
+                           .get("data", {})
+                           .get("id"))
+                pi   = pmap.get(pid, {})
+                name = pi.get("name", "")
+                if not name:
+                    continue
+
+                key = f"{name}|{stat}"
+                entry = {
+                    "sport":     _sport,
+                    "player":    name,
+                    "team":      pi.get("team", ""),
+                    "stat":      stat,
+                    "line":      float(line),
+                    "is_goblin": odds_type == "goblin",
+                    "is_demon":  odds_type == "demon",
+                    "odds_type": odds_type,
+                }
+
+                # Keep standard line but also track goblin if exists
+                if key not in seen:
+                    seen[key] = entry
+                elif odds_type == "goblin" and not seen[key]["is_goblin"]:
+                    # Add goblin as separate entry
+                    props.append(entry)
+                    continue
+                else:
+                    continue
+
+                props.append(entry)
+
+        except Exception as _pp_err:
+            errors.append(str(_pp_err)[:80])
+            continue
+
+    return props
+
+
+
 if st.session_state.active_sport == "edge":
 
     import re as _re_edge
-
-    @st.cache_data(ttl=300, show_spinner=False)
-    def fetch_all_pp_props(sport_filter: str = "Both") -> list:
-        """
-        Pull props from PrizePicks API — filtered by sport for speed.
-        sport_filter: "Both" | "NBA" | "MLB"
-        Cached 5 minutes per sport combination.
-        """
-        import requests as _req
-        props = []
-        HDRS  = {"User-Agent": "Mozilla/5.0", "Accept": "application/json",
-                 "Referer": "https://prizepicks.com/"}
-
-        # League IDs: 7=NBA, 2=MLB
-        _all_leagues = [("7", "NBA"), ("2", "MLB")]
-        if sport_filter == "NBA":
-            _all_leagues = [("7", "NBA")]
-        elif sport_filter == "MLB":
-            _all_leagues = [("2", "MLB")]
-
-        for _league_id, _sport in _all_leagues:
-            try:
-                r = _req.get(
-                    "https://api.prizepicks.com/projections",
-                    params={"league_id": _league_id, "per_page": "500",
-                            "single_stat": "true"},
-                    headers=HDRS, timeout=12
-                )
-                if not r.ok:
-                    continue
-                data = r.json()
-
-                # Build player map
-                pmap = {}
-                for item in data.get("included", []):
-                    if item.get("type") == "new_player":
-                        a = item.get("attributes", {})
-                        pmap[item["id"]] = {
-                            "name": a.get("display_name") or a.get("name", ""),
-                            "team": a.get("team_abbreviation", ""),
-                            "pos":  a.get("position", ""),
-                        }
-
-                # Parse projections
-                seen = {}  # player+stat → best line
-                for proj in data.get("data", []):
-                    a        = proj.get("attributes", {})
-                    stat     = a.get("stat_type", "")
-                    line     = a.get("line_score")
-                    odds_type = a.get("odds_type", "standard")  # standard, goblin, demon
-                    if not line or not stat:
-                        continue
-
-                    pid  = (proj.get("relationships", {})
-                               .get("new_player", {})
-                               .get("data", {})
-                               .get("id"))
-                    pi   = pmap.get(pid, {})
-                    name = pi.get("name", "")
-                    if not name:
-                        continue
-
-                    key = f"{name}|{stat}"
-                    entry = {
-                        "sport":     _sport,
-                        "player":    name,
-                        "team":      pi.get("team", ""),
-                        "stat":      stat,
-                        "line":      float(line),
-                        "is_goblin": odds_type == "goblin",
-                        "is_demon":  odds_type == "demon",
-                        "odds_type": odds_type,
-                    }
-
-                    # Keep standard line but also track goblin if exists
-                    if key not in seen:
-                        seen[key] = entry
-                    elif odds_type == "goblin" and not seen[key]["is_goblin"]:
-                        # Add goblin as separate entry
-                        props.append(entry)
-                        continue
-                    else:
-                        continue
-
-                    props.append(entry)
-
-            except Exception:
-                continue
-
-        return props
 
 
     def run_nba_edge_check(player_name: str, line: float, stat: str,
@@ -8460,7 +8468,10 @@ if st.session_state.active_sport == "edge":
     with _ec_btn_col2:
         if st.button("🔄 Clear Cache", key="edge_clear_cache",
                      use_container_width=True):
-            fetch_all_pp_props.clear()
+            try:
+                fetch_all_pp_props.clear()
+            except Exception:
+                st.cache_data.clear()
             st.session_state.edge_results = []
             st.toast("Cache cleared — ready to scan fresh", icon="✅")
             st.rerun()
@@ -8469,14 +8480,18 @@ if st.session_state.active_sport == "edge":
         st.session_state.edge_results = []
 
         with st.spinner(f"Fetching PrizePicks {_edge_sport} slate..."):
-            _all_props = fetch_all_pp_props(sport_filter=_edge_sport)
+            try:
+                _all_props = fetch_all_pp_props(sport_filter=_edge_sport)
+            except Exception as _fetch_err:
+                _all_props = []
+                st.error(f"Fetch error: {_fetch_err}")
 
         if not _all_props:
-            # Clear cache so next attempt makes a fresh request
             fetch_all_pp_props.clear()
-            st.error(
-                "Could not fetch PrizePicks slate. "
-                "The cache was cleared — please click **Scan for Edge Plays** again."
+            st.warning(
+                "⚠️ PrizePicks returned an empty slate. "
+                "This usually means their API is temporarily unavailable. "
+                "Cache cleared — try scanning again in 30 seconds."
             )
             st.stop()
 
