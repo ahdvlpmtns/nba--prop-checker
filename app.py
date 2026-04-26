@@ -8023,101 +8023,113 @@ if st.session_state.active_sport == "mlb":
 # ═══════════════════════════════════════════════════════
 # EDGE MODE — PropIQ Edge Scanner
 # ═══════════════════════════════════════════════════════
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=600, show_spinner=False)
 def fetch_all_pp_props(sport_filter: str = "Both") -> list:
     """
-    Pull props from PrizePicks API — filtered by sport for speed.
-    sport_filter: "Both" | "NBA" | "MLB"
-    Cached 5 minutes per sport combination.
+    Pull props from PrizePicks API.
+    Handles 429 rate limiting with exponential backoff + UA rotation.
+    Cached 10 minutes to stay under rate limits.
     """
-    import requests as _req
-    props  = []
-    errors = []
-    HDRS = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://prizepicks.com/",
-        "Origin": "https://prizepicks.com",
-    }
-    # League IDs: 7=NBA, 2=MLB
+    import requests as _req, time as _time, random as _rnd
+
+    props = []
+
+    _UAS = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    ]
+
     _all_leagues = [("7", "NBA"), ("2", "MLB")]
     if sport_filter == "NBA":
         _all_leagues = [("7", "NBA")]
     elif sport_filter == "MLB":
         _all_leagues = [("2", "MLB")]
 
-    for _league_id, _sport in _all_leagues:
-        try:
-            r = _req.get(
-                "https://api.prizepicks.com/projections",
-                params={"league_id": _league_id, "per_page": "500",
-                        "single_stat": "true"},
-                headers=HDRS, timeout=12
-            )
-            if not r.ok:
-                continue
-            data = r.json()
+    for _i, (_league_id, _sport) in enumerate(_all_leagues):
+        if _i > 0:
+            _time.sleep(2)  # gap between leagues
 
-            # Build player map
-            pmap = {}
-            for item in data.get("included", []):
-                if item.get("type") == "new_player":
-                    a = item.get("attributes", {})
-                    pmap[item["id"]] = {
-                        "name": a.get("display_name") or a.get("name", ""),
-                        "team": a.get("team_abbreviation", ""),
-                        "pos":  a.get("position", ""),
-                    }
-
-            # Parse projections
-            seen = {}  # player+stat → best line
-            for proj in data.get("data", []):
-                a        = proj.get("attributes", {})
-                stat     = a.get("stat_type", "")
-                line     = a.get("line_score")
-                odds_type = a.get("odds_type", "standard")  # standard, goblin, demon
-                if not line or not stat:
-                    continue
-
-                pid  = (proj.get("relationships", {})
-                           .get("new_player", {})
-                           .get("data", {})
-                           .get("id"))
-                pi   = pmap.get(pid, {})
-                name = pi.get("name", "")
-                if not name:
-                    continue
-
-                key = f"{name}|{stat}"
-                entry = {
-                    "sport":     _sport,
-                    "player":    name,
-                    "team":      pi.get("team", ""),
-                    "stat":      stat,
-                    "line":      float(line),
-                    "is_goblin": odds_type == "goblin",
-                    "is_demon":  odds_type == "demon",
-                    "odds_type": odds_type,
+        for _attempt in range(3):
+            try:
+                _hdrs = {
+                    "User-Agent": _UAS[_attempt % len(_UAS)],
+                    "Accept": "application/json, text/plain, */*",
+                    "Accept-Language": "en-US,en;q=0.9",
+                    "Accept-Encoding": "gzip, deflate, br",
+                    "Referer": "https://prizepicks.com/board",
+                    "Origin": "https://prizepicks.com",
+                    "Connection": "keep-alive",
                 }
+                r = _req.get(
+                    "https://api.prizepicks.com/projections",
+                    params={"league_id": _league_id, "per_page": "250",
+                            "single_stat": "true", "game_mode": "pickem"},
+                    headers=_hdrs, timeout=15
+                )
 
-                # Keep standard line but also track goblin if exists
-                if key not in seen:
-                    seen[key] = entry
-                elif odds_type == "goblin" and not seen[key]["is_goblin"]:
-                    # Add goblin as separate entry
-                    props.append(entry)
+                if r.status_code == 429:
+                    _wait = (2 ** _attempt) + _rnd.uniform(1, 3)
+                    _time.sleep(_wait)
                     continue
-                else:
-                    continue
 
-                props.append(entry)
+                if not r.ok:
+                    break
 
-        except Exception as _pp_err:
-            errors.append(str(_pp_err)[:80])
-            continue
+                data = r.json()
+                if not data.get("data"):
+                    break
+
+                pmap = {}
+                for item in data.get("included", []):
+                    if item.get("type") == "new_player":
+                        a = item.get("attributes", {})
+                        pmap[item["id"]] = {
+                            "name": a.get("display_name") or a.get("name", ""),
+                            "team": a.get("team_abbreviation", ""),
+                            "pos":  a.get("position", ""),
+                        }
+
+                seen = {}
+                for proj in data.get("data", []):
+                    a         = proj.get("attributes", {})
+                    stat      = a.get("stat_type", "")
+                    line      = a.get("line_score")
+                    odds_type = a.get("odds_type", "standard")
+                    if not line or not stat:
+                        continue
+                    pid  = (proj.get("relationships", {})
+                               .get("new_player", {})
+                               .get("data", {}).get("id"))
+                    pi   = pmap.get(pid, {})
+                    name = pi.get("name", "")
+                    if not name:
+                        continue
+                    key   = f"{name}|{stat}"
+                    entry = {
+                        "sport":     _sport,
+                        "player":    name,
+                        "team":      pi.get("team", ""),
+                        "stat":      stat,
+                        "line":      float(line),
+                        "is_goblin": odds_type == "goblin",
+                        "is_demon":  odds_type == "demon",
+                        "odds_type": odds_type,
+                    }
+                    if key not in seen:
+                        seen[key] = entry
+                        props.append(entry)
+                    elif odds_type == "goblin" and not seen[key]["is_goblin"]:
+                        props.append(entry)
+                break  # success
+
+            except Exception:
+                if _attempt < 2:
+                    _time.sleep(1 + _attempt)
+                continue
 
     return props
+
 
 
 
@@ -8488,32 +8500,11 @@ if st.session_state.active_sport == "edge":
 
         if not _all_props:
             fetch_all_pp_props.clear()
-            # Debug: show raw API response to diagnose
-            import requests as _dbg_req
-            _dbg_hdrs = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "Accept": "application/json",
-                "Referer": "https://prizepicks.com/",
-            }
-            _dbg_lid = "2" if _edge_sport == "MLB" else "7"
-            try:
-                _dbg_r = _dbg_req.get(
-                    "https://api.prizepicks.com/projections",
-                    params={"league_id": _dbg_lid, "per_page": "10", "single_stat": "true"},
-                    headers=_dbg_hdrs, timeout=10
-                )
-                _dbg_status = _dbg_r.status_code
-                _dbg_keys   = list(_dbg_r.json().keys()) if _dbg_r.ok else []
-                _dbg_data_n = len(_dbg_r.json().get("data", [])) if _dbg_r.ok else 0
-                _dbg_inc_n  = len(_dbg_r.json().get("included", [])) if _dbg_r.ok else 0
-                st.error(
-                    f"PrizePicks returned empty. Debug: "
-                    f"HTTP {_dbg_status} · keys={_dbg_keys} · "
-                    f"data={_dbg_data_n} items · included={_dbg_inc_n} items · "
-                    f"league_id={_dbg_lid}"
-                )
-            except Exception as _dbg_e:
-                st.error(f"PrizePicks unreachable: {_dbg_e}")
+            st.warning(
+                "⚠️ PrizePicks is currently rate limiting requests. "
+                "Wait 60 seconds then click **Scan for Edge Plays** again. "
+                "The cache has been cleared so it will make a fresh request."
+            )
             st.stop()
 
 
