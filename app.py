@@ -11901,7 +11901,7 @@ if st.session_state.logs is not None:
 
 
     # ── Add to Parlay ─────────────────────────────────────
-    if verdict_tier not in ("Pass",):
+    if _display_tier not in ("Pass",):
         _atp_col1, _atp_col2 = st.columns([3,1])
         with _atp_col2:
             if st.button("➕ Add to Parlay",
@@ -11913,7 +11913,7 @@ if st.session_state.logs is not None:
                     "prop":       f"Points {side}",
                     "line":       float(line),
                     "side":       side,
-                    "verdict":    verdict_tier,
+                    "verdict":    _display_tier,
                     "confidence": _conf_score,
                     "adj":        round(adjusted * 100, 1),
                     "sport":      "NBA",
