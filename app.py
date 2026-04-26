@@ -2624,8 +2624,8 @@ def playoff_usage_spike_signal(
 def get_supabase_client():
     """Get Supabase client using credentials from Streamlit secrets."""
     try:
-        url = st.secrets["SUPABASE_URL"]
-        key = st.secrets["SUPABASE_KEY"]
+        url = st.secrets.get("SUPABASE_URL") or os.environ.get("SUPABASE_URL", "")
+        key = st.secrets.get("SUPABASE_KEY") or os.environ.get("SUPABASE_KEY", "")
         import requests as _req
 
         class _SupabaseClient:
@@ -4473,7 +4473,7 @@ def build_points_chart(logs: pd.DataFrame, full_name: str, line: float, avg_pts:
 
 def get_groq_key() -> str:
     try:
-        return st.secrets["GROQ_API_KEY"]
+        return st.secrets.get("GROQ_API_KEY") or os.environ.get("GROQ_API_KEY", "")
     except Exception:
         return os.environ.get("GROQ_API_KEY", "")
 
@@ -8026,13 +8026,12 @@ if st.session_state.active_sport == "mlb":
 @st.cache_data(ttl=900, show_spinner=False)
 def fetch_all_pp_props(sport_filter: str = "Both") -> list:
     """
-    Pull props from PrizePicks using multiple strategies.
-    Strategy 1: Direct API (fastest, may 429)
-    Strategy 2: Mobile UA (different rate limit bucket)
-    Strategy 3: Free proxy fallbacks
-    Cached 15 minutes to minimize requests.
+    Pull props from PrizePicks using curl_cffi which impersonates
+    Chrome's TLS fingerprint — bypasses Cloudflare bot detection.
+    Falls back to cloudscraper, then requests on failure.
+    Cached 15 minutes.
     """
-    import requests as _req, time as _time, random as _rnd, urllib.parse as _up
+    import time as _time
 
     _all_leagues = [("7", "NBA"), ("2", "MLB")]
     if sport_filter == "NBA":
@@ -8040,8 +8039,7 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
     elif sport_filter == "MLB":
         _all_leagues = [("2", "MLB")]
 
-    def _parse_response(data: dict, sport: str) -> list:
-        """Parse PrizePicks API response into prop list."""
+    def _parse(data: dict, sport: str) -> list:
         props = []
         pmap  = {}
         for item in data.get("included", []):
@@ -8086,73 +8084,63 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
         return props
 
     def _fetch_league(league_id: str, sport: str) -> list:
-        """Try multiple strategies to fetch one league."""
-        _params = {"league_id": league_id, "per_page": "250",
-                   "single_stat": "true", "game_mode": "pickem"}
-        _url    = "https://api.prizepicks.com/projections"
+        _params = {
+            "league_id":   league_id,
+            "per_page":    "250",
+            "single_stat": "true",
+            "game_mode":   "pickem",
+        }
+        _hdrs = {
+            "Accept":          "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer":         "https://prizepicks.com/board",
+            "Origin":          "https://prizepicks.com",
+        }
+        _url = "https://api.prizepicks.com/projections"
 
-        # Strategy 1: Desktop Chrome UA
-        _strategies = [
-            {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-                "Accept": "application/json, text/plain, */*",
-                "Accept-Language": "en-US,en;q=0.9",
-                "Referer": "https://prizepicks.com/board",
-                "Origin": "https://prizepicks.com",
-            },
-            # Strategy 2: Mobile UA (separate rate limit bucket)
-            {
-                "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
-                "Accept": "application/json",
-                "Referer": "https://prizepicks.com/",
-            },
-            # Strategy 3: Android UA
-            {
-                "User-Agent": "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.82 Mobile Safari/537.36",
-                "Accept": "application/json",
-                "Referer": "https://prizepicks.com/",
-            },
-        ]
+        # Strategy 1: curl_cffi — impersonates Chrome TLS fingerprint
+        try:
+            from curl_cffi import requests as _cffi_req
+            r = _cffi_req.get(
+                _url, params=_params, headers=_hdrs,
+                impersonate="chrome124", timeout=20
+            )
+            if r.ok and r.json().get("data"):
+                return _parse(r.json(), sport)
+        except Exception:
+            pass
 
-        for _i, _hdrs in enumerate(_strategies):
-            try:
-                if _i > 0:
-                    _time.sleep(2 + _rnd.uniform(0, 2))
+        # Strategy 2: cloudscraper — handles CF JS challenges
+        try:
+            import cloudscraper as _cs
+            scraper = _cs.create_scraper(browser={"browser": "chrome", "platform": "windows"})
+            r = scraper.get(_url, params=_params, headers=_hdrs, timeout=20)
+            if r.ok and r.json().get("data"):
+                return _parse(r.json(), sport)
+        except Exception:
+            pass
 
-                r = _req.get(_url, params=_params, headers=_hdrs, timeout=15)
-
-                if r.status_code == 429:
-                    _time.sleep(3 + _i * 2)
-                    continue
-
+        # Strategy 3: requests with strong headers (may work on fresh IPs)
+        try:
+            import requests as _req
+            for _ua in [
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
+            ]:
+                _h = {**_hdrs, "User-Agent": _ua}
+                r = _req.get(_url, params=_params, headers=_h, timeout=15)
                 if r.ok and r.json().get("data"):
-                    return _parse_response(r.json(), sport)
-
-            except Exception:
-                continue
-
-        # Strategy 4: Proxy fallbacks
-        _proxies = [
-            f"https://api.allorigins.win/raw?url={_up.quote(_url + '?' + _up.urlencode(_params))}",
-            f"https://corsproxy.io/?{_url}?{_up.urlencode(_params)}",
-        ]
-        for _proxy_url in _proxies:
-            try:
-                _time.sleep(1)
-                rp = _req.get(_proxy_url,
-                              headers={"Accept": "application/json"},
-                              timeout=15)
-                if rp.ok and rp.json().get("data"):
-                    return _parse_response(rp.json(), sport)
-            except Exception:
-                continue
+                    return _parse(r.json(), sport)
+                _time.sleep(2)
+        except Exception:
+            pass
 
         return []
 
     all_props = []
     for _i, (league_id, sport) in enumerate(_all_leagues):
         if _i > 0:
-            _time.sleep(3)
+            _time.sleep(2)
         all_props.extend(_fetch_league(league_id, sport))
 
     return all_props
