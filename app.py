@@ -6444,8 +6444,10 @@ if st.session_state.active_sport == "mlb":
         pc_ceiling: estimated max Ks from pitch count — caps verdict if below line.
         """
         # Pitch count hard cap — if ceiling ≤ line, maximum verdict is Lean
+        # Only hard-cap verdict when ceiling is meaningfully below line (>0.5 gap)
+        # Ceiling just barely below line (e.g. 4.0 vs 4.5) is noise, not a true cap
         _ceiling_capped = (pc_ceiling is not None and line is not None and
-                           pc_ceiling <= line)
+                           pc_ceiling <= line - 0.5)
 
         if side == "Over":
             if not _ceiling_capped:
@@ -6857,10 +6859,11 @@ if st.session_state.active_sport == "mlb":
             _swstr_src = "Savant SwStr%" if _swstr_real else ("MLB Stats K%" if (_swstr and not _swstr_real) else "K/BF proxy")
             # Sanity check: real SwStr% should be 5-25%, K/BF ratio is 15-35%
             # If _swstr_real > 0.25 it's likely the K% not real whiff rate
-            if _swstr_real and _swstr_real > 0.28:
-                _swstr_src  = "Savant K%"  # actually K rate not whiff rate
-                _swstr_real = None          # don't treat as real whiff rate
-                # Re-apply K/BF scale thresholds
+            # Sanity: real SwStr% max is ~20% (MLB leaders)
+            # Anything above 22% is almost certainly K% not whiff rate
+            if _swstr_real and _swstr_real > 0.22:
+                _swstr_src  = "Savant K%"
+                _swstr_real = None
                 if _swstr >= 0.28:   _swstr_adj = +0.06
                 elif _swstr >= 0.23: _swstr_adj = +0.03
                 elif _swstr >= 0.18: _swstr_adj = 0.0
@@ -6974,25 +6977,29 @@ if st.session_state.active_sport == "mlb":
 
             if _pc_avg:
                 # Estimate K ceiling from pitch count
-                # ~16 pitches/inning, K/9 = Ks per 9 innings → K per inning = K/9 ÷ 9
-                _innings_est    = _pc_avg / 16.0           # estimated innings
+                # MLB avg ~15 pitches/inning for starters (not 16)
+                # High-K pitchers work faster per out — use 14.5 for K-heavy guys
+                _pitches_per_inn = 14.5 if (_k9 and _k9 >= 9.0) else 15.0
+                _innings_est    = _pc_avg / _pitches_per_inn
                 _k_per_inn      = (_k9 / 9.0) if _k9 > 0 else (avg_val / max(_avg_ip, 1.0))
                 _pc_k_ceiling   = round(_innings_est * _k_per_inn, 1)
 
-                # Base adj from pitch count
+                # Base adj from pitch count — only penalize genuinely short outings
                 if _pc_avg >= 100:    _pc_adj = +0.03
                 elif _pc_avg >= 90:   _pc_adj = +0.01
-                elif _pc_avg < 75:    _pc_adj = -0.08
-                elif _pc_avg < 85:    _pc_adj = -0.04
+                elif _pc_avg < 65:    _pc_adj = -0.08   # was 75 — too aggressive
+                elif _pc_avg < 78:    _pc_adj = -0.04   # was 85 — too aggressive
 
-                # Extra penalty if K ceiling is at or below the line
-                # This catches the case where even a perfect outing can't hit over
+                # Ceiling penalty — only apply when gap is significant
+                # 83p pitcher vs 4.5 line: ceiling ~4.2 = within 0.3, not a true cap
                 if _pc_k_ceiling and mlb_prop == "Strikeouts":
                     _ceiling_gap = _pc_k_ceiling - mlb_line
-                    if _ceiling_gap <= 0:        # ceiling is at or below line
-                        _pc_adj = min(_pc_adj, -0.15)  # heavy additional penalty
-                    elif _ceiling_gap <= 0.5:    # very tight ceiling
-                        _pc_adj = min(_pc_adj, -0.10)
+                    if _ceiling_gap <= -1.0:      # ceiling is well below line (>1 K gap)
+                        _pc_adj = min(_pc_adj, -0.15)  # genuine hard cap
+                    elif _ceiling_gap <= -0.5:    # ceiling is meaningfully below line
+                        _pc_adj = min(_pc_adj, -0.08)
+                    elif _ceiling_gap <= 0:       # ceiling just at/barely below line
+                        _pc_adj = min(_pc_adj, -0.04)  # mild penalty only
 
             # Partial lineup penalty
             if _lineup_order and len(_lineup_order) < 7:
