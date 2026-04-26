@@ -8028,10 +8028,11 @@ if st.session_state.active_sport == "edge":
     import re as _re_edge
 
     @st.cache_data(ttl=300, show_spinner=False)
-    def fetch_all_pp_props() -> list:
+    def fetch_all_pp_props(sport_filter: str = "Both") -> list:
         """
-        Pull ALL props from PrizePicks API — NBA + MLB, standard + goblin.
-        Returns unified list with sport, player, stat, line, is_goblin, is_demon.
+        Pull props from PrizePicks API — filtered by sport for speed.
+        sport_filter: "Both" | "NBA" | "MLB"
+        Cached 5 minutes per sport combination.
         """
         import requests as _req
         props = []
@@ -8039,7 +8040,13 @@ if st.session_state.active_sport == "edge":
                  "Referer": "https://prizepicks.com/"}
 
         # League IDs: 7=NBA, 2=MLB
-        for _league_id, _sport in [("7", "NBA"), ("2", "MLB")]:
+        _all_leagues = [("7", "NBA"), ("2", "MLB")]
+        if sport_filter == "NBA":
+            _all_leagues = [("7", "NBA")]
+        elif sport_filter == "MLB":
+            _all_leagues = [("2", "MLB")]
+
+        for _league_id, _sport in _all_leagues:
             try:
                 r = _req.get(
                     "https://api.prizepicks.com/projections",
@@ -8176,10 +8183,11 @@ if st.session_state.active_sport == "edge":
 
     def run_mlb_edge_check(pitcher_name: str, line: float,
                            stat: str, side: str = "Over") -> dict | None:
-        """Run MLB PropIQ model on one pitcher. Lightweight version."""
+        """Run MLB PropIQ model on one pitcher. Lightweight — uses cached logs."""
         try:
-            _logs = mlb_get_pitcher_logs(pitcher_name, n=10)
-            if _logs.empty or len(_logs) < 3:
+            # Use smaller n=8 for speed — scanner doesn't need full 10 games
+            _logs = mlb_get_pitcher_logs(pitcher_name, n=8)
+            if _logs is None or _logs.empty or len(_logs) < 3:
                 return None
 
             _stat_col = "K" if "strikeout" in stat.lower() else "OUTS"
@@ -8287,36 +8295,55 @@ if st.session_state.active_sport == "edge":
     if _run_edge:
         st.session_state.edge_results = []
 
-        with st.spinner("Fetching PrizePicks slate..."):
-            _all_props = fetch_all_pp_props()
+        with st.spinner(f"Fetching PrizePicks {_edge_sport} slate..."):
+            _all_props = fetch_all_pp_props(sport_filter=_edge_sport)
 
         if not _all_props:
             st.error("Could not fetch PrizePicks slate. Try again in a moment.")
             st.stop()
 
-        # Filter by sport and stat
+        # ── Filter BEFORE analysis — only pass matching props to threads ──
         _filtered = _all_props
+
+        # Sport filter
         if _edge_sport != "Both":
             _filtered = [p for p in _filtered if p["sport"] == _edge_sport]
-        if _edge_stat != "All Stats":
-            _filtered = [p for p in _filtered
-                        if _edge_stat.lower() in p["stat"].lower()]
+
+        # Stat filter — applied BEFORE threading so we don't spin up
+        # 484 threads for 20 actual props
+        _STAT_MAP = {
+            "Points":      lambda s: "point" in s.lower(),
+            "Strikeouts":  lambda s: "strikeout" in s.lower(),
+            "Rebounds":    lambda s: "rebound" in s.lower() or s.lower() == "reb",
+            "Assists":     lambda s: "assist" in s.lower() and "player" not in s.lower(),
+            "All Stats":   lambda s: True,
+        }
+        _stat_fn = _STAT_MAP.get(_edge_stat, lambda s: True)
+        _filtered = [p for p in _filtered if _stat_fn(p["stat"])]
+
+        # Goblin filter
         if not _include_goblin:
             _filtered = [p for p in _filtered if not p["is_goblin"]]
 
         # Deduplicate: keep best line per player+stat+sport
-        # (standard line preferred unless goblin is being included)
         _deduped = {}
         for p in _filtered:
             _k = f"{p['sport']}|{p['player']}|{p['stat']}"
             if _k not in _deduped:
                 _deduped[_k] = p
             elif p["is_goblin"] and not _deduped[_k]["is_goblin"]:
-                # Keep goblin as separate entry with different key
                 _deduped[f"{_k}|goblin"] = p
         _filtered = list(_deduped.values())
 
-        st.info(f"Analyzing {len(_filtered)} props across NBA + MLB...")
+        if not _filtered:
+            st.warning("No props found matching your filters. Try broadening the sport or stat filter.")
+            st.stop()
+
+        # Build human-readable label
+        _sport_lbl = _edge_sport if _edge_sport != "Both" else "NBA + MLB"
+        _stat_lbl  = _edge_stat if _edge_stat != "All Stats" else "all stats"
+        st.info(f"Analyzing {len(_filtered)} {_stat_lbl} props — {_sport_lbl}...")
+
         _prog    = st.progress(0)
         _status  = st.empty()
         _results = []
@@ -8324,43 +8351,42 @@ if st.session_state.active_sport == "edge":
         import concurrent.futures as _cfe
 
         def _check_prop(prop):
+            """Run the appropriate model. Filter already applied — every prop here is relevant."""
             try:
                 if prop["sport"] == "NBA":
-                    # Only run Points for now (most reliable)
-                    if "point" not in prop["stat"].lower():
-                        return None
                     return run_nba_edge_check(
                         prop["player"], prop["line"],
                         prop["stat"], prop["team"], "Over"
                     )
                 elif prop["sport"] == "MLB":
-                    if "strikeout" not in prop["stat"].lower():
-                        return None
                     return run_mlb_edge_check(
                         prop["player"], prop["line"], prop["stat"], "Over"
                     )
             except Exception:
                 return None
 
-        _total = len(_filtered)
+        _total = max(len(_filtered), 1)
         _done  = 0
 
-        with _cfe.ThreadPoolExecutor(max_workers=6) as _ex:
+        # Fewer workers for MLB (slow logs) vs NBA (fast cache)
+        _workers = 4 if _edge_sport == "MLB" else (8 if _edge_sport == "NBA" else 5)
+
+        with _cfe.ThreadPoolExecutor(max_workers=_workers) as _ex:
             _fmap = {_ex.submit(_check_prop, p): p for p in _filtered}
             for _fut in _cfe.as_completed(_fmap):
                 _done += 1
-                _prog.progress(min(_done / max(_total, 1), 1.0))
+                _prog.progress(min(_done / _total, 1.0))
                 _prop_ref = _fmap[_fut]
                 _status.markdown(
                     f"<span style='font-family:JetBrains Mono,monospace;"
-                    f"font-size:0.62rem;color:#6b7f96;'>Analyzing "
-                    f"{_prop_ref['player']}...</span>",
+                    f"font-size:0.62rem;color:#6b7f96;'>"
+                    f"[{_done}/{_total}] {_prop_ref['player']} "
+                    f"{_prop_ref['stat']} {_prop_ref['line']}...</span>",
                     unsafe_allow_html=True
                 )
                 try:
-                    _res = _fut.result(timeout=15)
+                    _res = _fut.result(timeout=12)
                     if _res:
-                        # Attach goblin flag from original prop
                         _res["is_goblin"] = _prop_ref.get("is_goblin", False)
                         _res["is_demon"]  = _prop_ref.get("is_demon", False)
                         _results.append(_res)
