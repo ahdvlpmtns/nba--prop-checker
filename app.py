@@ -6466,6 +6466,289 @@ if st.session_state.active_sport == "mlb":
             if adj >= 0.56 and edge <= 0.5:    return "Lean Under"
         return "Pass"
 
+    # ═══════════════════════════════════════════════════════════
+    # TONIGHT'S MLB TOP PICKS
+    # ═══════════════════════════════════════════════════════════
+
+    @st.cache_data(ttl=1800, show_spinner=False)
+    def mlb_get_tonights_starters() -> list:
+        """
+        Fetch tonight's scheduled MLB starting pitchers from MLB Stats API.
+        Returns list of {name, team, opp, home, game_time} dicts.
+        """
+        import requests as _req, datetime as _dtx
+        today  = _dtx.date.today().strftime("%Y-%m-%d")
+        result = []
+        try:
+            r = _req.get(
+                "https://statsapi.mlb.com/api/v1/schedule",
+                params={"sportId": 1, "date": today,
+                        "hydrate": "probablePitcher,team",
+                        "gameType": "R"},
+                timeout=10
+            )
+            if not r.ok:
+                return []
+            for date in r.json().get("dates", []):
+                for game in date.get("games", []):
+                    _home = game.get("teams", {}).get("home", {})
+                    _away = game.get("teams", {}).get("away", {})
+                    _time = game.get("gameDate", "")[:16]
+                    for _side, _opp_side in [("home", "away"), ("away", "home")]:
+                        _team = game.get("teams", {}).get(_side, {})
+                        _opp  = game.get("teams", {}).get(_opp_side, {})
+                        _pp   = _team.get("probablePitcher", {})
+                        if not _pp:
+                            continue
+                        result.append({
+                            "name":      _pp.get("fullName", ""),
+                            "team":      _team.get("team", {}).get("abbreviation", ""),
+                            "opp":       _opp.get("team", {}).get("abbreviation", ""),
+                            "home":      _side == "home",
+                            "game_time": _time,
+                        })
+        except Exception:
+            pass
+        return result
+
+
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def mlb_get_batter_pitcher_h2h(pitcher_id: int, season_range: int = 3) -> dict:
+        """
+        Fetch career batter vs pitcher H2H stats from MLB Stats API.
+        Returns dict of {batter_name: {ab, k, avg, k_pct}} for all batters
+        who have faced this pitcher in the last N seasons.
+        Aggregated across seasons for sample size.
+        """
+        import requests as _req, datetime as _dtx
+        result = {}
+        current_year = _dtx.datetime.now().year
+        seasons = list(range(current_year - season_range, current_year + 1))
+
+        try:
+            for season in seasons:
+                r = _req.get(
+                    f"https://statsapi.mlb.com/api/v1/people/{pitcher_id}/stats",
+                    params={"stats": "vsPlayer", "group": "pitching",
+                            "season": season, "limit": 500},
+                    timeout=8
+                )
+                if not r.ok:
+                    continue
+                for split in r.json().get("stats", [{}])[0].get("splits", []):
+                    _batter = split.get("batter", {})
+                    _name   = _batter.get("fullName", "")
+                    _st     = split.get("stat", {})
+                    if not _name:
+                        continue
+                    _ab  = int(_st.get("atBats", 0) or 0)
+                    _k   = int(_st.get("strikeOuts", 0) or 0)
+                    _h   = int(_st.get("hits", 0) or 0)
+                    if _ab < 3:
+                        continue  # too small
+                    if _name not in result:
+                        result[_name] = {"ab": 0, "k": 0, "h": 0}
+                    result[_name]["ab"] += _ab
+                    result[_name]["k"]  += _k
+                    result[_name]["h"]  += _h
+        except Exception:
+            pass
+
+        # Compute derived stats
+        for _name, _d in result.items():
+            _ab = max(_d["ab"], 1)
+            _d["k_pct"] = round(_d["k"] / _ab, 3)
+            _d["avg"]   = round(_d["h"] / _ab, 3)
+            _d["ab_total"] = _d["ab"]
+
+        return result
+
+
+    @st.cache_data(ttl=1800, show_spinner=False)
+    def mlb_top_picks_tonight(std_line: float = 4.5) -> list:
+        """
+        Run all tonight's starters through the model and rank by confidence.
+        Returns top picks sorted by adjusted hit rate descending.
+        """
+        starters = mlb_get_tonights_starters()
+        if not starters:
+            return []
+
+        results = []
+        import concurrent.futures as _cfe
+
+        def _check_starter(s):
+            try:
+                _data = _scanner_get_pitcher_data(s["name"])
+                _ks   = _data.get("ks", [])
+                if not _ks or len(_ks) < 3:
+                    return None
+                import numpy as _np
+                _vals = _np.array(_ks, dtype=float)
+                _avg  = float(_vals.mean())
+                _k9   = _data.get("k9")
+                _avg_ip = _data.get("avg_ip")
+
+                # Find the best line for this pitcher (closest to their avg)
+                _line = std_line
+                # Try common lines around their average
+                for _try_line in [3.5, 4.5, 5.5, 6.5]:
+                    if abs(_avg - _try_line - 0.5) < abs(_avg - _line - 0.5):
+                        _line = _try_line
+
+                # Quick model (same as edge scanner)
+                _n    = len(_vals)
+                _wts  = _np.array([1.5 if i < 3 else 1.0 for i in range(_n)])
+                _hits = _vals >= _line
+                _whr  = float((_hits * _wts).sum() / _wts.sum())
+                _cons = float(_hits.mean())
+                _adj  = _whr
+
+                # Signals
+                _l3 = float(_vals[:3].mean())
+                _diff = _l3 - _avg
+                if _diff >= 1.5:    _adj += 0.05
+                elif _diff >= 0.8:  _adj += 0.02
+                elif _diff <= -1.5: _adj -= 0.05
+                elif _diff <= -0.8: _adj -= 0.02
+
+                if _k9:
+                    if _k9 >= 11.0:   _adj += 0.07
+                    elif _k9 >= 9.5:  _adj += 0.04
+                    elif _k9 >= 8.0:  _adj += 0.01
+                    elif _k9 >= 6.5:  _adj -= 0.03
+                    else:             _adj -= 0.06
+
+                if _avg_ip:
+                    if _avg_ip >= 6.0:   _adj += 0.02
+                    elif _avg_ip <= 3.5: _adj -= 0.07
+
+                _edge = _avg - _line
+                if _edge >= 2:    _adj += 0.05
+                elif _edge >= 1:  _adj += 0.02
+                elif _edge <= -2: _adj -= 0.05
+                elif _edge <= -1: _adj -= 0.02
+
+                if _cons >= 0.75:  _adj += 0.03
+                elif _cons <= 0.35: _adj -= 0.04
+
+                _adj = max(0.05, min(0.95, _adj))
+
+                if _adj < 0.55:
+                    return None  # not worth showing
+
+                _tier = ("Strong Over" if _adj >= 0.72 else
+                         "Lean Over"   if _adj >= 0.63 else "Edge")
+
+                return {
+                    "name":    s["name"],
+                    "team":    s["team"],
+                    "opp":     s["opp"],
+                    "home":    s["home"],
+                    "line":    _line,
+                    "avg":     round(_avg, 1),
+                    "adj":     round(_adj * 100, 1),
+                    "k9":      _k9,
+                    "avg_ip":  _avg_ip,
+                    "cons":    round(_cons * 100, 1),
+                    "samples": _n,
+                    "tier":    _tier,
+                    "edge":    round(_edge, 2),
+                }
+            except Exception:
+                return None
+
+        with _cfe.ThreadPoolExecutor(max_workers=8) as _ex:
+            _futs = {_ex.submit(_check_starter, s): s for s in starters}
+            for _f in _cfe.as_completed(_futs):
+                try:
+                    _res = _f.result(timeout=12)
+                    if _res:
+                        results.append(_res)
+                except Exception:
+                    pass
+
+        results.sort(key=lambda x: -x["adj"])
+        return results
+
+
+    # ── Tonight's Top Picks UI ──────────────────────────────────────────
+    st.markdown("<div class='section-header'>⚡ Tonight's Top Pitcher Picks</div>",
+                unsafe_allow_html=True)
+
+    _tonight_picks = mlb_top_picks_tonight()
+
+    if not _tonight_picks:
+        st.markdown(
+            "<div style='background:rgba(0,196,204,0.04);border:1px dashed rgba(0,196,204,0.2);"
+            "border-radius:10px;padding:1rem;text-align:center;"
+            "font-family:JetBrains Mono,monospace;font-size:0.65rem;color:#6b7f96;'>"
+            "No high-confidence picks found for tonight · "
+            "Check back after lineups are posted (~6pm ET)"
+            "</div>",
+            unsafe_allow_html=True
+        )
+    else:
+        # Summary line
+        _strong_tp = [p for p in _tonight_picks if p["tier"] == "Strong Over"]
+        _lean_tp   = [p for p in _tonight_picks if p["tier"] == "Lean Over"]
+        st.markdown(
+            f"<div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;"
+            f"color:#6b7f96;margin-bottom:0.75rem;'>"
+            f"🔥 {len(_strong_tp)} Strong · 🟡 {len(_lean_tp)} Lean · "
+            f"📋 {len(_tonight_picks)} total picks above 55% threshold</div>",
+            unsafe_allow_html=True
+        )
+
+        # Cards — show top 6
+        _tp_cols = st.columns(min(len(_tonight_picks[:6]), 3))
+        for _i, _pick in enumerate(_tonight_picks[:6]):
+            with _tp_cols[_i % 3]:
+                _tc  = "#00e896" if _pick["tier"] == "Strong Over" else "#ffc107"
+                _tbg = ("rgba(0,232,150,0.06)" if _pick["tier"] == "Strong Over"
+                        else "rgba(255,193,7,0.05)")
+                _venue = "🏠" if _pick["home"] else "✈️"
+                st.markdown(
+                    f"<div style='background:{_tbg};border:1px solid {_tc}33;"
+                    f"border-top:3px solid {_tc};border-radius:10px;"
+                    f"padding:0.85rem 0.9rem;margin-bottom:0.5rem;'>"
+                    f"<div style='font-family:Plus Jakarta Sans,sans-serif;"
+                    f"font-size:0.88rem;font-weight:800;color:#f0f4f8;"
+                    f"margin-bottom:4px;white-space:nowrap;overflow:hidden;"
+                    f"text-overflow:ellipsis;'>{_pick['name']}</div>"
+                    f"<div style='font-family:JetBrains Mono,monospace;"
+                    f"font-size:0.6rem;color:#6b7f96;margin-bottom:8px;'>"
+                    f"{_venue} {_pick['team']} vs {_pick['opp']}</div>"
+                    f"<div style='display:flex;justify-content:space-between;"
+                    f"align-items:baseline;margin-bottom:6px;'>"
+                    f"<div><span style='font-family:Plus Jakarta Sans,sans-serif;"
+                    f"font-size:1.4rem;font-weight:900;color:{_tc};'>"
+                    f"{_pick['adj']}%</span>"
+                    f"<span style='font-family:JetBrains Mono,monospace;"
+                    f"font-size:0.55rem;color:#6b7f96;margin-left:4px;'>conf</span></div>"
+                    f"<div style='font-family:JetBrains Mono,monospace;"
+                    f"font-size:0.65rem;color:#f0f4f8;font-weight:700;'>"
+                    f"O {_pick['line']} K</div></div>"
+                    f"<div style='font-family:JetBrains Mono,monospace;"
+                    f"font-size:0.58rem;color:#9aaec4;'>"
+                    f"avg {_pick['avg']}K · {_pick['cons']}% hit · "
+                    f"{'K/9 '+str(_pick['k9']) if _pick['k9'] else ''}</div>"
+                    f"<div style='background:rgba(255,255,255,0.05);"
+                    f"border-radius:4px;height:3px;margin-top:8px;overflow:hidden;'>"
+                    f"<div style='width:{min(100,int(_pick['adj']))}%;height:100%;"
+                    f"background:{_tc};border-radius:4px;'></div></div>"
+                    f"</div>",
+                    unsafe_allow_html=True
+                )
+                # Quick-analyze button
+                if st.button(f"🔍 Analyze", key=f"tp_analyze_{_i}",
+                             use_container_width=True):
+                    st.session_state["_mlb_prefill_name"] = _pick["name"]
+                    st.session_state["_mlb_prefill_line"] = _pick["line"]
+                    st.rerun()
+
+    st.markdown("---")
+
     # ── MLB UI ────────────────────────────────────────────────
     st.markdown("<div class='section-header'>⚾ MLB Pitcher Prop Analyzer</div>", unsafe_allow_html=True)
 
@@ -6625,6 +6908,21 @@ if st.session_state.active_sport == "mlb":
             _f_pitches  = _mex.submit(mlb_estimate_pitch_count, mlb_pitcher)
             _f_injury   = _mex.submit(mlb_get_injury_status, mlb_pitcher)
             _f_vtrender = _mex.submit(mlb_get_velocity_trend, mlb_pitcher)
+            # H2H — fetch pitcher ID for batter matchup data
+            _f_h2h      = None
+            try:
+                _h2h_pid = next((p["id"] for p in _req.get(
+                    "https://statsapi.mlb.com/api/v1/sports/1/players",
+                    params={"season": __import__("datetime").datetime.now().year,
+                            "gameType": "R"}, timeout=5
+                ).json().get("people", [])
+                    if all(pt in p.get("fullName","").lower()
+                           for pt in mlb_pitcher.lower().split()[:2]
+                           if len(pt) > 2)), None)
+                if _h2h_pid:
+                    _f_h2h = _mex.submit(mlb_get_batter_pitcher_h2h, _h2h_pid)
+            except Exception:
+                pass
 
         try:    _pstats  = _f_pstats.result(timeout=12)
         except: _pstats  = {}
@@ -6650,11 +6948,16 @@ if st.session_state.active_sport == "mlb":
         except: _injury   = {"status": "Active", "description": "", "is_available": True}
         try:    _vtrender = _f_vtrender.result(timeout=12)
         except: _vtrender = {}
+        try:    _h2h_data = _f_h2h.result(timeout=10) if _f_h2h else {}
+        except: _h2h_data = {}
 
         # Initialize all derived signal variables with safe defaults
         _vtrend_mph = 0.0
         _vtrend_dir = "Stable"
         _vtrend_adj = 0.0
+        _h2h_adj    = 0.0
+        _h2h_note   = "No H2H data"
+        _h2h_data   = {}
         _is_avail   = _injury.get("is_available", True)
         _inj_status = _injury.get("status", "Active")
         _inj_desc   = _injury.get("description", "")
@@ -7011,7 +7314,7 @@ if st.session_state.active_sport == "mlb":
                       + _ha_adj + _form_adj + _rest_adj
                       + _k9_adj + _swstr_adj + _velo_adj + _vtrend_adj + _ip_adj
                       + _ump_adj + _wx_adj + _lineup_adj
-                      + _platoon_adj + _pc_adj))
+                      + _platoon_adj + _pc_adj + _h2h_adj))
             tier = mlb_verdict(adj, edge, mlb_side,
                               pc_ceiling=_pc_k_ceiling,
                               line=mlb_line)
@@ -7217,8 +7520,8 @@ if st.session_state.active_sport == "mlb":
                             f"<div class='stat-value {_ump_c}' style='font-size:1.4rem;'>{_ump_d}</div>"
                             f"<div class='stat-hint'>{_ump_tend} K zone · {_ump_kpg:.1f} K/g avg</div></div>",unsafe_allow_html=True)
 
-            # Row 3 — Velocity trend + Injury status
-            _c11, _c12 = st.columns(2)
+            # Row 3 — Velocity trend + Injury status + H2H
+            _c11, _c12, _c13 = st.columns(3)
             with _c11:
                 if _vtrender.get("avg_velo"):
                     _vt_col = "green" if _vtrend_dir=="Up" else ("red" if _vtrend_dir=="Down" else "yellow")
@@ -7248,6 +7551,19 @@ if st.session_state.active_sport == "mlb":
                     f"<div class='stat-value {_inj_c2}' style='font-size:1.1rem;font-weight:800;'>"
                     f"{'🚫' if not _is_avail else '✅' if _inj_lbl in ('Active','') else '⚠️'} {_inj_lbl or 'Active'}</div>"
                     f"<div class='stat-hint'>{_inj_desc[:60] if _inj_desc else 'No reported issues'}</div>"
+                    f"</div>", unsafe_allow_html=True
+                )
+            with _c13:
+                # H2H vs lineup card
+                _h2h_col = ("green" if _h2h_adj >= 0.04 else
+                            "red"   if _h2h_adj <= -0.04 else "yellow")
+                _h2h_val = (f"{_h2h_adj:+.0%}" if _h2h_adj != 0 else "Neutral")
+                st.markdown(
+                    f"<div class='stat-card'>"
+                    f"<div class='stat-label'>H2H vs Lineup</div>"
+                    f"<div class='stat-value {_h2h_col}' style='font-size:1.2rem;font-weight:800;'>"
+                    f"{_h2h_val}</div>"
+                    f"<div class='stat-hint'>{_h2h_note[:70]}</div>"
                     f"</div>", unsafe_allow_html=True
                 )
 
@@ -7661,6 +7977,7 @@ if st.session_state.active_sport == "mlb":
                     "Batting order":    f"{len(_lineup_order)}/9 · {_lhb_count}L/{_rhb_count}R" if _order_hands else (f"{len(_lineup_order)}/9" if _lineup_order else "Not posted"),
                     "Platoon matchup":  f"vsL:{_platoon_vs_l:.1%} vsR:{_platoon_vs_r:.1%} · {_lhb_count}L/{_rhb_count}R tonight" if (_platoon_vs_l and _platoon_vs_r) else "Lineup TBD",
                     "Pitch count est":  f"~{_pc_avg}p → ~{_pc_k_ceiling:.1f} K ceiling · {'⚠️ On limit' if _pc_limit else 'No limit detected'}" if _pc_avg else "N/A",
+                    "Batter vs Pitcher": _h2h_note,
                 }
 
                 for _lbl2, _a, _bef, _aft in _mlb_steps:
