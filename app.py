@@ -8482,7 +8482,7 @@ if st.session_state.active_sport == "edge":
         unsafe_allow_html=True
     )
 
-    _ec_btn_col1, _ec_btn_col2 = st.columns([2, 1])
+    _ec_btn_col1, _ec_btn_col2, _ec_btn_col3 = st.columns([2, 1, 1])
     with _ec_btn_col1:
         _run_edge = st.button(
             "🔍  Scan for Edge Plays",
@@ -8500,6 +8500,42 @@ if st.session_state.active_sport == "edge":
             st.session_state.edge_results = []
             st.toast("Cache cleared — ready to scan fresh", icon="✅")
             st.rerun()
+    with _ec_btn_col3:
+        if st.button("🛠 Debug API", key="edge_debug",
+                     use_container_width=True):
+            import requests as _dr, time as _dt
+            _url = "https://api.prizepicks.com/projections"
+            _p   = {"league_id": "2", "per_page": "5", "single_stat": "true"}
+            _debug_out = {}
+
+            # Test 1: curl_cffi
+            try:
+                from curl_cffi import requests as _cffi
+                _r = _cffi.get(_url, params=_p, impersonate="chrome124", timeout=15)
+                _debug_out["curl_cffi"] = f"HTTP {_r.status_code} · {len(_r.text)} bytes · data={len(_r.json().get('data',[]))}"
+            except Exception as _e:
+                _debug_out["curl_cffi"] = f"ERROR: {_e}"
+
+            # Test 2: cloudscraper
+            try:
+                import cloudscraper as _csc
+                _s = _csc.create_scraper()
+                _r2 = _s.get(_url, params=_p, timeout=15)
+                _debug_out["cloudscraper"] = f"HTTP {_r2.status_code} · {len(_r2.text)} bytes"
+            except Exception as _e:
+                _debug_out["cloudscraper"] = f"ERROR: {_e}"
+
+            # Test 3: plain requests
+            try:
+                _r3 = _dr.get(_url, params=_p,
+                    headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0",
+                             "Referer": "https://prizepicks.com/"},
+                    timeout=15)
+                _debug_out["requests"] = f"HTTP {_r3.status_code} · {len(_r3.text)} bytes"
+            except Exception as _e:
+                _debug_out["requests"] = f"ERROR: {_e}"
+
+            st.code("\n".join(f"{k}: {v}" for k,v in _debug_out.items()))
 
     if _run_edge:
         st.session_state.edge_results = []
