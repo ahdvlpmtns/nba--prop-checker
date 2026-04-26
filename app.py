@@ -1107,7 +1107,7 @@ for key, default in [
     ("logs", None), ("ai_analysis", None), ("ai_error", None),
     ("defense_data", None), ("tracker", []), ("active_tab", "player"),
     ("recent_players", []), ("supabase_loaded", False), ("show_share", False),
-    ("active_sport", "nba"), ("edge_results", []), ("edge_running", False),
+    ("active_sport", "nba"), ("edge_results", []), ("edge_running", False), ("edge_jump_player", None), ("edge_jump_pitcher", None), ("edge_jump_line", None), ("edge_jump_side", "Over"), ("edge_jump_prop", "Strikeouts"),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -6515,12 +6515,22 @@ if st.session_state.active_sport == "mlb":
 
 
     _mc1,_mc2,_mc3,_mc4 = st.columns([2.5,1,1,1])
+    # Pre-fill pitcher if jumped from Edge Scanner
+    _mlb_edge_jp = st.session_state.pop("edge_jump_pitcher", None)
+    if _mlb_edge_jp:
+        st.session_state["_mlb_prefill_name"] = _mlb_edge_jp
+        st.session_state["_mlb_prefill_line"] = st.session_state.pop("edge_jump_line", None)
+    _mlb_pf_name = st.session_state.get("_mlb_prefill_name", "")
+    _mlb_pf_idx  = (_mlb_pitchers.index(_mlb_pf_name) + 1
+                    if _mlb_pf_name and _mlb_pf_name in _mlb_pitchers else 0)
+
     with _mc1:
         mlb_pitcher = st.selectbox(
             "PITCHER — TYPE TO SEARCH",
             options=[""] + _mlb_pitchers,
             format_func=lambda x: "— type pitcher name to search —" if x == "" else x,
             key=f"mlb_pitcher_sel_{st.session_state.get('mlb_pitcher_key', 0)}",
+            index=_mlb_pf_idx,
         )
     with _mc2:
         mlb_prop = st.selectbox("Prop",["Strikeouts","Outs Recorded"],key="mlb_prop_type")
@@ -8015,6 +8025,8 @@ if st.session_state.active_sport == "mlb":
 # ═══════════════════════════════════════════════════════
 if st.session_state.active_sport == "edge":
 
+    import re as _re_edge
+
     @st.cache_data(ttl=300, show_spinner=False)
     def fetch_all_pp_props() -> list:
         """
@@ -8484,37 +8496,58 @@ if st.session_state.active_sport == "edge":
                     unsafe_allow_html=True
                 )
 
-                # Add to parlay button
-                if _is_strong or _is_lean:
-                    _bp_col = st.columns([4, 1])
-                    with _bp_col[1]:
-                        if st.button(
-                            "➕ Parlay",
-                            key=f"edge_parlay_{_r['player']}_{_r['line']}",
-                            use_container_width=True
-                        ):
-                            _new_leg = {
-                                "player":     _r["player"],
-                                "prop":       f"{_r['stat']} Over",
-                                "line":       _r["line"],
-                                "side":       "Over",
-                                "verdict":    _tier_lbl,
-                                "confidence": int(_r["adj"]),
-                                "adj":        _r["adj"],
-                                "sport":      _r["sport"],
-                                "added":      __import__("datetime").datetime.now().strftime("%I:%M %p"),
-                            }
-                            _dup = any(
-                                l["player"] == _r["player"] and abs(l["line"] - _r["line"]) < 0.1
-                                for l in st.session_state.parlay_legs
-                            )
-                            if not _dup and len(st.session_state.parlay_legs) < 6:
-                                st.session_state.parlay_legs.append(_new_leg)
-                                st.toast(f"✅ {_r['player']} added!", icon="🎯")
-                            elif _dup:
-                                st.toast("Already in parlay", icon="⚠️")
-                            else:
-                                st.toast("Parlay full", icon="🚫")
+                # Action buttons row
+                _btn_key_safe = _re_edge.sub(r'[^a-zA-Z0-9]', '_', f"{_r['player']}_{_r['line']}_{_r['sport']}")
+                _act_c1, _act_c2, _act_c3 = st.columns([3, 1, 1])
+
+                with _act_c2:
+                    # ── Add to Parlay ─────────────────────────────────────
+                    if st.button("➕ Parlay", key=f"ep_{_btn_key_safe}",
+                                 use_container_width=True):
+                        import datetime as _dt_edge
+                        _new_leg = {
+                            "player":     _r["player"],
+                            "prop":       f"{_r['stat']} Over",
+                            "line":       _r["line"],
+                            "side":       "Over",
+                            "verdict":    _tier_lbl,
+                            "confidence": int(_r["adj"]),
+                            "adj":        _r["adj"],
+                            "sport":      _r["sport"],
+                            "added":      _dt_edge.datetime.now().strftime("%I:%M %p"),
+                        }
+                        _dup = any(
+                            l["player"] == _r["player"] and
+                            abs(l["line"] - _r["line"]) < 0.1
+                            for l in st.session_state.parlay_legs
+                        )
+                        if not _dup and len(st.session_state.parlay_legs) < 6:
+                            st.session_state.parlay_legs.append(_new_leg)
+                            st.toast(f"✅ {_r['player']} added!", icon="🎯")
+                        elif _dup:
+                            st.toast("Already in parlay", icon="⚠️")
+                        else:
+                            st.toast("Parlay full (6 max)", icon="🚫")
+
+                with _act_c3:
+                    # ── Deep Dive — jump to full individual analyzer ──────
+                    if st.button("🔍 Analyze", key=f"ea_{_btn_key_safe}",
+                                 use_container_width=True):
+                        # Store jump target in session state
+                        # then switch to the correct sport tab
+                        if _r["sport"] == "NBA":
+                            st.session_state.active_sport    = "nba"
+                            st.session_state.active_tab      = "player"
+                            st.session_state.edge_jump_player = _r["player"]
+                            st.session_state.edge_jump_line   = _r["line"]
+                            st.session_state.edge_jump_side   = "Over"
+                        else:
+                            st.session_state.active_sport     = "mlb"
+                            st.session_state.edge_jump_pitcher = _r["player"]
+                            st.session_state.edge_jump_line    = _r["line"]
+                            st.session_state.edge_jump_side    = "Over"
+                            st.session_state.edge_jump_prop    = _r["stat"]
+                        st.rerun()
 
     elif st.session_state.get("edge_results") is not None and st.session_state.edge_results == []:
         pass  # Just ran, nothing found — already handled above
@@ -9590,11 +9623,16 @@ with col_a:
     if "player_alias_input" not in st.session_state:
         st.session_state.player_alias_input = ""
 
-    # Pre-select if a recent player was tapped
-    _recent_pick = st.session_state.pop("_recent_pick", None)
+    # Pre-select if a recent player was tapped OR jumped from Edge Scanner
+    _recent_pick   = st.session_state.pop("_recent_pick", None)
+    _edge_jump_nba = st.session_state.pop("edge_jump_player", None)
+    _pick_target   = _edge_jump_nba or _recent_pick
     _preselect_idx = 0
-    if _recent_pick and _recent_pick in player_names_list:
-        _preselect_idx = player_names_list.index(_recent_pick) + 1  # +1 for blank option
+    if _pick_target and _pick_target in player_names_list:
+        _preselect_idx = player_names_list.index(_pick_target) + 1
+    # Also pre-set line if jumped from edge
+    if _edge_jump_nba and st.session_state.get("edge_jump_line"):
+        st.session_state["_edge_prefill_line"] = st.session_state.pop("edge_jump_line", None)
 
     player_query = st.selectbox(
         "Player — type name, nickname, or initials",
