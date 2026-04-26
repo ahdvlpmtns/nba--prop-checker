@@ -8302,6 +8302,22 @@ if st.session_state.active_sport == "edge":
             st.error("Could not fetch PrizePicks slate. Try again in a moment.")
             st.stop()
 
+        # ── Debug: show raw API response ──────────────────────────────
+        _debug_by_sport = {}
+        for _p in _all_props:
+            _key = f"{_p['sport']}:{_p['stat']}"
+            _debug_by_sport[_key] = _debug_by_sport.get(_key, 0) + 1
+        _debug_lines = ["sport:stat — count"] + [
+            f"  {k}: {v}" for k,v in sorted(_debug_by_sport.items())
+        ]
+        with st.expander("🔍 Debug — raw API response (remove after testing)", expanded=True):
+            st.code(
+                "Total fetched: " + str(len(_all_props)) + chr(10) +
+                "Sport filter: " + _edge_sport + chr(10) +
+                "Stat filter:  " + _edge_stat + chr(10) + chr(10) +
+                chr(10).join(_debug_lines)
+            )
+
         # ── Filter BEFORE analysis — only pass matching props to threads ──
         _filtered = _all_props
 
