@@ -6402,14 +6402,16 @@ if st.session_state.active_sport == "mlb":
                 if adj >= 0.72:               return "Strong Over"
                 if adj >= 0.64 and edge >= 0: return "Strong Over"
             # Ceiling capped or borderline — max Lean Over
-            if adj >= 0.64 and edge >= -1.5:  return "Lean Over"
+            if adj >= 0.63 and edge >= -1.5:  return "Lean Over"  # 63% not 64%
             if adj >= 0.52 and edge > 0:      return "Lean Over"
+            if adj >= 0.56 and edge >= -0.5:  return "Lean Over"  # close line + decent signal
         else:
             if not _ceiling_capped:
                 if adj >= 0.72:                return "Strong Under"
                 if adj >= 0.64 and edge <= 0:  return "Strong Under"
-            if adj >= 0.64 and edge <= 1.5:    return "Lean Under"
+            if adj >= 0.63 and edge <= 1.5:    return "Lean Under"
             if adj >= 0.52 and edge < 0:       return "Lean Under"
+            if adj >= 0.56 and edge <= 0.5:    return "Lean Under"
         return "Pass"
 
     # ── MLB UI ────────────────────────────────────────────────
@@ -6771,15 +6773,23 @@ if st.session_state.active_sport == "mlb":
                         pass
 
             _k9_adj = 0.0
-            if _k9 >= 10.5:  _k9_adj = +0.07
-            elif _k9 >= 9.0: _k9_adj = +0.04
-            elif _k9 >= 7.5: _k9_adj = 0.0
-            elif _k9 >= 6.0: _k9_adj = -0.04
-            elif _k9 > 0:    _k9_adj = -0.07
-            # No data — neutral, don't penalize
+            # Require minimum 20 IP for K/9 to be meaningful
+            # Bradish-type situations: 13.2 K/9 from 5 innings = noise, not signal
+            _k9_ip = _pstats.get("ip_total", 999)  # IP from season stats
+            _k9_reliable = (_k9_ip >= 20) if _k9_ip < 500 else True  # 999 = unknown
+            if _k9 >= 10.5 and _k9_reliable:  _k9_adj = +0.07
+            elif _k9 >= 10.5:                  _k9_adj = +0.03  # elite but small sample
+            elif _k9 >= 9.0 and _k9_reliable:  _k9_adj = +0.04
+            elif _k9 >= 9.0:                   _k9_adj = +0.02
+            elif _k9 >= 7.5:                   _k9_adj = 0.0
+            elif _k9 >= 6.0:                   _k9_adj = -0.04
+            elif _k9 > 0:                      _k9_adj = -0.07
             else:
                 _k9_adj = 0.0
                 _k9_source = "no data"
+            # Flag small sample in source label
+            if _k9 > 0 and not _k9_reliable:
+                _k9_source = f"{_k9_source} (small sample)"
 
             # ── Signal 8: Real SwStr% from Baseball Savant (whiff rate)
             # Use Savant real swinging strike % if available, else K/BF proxy
@@ -6799,15 +6809,17 @@ if st.session_state.active_sport == "mlb":
             _swstr_adj = 0.0
             if _swstr is not None:
                 # Real SwStr% league avg ~11%. K/BF avg ~21% — different scales
-                if _swstr_real:  # Real SwStr% scale
+                if _swstr_real:  # Real SwStr% — league avg ~11%
                     if _swstr >= 0.16:   _swstr_adj = +0.07  # elite (top 10%)
-                    elif _swstr >= 0.13: _swstr_adj = +0.04  # above avg
-                    elif _swstr >= 0.10: _swstr_adj = 0.0    # average
-                    elif _swstr >= 0.07: _swstr_adj = -0.04  # below avg
+                    elif _swstr >= 0.14: _swstr_adj = +0.05  # very good
+                    elif _swstr >= 0.12: _swstr_adj = +0.03  # above avg
+                    elif _swstr >= 0.10: _swstr_adj = +0.01  # slight edge
+                    elif _swstr >= 0.08: _swstr_adj = -0.03  # below avg
                     else:                _swstr_adj = -0.07  # very low whiff
-                else:  # K/BF proxy scale
+                else:  # K/BF proxy scale — avg ~21%
                     if _swstr >= 0.28:   _swstr_adj = +0.06
-                    elif _swstr >= 0.23: _swstr_adj = +0.03
+                    elif _swstr >= 0.25: _swstr_adj = +0.04
+                    elif _swstr >= 0.22: _swstr_adj = +0.02
                     elif _swstr >= 0.18: _swstr_adj = 0.0
                     elif _swstr >= 0.14: _swstr_adj = -0.03
                     else:                _swstr_adj = -0.06
@@ -7640,7 +7652,7 @@ if st.session_state.active_sport == "mlb":
                     "#f97316" if "Lean Under" in tier else
                     "#ef4444" if "Strong Under" in tier else "#6b7f96"
                 )
-                _mlb_strong_thresh = "≥ 72% (any edge) OR ≥ 64% (edge ≥ -1.5)" if mlb_side=="Over" else "≥ 72% (any edge) OR ≥ 64% (edge ≤ 1.5)"
+                _mlb_strong_thresh = "≥ 72% (any edge) OR ≥ 63% (edge ≥ -1.5)" if mlb_side=="Over" else "≥ 72% (any edge) OR ≥ 63% (edge ≤ 1.5)"
                 _mlb_lean_thresh   = "≥ 52% AND edge > 0" if mlb_side=="Over" else "≥ 52% AND edge < 0"
                 _edge_ok_mlb       = (edge >= -1.5 if mlb_side=="Over" else edge <= 1.5)
 
