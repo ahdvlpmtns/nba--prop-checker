@@ -8098,15 +8098,25 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
         }
         _url = "https://api.prizepicks.com/projections"
 
-        # Strategy 1: curl_cffi — impersonates Chrome TLS fingerprint
+        # Strategy 1: curl_cffi session — handles CF JS challenge properly
         try:
             from curl_cffi import requests as _cffi_req
-            r = _cffi_req.get(
-                _url, params=_params, headers=_hdrs,
-                impersonate="chrome124", timeout=20
-            )
-            if r.ok and r.json().get("data"):
-                return _parse(r.json(), sport)
+            # Use a session so cookies (cf_clearance) persist across requests
+            with _cffi_req.Session(impersonate="chrome124") as _sess:
+                # First hit the main page to get CF cookies
+                _sess.get("https://prizepicks.com/board",
+                          headers={**_hdrs, "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"},
+                          timeout=20)
+                _time.sleep(1)
+                # Now hit the API with CF cookies in place
+                r = _sess.get(_url, params=_params, headers=_hdrs, timeout=20)
+                if r.ok:
+                    try:
+                        _data = r.json()
+                        if _data.get("data"):
+                            return _parse(_data, sport)
+                    except Exception:
+                        pass  # Got HTML instead of JSON — CF challenge not cleared
         except Exception:
             pass
 
@@ -8508,11 +8518,19 @@ if st.session_state.active_sport == "edge":
             _p   = {"league_id": "2", "per_page": "5", "single_stat": "true"}
             _debug_out = {}
 
-            # Test 1: curl_cffi
+            # Test 1: curl_cffi with session
             try:
                 from curl_cffi import requests as _cffi
-                _r = _cffi.get(_url, params=_p, impersonate="chrome124", timeout=15)
-                _debug_out["curl_cffi"] = f"HTTP {_r.status_code} · {len(_r.text)} bytes · data={len(_r.json().get('data',[]))}"
+                with _cffi.Session(impersonate="chrome124") as _sess:
+                    _sess.get("https://prizepicks.com/board", timeout=15)
+                    _dt.sleep(1)
+                    _r = _sess.get(_url, params=_p, timeout=15)
+                    _preview = _r.text[:80].replace("\n","")
+                    try:
+                        _dcount = len(_r.json().get("data", []))
+                        _debug_out["curl_cffi"] = f"HTTP {_r.status_code} · {len(_r.text)} bytes · data={_dcount}"
+                    except Exception:
+                        _debug_out["curl_cffi"] = f"HTTP {_r.status_code} · {len(_r.text)} bytes · NOT JSON · {_preview}"
             except Exception as _e:
                 _debug_out["curl_cffi"] = f"ERROR: {_e}"
 
