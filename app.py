@@ -8488,11 +8488,32 @@ if st.session_state.active_sport == "edge":
 
         if not _all_props:
             fetch_all_pp_props.clear()
-            st.warning(
-                "⚠️ PrizePicks returned an empty slate. "
-                "This usually means their API is temporarily unavailable. "
-                "Cache cleared — try scanning again in 30 seconds."
-            )
+            # Debug: show raw API response to diagnose
+            import requests as _dbg_req
+            _dbg_hdrs = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept": "application/json",
+                "Referer": "https://prizepicks.com/",
+            }
+            _dbg_lid = "2" if _edge_sport == "MLB" else "7"
+            try:
+                _dbg_r = _dbg_req.get(
+                    "https://api.prizepicks.com/projections",
+                    params={"league_id": _dbg_lid, "per_page": "10", "single_stat": "true"},
+                    headers=_dbg_hdrs, timeout=10
+                )
+                _dbg_status = _dbg_r.status_code
+                _dbg_keys   = list(_dbg_r.json().keys()) if _dbg_r.ok else []
+                _dbg_data_n = len(_dbg_r.json().get("data", [])) if _dbg_r.ok else 0
+                _dbg_inc_n  = len(_dbg_r.json().get("included", [])) if _dbg_r.ok else 0
+                st.error(
+                    f"PrizePicks returned empty. Debug: "
+                    f"HTTP {_dbg_status} · keys={_dbg_keys} · "
+                    f"data={_dbg_data_n} items · included={_dbg_inc_n} items · "
+                    f"league_id={_dbg_lid}"
+                )
+            except Exception as _dbg_e:
+                st.error(f"PrizePicks unreachable: {_dbg_e}")
             st.stop()
 
 
