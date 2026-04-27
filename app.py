@@ -6876,17 +6876,28 @@ if st.session_state.active_sport == "mlb":
             _f_pitches  = _mex.submit(mlb_estimate_pitch_count, mlb_pitcher)
             _f_injury   = _mex.submit(mlb_get_injury_status, mlb_pitcher)
 
+            _mlb_ph.markdown("⏳ fetching stats...", unsafe_allow_html=False)
             _pstats  = _get(_f_pstats,  {},  12)
+            _mlb_ph.markdown("⏳ fetching hand...", unsafe_allow_html=False)
             _phand   = _get(_f_phand,   "R",  8)
+            _mlb_ph.markdown("⏳ fetching umpire...", unsafe_allow_html=False)
             _ump     = _get(_f_ump,     {},   8)
+            _mlb_ph.markdown("⏳ fetching splits...", unsafe_allow_html=False)
             _splits  = _get(_f_splits,  {},   8)
+            _mlb_ph.markdown("⏳ fetching savant...", unsafe_allow_html=False)
             _savant  = _get(_f_savant,  {},  12)
             _velo_from_savant = _savant.get("velo") if _savant else None
+            _mlb_ph.markdown("⏳ fetching weather...", unsafe_allow_html=False)
             _weather = _get(_f_weather, {},   8)
+            _mlb_ph.markdown("⏳ fetching lineup...", unsafe_allow_html=False)
             _lineup  = _get(_f_lineup,  {},   8)
+            _mlb_ph.markdown("⏳ fetching platoon...", unsafe_allow_html=False)
             _platoon = _get(_f_platoon, {},  10)
+            _mlb_ph.markdown("⏳ fetching pitch count...", unsafe_allow_html=False)
             _pitchcnt= _get(_f_pitches, {},  10)
+            _mlb_ph.markdown("⏳ fetching injury...", unsafe_allow_html=False)
             _injury  = _get(_f_injury,  {"status":"Active","description":"","is_available":True}, 8)
+            _mlb_ph.markdown("⏳ done with main pool", unsafe_allow_html=False)
 
         # Velocity trend + H2H run separately with strict timeouts
         _vtrender = {}
