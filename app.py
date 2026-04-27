@@ -9069,115 +9069,8 @@ if st.session_state.active_sport == "edge":
         # ── Pre-fetch all tonight's MLB matchups in ONE API call ─────────
         # Much faster than per-pitcher lookups inside threads
         @st.cache_data(ttl=1800, show_spinner=False)
-        def _scanner_bulk_matchups() -> dict:
-            """Single API call → dict of {pitcher_name: {opp, home_team}}"""
-            import requests as _req, datetime as _dtx, pytz as _ptz
-            result = {}
-            try:
-                _et    = _ptz.timezone("America/New_York")
-                _today = _dtx.datetime.now(_et).strftime("%Y-%m-%d")
-                r = _req.get(
-                    "https://statsapi.mlb.com/api/v1/schedule",
-                    params={"sportId": 1, "date": _today,
-                            "hydrate": "probablePitcher,team", "gameType": "R"},
-                    timeout=10
-                )
-                if not r.ok: return result
-                for date in r.json().get("dates", []):
-                    for game in date.get("games", []):
-                        _home_abbr = (game.get("teams", {})
-                                         .get("home", {})
-                                         .get("team", {})
-                                         .get("abbreviation", ""))
-                        for _side in ["home", "away"]:
-                            _team = game.get("teams", {}).get(_side, {})
-                            _pp   = _team.get("probablePitcher", {})
-                            if not _pp: continue
-                            _opp_side = "away" if _side == "home" else "home"
-                            _opp_abbr = (game.get("teams", {})
-                                             .get(_opp_side, {})
-                                             .get("team", {})
-                                             .get("abbreviation", ""))
-                            result[_pp.get("fullName", "").lower()] = {
-                                "opp":       _opp_abbr,
-                                "home_team": _home_abbr,
-                            }
-            except Exception:
-                pass
-            return result
-
-        # ── Pre-fetch all team K rates in one shot ────────────────────
-        @st.cache_data(ttl=3600, show_spinner=False)
-        def _scanner_all_team_k_rates() -> dict:
-            """Fetch all team K rates in one API call → {abbr: k_pct}"""
-            import requests as _req, datetime as _dtx
-            result = {}
-            season = _dtx.datetime.now().year
-            try:
-                r = _req.get(
-                    "https://statsapi.mlb.com/api/v1/teams/stats",
-                    params={"stats": "season", "group": "hitting",
-                            "season": season, "sportId": 1},
-                    timeout=10
-                )
-                if not r.ok: return result
-                r2 = _req.get(
-                    "https://statsapi.mlb.com/api/v1/teams",
-                    params={"sportId": 1, "season": season}, timeout=8
-                )
-                if not r2.ok: return result
-                _id_to_abbr = {t["id"]: t.get("abbreviation","")
-                               for t in r2.json().get("teams", [])}
-                for split in r.json().get("stats", [{}])[0].get("splits", []):
-                    _tid = split.get("team", {}).get("id")
-                    _st  = split.get("stat", {})
-                    _ab  = int(_st.get("atBats", 0) or 0)
-                    _k   = int(_st.get("strikeOuts", 0) or 0)
-                    if _ab > 0 and _tid in _id_to_abbr:
-                        result[_id_to_abbr[_tid]] = round(_k / _ab, 3)
-            except Exception:
-                pass
-            return result
-
-        # Pre-fetch ALL data before threading — single calls, no parallel hammering
-        with st.spinner("Loading tonight's data..."):
-            _bulk_matchups = _scanner_bulk_matchups()
-            _team_k_rates  = _scanner_all_team_k_rates()
-            # Pre-warm pitcher data cache for all filtered MLB pitchers
-            # This prevents 31 threads simultaneously downloading the roster
-            if any(p["sport"] == "MLB" for p in _filtered):
-                _mlb_names = [p["player"] for p in _filtered if p["sport"] == "MLB"]
-                for _pn in _mlb_names:
-                    try:
-                        _scanner_get_pitcher_data(_pn)  # warms cache
-                    except Exception:
-                        pass
-            # Quick IL list — exclude pitchers on IL from results
-            _il_pitchers = set()
-            try:
-                import requests as _qr
-                _qr2 = _qr.get(
-                    "https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/injuries",
-                    params={"limit": 300}, timeout=6
-                )
-                if _qr2.ok:
-                    for _inj in _qr2.json().get("injuries", []):
-                        _ist = _inj.get("status", "").lower()
-                        if any(x in _ist for x in ["il-", "injured reserve", "out"]):
-                            _iname = _inj.get("athlete",{}).get("displayName","").lower()
-                            if _iname:
-                                _il_pitchers.add(_iname)
-            except Exception:
-                pass
-
-        # Remove IL pitchers from props now that we have the list
-        if _il_pitchers:
-            _filtered = [p for p in _filtered
-                         if not (p["sport"] == "MLB" and
-                                 p["player"].lower() in _il_pitchers)]
-
         def _check_prop(prop):
-            """Run the appropriate model — matchups pre-fetched, no extra API calls."""
+            """Run model — no API calls inside threads."""
             try:
                 if prop["sport"] == "NBA":
                     return run_nba_edge_check(
@@ -9187,19 +9080,12 @@ if st.session_state.active_sport == "edge":
                 elif prop["sport"] == "MLB":
                     _norm_stat = ("Strikeouts" if "strikeout" in prop["stat"].lower()
                                   else prop["stat"])
-                    # Fast dict lookup — no API call per pitcher
-                    _m = _bulk_matchups.get(prop["player"].lower(), {})
-                    _opp  = _m.get("opp", "")
-                    _home = _m.get("home_team", "")
-                    # Pass pre-fetched K rate directly — skip internal API call
-                    _opp_k = _team_k_rates.get(_opp) if _opp else None
                     return run_mlb_edge_check(
-                        prop["player"], prop["line"], _norm_stat, "Over",
-                        opp_team=_opp, home_team=_home,
-                        opp_k_override=_opp_k,
+                        prop["player"], prop["line"], _norm_stat, "Over"
                     )
             except Exception:
                 return None
+
 
         _total = max(len(_filtered), 1)
         _done  = 0
