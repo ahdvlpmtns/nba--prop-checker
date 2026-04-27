@@ -4972,7 +4972,6 @@ if st.session_state.active_sport == "mlb":
 
     # ── MLB Data Functions ─────────────────────────────
 
-    @st.cache_data(ttl=14400, show_spinner=False)
     @st.cache_data(ttl=3600, show_spinner=False)
     def mlb_get_pitcher_logs(player_name: str, n: int = 10) -> pd.DataFrame:
         """
@@ -5000,21 +4999,26 @@ if st.session_state.active_sport == "mlb":
             pid = None
             people = []
 
-            # Strategy A: Full active roster (most reliable)
-            for _gt in ["R", "S", "E"]:  # Regular, Spring, Exhibition
-                try:
-                    _r = _req.get(
-                        "https://statsapi.mlb.com/api/v1/sports/1/players",
-                        params={"season": season, "gameType": _gt},
-                        timeout=10
-                    )
-                    if _r.ok:
-                        _all = _r.json().get("people", [])
-                        if _all:
-                            people = _all
-                            break
-                except Exception:
-                    continue
+            # Strategy A: Top-level roster cache (shared, never re-downloaded)
+            try:
+                people = _get_mlb_roster_cached() or []
+            except Exception:
+                people = []
+            if not people:
+                for _gt in ["R", "S", "E"]:
+                    try:
+                        _r = _req.get(
+                            "https://statsapi.mlb.com/api/v1/sports/1/players",
+                            params={"season": season, "gameType": _gt},
+                            timeout=10
+                        )
+                        if _r.ok:
+                            _all = _r.json().get("people", [])
+                            if _all:
+                                people = _all
+                                break
+                    except Exception:
+                        continue
 
             if people:
                 # Match priority: exact > last+first > last only > partial
@@ -8451,6 +8455,24 @@ if st.session_state.active_sport == "mlb":
 # ═══════════════════════════════════════════════════════
 # EDGE MODE — PropIQ Edge Scanner
 # ═══════════════════════════════════════════════════════
+@st.cache_data(ttl=3600, show_spinner=False)
+def _get_mlb_roster_cached() -> list:
+    """Top-level MLB roster cache — shared by all threads, never re-fetched."""
+    import requests as _rq, datetime as _dtx
+    season = _dtx.datetime.now().year
+    try:
+        r = _rq.get(
+            "https://statsapi.mlb.com/api/v1/sports/1/players",
+            params={"season": season, "gameType": "R"},
+            timeout=8
+        )
+        if r.ok:
+            return r.json().get("people", [])
+    except Exception:
+        pass
+    return []
+
+
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_all_pp_props(sport_filter: str = "Both") -> list:
     """
@@ -8556,6 +8578,153 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
     return props
 
 
+
+def _scanner_get_tonight_matchup(pitcher_name: str) -> dict:
+    """
+    Get tonight's game context for a pitcher from MLB Stats API.
+    Returns: {opp, home_team, is_confirmed_starter, game_time}
+    Cached 30 min — lineups update throughout the day.
+    """
+    import requests as _req, datetime as _dtx, pytz as _ptz
+    empty = {"opp": "", "home_team": "", "is_confirmed": False, "game_time": ""}
+    try:
+        _et    = _ptz.timezone("America/New_York")
+        _today = _dtx.datetime.now(_et).strftime("%Y-%m-%d")
+        r = _req.get(
+            "https://statsapi.mlb.com/api/v1/schedule",
+            params={"sportId": 1, "date": _today,
+                    "hydrate": "probablePitcher,team", "gameType": "R"},
+            timeout=8
+        )
+        if not r.ok: return empty
+        _norm = lambda s: s.lower().strip()
+        _target = _norm(pitcher_name)
+        _parts  = [p for p in _target.split() if len(p) > 2]
+
+        for date in r.json().get("dates", []):
+            for game in date.get("games", []):
+                for _side in ["home", "away"]:
+                    _team = game.get("teams", {}).get(_side, {})
+                    _pp   = _team.get("probablePitcher", {})
+                    if not _pp: continue
+                    _pname = _norm(_pp.get("fullName", ""))
+                    if all(p in _pname for p in _parts):
+                        _opp_side = "away" if _side == "home" else "home"
+                        _opp = game.get("teams",{}).get(_opp_side,{}).get("team",{}).get("abbreviation","")
+                        _home = game.get("teams",{}).get("home",{}).get("team",{}).get("abbreviation","")
+                        _time = game.get("gameDate","")[:16]
+                        return {
+                            "opp":          _opp,
+                            "home_team":    _home,
+                            "is_confirmed": True,
+                            "game_time":    _time,
+                        }
+    except Exception:
+        pass
+    return empty
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _scanner_get_all_players() -> list:
+    """Fetch full MLB player list once — shared across all pitcher lookups."""
+    import requests as _req, datetime as _dtx
+    season = _dtx.datetime.now().year
+    try:
+        r = _req.get(
+            "https://statsapi.mlb.com/api/v1/sports/1/players",
+            params={"season": season, "gameType": "R"},
+            timeout=8
+        )
+        if r.ok:
+            return r.json().get("people", [])
+    except Exception:
+        pass
+    return []
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _scanner_get_pitcher_data(pitcher_name: str) -> dict:
+    """
+    Fast pitcher data fetch for the scanner.
+    Uses shared player cache — only 1 API call per pitcher (game logs).
+    """
+    import requests as _req, datetime as _dtx
+    empty = {"ks": [], "k9": None, "avg_ip": None, "avg_pitches": None, "sample": 0}
+    _norm   = lambda s: s.lower().strip().replace(".", "").replace("-", " ")
+    _target = _norm(pitcher_name)
+    _parts  = [p for p in _target.split() if len(p) > 2]
+    _last   = _target.split()[-1]
+    season  = _dtx.datetime.now().year
+
+    try:
+        # Step 1: find player ID from shared cached roster
+        _ppl = _scanner_get_all_players()
+        if not _ppl:
+            return empty
+        _pp  = next((p for p in _ppl
+                     if all(pt in _norm(p.get("fullName","")) for pt in _parts)), None)
+        if not _pp:
+            _pp = next((p for p in _ppl
+                       if _last in _norm(p.get("fullName","")) and
+                       p.get("primaryPosition",{}).get("code") == "1"), None)
+        if not _pp:
+            return empty
+
+        pid = _pp["id"]
+
+        # Step 2: game logs — get K, IP, pitch count per start
+        r2 = _req.get(
+            f"https://statsapi.mlb.com/api/v1/people/{pid}/stats",
+            params={"stats": "gameLog", "group": "pitching",
+                    "season": season, "gameType": "R", "limit": 12},
+            timeout=5
+        )
+        if not r2.ok:
+            return empty
+
+        splits = r2.json().get("stats", [{}])[0].get("splits", [])
+
+        ks, ips, pitches = [], [], []
+        for s in splits:
+            st   = s.get("stat", {})
+            date = s.get("date", "")
+            np_v = int(st.get("numberOfPitches", 0) or 0)
+            if np_v < 40:
+                continue  # skip bullpen appearances
+            try:
+                if _dtx.date.fromisoformat(date[:10]).month < 4:
+                    continue  # skip spring training
+            except Exception:
+                pass
+            ks.append(int(st.get("strikeOuts", 0) or 0))
+            # Parse IP (stored as float e.g. 5.1 = 5 innings + 1 out)
+            _ip_raw = float(st.get("inningsPitched", 0) or 0)
+            _ip_full = int(_ip_raw) + ((_ip_raw % 1) * 10 / 3)
+            ips.append(_ip_full)
+            pitches.append(np_v)
+
+        if not ks:
+            return empty
+
+        # Season K/9 from totals (more reliable than per-game avg)
+        _ip_tot = sum(ips) if ips else 0
+        _k_tot  = sum(ks)
+        _k9     = round((_k_tot / _ip_tot * 9), 1) if _ip_tot >= 10 else None
+        _avg_ip = round(sum(ips) / len(ips), 1) if ips else None
+        _avg_pc = round(sum(pitches) / len(pitches), 0) if pitches else None
+
+        return {
+            "ks":          ks,
+            "k9":          _k9,
+            "avg_ip":      _avg_ip,
+            "avg_pitches": _avg_pc,
+            "sample":      len(ks),
+        }
+
+    except Exception:
+        return empty
+
+
 if st.session_state.active_sport == "edge":
 
     import re as _re_edge
@@ -8659,152 +8828,6 @@ if st.session_state.active_sport == "edge":
         except Exception:
             return None
 
-
-    @st.cache_data(ttl=1800, show_spinner=False)
-    def _scanner_get_tonight_matchup(pitcher_name: str) -> dict:
-        """
-        Get tonight's game context for a pitcher from MLB Stats API.
-        Returns: {opp, home_team, is_confirmed_starter, game_time}
-        Cached 30 min — lineups update throughout the day.
-        """
-        import requests as _req, datetime as _dtx, pytz as _ptz
-        empty = {"opp": "", "home_team": "", "is_confirmed": False, "game_time": ""}
-        try:
-            _et    = _ptz.timezone("America/New_York")
-            _today = _dtx.datetime.now(_et).strftime("%Y-%m-%d")
-            r = _req.get(
-                "https://statsapi.mlb.com/api/v1/schedule",
-                params={"sportId": 1, "date": _today,
-                        "hydrate": "probablePitcher,team", "gameType": "R"},
-                timeout=8
-            )
-            if not r.ok: return empty
-            _norm = lambda s: s.lower().strip()
-            _target = _norm(pitcher_name)
-            _parts  = [p for p in _target.split() if len(p) > 2]
-
-            for date in r.json().get("dates", []):
-                for game in date.get("games", []):
-                    for _side in ["home", "away"]:
-                        _team = game.get("teams", {}).get(_side, {})
-                        _pp   = _team.get("probablePitcher", {})
-                        if not _pp: continue
-                        _pname = _norm(_pp.get("fullName", ""))
-                        if all(p in _pname for p in _parts):
-                            _opp_side = "away" if _side == "home" else "home"
-                            _opp = game.get("teams",{}).get(_opp_side,{}).get("team",{}).get("abbreviation","")
-                            _home = game.get("teams",{}).get("home",{}).get("team",{}).get("abbreviation","")
-                            _time = game.get("gameDate","")[:16]
-                            return {
-                                "opp":          _opp,
-                                "home_team":    _home,
-                                "is_confirmed": True,
-                                "game_time":    _time,
-                            }
-        except Exception:
-            pass
-        return empty
-
-
-    @st.cache_data(ttl=3600, show_spinner=False)
-    def _scanner_get_all_players() -> list:
-        """Fetch full MLB player list once — shared across all pitcher lookups."""
-        import requests as _req, datetime as _dtx
-        season = _dtx.datetime.now().year
-        try:
-            r = _req.get(
-                "https://statsapi.mlb.com/api/v1/sports/1/players",
-                params={"season": season, "gameType": "R"},
-                timeout=8
-            )
-            if r.ok:
-                return r.json().get("people", [])
-        except Exception:
-            pass
-        return []
-
-
-    @st.cache_data(ttl=3600, show_spinner=False)
-    def _scanner_get_pitcher_data(pitcher_name: str) -> dict:
-        """
-        Fast pitcher data fetch for the scanner.
-        Uses shared player cache — only 1 API call per pitcher (game logs).
-        """
-        import requests as _req, datetime as _dtx
-        empty = {"ks": [], "k9": None, "avg_ip": None, "avg_pitches": None, "sample": 0}
-        _norm   = lambda s: s.lower().strip().replace(".", "").replace("-", " ")
-        _target = _norm(pitcher_name)
-        _parts  = [p for p in _target.split() if len(p) > 2]
-        _last   = _target.split()[-1]
-        season  = _dtx.datetime.now().year
-
-        try:
-            # Step 1: find player ID from shared cached roster
-            _ppl = _scanner_get_all_players()
-            if not _ppl:
-                return empty
-            _pp  = next((p for p in _ppl
-                         if all(pt in _norm(p.get("fullName","")) for pt in _parts)), None)
-            if not _pp:
-                _pp = next((p for p in _ppl
-                           if _last in _norm(p.get("fullName","")) and
-                           p.get("primaryPosition",{}).get("code") == "1"), None)
-            if not _pp:
-                return empty
-
-            pid = _pp["id"]
-
-            # Step 2: game logs — get K, IP, pitch count per start
-            r2 = _req.get(
-                f"https://statsapi.mlb.com/api/v1/people/{pid}/stats",
-                params={"stats": "gameLog", "group": "pitching",
-                        "season": season, "gameType": "R", "limit": 12},
-                timeout=5
-            )
-            if not r2.ok:
-                return empty
-
-            splits = r2.json().get("stats", [{}])[0].get("splits", [])
-
-            ks, ips, pitches = [], [], []
-            for s in splits:
-                st   = s.get("stat", {})
-                date = s.get("date", "")
-                np_v = int(st.get("numberOfPitches", 0) or 0)
-                if np_v < 40:
-                    continue  # skip bullpen appearances
-                try:
-                    if _dtx.date.fromisoformat(date[:10]).month < 4:
-                        continue  # skip spring training
-                except Exception:
-                    pass
-                ks.append(int(st.get("strikeOuts", 0) or 0))
-                # Parse IP (stored as float e.g. 5.1 = 5 innings + 1 out)
-                _ip_raw = float(st.get("inningsPitched", 0) or 0)
-                _ip_full = int(_ip_raw) + ((_ip_raw % 1) * 10 / 3)
-                ips.append(_ip_full)
-                pitches.append(np_v)
-
-            if not ks:
-                return empty
-
-            # Season K/9 from totals (more reliable than per-game avg)
-            _ip_tot = sum(ips) if ips else 0
-            _k_tot  = sum(ks)
-            _k9     = round((_k_tot / _ip_tot * 9), 1) if _ip_tot >= 10 else None
-            _avg_ip = round(sum(ips) / len(ips), 1) if ips else None
-            _avg_pc = round(sum(pitches) / len(pitches), 0) if pitches else None
-
-            return {
-                "ks":          ks,
-                "k9":          _k9,
-                "avg_ip":      _avg_ip,
-                "avg_pitches": _avg_pc,
-                "sample":      len(ks),
-            }
-
-        except Exception:
-            return empty
 
 
     def run_mlb_edge_check(pitcher_name: str, line: float,
