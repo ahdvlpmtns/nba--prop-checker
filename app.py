@@ -8808,122 +8808,46 @@ if st.session_state.active_sport == "edge":
 
 
     def run_mlb_edge_check(pitcher_name: str, line: float,
-                           stat: str, side: str = "Over",
-                           opp_team: str = "", home_team: str = "",
-                           opp_k_override=None) -> dict | None:
-        """
-        MLB scanner edge check — 10 signals including injury, opponent, starter, park.
-        Closely matches the full 15-signal analyzer accuracy.
-        """
+                           stat: str, side: str = "Over") -> dict | None:
+        """Original working MLB edge check using mlb_get_pitcher_logs."""
         try:
-            _data = _scanner_get_pitcher_data(pitcher_name)
-            _ks   = _data.get("ks", [])
-            if not _ks or len(_ks) < 5:
+            _logs = mlb_get_pitcher_logs(pitcher_name, n=8)
+            if _logs is None or _logs.empty or len(_logs) < 3:
                 return None
 
-            import numpy as _np
-            _vals    = _np.array(_ks, dtype=float)
-            _n       = len(_vals)
-            _avg     = round(float(_vals.mean()), 1)
-            _k9      = _data.get("k9")
-            _avg_ip  = _data.get("avg_ip")
+            _stat_col = "K" if "strikeout" in stat.lower() else "OUTS"
+            if _stat_col not in _logs.columns:
+                return None
 
-            # ── Signal 1: Weighted hit rate (base) ────────────────────
-            _wts  = _np.array([1.5 if i < 3 else 1.0 for i in range(_n)])
-            _hits = (_vals >= line) if side == "Over" else (_vals <= line)
-            _whr  = round(float((_hits * _wts).sum() / _wts.sum()), 3)
-            _cons = round(float(_hits.mean()), 3)
+            _vals = pd.to_numeric(_logs[_stat_col], errors="coerce").dropna()
+            if len(_vals) < 3:
+                return None
+
+            _avg  = _vals.mean()
+            _whr  = mlb_weighted_hr(_logs, line, _stat_col, side)
+            _cons = (_vals >= line if side == "Over" else _vals <= line).mean()
+
+            _l3   = _vals.head(3).mean()
             _adj  = _whr
-
-            # Small sample penalty — confidence decays below 8 starts
-            if _n < 8:
-                _sample_penalty = (8 - _n) * 0.015
-                _adj = max(0.05, _adj - _sample_penalty)
-
-            # ── Signal 2: L3 form ─────────────────────────────────────
-            _l3   = float(_vals[:3].mean())
             _diff = _l3 - _avg
-            if _diff >= 1.5:    _adj += 0.05
-            elif _diff >= 0.8:  _adj += 0.02
-            elif _diff <= -1.5: _adj -= 0.05
-            elif _diff <= -0.8: _adj -= 0.02
-
-            # ── Signal 3: K/9 rate ────────────────────────────────────
-            if _k9:
-                if _k9 >= 11.0:   _adj += 0.07
-                elif _k9 >= 9.5:  _adj += 0.04
-                elif _k9 >= 8.0:  _adj += 0.01
-                elif _k9 >= 6.5:  _adj -= 0.03
-                else:             _adj -= 0.06
-
-            # ── Signal 4: Avg IP depth ────────────────────────────────
-            if _avg_ip:
-                if _avg_ip >= 6.0:   _adj += 0.02
-                elif _avg_ip >= 5.0: _adj += 0.01
-                elif _avg_ip <= 3.5: _adj -= 0.07
-                elif _avg_ip <= 4.5: _adj -= 0.03
-
-            # ── Signal 5: Edge vs line ────────────────────────────────
-            _edge = _avg - line
-            if _edge >= 2.5:    _adj += 0.05
-            elif _edge >= 1.5:  _adj += 0.03
-            elif _edge >= 0.5:  _adj += 0.01
-            elif _edge <= -2.5: _adj -= 0.05
-            elif _edge <= -1.5: _adj -= 0.03
-            elif _edge <= -0.5: _adj -= 0.01
-
-            # ── Signal 6: Consistency ─────────────────────────────────
-            if _cons >= 0.75:   _adj += 0.03
-            elif _cons >= 0.65: _adj += 0.01
-            elif _cons <= 0.35: _adj -= 0.04
-            elif _cons <= 0.45: _adj -= 0.02
-
-            # ── Signal 7: Opponent K% (pre-fetched, no API call) ─────
-            _opp_k_pct  = opp_k_override  # passed in from pre-fetch
-            _opp_k_note = ""
-            if _opp_k_pct:
-                if _opp_k_pct >= 0.27:   _adj += 0.06   # high K lineup
-                elif _opp_k_pct >= 0.24: _adj += 0.03
-                elif _opp_k_pct >= 0.21: _adj += 0.00
-                elif _opp_k_pct >= 0.18: _adj -= 0.03   # contact lineup
-                else:                    _adj -= 0.06   # very contact-heavy
-                _opp_k_note = f"opp K%: {_opp_k_pct:.1%}"
-
-            # ── Signal 8: Park factor (NEW) ───────────────────────────
-            _park_adj = 0.0
-            if home_team:
-                _pf = _MLB_PARK_FACTORS.get(home_team.upper(), 1.00)
-                if _pf >= 1.06:   _park_adj = +0.05
-                elif _pf <= 0.95: _park_adj = -0.06
-                _adj += _park_adj
-
-            # ── Signal 9: Injury/IL check ─────────────────────────────
-            # Note: IL pitchers filtered out in _check_prop via pre-fetched data
-            _injury_flag = False
-            _injury_note = ""
+            if _diff >= 1.2:    _adj += 0.05
+            elif _diff >= 0.6:  _adj += 0.02
+            elif _diff <= -1.2: _adj -= 0.05
+            elif _diff <= -0.6: _adj -= 0.02
 
             _adj = max(0.05, min(0.95, _adj))
 
             return {
-                "sport":        "MLB",
-                "player":       pitcher_name,
-                "stat":         stat,
-                "line":         line,
-                "side":         side,
-                "adj":          round(_adj * 100, 1),
-                "avg":          _avg,
-                "edge_raw":     round(_edge, 2),
-                "cons":         round(_cons * 100, 1),
-                "samples":      _n,
-                "k9":           _k9,
-                "avg_ip":       _avg_ip,
-                "opp":          opp_team,
-                "home":         home_team,
-                "opp_k_pct":   _opp_k_pct,
-                "opp_k_note":  _opp_k_note,
-                "park_adj":    _park_adj,
-                "injury_flag": _injury_flag,
-                "injury_note": _injury_note,
+                "sport":    "MLB",
+                "player":   pitcher_name,
+                "stat":     stat,
+                "line":     line,
+                "side":     side,
+                "adj":      round(_adj * 100, 1),
+                "avg":      round(float(_avg), 1),
+                "edge_raw": round(float(_avg - line), 2),
+                "cons":     round(float(_cons * 100), 1),
+                "samples":  len(_vals),
             }
         except Exception:
             return None
