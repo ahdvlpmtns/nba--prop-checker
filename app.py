@@ -9050,12 +9050,6 @@ if st.session_state.active_sport == "edge":
                 _deduped[f"{_k}|goblin"] = p
         _filtered = list(_deduped.values())
 
-        # Remove IL pitchers from MLB props
-        if _il_pitchers:
-            _filtered = [p for p in _filtered
-                         if not (p["sport"] == "MLB" and
-                                 p["player"].lower() in _il_pitchers)]
-
         if not _filtered:
             st.warning("No props found matching your filters. Try broadening the sport or stat filter.")
             st.stop()
@@ -9156,7 +9150,7 @@ if st.session_state.active_sport == "edge":
             # Quick IL list — exclude pitchers on IL from results
             _il_pitchers = set()
             try:
-                import requests as _qr, datetime as _qdt
+                import requests as _qr
                 _qr2 = _qr.get(
                     "https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/injuries",
                     params={"limit": 300}, timeout=6
@@ -9170,6 +9164,12 @@ if st.session_state.active_sport == "edge":
                                 _il_pitchers.add(_iname)
             except Exception:
                 pass
+
+        # Remove IL pitchers from props now that we have the list
+        if _il_pitchers:
+            _filtered = [p for p in _filtered
+                         if not (p["sport"] == "MLB" and
+                                 p["player"].lower() in _il_pitchers)]
 
         def _check_prop(prop):
             """Run the appropriate model — matchups pre-fetched, no extra API calls."""
