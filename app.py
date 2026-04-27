@@ -6226,6 +6226,91 @@ if st.session_state.active_sport == "mlb":
             return empty
 
 
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def mlb_detect_injury_return(logs: pd.DataFrame, pitcher_name: str) -> dict:
+        """
+        Detect if a pitcher is in their injury return window.
+        Looks for a pattern of recent short starts (< 4 IP) after normal starts (5+ IP).
+        Returns: {
+            is_return: bool,
+            return_starts: int,       # how many short starts at beginning of log
+            normal_avg_k: float,      # avg Ks in normal starts
+            suppressed_avg_k: float,  # avg Ks in shortened starts
+            k_suppression: float,     # how many Ks being lost per start
+            confidence: str,          # High / Medium / Low
+            note: str
+        }
+        """
+        empty = {"is_return": False, "return_starts": 0,
+                 "normal_avg_k": 0.0, "suppressed_avg_k": 0.0,
+                 "k_suppression": 0.0, "confidence": "Low", "note": ""}
+
+        if logs is None or logs.empty or len(logs) < 4:
+            return empty
+
+        try:
+            _outs = pd.to_numeric(logs["OUTS"], errors="coerce").fillna(0).tolist()
+            _ks   = pd.to_numeric(logs["K"], errors="coerce").fillna(0).tolist()
+            _ips  = logs["IP"].tolist()
+
+            # A "normal" start = 12+ outs (4+ innings)
+            # A "shortened" start = < 12 outs (< 4 innings)
+            # Injury return pattern: 1-3 shortened starts at the TOP of log
+            # followed by normal starts before that
+
+            _SHORT_OUTS = 12  # < 4 innings = shortened
+
+            # Find how many consecutive short starts are at the beginning (most recent)
+            _return_count = 0
+            for i, outs in enumerate(_outs):
+                if outs < _SHORT_OUTS:
+                    _return_count += 1
+                else:
+                    break  # first normal start — stop
+
+            if _return_count == 0:
+                return empty
+
+            # Need at least 3 normal starts after the short ones
+            _normal_starts = [i for i in range(_return_count, len(_outs))
+                              if _outs[i] >= _SHORT_OUTS]
+            if len(_normal_starts) < 3:
+                return {**empty, "note": "Too few normal starts to compare"}
+
+            # Compare K averages
+            _short_ks  = [_ks[i] for i in range(_return_count)]
+            _normal_ks = [_ks[i] for i in _normal_starts[:8]]  # last 8 normal starts
+
+            _short_avg  = round(sum(_short_ks) / max(len(_short_ks), 1), 1)
+            _normal_avg = round(sum(_normal_ks) / max(len(_normal_ks), 1), 1)
+            _suppression = round(_normal_avg - _short_avg, 1)
+
+            # Only flag if suppression is meaningful (>= 1.5 Ks difference)
+            if _suppression < 1.5:
+                return {**empty,
+                        "note": f"Recent short starts but K rate similar ({_short_avg} vs {_normal_avg})"}
+
+            # Confidence based on pattern clarity
+            _conf = "High" if (_return_count <= 2 and _suppression >= 2.5) else                     "Medium" if _suppression >= 1.5 else "Low"
+
+            _note = (f"Last {_return_count} start{'s' if _return_count > 1 else ''} shortened "
+                     f"(injury return) · avg {_short_avg}K vs true ability {_normal_avg}K · "
+                     f"line likely set {_suppression:.1f}K too low")
+
+            return {
+                "is_return":       True,
+                "return_starts":   _return_count,
+                "normal_avg_k":    _normal_avg,
+                "suppressed_avg_k": _short_avg,
+                "k_suppression":   _suppression,
+                "confidence":      _conf,
+                "note":            _note,
+            }
+
+        except Exception:
+            return empty
+
+
     @st.cache_data(ttl=1800, show_spinner=False)
     def mlb_get_injury_status(pitcher_name: str) -> dict:
         """
@@ -6763,6 +6848,10 @@ if st.session_state.active_sport == "mlb":
                          unsafe_allow_html=True)
         mlb_logs = mlb_get_pitcher_logs(mlb_pitcher, n=10)
 
+        # ── Injury return detection (runs on fetched logs) ──────────
+        _return_data  = mlb_detect_injury_return(mlb_logs, mlb_pitcher)
+        _return_boost = 0.0  # will be set below if return detected
+
         _mlb_ph.markdown("<div style='font-family:JetBrains Mono,monospace;font-size:0.7rem;"
                          "color:#6b7f96;padding:0.5rem 0;'>⏳ LOADING MATCHUP + CONTEXT...</div>",
                          unsafe_allow_html=True)
@@ -6828,12 +6917,14 @@ if st.session_state.active_sport == "mlb":
         except: _h2h_data = {}
 
         # Initialize all derived signal variables with safe defaults
-        _vtrend_mph = 0.0
-        _vtrend_dir = "Stable"
-        _vtrend_adj = 0.0
-        _h2h_adj    = 0.0
-        _h2h_note   = "No H2H data"
-        _h2h_data   = {}
+        _vtrend_mph  = 0.0
+        _vtrend_dir  = "Stable"
+        _vtrend_adj  = 0.0
+        _h2h_adj     = 0.0
+        _h2h_note    = "No H2H data"
+        _h2h_data    = {}
+        _return_data = {"is_return": False}
+        _return_boost = 0.0
         _is_avail   = _injury.get("is_available", True)
         _inj_status = _injury.get("status", "Active")
         _inj_desc   = _injury.get("description", "")
@@ -6896,6 +6987,19 @@ if st.session_state.active_sport == "mlb":
 
             # ── Signal 1: Weighted hit rate (L10 starts, recency-weighted)
             whr = mlb_weighted_hr(mlb_logs, mlb_line, _stat, mlb_side)
+
+        # ── Injury return K boost ──────────────────────────────────
+        # If pitcher is in return window, recalculate using normal-start logs only
+        _return_boost = 0.0
+        if _return_data.get("is_return"):
+            _rc = _return_data["return_starts"]
+            # Recalculate hit rate using only normal starts (exclude shortened)
+            _normal_logs = mlb_logs.iloc[_rc:].reset_index(drop=True)
+            if len(_normal_logs) >= 3:
+                _normal_whr = mlb_weighted_hr(_normal_logs, mlb_line, _stat, mlb_side)
+                _return_boost = round(_normal_whr - whr, 3)
+                # Cap the boost — don't overcorrect
+                _return_boost = min(_return_boost, 0.20)
 
             # ── Signal 2: Opponent K% by handedness (most accurate version)
             _opp_kpct_vs_hand = None
@@ -7190,7 +7294,8 @@ if st.session_state.active_sport == "mlb":
                       + _ha_adj + _form_adj + _rest_adj
                       + _k9_adj + _swstr_adj + _velo_adj + _vtrend_adj + _ip_adj
                       + _ump_adj + _wx_adj + _lineup_adj
-                      + _platoon_adj + _pc_adj + _h2h_adj))
+                      + _platoon_adj + _pc_adj + _h2h_adj
+                      + _return_boost))  # injury return correction
             tier = mlb_verdict(adj, edge, mlb_side,
                               pc_ceiling=_pc_k_ceiling,
                               line=mlb_line)
@@ -7318,6 +7423,37 @@ if st.session_state.active_sport == "mlb":
             # IP note
             if _ip_note:
                 _pills.append(f"<span class='flag-pill down'>⚠️ {_ip_note}</span>")
+
+            # ── 🚨 Injury Return Trap Alert ─────────────────────────
+            if _return_data.get("is_return"):
+                _rconf = _return_data.get("confidence","Medium")
+                _rk    = _return_data.get("k_suppression", 0)
+                _rnorm = _return_data.get("normal_avg_k", 0)
+                _rshrt = _return_data.get("suppressed_avg_k", 0)
+                _rc    = _return_data.get("return_starts", 1)
+                _rcol  = "#ffc107" if _rconf == "Medium" else "#00c4cc"
+                _rbg   = "rgba(255,193,7,0.08)" if _rconf == "Medium" else "rgba(0,196,204,0.08)"
+                _rbdr  = "rgba(255,193,7,0.3)" if _rconf == "Medium" else "rgba(0,196,204,0.3)"
+                st.markdown(
+                    f"<div style='background:{_rbg};border:1px solid {_rbdr};"
+                    f"border-left:4px solid {_rcol};"
+                    f"border-radius:0 12px 12px 0;padding:0.85rem 1.1rem;margin-bottom:0.75rem;'>"
+                    f"<div style='font-family:Plus Jakarta Sans,sans-serif;font-weight:800;"
+                    f"color:{_rcol};font-size:0.9rem;margin-bottom:4px;'>"
+                    f"🚨 INJURY RETURN TRAP DETECTED — {_rconf} Confidence</div>"
+                    f"<div style='font-family:JetBrains Mono,monospace;font-size:0.65rem;"
+                    f"color:#9aaec4;line-height:1.8;'>"
+                    f"Last {_rc} start{'s' if _rc > 1 else ''} were shortened (injury return) · "
+                    f"avg <strong style='color:#ff3d5c;'>{_rshrt}K</strong> in those starts<br>"
+                    f"True ability from normal starts: "
+                    f"<strong style='color:#00e896;'>{_rnorm}K avg</strong> · "
+                    f"Line likely set <strong style='color:{_rcol};'>{_rk:.1f}K too low</strong><br>"
+                    f"<span style='color:#f0f4f8;font-weight:600;'>"
+                    f"PropIQ adjusted model using normal starts only "
+                    f"(+{_return_boost:.0%} correction applied)</span>"
+                    f"</div></div>",
+                    unsafe_allow_html=True
+                )
 
             # ── Injury / Status Banner ─────────────────────────────────
             _inj_status = _injury.get("status","Active")
@@ -7922,6 +8058,11 @@ if st.session_state.active_sport == "mlb":
                     "Platoon matchup":  f"vsL:{_platoon_vs_l:.1%} vsR:{_platoon_vs_r:.1%} · {_lhb_count}L/{_rhb_count}R tonight" if (_platoon_vs_l and _platoon_vs_r) else "Lineup TBD",
                     "Pitch count est":  f"~{_pc_avg}p → ~{_pc_k_ceiling:.1f} K ceiling · {'⚠️ On limit' if _pc_limit else 'No limit detected'}" if _pc_avg else "N/A",
                     "Batter vs Pitcher": _h2h_note,
+                    "Injury return":     (f"⚠️ {_return_data['return_starts']} shortened start(s) detected · "
+                                         f"true ability {_return_data['normal_avg_k']}K vs "
+                                         f"suppressed {_return_data['suppressed_avg_k']}K · "
+                                         f"+{_return_boost:.0%} correction applied"
+                                         if _return_data.get("is_return") else "No return pattern detected"),
                 }
 
                 for _lbl2, _a, _bef, _aft in _mlb_steps:
