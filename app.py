@@ -8707,11 +8707,28 @@ if st.session_state.active_sport == "edge":
 
 
     @st.cache_data(ttl=3600, show_spinner=False)
+    def _scanner_get_all_players() -> list:
+        """Fetch full MLB player list once — shared across all pitcher lookups."""
+        import requests as _req, datetime as _dtx
+        season = _dtx.datetime.now().year
+        try:
+            r = _req.get(
+                "https://statsapi.mlb.com/api/v1/sports/1/players",
+                params={"season": season, "gameType": "R"},
+                timeout=8
+            )
+            if r.ok:
+                return r.json().get("people", [])
+        except Exception:
+            pass
+        return []
+
+
+    @st.cache_data(ttl=3600, show_spinner=False)
     def _scanner_get_pitcher_data(pitcher_name: str) -> dict:
         """
         Fast pitcher data fetch for the scanner.
-        Two API calls, 5s timeout each.
-        Returns K logs + season K/9 + avg IP — everything needed for 6-signal model.
+        Uses shared player cache — only 1 API call per pitcher (game logs).
         """
         import requests as _req, datetime as _dtx
         empty = {"ks": [], "k9": None, "avg_ip": None, "avg_pitches": None, "sample": 0}
@@ -8722,16 +8739,10 @@ if st.session_state.active_sport == "edge":
         season  = _dtx.datetime.now().year
 
         try:
-            # Step 1: find player ID
-            r = _req.get(
-                "https://statsapi.mlb.com/api/v1/sports/1/players",
-                params={"season": season, "gameType": "R"},
-                timeout=5
-            )
-            if not r.ok:
+            # Step 1: find player ID from shared cached roster
+            _ppl = _scanner_get_all_players()
+            if not _ppl:
                 return empty
-
-            _ppl = r.json().get("people", [])
             _pp  = next((p for p in _ppl
                          if all(pt in _norm(p.get("fullName","")) for pt in _parts)), None)
             if not _pp:
@@ -9086,6 +9097,11 @@ if st.session_state.active_sport == "edge":
             except Exception:
                 return None
 
+
+        # Pre-fetch roster once so all threads share it (no duplicate downloads)
+        if any(p["sport"] == "MLB" for p in _filtered):
+            with st.spinner("Pre-loading pitcher roster..."):
+                _scanner_get_all_players()  # warms shared cache in 1 call
 
         _total = max(len(_filtered), 1)
         _done  = 0
