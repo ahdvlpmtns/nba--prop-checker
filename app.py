@@ -6865,63 +6865,70 @@ if st.session_state.active_sport == "mlb":
             except Exception: return default
 
         import time as _timer
-        _mex = _cfu.ThreadPoolExecutor(max_workers=8)
-        _t0  = _timer.time()
-
-        _f_pstats   = _mex.submit(mlb_get_pitcher_season_stats, mlb_pitcher)
-        _f_phand    = _mex.submit(mlb_get_pitcher_hand, mlb_pitcher)
-        _f_ump      = _mex.submit(mlb_get_umpire_k_tendency, mlb_home) if mlb_home else None
-        _f_splits   = _mex.submit(mlb_get_opp_k_rate_splits, mlb_opp, "R") if mlb_opp else None
-        _f_savant   = _mex.submit(mlb_get_savant_stats, mlb_pitcher)
-        _f_weather  = _mex.submit(mlb_get_weather, _wx_team) if _wx_team else None
-        _f_lineup   = _mex.submit(mlb_get_batting_order_with_hands, mlb_opp) if mlb_opp else None
-        _f_platoon  = _mex.submit(mlb_get_platoon_splits, mlb_pitcher)
-        _f_pitches  = _mex.submit(mlb_estimate_pitch_count, mlb_pitcher)
-        _f_injury   = _mex.submit(mlb_get_injury_status, mlb_pitcher)
-        _f_vtrender = _mex.submit(mlb_get_velocity_trend, mlb_pitcher)
-
-        # H2H
-        _f_h2h = None
-        try:
-            _h2h_parts = [pt for pt in mlb_pitcher.lower().split()[:2] if len(pt) > 2]
-            _h2h_pid   = next((p["id"] for p in _get_mlb_roster_cached()
-                               if all(pt in p.get("fullName","").lower()
-                                      for pt in _h2h_parts)), None)
-            if _h2h_pid:
-                _f_h2h = _mex.submit(mlb_get_batter_pitcher_h2h, _h2h_pid)
-        except Exception:
-            pass
-
-        _dbg = {}
-        def _tget(name, f, default, t=10):
-            _ts = _timer.time()
-            result = default
-            if f is not None:
-                try: result = f.result(timeout=t)
-                except Exception as e: result = default
-            _dbg[name] = f"{_timer.time()-_ts:.1f}s"
-            _mlb_ph.markdown(
-                f"<span style='font-family:JetBrains Mono,monospace;font-size:0.6rem;"
-                f"color:#6b7f96;'>⏳ {name}... ({_timer.time()-_t0:.1f}s total)</span>",
-                unsafe_allow_html=True
-            )
-            return result
-
-        _pstats  = _tget("season stats",  _f_pstats,  {},  12)
-        _phand   = _tget("pitcher hand",  _f_phand,   "R",  8)
-        _ump     = _tget("umpire",        _f_ump,     {},   8)
-        _splits  = _tget("opp splits",   _f_splits,  {},   8)
-        _savant  = _tget("savant",        _f_savant,  {},  12)
-        _velo_from_savant = _savant.get("velo") if _savant else None
-        _weather = _tget("weather",       _f_weather, {},   8)
-        _lineup  = _tget("lineup",        _f_lineup,  {},   8)
-        _platoon = _tget("platoon",       _f_platoon, {},  10)
-        _pitchcnt= _tget("pitch count",   _f_pitches, {},  10)
-        _injury  = _tget("injury",        _f_injury,
-                         {"status":"Active","description":"","is_available":True}, 8)
-        _vtrender= _tget("velo trend",    _f_vtrender,{},  12)
-        _h2h_data= _tget("H2H",          _f_h2h,     {},  10)
-        _mex.shutdown(wait=False)
+        with _cfu.ThreadPoolExecutor(max_workers=8) as _mex:
+            _t0  = _timer.time()
+    
+            _f_pstats   = _mex.submit(mlb_get_pitcher_season_stats, mlb_pitcher)
+            _f_phand    = _mex.submit(mlb_get_pitcher_hand, mlb_pitcher)
+            _f_ump      = _mex.submit(mlb_get_umpire_k_tendency, mlb_home) if mlb_home else None
+            _f_splits   = _mex.submit(mlb_get_opp_k_rate_splits, mlb_opp, "R") if mlb_opp else None
+            _f_savant   = _mex.submit(mlb_get_savant_stats, mlb_pitcher)
+            _f_weather  = _mex.submit(mlb_get_weather, _wx_team) if _wx_team else None
+            _f_lineup   = _mex.submit(mlb_get_batting_order_with_hands, mlb_opp) if mlb_opp else None
+            _f_platoon  = _mex.submit(mlb_get_platoon_splits, mlb_pitcher)
+            _f_pitches  = _mex.submit(mlb_estimate_pitch_count, mlb_pitcher)
+            _f_injury   = _mex.submit(mlb_get_injury_status, mlb_pitcher)
+            _f_vtrender = _mex.submit(mlb_get_velocity_trend, mlb_pitcher)
+    
+            # H2H
+            _f_h2h = None
+            try:
+                _h2h_parts = [pt for pt in mlb_pitcher.lower().split()[:2] if len(pt) > 2]
+                _h2h_pid   = next((p["id"] for p in _get_mlb_roster_cached()
+                                   if all(pt in p.get("fullName","").lower()
+                                          for pt in _h2h_parts)), None)
+                if _h2h_pid:
+                    _f_h2h = _mex.submit(mlb_get_batter_pitcher_h2h, _h2h_pid)
+            except Exception:
+                pass
+    
+            _dbg = {}
+            def _tget(name, f, default, t=10):
+                _ts = _timer.time()
+                result = default
+                if f is not None:
+                    try: result = f.result(timeout=t)
+                    except Exception as e: result = default
+                _dbg[name] = f"{_timer.time()-_ts:.1f}s"
+                _mlb_ph.markdown(
+                    f"<span style='font-family:JetBrains Mono,monospace;font-size:0.6rem;"
+                    f"color:#6b7f96;'>⏳ {name}... ({_timer.time()-_t0:.1f}s total)</span>",
+                    unsafe_allow_html=True
+                )
+                return result
+    
+            _pstats  = _tget("season stats",  _f_pstats,  {},  12)
+            _phand   = _tget("pitcher hand",  _f_phand,   "R",  8)
+            _ump     = _tget("umpire",        _f_ump,     {},   8)
+            _splits  = _tget("opp splits",   _f_splits,  {},   8)
+            _savant  = _tget("savant",        _f_savant,  {},  12)
+            _velo_from_savant = _savant.get("velo") if _savant else None
+            _weather = _tget("weather",       _f_weather, {},   8)
+            _lineup  = _tget("lineup",        _f_lineup,  {},   8)
+            _platoon = _tget("platoon",       _f_platoon, {},  10)
+            _pitchcnt= _tget("pitch count",   _f_pitches, {},  10)
+            _injury  = _tget("injury",        _f_injury,
+                             {"status":"Active","description":"","is_available":True}, 8)
+            _vtrender= _tget("velo trend",    _f_vtrender,{},  12)
+            _h2h_data= _tget("H2H",          _f_h2h,     {},  10)
+            # Cancel any futures still running so with-block exits immediately
+            for _ff in [_f_pstats, _f_phand, _f_ump, _f_splits, _f_savant,
+                        _f_weather, _f_lineup, _f_platoon, _f_pitches,
+                        _f_injury, _f_vtrender, _f_h2h]:
+                try:
+                    if _ff: _ff.cancel()
+                except Exception:
+                    pass
 
         # Show timing summary
 
