@@ -8832,31 +8832,66 @@ if st.session_state.active_sport == "edge":
 
     def run_mlb_edge_check(pitcher_name: str, line: float,
                            stat: str, side: str = "Over") -> dict | None:
-        """Original working MLB edge check using mlb_get_pitcher_logs."""
+        """
+        MLB scanner edge check using _scanner_get_pitcher_data
+        which is top-level cached — safe to call from threads.
+        """
         try:
-            _logs = mlb_get_pitcher_logs(pitcher_name, n=8)
-            if _logs is None or _logs.empty or len(_logs) < 3:
+            _data = _scanner_get_pitcher_data(pitcher_name)
+            _ks   = _data.get("ks", [])
+            if not _ks or len(_ks) < 3:
                 return None
 
-            _stat_col = "K" if "strikeout" in stat.lower() else "OUTS"
-            if _stat_col not in _logs.columns:
-                return None
+            import numpy as _np
+            _vals = _np.array(_ks, dtype=float)
+            _n    = len(_vals)
+            _avg  = round(float(_vals.mean()), 1)
+            _k9   = _data.get("k9")
+            _avg_ip = _data.get("avg_ip")
 
-            _vals = pd.to_numeric(_logs[_stat_col], errors="coerce").dropna()
-            if len(_vals) < 3:
-                return None
-
-            _avg  = _vals.mean()
-            _whr  = mlb_weighted_hr(_logs, line, _stat_col, side)
-            _cons = (_vals >= line if side == "Over" else _vals <= line).mean()
-
-            _l3   = _vals.head(3).mean()
+            _wts  = _np.array([1.5 if i < 3 else 1.0 for i in range(_n)])
+            _hits = _vals >= line
+            _whr  = round(float((_hits * _wts).sum() / _wts.sum()), 3)
+            _cons = round(float(_hits.mean()), 3)
             _adj  = _whr
+
+            # Form
+            _l3   = float(_vals[:3].mean())
             _diff = _l3 - _avg
             if _diff >= 1.2:    _adj += 0.05
             elif _diff >= 0.6:  _adj += 0.02
             elif _diff <= -1.2: _adj -= 0.05
             elif _diff <= -0.6: _adj -= 0.02
+
+            # K/9
+            if _k9:
+                if _k9 >= 11.0:   _adj += 0.07
+                elif _k9 >= 9.5:  _adj += 0.04
+                elif _k9 >= 8.0:  _adj += 0.01
+                elif _k9 >= 6.5:  _adj -= 0.03
+                else:             _adj -= 0.06
+
+            # IP depth
+            if _avg_ip:
+                if _avg_ip >= 6.0:   _adj += 0.02
+                elif _avg_ip >= 5.0: _adj += 0.01
+                elif _avg_ip <= 3.5: _adj -= 0.07
+                elif _avg_ip <= 4.5: _adj -= 0.03
+
+            # Edge vs line
+            _edge = _avg - line
+            if _edge >= 2.5:    _adj += 0.05
+            elif _edge >= 1.5:  _adj += 0.03
+            elif _edge >= 0.5:  _adj += 0.01
+            elif _edge <= -2.5: _adj -= 0.05
+            elif _edge <= -1.5: _adj -= 0.03
+            elif _edge <= -0.5: _adj -= 0.01
+
+            # Consistency
+            if _cons >= 0.75:    _adj += 0.03
+            elif _cons >= 0.65:  _adj += 0.01
+            elif _cons <= 0.35:  _adj -= 0.04
+            elif _cons <= 0.45:  _adj -= 0.02
 
             _adj = max(0.05, min(0.95, _adj))
 
@@ -8867,10 +8902,11 @@ if st.session_state.active_sport == "edge":
                 "line":     line,
                 "side":     side,
                 "adj":      round(_adj * 100, 1),
-                "avg":      round(float(_avg), 1),
-                "edge_raw": round(float(_avg - line), 2),
-                "cons":     round(float(_cons * 100), 1),
-                "samples":  len(_vals),
+                "avg":      _avg,
+                "edge_raw": round(_edge, 2),
+                "cons":     round(_cons * 100, 1),
+                "samples":  _n,
+                "k9":       _k9,
             }
         except Exception:
             return None
@@ -9052,6 +9088,10 @@ if st.session_state.active_sport == "edge":
 
         _total = max(len(_filtered), 1)
         _done  = 0
+
+        # Pre-warm shared roster cache once before threads start
+        if any(p["sport"] == "MLB" for p in _filtered):
+            _scanner_get_all_players()
 
         _workers = 6 if _edge_sport == "MLB" else 8
 
