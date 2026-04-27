@@ -4969,22 +4969,32 @@ for _k in ["scanner_results", "scanner_error"]:
 # ═══════════════════════════════════════════════════════
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def _get_mlb_roster_cached() -> list:
-    """Top-level MLB roster cache — shared by all threads, never re-fetched."""
-    import requests as _rq, datetime as _dtx
-    season = _dtx.datetime.now().year
-    try:
-        r = _rq.get(
-            "https://statsapi.mlb.com/api/v1/sports/1/players",
-            params={"season": season, "gameType": "R"},
-            timeout=8
-        )
-        if r.ok:
-            return r.json().get("people", [])
-    except Exception:
-        pass
-    return []
+import functools as _ftools
+import datetime as _dtmod
+
+@_ftools.lru_cache(maxsize=1)
+def _get_mlb_roster_cached() -> tuple:
+    """
+    True module-level roster cache using lru_cache.
+    Returns tuple (immutable) so lru_cache can hash it.
+    Call list(list(_get_mlb_roster_cached())) to get the list.
+    """
+    import requests as _rq
+    season = _dtmod.datetime.now().year
+    for _gt in ["R", "S"]:
+        try:
+            r = _rq.get(
+                "https://statsapi.mlb.com/api/v1/sports/1/players",
+                params={"season": season, "gameType": _gt},
+                timeout=8
+            )
+            if r.ok:
+                people = r.json().get("people", [])
+                if people:
+                    return tuple(people)
+        except Exception:
+            pass
+    return tuple()
 
 
 if st.session_state.active_sport == "mlb":
@@ -5019,7 +5029,7 @@ if st.session_state.active_sport == "mlb":
             people = []
 
             # Strategy A: Full active roster (most reliable)
-            people = _get_mlb_roster_cached()
+            people = list(_get_mlb_roster_cached())
             if not people:
                 for _gt in ["R", "S", "E"]:
                     try:
@@ -5375,7 +5385,7 @@ if st.session_state.active_sport == "mlb":
             _parts  = [p for p in _target.split() if len(p) > 2]
 
             # Find player ID
-            people = _get_mlb_roster_cached()
+            people = list(_get_mlb_roster_cached())
             if not people: return empty
             pitcher = next((p for p in people
                            if _norm(p.get("fullName","")) == _target), None)
@@ -5561,7 +5571,7 @@ if st.session_state.active_sport == "mlb":
             _norm   = lambda s: s.lower().strip()
             _target = _norm(player_name)
             _parts  = [p for p in _target.split() if len(p) > 2]
-            people = _get_mlb_roster_cached()
+            people = list(_get_mlb_roster_cached())
             if not people: return "R"
             p = next((x for x in people
                       if all(pt in _norm(x.get("fullName","")) for pt in _parts)), None)
@@ -5846,7 +5856,7 @@ if st.session_state.active_sport == "mlb":
             # Method 3: MLB Stats API K% — always works
             for _yr in [season, season-1]:
                 try:
-                    _ppl = _get_mlb_roster_cached()
+                    _ppl = list(_get_mlb_roster_cached())
                     if not _ppl: continue
                     _pp = next((p for p in _ppl
                                if all(pt in _norm(p.get("fullName",""))
@@ -5954,7 +5964,7 @@ if st.session_state.active_sport == "mlb":
 
             # Find player ID
             for _yr in [season, season - 1]:
-                _ppl = _get_mlb_roster_cached()
+                _ppl = list(_get_mlb_roster_cached())
                 if not _ppl: continue
                 _pp  = next((p for p in _ppl
                              if all(pt in _norm(p.get("fullName",""))
@@ -6013,7 +6023,7 @@ if st.session_state.active_sport == "mlb":
             import requests as _req
             import datetime as _dtx
             season = _dtx.datetime.now().year
-            all_players = _get_mlb_roster_cached()
+            all_players = list(_get_mlb_roster_cached())
             if not all_players: return []
 
             order_with_hands = []
@@ -6063,7 +6073,7 @@ if st.session_state.active_sport == "mlb":
             season  = _dtx.datetime.now().year
 
             # Find player
-            _ppl = _get_mlb_roster_cached()
+            _ppl = list(_get_mlb_roster_cached())
             if not _ppl: return empty
             _pp  = next((p for p in _ppl
                          if all(pt in _norm(p.get("fullName","")) for pt in _parts)), None)
@@ -6729,7 +6739,7 @@ if st.session_state.active_sport == "mlb":
         pitchers = set()
         try:
             # Fetch all active players for the current season
-            people = _get_mlb_roster_cached()
+            people = list(_get_mlb_roster_cached())
             if not people:
                 # Fallback: direct call
                 r = _req.get(
@@ -6861,45 +6871,55 @@ if st.session_state.active_sport == "mlb":
         import concurrent.futures as _cfu
         _wx_team = mlb_home or (_tonight.get("home_team","") if _tonight else "")
 
-        def _get(f, default, t=10):
-            if f is None: return default
-            try: return f.result(timeout=t)
-            except Exception: return default
+        with _cfu.ThreadPoolExecutor(max_workers=12) as _mex:
+            _f_pstats   = _mex.submit(mlb_get_pitcher_season_stats, mlb_pitcher)
+            _f_phand    = _mex.submit(mlb_get_pitcher_hand, mlb_pitcher)
+            _f_ump      = _mex.submit(mlb_get_umpire_k_tendency, mlb_home) if mlb_home else None
+            _f_splits   = _mex.submit(mlb_get_opp_k_rate_splits, mlb_opp, "R") if mlb_opp else None
+            _f_savant   = _mex.submit(mlb_get_savant_stats, mlb_pitcher)
+            _f_weather  = _mex.submit(mlb_get_weather, _wx_team) if _wx_team else None
+            _f_lineup   = _mex.submit(mlb_get_batting_order_with_hands, mlb_opp) if mlb_opp else None
+            _f_platoon  = _mex.submit(mlb_get_platoon_splits, mlb_pitcher)
+            _f_pitches  = _mex.submit(mlb_estimate_pitch_count, mlb_pitcher)
+            _f_injury   = _mex.submit(mlb_get_injury_status, mlb_pitcher)
+            _f_vtrender = _mex.submit(mlb_get_velocity_trend, mlb_pitcher)
+            _f_h2h      = None
+            try:
+                _h2h_parts = [pt for pt in mlb_pitcher.lower().split()[:2] if len(pt) > 2]
+                _h2h_pid   = next((p["id"] for p in list(_get_mlb_roster_cached())
+                                   if all(pt in p.get("fullName","").lower()
+                                          for pt in _h2h_parts)), None)
+                if _h2h_pid:
+                    _f_h2h = _mex.submit(mlb_get_batter_pitcher_h2h, _h2h_pid)
+            except Exception:
+                pass
 
-        _pstats   = mlb_get_pitcher_season_stats(mlb_pitcher)
-        _phand    = mlb_get_pitcher_hand(mlb_pitcher)
-        _ump      = mlb_get_umpire_k_tendency(mlb_home) if mlb_home else {}
-        _splits   = mlb_get_opp_k_rate_splits(mlb_opp, "R") if mlb_opp else {}
-        _savant   = mlb_get_savant_stats(mlb_pitcher)
+        try:    _pstats  = _f_pstats.result(timeout=12)
+        except: _pstats  = {}
+        try:    _phand   = _f_phand.result(timeout=8)
+        except: _phand   = "R"
+        try:    _ump     = _f_ump.result(timeout=8) if _f_ump else {}
+        except: _ump     = {}
+        try:    _splits  = _f_splits.result(timeout=8) if _f_splits else {}
+        except: _splits  = {}
+        try:    _savant  = _f_savant.result(timeout=12)
+        except: _savant  = {}
         _velo_from_savant = _savant.get("velo") if _savant else None
-        _weather  = mlb_get_weather(_wx_team) if _wx_team else {}
-        _lineup   = mlb_get_batting_order_with_hands(mlb_opp) if mlb_opp else {}
-        _platoon  = mlb_get_platoon_splits(mlb_pitcher)
-        _pitchcnt = mlb_estimate_pitch_count(mlb_pitcher)
-        _injury   = mlb_get_injury_status(mlb_pitcher)
-        _vtrender = mlb_get_velocity_trend(mlb_pitcher)
-        _h2h_data = {}
-        try:
-            _h2h_parts = [pt for pt in mlb_pitcher.lower().split()[:2] if len(pt) > 2]
-            _h2h_pid   = next((p["id"] for p in _get_mlb_roster_cached()
-                               if all(pt in p.get("fullName","").lower()
-                                      for pt in _h2h_parts)), None)
-            if _h2h_pid:
-                _h2h_data = mlb_get_batter_pitcher_h2h(_h2h_pid)
-        except Exception:
-            pass
+        try:    _weather = _f_weather.result(timeout=8) if _f_weather else {}
+        except: _weather = {}
+        try:    _lineup  = _f_lineup.result(timeout=8) if _f_lineup else {}
+        except: _lineup  = {}
+        try:    _platoon = _f_platoon.result(timeout=10)
+        except: _platoon = {}
+        try:    _pitchcnt= _f_pitches.result(timeout=10)
+        except: _pitchcnt= {}
+        try:    _injury  = _f_injury.result(timeout=8)
+        except: _injury  = {"status": "Active", "description": "", "is_available": True}
+        try:    _vtrender= _f_vtrender.result(timeout=12)
+        except: _vtrender= {}
+        try:    _h2h_data= _f_h2h.result(timeout=10) if _f_h2h else {}
+        except: _h2h_data= {}
 
-
-        # Initialize all derived signal variables with safe defaults
-        _vtrend_mph  = 0.0
-        _vtrend_dir  = "Stable"
-        _vtrend_adj  = 0.0
-        _h2h_adj     = 0.0
-        _h2h_note    = "No H2H data"
-        _h2h_data    = {}
-        _return_data = {"is_return": False}
-        _return_boost = 0.0
-        _is_avail   = _injury.get("is_available", True)
         _inj_status = _injury.get("status", "Active")
         _inj_desc   = _injury.get("description", "")
 
@@ -7037,7 +7057,7 @@ if st.session_state.active_sport == "mlb":
                     import requests as _req2, datetime as _dtx2
                     # Use cached roster — no fresh download
                     _norm2 = lambda s: s.lower().strip()
-                    _ppl   = _get_mlb_roster_cached()
+                    _ppl   = list(_get_mlb_roster_cached())
                     _pp    = next((p for p in _ppl
                                   if _norm2(p.get("fullName","")) == _norm2(mlb_pitcher)), None)
                     if not _pp:
@@ -8568,7 +8588,7 @@ def _scanner_get_all_players() -> list:
     import requests as _req, datetime as _dtx
     season = _dtx.datetime.now().year
     try:
-            people = _get_mlb_roster_cached()
+            people = list(_get_mlb_roster_cached())
             if not people: return empty
     except Exception:
         pass
@@ -9327,7 +9347,7 @@ if st.session_state.active_sport == "edge":
         _parts  = [p for p in _target.split() if len(p) > 2]
         season  = _dtx.datetime.now().year
         try:
-            _ppl = _get_mlb_roster_cached()
+            _ppl = list(_get_mlb_roster_cached())
             if not _ppl: return empty
             _pp = next((p for p in _ppl
                         if all(pt in _norm(p.get("fullName","")) for pt in _parts)
@@ -9372,7 +9392,7 @@ if st.session_state.active_sport == "edge":
         _parts  = [p for p in _target.split() if len(p) > 2]
         season  = _dtx.datetime.now().year
         try:
-            _ppl = _get_mlb_roster_cached()
+            _ppl = list(_get_mlb_roster_cached())
             if not _ppl: return []
             _pp = next((p for p in _ppl
                         if all(pt in _norm(p.get("fullName","")) for pt in _parts)
