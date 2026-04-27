@@ -6866,52 +6866,50 @@ if st.session_state.active_sport == "mlb":
 
         # Parallel fetch all new signals
         import concurrent.futures as _cfu
-        _mex = _cfu.ThreadPoolExecutor(max_workers=12)
         _wx_team = mlb_home or (_tonight.get("home_team","") if _tonight else "")
 
-        _f_pstats   = _mex.submit(mlb_get_pitcher_season_stats, mlb_pitcher)
-        _f_phand    = _mex.submit(mlb_get_pitcher_hand, mlb_pitcher)
-        _f_ump      = _mex.submit(mlb_get_umpire_k_tendency, mlb_home) if mlb_home else None
-        _f_splits   = _mex.submit(mlb_get_opp_k_rate_splits, mlb_opp, "R") if mlb_opp else None
-        _f_savant   = _mex.submit(mlb_get_savant_stats, mlb_pitcher)
-        _f_weather  = _mex.submit(mlb_get_weather, _wx_team) if _wx_team else None
-        _f_lineup   = _mex.submit(mlb_get_batting_order_with_hands, mlb_opp) if mlb_opp else None
-        _f_platoon  = _mex.submit(mlb_get_platoon_splits, mlb_pitcher)
-        _f_pitches  = _mex.submit(mlb_estimate_pitch_count, mlb_pitcher)
-        _f_injury   = _mex.submit(mlb_get_injury_status, mlb_pitcher)
-        _f_vtrender = _mex.submit(mlb_get_velocity_trend, mlb_pitcher)
-        _f_h2h      = None
-        try:
-            _h2h_parts  = [pt for pt in mlb_pitcher.lower().split()[:2] if len(pt) > 2]
-            _h2h_roster = _get_mlb_roster_cached()
-            _h2h_pid    = next((p["id"] for p in _h2h_roster
-                                if all(pt in p.get("fullName","").lower()
-                                       for pt in _h2h_parts)), None)
-            if _h2h_pid:
-                _f_h2h = _mex.submit(mlb_get_batter_pitcher_h2h, _h2h_pid)
-        except Exception:
-            pass
-
-        # Hard 15s timeout on every result — no more infinite hangs
         def _get(f, default, t=10):
             if f is None: return default
             try: return f.result(timeout=t)
             except Exception: return default
 
-        _pstats  = _get(_f_pstats,  {},  12)
-        _phand   = _get(_f_phand,   "R",  8)
-        _ump     = _get(_f_ump,     {},   8)
-        _splits  = _get(_f_splits,  {},   8)
-        _savant  = _get(_f_savant,  {},  12)
-        _velo_from_savant = _savant.get("velo") if _savant else None
-        _weather = _get(_f_weather, {},   8)
-        _lineup  = _get(_f_lineup,  {},   8)
-        _platoon = _get(_f_platoon, {},  10)
-        _pitchcnt= _get(_f_pitches, {},  10)
-        _injury  = _get(_f_injury,  {"status":"Active","description":"","is_available":True}, 8)
-        _vtrender= _get(_f_vtrender,{},  10)
-        _h2h_data= _get(_f_h2h,    {},  10)
-        _mex.shutdown(wait=False)  # don't block on stragglers
+        with _cfu.ThreadPoolExecutor(max_workers=12) as _mex:
+            _f_pstats   = _mex.submit(mlb_get_pitcher_season_stats, mlb_pitcher)
+            _f_phand    = _mex.submit(mlb_get_pitcher_hand, mlb_pitcher)
+            _f_ump      = _mex.submit(mlb_get_umpire_k_tendency, mlb_home) if mlb_home else None
+            _f_splits   = _mex.submit(mlb_get_opp_k_rate_splits, mlb_opp, "R") if mlb_opp else None
+            _f_savant   = _mex.submit(mlb_get_savant_stats, mlb_pitcher)
+            _f_weather  = _mex.submit(mlb_get_weather, _wx_team) if _wx_team else None
+            _f_lineup   = _mex.submit(mlb_get_batting_order_with_hands, mlb_opp) if mlb_opp else None
+            _f_platoon  = _mex.submit(mlb_get_platoon_splits, mlb_pitcher)
+            _f_pitches  = _mex.submit(mlb_estimate_pitch_count, mlb_pitcher)
+            _f_injury   = _mex.submit(mlb_get_injury_status, mlb_pitcher)
+            _f_vtrender = _mex.submit(mlb_get_velocity_trend, mlb_pitcher)
+            _f_h2h      = None
+            try:
+                _h2h_parts  = [pt for pt in mlb_pitcher.lower().split()[:2] if len(pt) > 2]
+                _h2h_roster = _get_mlb_roster_cached()
+                _h2h_pid    = next((p["id"] for p in _h2h_roster
+                                    if all(pt in p.get("fullName","").lower()
+                                           for pt in _h2h_parts)), None)
+                if _h2h_pid:
+                    _f_h2h = _mex.submit(mlb_get_batter_pitcher_h2h, _h2h_pid)
+            except Exception:
+                pass
+
+            _pstats  = _get(_f_pstats,  {},  12)
+            _phand   = _get(_f_phand,   "R",  8)
+            _ump     = _get(_f_ump,     {},   8)
+            _splits  = _get(_f_splits,  {},   8)
+            _savant  = _get(_f_savant,  {},  12)
+            _velo_from_savant = _savant.get("velo") if _savant else None
+            _weather = _get(_f_weather, {},   8)
+            _lineup  = _get(_f_lineup,  {},   8)
+            _platoon = _get(_f_platoon, {},  10)
+            _pitchcnt= _get(_f_pitches, {},  10)
+            _injury  = _get(_f_injury,  {"status":"Active","description":"","is_available":True}, 8)
+            _vtrender= _get(_f_vtrender,{},  10)
+            _h2h_data= _get(_f_h2h,    {},  10)
 
         # Initialize all derived signal variables with safe defaults
         _vtrend_mph  = 0.0
