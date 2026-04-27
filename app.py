@@ -6868,57 +6868,53 @@ if st.session_state.active_sport == "mlb":
                          unsafe_allow_html=True)
 
         # Parallel fetch all new signals
-        import concurrent.futures as _cfu
+        import concurrent.futures as _cfu, signal as _sig
         _wx_team = mlb_home or (_tonight.get("home_team","") if _tonight else "")
 
-        with _cfu.ThreadPoolExecutor(max_workers=12) as _mex:
-            _f_pstats   = _mex.submit(mlb_get_pitcher_season_stats, mlb_pitcher)
-            _f_phand    = _mex.submit(mlb_get_pitcher_hand, mlb_pitcher)
-            _f_ump      = _mex.submit(mlb_get_umpire_k_tendency, mlb_home) if mlb_home else None
-            _f_splits   = _mex.submit(mlb_get_opp_k_rate_splits, mlb_opp, "R") if mlb_opp else None
-            _f_savant   = _mex.submit(mlb_get_savant_stats, mlb_pitcher)
-            _f_weather  = _mex.submit(mlb_get_weather, _wx_team) if _wx_team else None
-            _f_lineup   = _mex.submit(mlb_get_batting_order_with_hands, mlb_opp) if mlb_opp else None
-            _f_platoon  = _mex.submit(mlb_get_platoon_splits, mlb_pitcher)
-            _f_pitches  = _mex.submit(mlb_estimate_pitch_count, mlb_pitcher)
-            _f_injury   = _mex.submit(mlb_get_injury_status, mlb_pitcher)
-            _f_vtrender = _mex.submit(mlb_get_velocity_trend, mlb_pitcher)
-            _f_h2h      = None
+        def _safe(fn, default, *args, **kwargs):
+            """Call fn with hard 10s timeout using a thread."""
             try:
-                _h2h_parts = [pt for pt in mlb_pitcher.lower().split()[:2] if len(pt) > 2]
-                _h2h_pid   = next((p["id"] for p in list(_get_mlb_roster_cached())
-                                   if all(pt in p.get("fullName","").lower()
-                                          for pt in _h2h_parts)), None)
-                if _h2h_pid:
-                    _f_h2h = _mex.submit(mlb_get_batter_pitcher_h2h, _h2h_pid)
+                with _cfu.ThreadPoolExecutor(max_workers=1) as _ex:
+                    return _ex.submit(fn, *args, **kwargs).result(timeout=10)
             except Exception:
-                pass
+                return default
 
-        try:    _pstats  = _f_pstats.result(timeout=12)
-        except: _pstats  = {}
-        try:    _phand   = _f_phand.result(timeout=8)
-        except: _phand   = "R"
-        try:    _ump     = _f_ump.result(timeout=8) if _f_ump else {}
-        except: _ump     = {}
-        try:    _splits  = _f_splits.result(timeout=8) if _f_splits else {}
-        except: _splits  = {}
-        try:    _savant  = _f_savant.result(timeout=12)
-        except: _savant  = {}
+        _mlb_ph.markdown("⏳ fetching pitcher stats...", unsafe_allow_html=False)
+        _pstats   = _safe(mlb_get_pitcher_season_stats, {}, mlb_pitcher)
+        _mlb_ph.markdown("⏳ fetching hand...", unsafe_allow_html=False)
+        _phand    = _safe(mlb_get_pitcher_hand, "R", mlb_pitcher)
+        _mlb_ph.markdown("⏳ fetching umpire...", unsafe_allow_html=False)
+        _ump      = _safe(mlb_get_umpire_k_tendency, {}, mlb_home) if mlb_home else {}
+        _mlb_ph.markdown("⏳ fetching opp splits...", unsafe_allow_html=False)
+        _splits   = _safe(mlb_get_opp_k_rate_splits, {}, mlb_opp, "R") if mlb_opp else {}
+        _mlb_ph.markdown("⏳ fetching savant...", unsafe_allow_html=False)
+        _savant   = _safe(mlb_get_savant_stats, {}, mlb_pitcher)
         _velo_from_savant = _savant.get("velo") if _savant else None
-        try:    _weather = _f_weather.result(timeout=8) if _f_weather else {}
-        except: _weather = {}
-        try:    _lineup  = _f_lineup.result(timeout=8) if _f_lineup else {}
-        except: _lineup  = {}
-        try:    _platoon = _f_platoon.result(timeout=10)
-        except: _platoon = {}
-        try:    _pitchcnt= _f_pitches.result(timeout=10)
-        except: _pitchcnt= {}
-        try:    _injury  = _f_injury.result(timeout=8)
-        except: _injury  = {"status": "Active", "description": "", "is_available": True}
-        try:    _vtrender= _f_vtrender.result(timeout=12)
-        except: _vtrender= {}
-        try:    _h2h_data= _f_h2h.result(timeout=10) if _f_h2h else {}
-        except: _h2h_data= {}
+        _mlb_ph.markdown("⏳ fetching weather...", unsafe_allow_html=False)
+        _weather  = _safe(mlb_get_weather, {}, _wx_team) if _wx_team else {}
+        _mlb_ph.markdown("⏳ fetching lineup...", unsafe_allow_html=False)
+        _lineup   = _safe(mlb_get_batting_order_with_hands, {}, mlb_opp) if mlb_opp else {}
+        _mlb_ph.markdown("⏳ fetching platoon...", unsafe_allow_html=False)
+        _platoon  = _safe(mlb_get_platoon_splits, {}, mlb_pitcher)
+        _mlb_ph.markdown("⏳ fetching pitch count...", unsafe_allow_html=False)
+        _pitchcnt = _safe(mlb_estimate_pitch_count, {}, mlb_pitcher)
+        _mlb_ph.markdown("⏳ fetching injury...", unsafe_allow_html=False)
+        _injury   = _safe(mlb_get_injury_status, {"status":"Active","description":"","is_available":True}, mlb_pitcher)
+        _mlb_ph.markdown("⏳ fetching velocity...", unsafe_allow_html=False)
+        _vtrender = _safe(mlb_get_velocity_trend, {}, mlb_pitcher)
+        _mlb_ph.markdown("⏳ fetching H2H...", unsafe_allow_html=False)
+        _h2h_data = {}
+        try:
+            _h2h_parts = [pt for pt in mlb_pitcher.lower().split()[:2] if len(pt) > 2]
+            _h2h_pid   = next((p["id"] for p in list(_get_mlb_roster_cached())
+                               if all(pt in p.get("fullName","").lower()
+                                      for pt in _h2h_parts)), None)
+            if _h2h_pid:
+                _h2h_data = _safe(mlb_get_batter_pitcher_h2h, {}, _h2h_pid)
+        except Exception:
+            pass
+        _mlb_ph.markdown("⏳ all signals loaded", unsafe_allow_html=False)
+
 
         _inj_status = _injury.get("status", "Active")
         _inj_desc   = _injury.get("description", "")
