@@ -4999,26 +4999,21 @@ if st.session_state.active_sport == "mlb":
             pid = None
             people = []
 
-            # Strategy A: Top-level roster cache (shared, never re-downloaded)
-            try:
-                people = _get_mlb_roster_cached() or []
-            except Exception:
-                people = []
-            if not people:
-                for _gt in ["R", "S", "E"]:
-                    try:
-                        _r = _req.get(
-                            "https://statsapi.mlb.com/api/v1/sports/1/players",
-                            params={"season": season, "gameType": _gt},
-                            timeout=10
-                        )
-                        if _r.ok:
-                            _all = _r.json().get("people", [])
-                            if _all:
-                                people = _all
-                                break
-                    except Exception:
-                        continue
+            # Strategy A: Full active roster (most reliable)
+            for _gt in ["R", "S", "E"]:  # Regular, Spring, Exhibition
+                try:
+                    _r = _req.get(
+                        "https://statsapi.mlb.com/api/v1/sports/1/players",
+                        params={"season": season, "gameType": _gt},
+                        timeout=10
+                    )
+                    if _r.ok:
+                        _all = _r.json().get("people", [])
+                        if _all:
+                            people = _all
+                            break
+                except Exception:
+                    continue
 
             if people:
                 # Match priority: exact > last+first > last only > partial
