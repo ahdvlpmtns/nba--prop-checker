@@ -6927,9 +6927,8 @@ if st.session_state.active_sport == "mlb":
         _dbg_lines = " · ".join(f"{k}:{v}" for k,v in _dbg.items())
         st.caption(f"⏱ Signal timing: {_dbg_lines}")
 
-        # Velocity trend + H2H — skip for now, use cached values only
-        _vtrender = {}
-        _h2h_data = {}
+        # Show timing summary then continue
+        _mlb_ph.markdown("⏳ processing signals...", unsafe_allow_html=False)
 
         # Initialize all derived signal variables with safe defaults
         _vtrend_mph  = 0.0
@@ -6947,10 +6946,12 @@ if st.session_state.active_sport == "mlb":
         # Re-fetch splits with correct pitcher hand
         if mlb_opp and _phand:
             try:
+                _mlb_ph.markdown("⏳ re-fetching splits...", unsafe_allow_html=False)
                 _splits = mlb_get_opp_k_rate_splits(mlb_opp, _phand)
             except Exception:
                 pass
 
+        _mlb_ph.markdown("⏳ computing signals...", unsafe_allow_html=False)
         # Override K% proxy with real Savant SwStr% if available
         _swstr_real = _savant.get("swstr_pct")
         _velo       = _savant.get("velo")
