@@ -4968,6 +4968,25 @@ for _k in ["scanner_results", "scanner_error"]:
 # MLB MODE
 # ═══════════════════════════════════════════════════════
 
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _get_mlb_roster_cached() -> list:
+    """Top-level MLB roster cache — shared by all threads, never re-fetched."""
+    import requests as _rq, datetime as _dtx
+    season = _dtx.datetime.now().year
+    try:
+        r = _rq.get(
+            "https://statsapi.mlb.com/api/v1/sports/1/players",
+            params={"season": season, "gameType": "R"},
+            timeout=8
+        )
+        if r.ok:
+            return r.json().get("people", [])
+    except Exception:
+        pass
+    return []
+
+
 if st.session_state.active_sport == "mlb":
 
     # ── MLB Data Functions ─────────────────────────────
@@ -6746,6 +6765,12 @@ if st.session_state.active_sport == "mlb":
             "Cristopher Sanchez","Zac Gallen","Eduardo Rodriguez","Merrill Kelly",
             "Jordan Montgomery","Graham Ashcraft","Nick Lodolo","Andrew Abbott",
             "Mitch Keller","Marco Gonzales","Taj Bradley","Shane McClanahan",
+            "Chad Patrick","Aaron Civale","Casey Mize","Kai-Wei Teng",
+            "Parker Messick","Dustin May","Randy Vasquez","Ranger Suarez",
+            "Chris Paddack","Steven Matz","Marcus Stroman","Justin Steele",
+            "Nestor Cortes","Clarke Schmidt","Bryce Miller","Tanner Houck",
+            "Sonny Gray","Charlie Morton","Tyler Wells","Dean Kremer",
+            "Zach Eflin","Kyle Gibson","Michael Lorenzen","Wade Miley",
         ]
         for n in _seed:
             pitchers.add(n)
@@ -8386,23 +8411,6 @@ if st.session_state.active_sport == "mlb":
 # ═══════════════════════════════════════════════════════
 # EDGE MODE — PropIQ Edge Scanner
 # ═══════════════════════════════════════════════════════
-@st.cache_data(ttl=3600, show_spinner=False)
-def _get_mlb_roster_cached() -> list:
-    """Top-level MLB roster cache — shared by all threads, never re-fetched."""
-    import requests as _rq, datetime as _dtx
-    season = _dtx.datetime.now().year
-    try:
-        r = _rq.get(
-            "https://statsapi.mlb.com/api/v1/sports/1/players",
-            params={"season": season, "gameType": "R"},
-            timeout=8
-        )
-        if r.ok:
-            return r.json().get("people", [])
-    except Exception:
-        pass
-    return []
-
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_all_pp_props(sport_filter: str = "Both") -> list:
     """
