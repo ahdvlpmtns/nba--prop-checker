@@ -6882,16 +6882,14 @@ if st.session_state.active_sport == "mlb":
             _f_injury   = _mex.submit(mlb_get_injury_status, mlb_pitcher)
             _f_vtrender = _mex.submit(mlb_get_velocity_trend, mlb_pitcher)
             # H2H — fetch pitcher ID for batter matchup data
-            _f_h2h      = None
+            # H2H — use cached roster, no blocking API call
+            _f_h2h = None
             try:
-                _h2h_pid = next((p["id"] for p in _req.get(
-                    "https://statsapi.mlb.com/api/v1/sports/1/players",
-                    params={"season": __import__("datetime").datetime.now().year,
-                            "gameType": "R"}, timeout=5
-                ).json().get("people", [])
-                    if all(pt in p.get("fullName","").lower()
-                           for pt in mlb_pitcher.lower().split()[:2]
-                           if len(pt) > 2)), None)
+                _h2h_parts  = [pt for pt in mlb_pitcher.lower().split()[:2] if len(pt) > 2]
+                _h2h_roster = _get_mlb_roster_cached()
+                _h2h_pid    = next((p["id"] for p in _h2h_roster
+                                    if all(pt in p.get("fullName","").lower()
+                                           for pt in _h2h_parts)), None)
                 if _h2h_pid:
                     _f_h2h = _mex.submit(mlb_get_batter_pitcher_h2h, _h2h_pid)
             except Exception:
