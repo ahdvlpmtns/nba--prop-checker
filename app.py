@@ -8798,7 +8798,8 @@ if st.session_state.active_sport == "edge":
 
     def run_mlb_edge_check(pitcher_name: str, line: float,
                            stat: str, side: str = "Over",
-                           opp_team: str = "", home_team: str = "") -> dict | None:
+                           opp_team: str = "", home_team: str = "",
+                           opp_k_override=None) -> dict | None:
         """
         MLB scanner edge check — 10 signals including injury, opponent, starter, park.
         Closely matches the full 15-signal analyzer accuracy.
@@ -8866,14 +8867,9 @@ if st.session_state.active_sport == "edge":
             elif _cons <= 0.35: _adj -= 0.04
             elif _cons <= 0.45: _adj -= 0.02
 
-            # ── Signal 7: Opponent K% (NEW) ───────────────────────────
-            _opp_k_pct  = None
+            # ── Signal 7: Opponent K% (pre-fetched, no API call) ─────
+            _opp_k_pct  = opp_k_override  # passed in from pre-fetch
             _opp_k_note = ""
-            if opp_team:
-                try:
-                    _opp_k_pct = mlb_get_opp_k_rate(opp_team)
-                except Exception:
-                    pass
             if _opp_k_pct:
                 if _opp_k_pct >= 0.27:   _adj += 0.06   # high K lineup
                 elif _opp_k_pct >= 0.24: _adj += 0.03
@@ -9186,14 +9182,12 @@ if st.session_state.active_sport == "edge":
                     _m = _bulk_matchups.get(prop["player"].lower(), {})
                     _opp  = _m.get("opp", "")
                     _home = _m.get("home_team", "")
-                    # Inject pre-fetched K rate for opponent
-                    if _opp and _opp in _team_k_rates:
-                        _opp_k = _team_k_rates[_opp]
-                    else:
-                        _opp_k = None
+                    # Pass pre-fetched K rate directly — skip internal API call
+                    _opp_k = _team_k_rates.get(_opp) if _opp else None
                     return run_mlb_edge_check(
                         prop["player"], prop["line"], _norm_stat, "Over",
                         opp_team=_opp, home_team=_home,
+                        opp_k_override=_opp_k,
                     )
             except Exception:
                 return None
@@ -9218,15 +9212,10 @@ if st.session_state.active_sport == "edge":
                     unsafe_allow_html=True
                 )
                 try:
-                    _res = _fut.result(timeout=15)
+                    _res = _fut.result(timeout=12)
                     if _res:
                         _res["is_goblin"] = _prop_ref.get("is_goblin", False)
                         _res["is_demon"]  = _prop_ref.get("is_demon", False)
-                        # Add matchup info if MLB
-                        if _res.get("sport") == "MLB" and not _res.get("opp"):
-                            _m = _scanner_get_tonight_matchup(_res["player"])
-                            _res["opp"]       = _m.get("opp", "")
-                            _res["home_team"] = _m.get("home_team", "")
                         _results.append(_res)
                 except Exception:
                     pass
