@@ -9139,10 +9139,19 @@ if st.session_state.active_sport == "edge":
                 pass
             return result
 
-        # Pre-fetch all data before threading — fast single calls
-        with st.spinner("Loading tonight's matchup data..."):
+        # Pre-fetch ALL data before threading — single calls, no parallel hammering
+        with st.spinner("Loading tonight's data..."):
             _bulk_matchups = _scanner_bulk_matchups()
             _team_k_rates  = _scanner_all_team_k_rates()
+            # Pre-warm pitcher data cache for all filtered MLB pitchers
+            # This prevents 31 threads simultaneously downloading the roster
+            if any(p["sport"] == "MLB" for p in _filtered):
+                _mlb_names = [p["player"] for p in _filtered if p["sport"] == "MLB"]
+                for _pn in _mlb_names:
+                    try:
+                        _scanner_get_pitcher_data(_pn)  # warms cache
+                    except Exception:
+                        pass
             # Quick IL list — exclude pitchers on IL from results
             _il_pitchers = set()
             try:
@@ -9195,30 +9204,34 @@ if st.session_state.active_sport == "edge":
         _total = max(len(_filtered), 1)
         _done  = 0
 
-        # MLB uses cached single-call fetch — can handle more workers
-        _workers = 8 if _edge_sport == "MLB" else (8 if _edge_sport == "NBA" else 8)
+        _workers = 6 if _edge_sport == "MLB" else 8
 
         with _cfe.ThreadPoolExecutor(max_workers=_workers) as _ex:
             _fmap = {_ex.submit(_check_prop, p): p for p in _filtered}
-            for _fut in _cfe.as_completed(_fmap):
-                _done += 1
-                _prog.progress(min(_done / _total, 1.0))
-                _prop_ref = _fmap[_fut]
-                _status.markdown(
-                    f"<span style='font-family:JetBrains Mono,monospace;"
-                    f"font-size:0.62rem;color:#6b7f96;'>"
-                    f"[{_done}/{_total}] {_prop_ref['player']} "
-                    f"{_prop_ref['stat']} {_prop_ref['line']}...</span>",
-                    unsafe_allow_html=True
-                )
-                try:
-                    _res = _fut.result(timeout=12)
-                    if _res:
-                        _res["is_goblin"] = _prop_ref.get("is_goblin", False)
-                        _res["is_demon"]  = _prop_ref.get("is_demon", False)
-                        _results.append(_res)
-                except Exception:
-                    pass
+            # Hard overall timeout — never hang more than 90s total
+            try:
+                for _fut in _cfe.as_completed(_fmap, timeout=90):
+                    _done += 1
+                    _prog.progress(min(_done / _total, 1.0))
+                    _prop_ref = _fmap[_fut]
+                    _status.markdown(
+                        f"<span style='font-family:JetBrains Mono,monospace;"
+                        f"font-size:0.62rem;color:#6b7f96;'>"
+                        f"[{_done}/{_total}] {_prop_ref['player']} "
+                        f"{_prop_ref['stat']} {_prop_ref['line']}...</span>",
+                        unsafe_allow_html=True
+                    )
+                    try:
+                        _res = _fut.result(timeout=8)
+                        if _res:
+                            _res["is_goblin"] = _prop_ref.get("is_goblin", False)
+                            _res["is_demon"]  = _prop_ref.get("is_demon", False)
+                            _results.append(_res)
+                    except Exception:
+                        pass  # skip timed-out props
+            except _cfe.TimeoutError:
+                # Some props timed out — show what we have
+                st.warning(f"⚡ Scan timed out after 90s — showing {len(_results)} results found so far.")
 
         _prog.empty()
         _status.empty()
