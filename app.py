@@ -8890,19 +8890,10 @@ if st.session_state.active_sport == "edge":
                 elif _pf <= 0.95: _park_adj = -0.06
                 _adj += _park_adj
 
-            # ── Signal 9: Injury/IL check (NEW) ──────────────────────
+            # ── Signal 9: Injury/IL check ─────────────────────────────
+            # Note: IL pitchers filtered out in _check_prop via pre-fetched data
             _injury_flag = False
             _injury_note = ""
-            try:
-                _inj = mlb_get_injury_status(pitcher_name)
-                if not _inj.get("is_available", True):
-                    return None  # on IL — remove from results entirely
-                if _inj.get("status", "Active").lower() not in ("active", "", "available"):
-                    _injury_flag = True
-                    _injury_note = _inj.get("status", "")
-                    _adj -= 0.05  # DTD penalty
-            except Exception:
-                pass
 
             _adj = max(0.05, min(0.95, _adj))
 
@@ -9059,6 +9050,12 @@ if st.session_state.active_sport == "edge":
                 _deduped[f"{_k}|goblin"] = p
         _filtered = list(_deduped.values())
 
+        # Remove IL pitchers from MLB props
+        if _il_pitchers:
+            _filtered = [p for p in _filtered
+                         if not (p["sport"] == "MLB" and
+                                 p["player"].lower() in _il_pitchers)]
+
         if not _filtered:
             st.warning("No props found matching your filters. Try broadening the sport or stat filter.")
             st.stop()
@@ -9079,8 +9076,103 @@ if st.session_state.active_sport == "edge":
 
         import concurrent.futures as _cfe
 
+        # ── Pre-fetch all tonight's MLB matchups in ONE API call ─────────
+        # Much faster than per-pitcher lookups inside threads
+        @st.cache_data(ttl=1800, show_spinner=False)
+        def _scanner_bulk_matchups() -> dict:
+            """Single API call → dict of {pitcher_name: {opp, home_team}}"""
+            import requests as _req, datetime as _dtx, pytz as _ptz
+            result = {}
+            try:
+                _et    = _ptz.timezone("America/New_York")
+                _today = _dtx.datetime.now(_et).strftime("%Y-%m-%d")
+                r = _req.get(
+                    "https://statsapi.mlb.com/api/v1/schedule",
+                    params={"sportId": 1, "date": _today,
+                            "hydrate": "probablePitcher,team", "gameType": "R"},
+                    timeout=10
+                )
+                if not r.ok: return result
+                for date in r.json().get("dates", []):
+                    for game in date.get("games", []):
+                        _home_abbr = (game.get("teams", {})
+                                         .get("home", {})
+                                         .get("team", {})
+                                         .get("abbreviation", ""))
+                        for _side in ["home", "away"]:
+                            _team = game.get("teams", {}).get(_side, {})
+                            _pp   = _team.get("probablePitcher", {})
+                            if not _pp: continue
+                            _opp_side = "away" if _side == "home" else "home"
+                            _opp_abbr = (game.get("teams", {})
+                                             .get(_opp_side, {})
+                                             .get("team", {})
+                                             .get("abbreviation", ""))
+                            result[_pp.get("fullName", "").lower()] = {
+                                "opp":       _opp_abbr,
+                                "home_team": _home_abbr,
+                            }
+            except Exception:
+                pass
+            return result
+
+        # ── Pre-fetch all team K rates in one shot ────────────────────
+        @st.cache_data(ttl=3600, show_spinner=False)
+        def _scanner_all_team_k_rates() -> dict:
+            """Fetch all team K rates in one API call → {abbr: k_pct}"""
+            import requests as _req, datetime as _dtx
+            result = {}
+            season = _dtx.datetime.now().year
+            try:
+                r = _req.get(
+                    "https://statsapi.mlb.com/api/v1/teams/stats",
+                    params={"stats": "season", "group": "hitting",
+                            "season": season, "sportId": 1},
+                    timeout=10
+                )
+                if not r.ok: return result
+                r2 = _req.get(
+                    "https://statsapi.mlb.com/api/v1/teams",
+                    params={"sportId": 1, "season": season}, timeout=8
+                )
+                if not r2.ok: return result
+                _id_to_abbr = {t["id"]: t.get("abbreviation","")
+                               for t in r2.json().get("teams", [])}
+                for split in r.json().get("stats", [{}])[0].get("splits", []):
+                    _tid = split.get("team", {}).get("id")
+                    _st  = split.get("stat", {})
+                    _ab  = int(_st.get("atBats", 0) or 0)
+                    _k   = int(_st.get("strikeOuts", 0) or 0)
+                    if _ab > 0 and _tid in _id_to_abbr:
+                        result[_id_to_abbr[_tid]] = round(_k / _ab, 3)
+            except Exception:
+                pass
+            return result
+
+        # Pre-fetch all data before threading — fast single calls
+        with st.spinner("Loading tonight's matchup data..."):
+            _bulk_matchups = _scanner_bulk_matchups()
+            _team_k_rates  = _scanner_all_team_k_rates()
+            # Quick IL list — exclude pitchers on IL from results
+            _il_pitchers = set()
+            try:
+                import requests as _qr, datetime as _qdt
+                _qr2 = _qr.get(
+                    "https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/injuries",
+                    params={"limit": 300}, timeout=6
+                )
+                if _qr2.ok:
+                    for _inj in _qr2.json().get("injuries", []):
+                        _ist = _inj.get("status", "").lower()
+                        if any(x in _ist for x in ["il-", "injured reserve", "out"]):
+                            _iname = _inj.get("athlete",{}).get("displayName","").lower()
+                            if _iname:
+                                _il_pitchers.add(_iname)
+            except Exception:
+                pass
+
         def _check_prop(prop):
-            """Run the appropriate model with full context."""
+            """Run the appropriate model — matchups pre-fetched, no extra API calls."""
             try:
                 if prop["sport"] == "NBA":
                     return run_nba_edge_check(
@@ -9088,15 +9180,20 @@ if st.session_state.active_sport == "edge":
                         prop["stat"], prop["team"], "Over"
                     )
                 elif prop["sport"] == "MLB":
-                    _norm_stat = "Strikeouts" if "strikeout" in prop["stat"].lower() else prop["stat"]
-                    # Get tonight's matchup for opponent K% and park factor
-                    _matchup = _scanner_get_tonight_matchup(prop["player"])
-                    # Skip if not confirmed starter tonight
-                    # (still run if unconfirmed — just flag it)
+                    _norm_stat = ("Strikeouts" if "strikeout" in prop["stat"].lower()
+                                  else prop["stat"])
+                    # Fast dict lookup — no API call per pitcher
+                    _m = _bulk_matchups.get(prop["player"].lower(), {})
+                    _opp  = _m.get("opp", "")
+                    _home = _m.get("home_team", "")
+                    # Inject pre-fetched K rate for opponent
+                    if _opp and _opp in _team_k_rates:
+                        _opp_k = _team_k_rates[_opp]
+                    else:
+                        _opp_k = None
                     return run_mlb_edge_check(
                         prop["player"], prop["line"], _norm_stat, "Over",
-                        opp_team=_matchup.get("opp", ""),
-                        home_team=_matchup.get("home_team", ""),
+                        opp_team=_opp, home_team=_home,
                     )
             except Exception:
                 return None
