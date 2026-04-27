@@ -5220,7 +5220,7 @@ if st.session_state.active_sport == "mlb":
     def mlb_get_opp_k_rate(opp_abbr: str) -> Optional[float]:
         try:
             import requests as _req, datetime
-            season = datetime.datetime.now().year
+            season = __import__("datetime").datetime.now().year
             teams_r = _req.get("https://statsapi.mlb.com/api/v1/teams",
                 params={"sportId":1,"season":season}, timeout=8)
             if not teams_r.ok: return None
@@ -5375,7 +5375,7 @@ if st.session_state.active_sport == "mlb":
             sr = _req.get(
                 f"https://statsapi.mlb.com/api/v1/people/{pid}/stats",
                 params={"stats": "season", "group": "pitching",
-                        "season": datetime.datetime.now().year},
+                        "season": __import__("datetime").datetime.now().year},
                 timeout=8
             )
             if not sr.ok: return empty
@@ -5418,7 +5418,7 @@ if st.session_state.active_sport == "mlb":
         empty = {"vs_r": None, "vs_l": None, "overall": None}
         try:
             import requests as _req
-            season = datetime.datetime.now().year
+            season = __import__("datetime").datetime.now().year
             # Get team ID
             tr = _req.get("https://statsapi.mlb.com/api/v1/teams",
                           params={"sportId":1,"season":season}, timeout=7)
@@ -6886,7 +6886,7 @@ if st.session_state.active_sport == "mlb":
             _mlb_ph.empty()
             # Try to give a helpful message based on what we know
             _err_lines = [
-                f"No game logs found for <strong style='color:#f0f4f8;'>{mlb_pitcher}</strong> in {datetime.datetime.now().year}.",
+                f"No game logs found for <strong style='color:#f0f4f8;'>{mlb_pitcher}</strong> in 2026.",
                 "This usually means one of:",
                 "· Player hasn't started a game yet this season (call-up / IL return)",
                 "· Name spelling — try full name (e.g. 'Cristopher Sanchez' not 'Christopher')",
