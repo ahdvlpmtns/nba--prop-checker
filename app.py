@@ -5000,20 +5000,22 @@ if st.session_state.active_sport == "mlb":
             people = []
 
             # Strategy A: Full active roster (most reliable)
-            for _gt in ["R", "S", "E"]:  # Regular, Spring, Exhibition
-                try:
-                    _r = _req.get(
-                        "https://statsapi.mlb.com/api/v1/sports/1/players",
-                        params={"season": season, "gameType": _gt},
-                        timeout=10
-                    )
-                    if _r.ok:
-                        _all = _r.json().get("people", [])
-                        if _all:
-                            people = _all
-                            break
-                except Exception:
-                    continue
+            people = _get_mlb_roster_cached()
+            if not people:
+                for _gt in ["R", "S", "E"]:
+                    try:
+                        _r = _req.get(
+                            "https://statsapi.mlb.com/api/v1/sports/1/players",
+                            params={"season": season, "gameType": _gt},
+                            timeout=10
+                        )
+                        if _r.ok:
+                            _all = _r.json().get("people", [])
+                            if _all:
+                                people = _all
+                                break
+                    except Exception:
+                        continue
 
             if people:
                 # Match priority: exact > last+first > last only > partial
@@ -5354,12 +5356,8 @@ if st.session_state.active_sport == "mlb":
             _parts  = [p for p in _target.split() if len(p) > 2]
 
             # Find player ID
-            r = _req.get("https://statsapi.mlb.com/api/v1/sports/1/players",
-                         params={"season": datetime.datetime.now().year, "gameType": "R"},
-                         timeout=8)
-            if not r.ok: return empty
-            people = r.json().get("people", [])
-            # Match by name
+            people = _get_mlb_roster_cached()
+            if not people: return empty
             pitcher = next((p for p in people
                            if _norm(p.get("fullName","")) == _target), None)
             if not pitcher:
@@ -5544,11 +5542,8 @@ if st.session_state.active_sport == "mlb":
             _norm   = lambda s: s.lower().strip()
             _target = _norm(player_name)
             _parts  = [p for p in _target.split() if len(p) > 2]
-            r = _req.get("https://statsapi.mlb.com/api/v1/sports/1/players",
-                         params={"season": datetime.datetime.now().year,"gameType":"R"},
-                         timeout=7)
-            if not r.ok: return "R"
-            people = r.json().get("people",[])
+            people = _get_mlb_roster_cached()
+            if not people: return "R"
             p = next((x for x in people
                       if all(pt in _norm(x.get("fullName","")) for pt in _parts)), None)
             if p:
@@ -5832,11 +5827,8 @@ if st.session_state.active_sport == "mlb":
             # Method 3: MLB Stats API K% — always works
             for _yr in [season, season-1]:
                 try:
-                    _pr = _req.get(
-                        "https://statsapi.mlb.com/api/v1/sports/1/players",
-                        params={"season":_yr,"gameType":"R"}, timeout=8)
-                    if not _pr.ok: continue
-                    _ppl = _pr.json().get("people",[])
+                    _ppl = _get_mlb_roster_cached()
+                    if not _ppl: continue
                     _pp = next((p for p in _ppl
                                if all(pt in _norm(p.get("fullName",""))
                                       for pt in _parts)), None)
@@ -5943,12 +5935,8 @@ if st.session_state.active_sport == "mlb":
 
             # Find player ID
             for _yr in [season, season - 1]:
-                _pr = _req.get(
-                    "https://statsapi.mlb.com/api/v1/sports/1/players",
-                    params={"season": _yr, "gameType": "R"}, timeout=8
-                )
-                if not _pr.ok: continue
-                _ppl = _pr.json().get("people", [])
+                _ppl = _get_mlb_roster_cached()
+                if not _ppl: continue
                 _pp  = next((p for p in _ppl
                              if all(pt in _norm(p.get("fullName",""))
                                     for pt in _parts)), None)
@@ -6006,16 +5994,8 @@ if st.session_state.active_sport == "mlb":
             import requests as _req
             import datetime as _dtx
             season = _dtx.datetime.now().year
-            _pr = _req.get(
-                "https://statsapi.mlb.com/api/v1/sports/1/players",
-                params={"season": season, "gameType": "R"}, timeout=8
-            )
-            if not _pr.ok:
-                return {**base, "lhb_count": 0, "rhb_count": 0,
-                        "lhb_pct": 0.5, "order_with_hands": []}
-
-            all_players = _pr.json().get("people", [])
-            _norm = lambda s: s.lower().strip()
+            all_players = _get_mlb_roster_cached()
+            if not all_players: return []
 
             order_with_hands = []
             lhb = 0; rhb = 0
@@ -6064,12 +6044,8 @@ if st.session_state.active_sport == "mlb":
             season  = _dtx.datetime.now().year
 
             # Find player
-            _pr = _req.get(
-                "https://statsapi.mlb.com/api/v1/sports/1/players",
-                params={"season": season, "gameType": "R"}, timeout=8
-            )
-            if not _pr.ok: return empty
-            _ppl = _pr.json().get("people", [])
+            _ppl = _get_mlb_roster_cached()
+            if not _ppl: return empty
             _pp  = next((p for p in _ppl
                          if all(pt in _norm(p.get("fullName","")) for pt in _parts)), None)
             if not _pp:
@@ -6733,21 +6709,14 @@ if st.session_state.active_sport == "mlb":
         pitchers = set()
         try:
             # Fetch all active players for the current season
-            for _gt in ["R", "S"]:
-                r = _req.get(
-                    "https://statsapi.mlb.com/api/v1/sports/1/players",
-                    params={"season": season, "gameType": _gt},
-                    timeout=12
-                )
-                if r.ok:
-                    for p in r.json().get("people", []):
-                        pos = p.get("primaryPosition", {}).get("code", "")
-                        if pos in ("1", "P"):  # pitchers only
-                            name = p.get("fullName", "").strip()
-                            if name and len(name) > 3:
-                                pitchers.add(name)
-                    if pitchers:
-                        break
+            people = _get_mlb_roster_cached()
+            if people:
+                for p in people:
+                    pos = p.get("primaryPosition", {}).get("code", "")
+                    if pos in ("1", "P"):
+                        name = p.get("fullName", "").strip()
+                        if name and len(name) > 3:
+                            pitchers.add(name)
         except Exception:
             pass
 
@@ -8426,7 +8395,6 @@ def _get_mlb_roster_cached() -> list:
         pass
     return []
 
-
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_all_pp_props(sport_filter: str = "Both") -> list:
     """
@@ -8584,13 +8552,8 @@ def _scanner_get_all_players() -> list:
     import requests as _req, datetime as _dtx
     season = _dtx.datetime.now().year
     try:
-        r = _req.get(
-            "https://statsapi.mlb.com/api/v1/sports/1/players",
-            params={"season": season, "gameType": "R"},
-            timeout=8
-        )
-        if r.ok:
-            return r.json().get("people", [])
+            people = _get_mlb_roster_cached()
+            if not people: return empty
     except Exception:
         pass
     return []
@@ -9348,20 +9311,15 @@ if st.session_state.active_sport == "edge":
         _parts  = [p for p in _target.split() if len(p) > 2]
         season  = _dtx.datetime.now().year
         try:
-            r = _req.get(
-                "https://statsapi.mlb.com/api/v1/sports/1/players",
-                params={"season": season, "gameType": "R"}, timeout=6
-            )
-            if not r.ok: return empty
-            _ppl = r.json().get("people", [])
-            _pp  = next((p for p in _ppl
-                         if all(pt in _norm(p.get("fullName","")) for pt in _parts)
-                         and p.get("primaryPosition",{}).get("code") not in ("1","P")), None)
+            _ppl = _get_mlb_roster_cached()
+            if not _ppl: return empty
+            _pp = next((p for p in _ppl
+                        if all(pt in _norm(p.get("fullName","")) for pt in _parts)
+                        and p.get("primaryPosition",{}).get("code") not in ("1","P")), None)
             if not _pp:
                 _pp = next((p for p in _ppl
                            if _parts[-1] in _norm(p.get("fullName",""))
                            and p.get("primaryPosition",{}).get("code") not in ("1","P")), None)
-            if not _pp: return empty
             pid = _pp["id"]
             r2 = _req.get(
                 f"https://statsapi.mlb.com/api/v1/people/{pid}/stats",
@@ -9398,16 +9356,11 @@ if st.session_state.active_sport == "edge":
         _parts  = [p for p in _target.split() if len(p) > 2]
         season  = _dtx.datetime.now().year
         try:
-            r = _req.get(
-                "https://statsapi.mlb.com/api/v1/sports/1/players",
-                params={"season": season, "gameType": "R"}, timeout=6
-            )
-            if not r.ok: return []
-            _ppl = r.json().get("people", [])
-            _pp  = next((p for p in _ppl
-                         if all(pt in _norm(p.get("fullName","")) for pt in _parts)
-                         and p.get("primaryPosition",{}).get("code") not in ("1","P")), None)
-            if not _pp: return []
+            _ppl = _get_mlb_roster_cached()
+            if not _ppl: return []
+            _pp = next((p for p in _ppl
+                        if all(pt in _norm(p.get("fullName","")) for pt in _parts)
+                        and p.get("primaryPosition",{}).get("code") not in ("1","P")), None)
             pid = _pp["id"]
             r2 = _req.get(
                 f"https://statsapi.mlb.com/api/v1/people/{pid}/stats",
