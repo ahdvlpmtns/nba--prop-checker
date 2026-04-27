@@ -6924,12 +6924,8 @@ if st.session_state.active_sport == "mlb":
         _mex.shutdown(wait=False)
 
         # Show timing summary
-        _dbg_lines = " · ".join(f"{k}:{v}" for k,v in _dbg.items())
-        st.caption(f"⏱ Signal timing: {_dbg_lines}")
 
         # Show timing summary then continue
-        _mlb_ph.markdown("⏳ processing signals...", unsafe_allow_html=False)
-
         # Initialize all derived signal variables with safe defaults
         _vtrend_mph  = 0.0
         _vtrend_dir  = "Stable"
@@ -6946,12 +6942,10 @@ if st.session_state.active_sport == "mlb":
         # Re-fetch splits with correct pitcher hand
         if mlb_opp and _phand:
             try:
-                _mlb_ph.markdown("⏳ re-fetching splits...", unsafe_allow_html=False)
-                _splits = mlb_get_opp_k_rate_splits(mlb_opp, _phand)
+                    _splits = mlb_get_opp_k_rate_splits(mlb_opp, _phand)
             except Exception:
                 pass
 
-        _mlb_ph.markdown("⏳ computing signals...", unsafe_allow_html=False)
         # Override K% proxy with real Savant SwStr% if available
         _swstr_real = _savant.get("swstr_pct")
         _velo       = _savant.get("velo")
@@ -7002,9 +6996,7 @@ if st.session_state.active_sport == "mlb":
                 )
 
             # ── Signal 1: Weighted hit rate (L10 starts, recency-weighted)
-            _mlb_ph.markdown(f"⏳ signal 1: weighted HR (cols={list(mlb_logs.columns)}, stat={_stat})", unsafe_allow_html=False)
             whr = mlb_weighted_hr(mlb_logs, mlb_line, _stat, mlb_side)
-            _mlb_ph.markdown("⏳ signal 1 done", unsafe_allow_html=False)
 
         # ── Injury return K boost ──────────────────────────────────
         # If pitcher is in return window, recalculate using normal-start logs only
@@ -7079,22 +7071,17 @@ if st.session_state.active_sport == "mlb":
                 # Try prior season stats API first (best sample size)
                 try:
                     import requests as _req2, datetime as _dtx2
-                    _pid_r = _req2.get(
-                        "https://statsapi.mlb.com/api/v1/sports/1/players",
-                        params={"season": _dtx2.datetime.now().year, "gameType": "R"},
-                        timeout=8
-                    )
-                    if _pid_r.ok:
-                        _norm2 = lambda s: s.lower().strip()
-                        _ppl   = _pid_r.json().get("people", [])
-                        _pp    = next((p for p in _ppl
-                                      if _norm2(p.get("fullName","")) == _norm2(mlb_pitcher)), None)
-                        if not _pp:
-                            _last_p = _norm2(mlb_pitcher).split()[-1]
-                            _pp = next((p for p in _ppl
-                                       if _last_p in _norm2(p.get("fullName","")) and
-                                       p.get("primaryPosition",{}).get("code")=="1"), None)
-                        if _pp:
+                    # Use cached roster — no fresh download
+                    _norm2 = lambda s: s.lower().strip()
+                    _ppl   = _get_mlb_roster_cached()
+                    _pp    = next((p for p in _ppl
+                                  if _norm2(p.get("fullName","")) == _norm2(mlb_pitcher)), None)
+                    if not _pp:
+                        _last_p = _norm2(mlb_pitcher).split()[-1]
+                        _pp = next((p for p in _ppl
+                                   if _last_p in _norm2(p.get("fullName","")) and
+                                   p.get("primaryPosition",{}).get("code")=="1"), None)
+                    if _pp:
                             for _prev_yr in [_dtx2.datetime.now().year - 1,
                                              _dtx2.datetime.now().year - 2]:
                                 _prev = _req2.get(
