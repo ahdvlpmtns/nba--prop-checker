@@ -6820,20 +6820,11 @@ if st.session_state.active_sport == "mlb":
                     f"padding:0.5rem 1rem;margin-bottom:0.5rem;font-family:JetBrains Mono,monospace;"
                     f"font-size:0.68rem;color:#00c4cc;'>🎯 TONIGHT: {_od}</div>",unsafe_allow_html=True)
     elif mlb_pitcher:
-        # Try to figure out next start from recent logs
-        _last_date = None
-        try:
-            _tmp_logs = mlb_get_pitcher_logs(mlb_pitcher, n=1)
-            if not _tmp_logs.empty:
-                _last_date = pd.to_datetime(_tmp_logs.iloc[0]["DATE"]).strftime("%b %d")
-        except Exception:
-            pass
-        _last_str = f" · Last start: {_last_date}" if _last_date else ""
         st.markdown(
             f"<div style='background:#111;border:1px solid #1e2a3a;border-left:3px solid #f97316;"
             f"padding:0.5rem 1rem;margin-bottom:0.5rem;font-family:JetBrains Mono,monospace;"
-            f"font-size:0.68rem;color:#f97316;'>⚠️ No game found for today — {mlb_pitcher} may not be scheduled to pitch{_last_str}."
-            f" Park + opponent signals will be unavailable.</div>",
+            f"font-size:0.68rem;color:#f97316;'>⚠️ No game found for today — {mlb_pitcher} may not be pitching tonight."
+            f" Park + opponent signals unavailable.</div>",
             unsafe_allow_html=True
         )
 
@@ -6873,7 +6864,7 @@ if st.session_state.active_sport == "mlb":
             try: return f.result(timeout=t)
             except Exception: return default
 
-        with _cfu.ThreadPoolExecutor(max_workers=12) as _mex:
+        with _cfu.ThreadPoolExecutor(max_workers=8) as _mex:
             _f_pstats   = _mex.submit(mlb_get_pitcher_season_stats, mlb_pitcher)
             _f_phand    = _mex.submit(mlb_get_pitcher_hand, mlb_pitcher)
             _f_ump      = _mex.submit(mlb_get_umpire_k_tendency, mlb_home) if mlb_home else None
@@ -6884,18 +6875,6 @@ if st.session_state.active_sport == "mlb":
             _f_platoon  = _mex.submit(mlb_get_platoon_splits, mlb_pitcher)
             _f_pitches  = _mex.submit(mlb_estimate_pitch_count, mlb_pitcher)
             _f_injury   = _mex.submit(mlb_get_injury_status, mlb_pitcher)
-            _f_vtrender = _mex.submit(mlb_get_velocity_trend, mlb_pitcher)
-            _f_h2h      = None
-            try:
-                _h2h_parts  = [pt for pt in mlb_pitcher.lower().split()[:2] if len(pt) > 2]
-                _h2h_roster = _get_mlb_roster_cached()
-                _h2h_pid    = next((p["id"] for p in _h2h_roster
-                                    if all(pt in p.get("fullName","").lower()
-                                           for pt in _h2h_parts)), None)
-                if _h2h_pid:
-                    _f_h2h = _mex.submit(mlb_get_batter_pitcher_h2h, _h2h_pid)
-            except Exception:
-                pass
 
             _pstats  = _get(_f_pstats,  {},  12)
             _phand   = _get(_f_phand,   "R",  8)
@@ -6908,8 +6887,27 @@ if st.session_state.active_sport == "mlb":
             _platoon = _get(_f_platoon, {},  10)
             _pitchcnt= _get(_f_pitches, {},  10)
             _injury  = _get(_f_injury,  {"status":"Active","description":"","is_available":True}, 8)
-            _vtrender= _get(_f_vtrender,{},  10)
-            _h2h_data= _get(_f_h2h,    {},  10)
+
+        # Velocity trend + H2H run separately with strict timeouts
+        _vtrender = {}
+        _h2h_data = {}
+        try:
+            with _cfu.ThreadPoolExecutor(max_workers=2) as _mex2:
+                _fvt = _mex2.submit(mlb_get_velocity_trend, mlb_pitcher)
+                _fh2 = None
+                try:
+                    _h2h_parts = [pt for pt in mlb_pitcher.lower().split()[:2] if len(pt) > 2]
+                    _h2h_pid   = next((p["id"] for p in _get_mlb_roster_cached()
+                                       if all(pt in p.get("fullName","").lower()
+                                              for pt in _h2h_parts)), None)
+                    if _h2h_pid:
+                        _fh2 = _mex2.submit(mlb_get_batter_pitcher_h2h, _h2h_pid)
+                except Exception:
+                    pass
+                _vtrender = _get(_fvt, {}, 8)
+                _h2h_data = _get(_fh2, {}, 8)
+        except Exception:
+            pass
 
         # Initialize all derived signal variables with safe defaults
         _vtrend_mph  = 0.0
