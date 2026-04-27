@@ -9199,6 +9199,46 @@ if st.session_state.active_sport == "edge":
                 )
                 _bar_w = min(100, int(_r["adj"]))
 
+                # ── Context vars ──────────────────────────────────────
+                _sample_warn = ""
+                _line_flag   = ""
+                _k9_str      = ""
+                _ctx_row     = ""
+
+                if _r.get("samples", 99) < 8:
+                    _sample_warn = (f"<span style='background:rgba(255,193,7,0.15);"
+                                    f"border:1px solid rgba(255,193,7,0.3);"
+                                    f"border-radius:4px;padding:1px 6px;"
+                                    f"font-size:0.52rem;color:#ffc107;margin-left:6px;'>"
+                                    f"⚠️ {_r.get('samples',0)} starts only</span>")
+
+                if _r.get("is_goblin") and _r.get("edge_raw", 0) >= -0.5:
+                    _line_flag = ("<span style='background:rgba(255,193,7,0.2);"
+                                  "border:1px solid rgba(255,193,7,0.4);color:#ffc107;"
+                                  "font-size:0.5rem;font-weight:800;padding:1px 5px;"
+                                  "border-radius:4px;margin-left:6px;'>"
+                                  "💰 VALUE</span>")
+
+                if _r.get("k9"):
+                    _k9_str = f"<span style='color:#00c4cc;'>K/9 {_r['k9']}</span>"
+
+                if _r.get("sport") == "MLB":
+                    _os  = (f"<span style='color:#6b7f96;'>vs {_r['opp']}</span>"
+                            if _r.get("opp") else "")
+                    _okc = ("#00e896" if (_r.get("opp_k_pct") or 0) >= 0.24
+                            else "#ff3d5c" if (_r.get("opp_k_pct") or 0) <= 0.19
+                            else "#9aaec4")
+                    _oks = (f"<span style='color:{_okc};'>Opp K% {_r['opp_k_pct']:.1%}</span>"
+                            if _r.get("opp_k_pct") else "")
+                    _ins = (f"<span style='color:#f97316;'>⚠️ {_r.get('injury_note','DTD')}</span>"
+                            if _r.get("injury_flag") else "")
+                    if _os or _oks or _ins:
+                        _ctx_row = (
+                            "<div style='display:flex;gap:10px;flex-wrap:wrap;"
+                            "margin-bottom:5px;font-family:JetBrains Mono,monospace;"
+                            f"font-size:0.58rem;'>{_os}{_oks}{_ins}</div>"
+                        )
+
                 st.markdown(
                     f"<div style='background:{_tier_bg};"
                     f"border:1px solid {_border_col};"
