@@ -7002,7 +7002,9 @@ if st.session_state.active_sport == "mlb":
                 )
 
             # ── Signal 1: Weighted hit rate (L10 starts, recency-weighted)
+            _mlb_ph.markdown(f"⏳ signal 1: weighted HR (cols={list(mlb_logs.columns)}, stat={_stat})", unsafe_allow_html=False)
             whr = mlb_weighted_hr(mlb_logs, mlb_line, _stat, mlb_side)
+            _mlb_ph.markdown("⏳ signal 1 done", unsafe_allow_html=False)
 
         # ── Injury return K boost ──────────────────────────────────
         # If pitcher is in return window, recalculate using normal-start logs only
