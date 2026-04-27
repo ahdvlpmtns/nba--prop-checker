@@ -6864,61 +6864,34 @@ if st.session_state.active_sport == "mlb":
             try: return f.result(timeout=t)
             except Exception: return default
 
-        with _cfu.ThreadPoolExecutor(max_workers=8) as _mex:
-            _f_pstats   = _mex.submit(mlb_get_pitcher_season_stats, mlb_pitcher)
-            _f_phand    = _mex.submit(mlb_get_pitcher_hand, mlb_pitcher)
-            _f_ump      = _mex.submit(mlb_get_umpire_k_tendency, mlb_home) if mlb_home else None
-            _f_splits   = _mex.submit(mlb_get_opp_k_rate_splits, mlb_opp, "R") if mlb_opp else None
-            _f_savant   = _mex.submit(mlb_get_savant_stats, mlb_pitcher)
-            _f_weather  = _mex.submit(mlb_get_weather, _wx_team) if _wx_team else None
-            _f_lineup   = _mex.submit(mlb_get_batting_order_with_hands, mlb_opp) if mlb_opp else None
-            _f_platoon  = _mex.submit(mlb_get_platoon_splits, mlb_pitcher)
-            _f_pitches  = _mex.submit(mlb_estimate_pitch_count, mlb_pitcher)
-            _f_injury   = _mex.submit(mlb_get_injury_status, mlb_pitcher)
+        _mex = _cfu.ThreadPoolExecutor(max_workers=8)
+        _f_pstats   = _mex.submit(mlb_get_pitcher_season_stats, mlb_pitcher)
+        _f_phand    = _mex.submit(mlb_get_pitcher_hand, mlb_pitcher)
+        _f_ump      = _mex.submit(mlb_get_umpire_k_tendency, mlb_home) if mlb_home else None
+        _f_splits   = _mex.submit(mlb_get_opp_k_rate_splits, mlb_opp, "R") if mlb_opp else None
+        _f_savant   = _mex.submit(mlb_get_savant_stats, mlb_pitcher)
+        _f_weather  = _mex.submit(mlb_get_weather, _wx_team) if _wx_team else None
+        _f_lineup   = _mex.submit(mlb_get_batting_order_with_hands, mlb_opp) if mlb_opp else None
+        _f_platoon  = _mex.submit(mlb_get_platoon_splits, mlb_pitcher)
+        _f_pitches  = _mex.submit(mlb_estimate_pitch_count, mlb_pitcher)
+        _f_injury   = _mex.submit(mlb_get_injury_status, mlb_pitcher)
 
-            _mlb_ph.markdown("⏳ fetching stats...", unsafe_allow_html=False)
-            _pstats  = _get(_f_pstats,  {},  12)
-            _mlb_ph.markdown("⏳ fetching hand...", unsafe_allow_html=False)
-            _phand   = _get(_f_phand,   "R",  8)
-            _mlb_ph.markdown("⏳ fetching umpire...", unsafe_allow_html=False)
-            _ump     = _get(_f_ump,     {},   8)
-            _mlb_ph.markdown("⏳ fetching splits...", unsafe_allow_html=False)
-            _splits  = _get(_f_splits,  {},   8)
-            _mlb_ph.markdown("⏳ fetching savant...", unsafe_allow_html=False)
-            _savant  = _get(_f_savant,  {},  12)
-            _velo_from_savant = _savant.get("velo") if _savant else None
-            _mlb_ph.markdown("⏳ fetching weather...", unsafe_allow_html=False)
-            _weather = _get(_f_weather, {},   8)
-            _mlb_ph.markdown("⏳ fetching lineup...", unsafe_allow_html=False)
-            _lineup  = _get(_f_lineup,  {},   8)
-            _mlb_ph.markdown("⏳ fetching platoon...", unsafe_allow_html=False)
-            _platoon = _get(_f_platoon, {},  10)
-            _mlb_ph.markdown("⏳ fetching pitch count...", unsafe_allow_html=False)
-            _pitchcnt= _get(_f_pitches, {},  10)
-            _mlb_ph.markdown("⏳ fetching injury...", unsafe_allow_html=False)
-            _injury  = _get(_f_injury,  {"status":"Active","description":"","is_available":True}, 8)
-            _mlb_ph.markdown("⏳ done with main pool", unsafe_allow_html=False)
+        _pstats  = _get(_f_pstats,  {},  12)
+        _phand   = _get(_f_phand,   "R",  8)
+        _ump     = _get(_f_ump,     {},   8)
+        _splits  = _get(_f_splits,  {},   8)
+        _savant  = _get(_f_savant,  {},  12)
+        _velo_from_savant = _savant.get("velo") if _savant else None
+        _weather = _get(_f_weather, {},   8)
+        _lineup  = _get(_f_lineup,  {},   8)
+        _platoon = _get(_f_platoon, {},  10)
+        _pitchcnt= _get(_f_pitches, {},  10)
+        _injury  = _get(_f_injury,  {"status":"Active","description":"","is_available":True}, 8)
+        _mex.shutdown(wait=False)  # abandon any stragglers — don't block
 
-        # Velocity trend + H2H run separately with strict timeouts
+        # Velocity trend + H2H — skip for now, use cached values only
         _vtrender = {}
         _h2h_data = {}
-        try:
-            with _cfu.ThreadPoolExecutor(max_workers=2) as _mex2:
-                _fvt = _mex2.submit(mlb_get_velocity_trend, mlb_pitcher)
-                _fh2 = None
-                try:
-                    _h2h_parts = [pt for pt in mlb_pitcher.lower().split()[:2] if len(pt) > 2]
-                    _h2h_pid   = next((p["id"] for p in _get_mlb_roster_cached()
-                                       if all(pt in p.get("fullName","").lower()
-                                              for pt in _h2h_parts)), None)
-                    if _h2h_pid:
-                        _fh2 = _mex2.submit(mlb_get_batter_pitcher_h2h, _h2h_pid)
-                except Exception:
-                    pass
-                _vtrender = _get(_fvt, {}, 8)
-                _h2h_data = _get(_fh2, {}, 8)
-        except Exception:
-            pass
 
         # Initialize all derived signal variables with safe defaults
         _vtrend_mph  = 0.0
