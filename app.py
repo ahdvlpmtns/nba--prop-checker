@@ -8910,8 +8910,8 @@ if st.session_state.active_sport == "edge":
         if not _all_props:
             fetch_all_pp_props.clear()
             st.warning(
-                "⚠️ PrizePicks is temporarily blocking server requests (Cloudflare). "
-                "This resolves on its own — **try again in a few hours**. Cache cleared."
+                "⚠️ Could not reach PrizePicks right now. "
+                "Try again in a moment or hit **Clear Cache** and retry."
             )
             st.stop()
 
