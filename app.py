@@ -6699,6 +6699,7 @@ if st.session_state.active_sport == "mlb":
 
     # ── Dynamic pitcher list from MLB Stats API ──────────────────────────────
     @st.cache_data(ttl=86400, show_spinner=False)  # refresh once a day
+    @st.cache_data(ttl=86400, show_spinner=False)
     def _mlb_fetch_pitcher_list() -> list:
         """
         Fetch all active MLB pitchers from the roster API.
@@ -6710,13 +6711,20 @@ if st.session_state.active_sport == "mlb":
         try:
             # Fetch all active players for the current season
             people = _get_mlb_roster_cached()
-            if people:
-                for p in people:
-                    pos = p.get("primaryPosition", {}).get("code", "")
-                    if pos in ("1", "P"):
-                        name = p.get("fullName", "").strip()
-                        if name and len(name) > 3:
-                            pitchers.add(name)
+            if not people:
+                # Fallback: direct call
+                r = _req.get(
+                    "https://statsapi.mlb.com/api/v1/sports/1/players",
+                    params={"season": season, "gameType": "R"}, timeout=8
+                )
+                if r.ok:
+                    people = r.json().get("people", [])
+            for p in (people or []):
+                pos = p.get("primaryPosition", {}).get("code", "")
+                if pos in ("1", "P"):
+                    name = p.get("fullName", "").strip()
+                    if name and len(name) > 3:
+                        pitchers.add(name)
         except Exception:
             pass
 
