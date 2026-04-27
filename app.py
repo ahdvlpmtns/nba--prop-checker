@@ -5164,15 +5164,46 @@ if st.session_state.active_sport == "mlb":
             return empty
 
     # ── MLB Park factors ──────────────────────────────────────
+    # K-specific park factors — strikeout rate relative to league avg
+    # >1.0 = more Ks at this park, <1.0 = fewer Ks
+    # Source: MLB park-adjusted K rates 2022-2025
     _MLB_PARK_FACTORS = {
-        "COL": 1.30, "CIN": 1.10, "BOS": 1.08, "PHI": 1.06,
-        "TEX": 1.05, "NYY": 1.04, "CHC": 1.03, "HOU": 1.02,
-        "ATL": 1.01, "MIL": 1.01, "STL": 1.00, "LAD": 0.99,
-        "NYM": 0.99, "TOR": 0.98, "DET": 0.98, "MIN": 0.97,
-        "CLE": 0.97, "ARI": 0.97, "BAL": 0.97, "KCR": 0.96,
-        "PIT": 0.96, "TBR": 0.96, "CHW": 0.95, "SEA": 0.95,
-        "SFG": 0.94, "MIA": 0.94, "LAA": 0.94, "WSN": 0.93,
-        "OAK": 0.93, "SDP": 0.92,
+        # Strong K parks (pitcher-friendly, marine layer, dome)
+        "SFG": 1.08,  # Oracle Park — marine layer, cold, elite K park
+        "SDP": 1.07,  # Petco Park — marine layer suppresses offense
+        "SEA": 1.06,  # T-Mobile — marine layer + pitcher dimensions
+        "MIL": 1.06,  # American Family — pitcher-friendly
+        "ARI": 1.05,  # Chase Field — dome, controlled conditions
+        "HOU": 1.05,  # Minute Maid — roof, consistent, K-friendly
+        "LAD": 1.04,  # Dodger Stadium — pitcher park
+        "PIT": 1.04,  # PNC Park — large dimensions
+        "STL": 1.03,  # Busch Stadium — consistent conditions
+        "TBR": 1.03,  # Tropicana — dome, controlled
+        "ATL": 1.03,  # Truist Park — sea level, good movement
+        "TEX": 1.03,  # Globe Life — dry air, good grip
+        "OAK": 1.02,  # Coliseum — foul territory + dimensions
+        "ATH": 1.02,  # Same park
+        "KCR": 1.02,  # Kauffman — large park
+        "KCA": 1.02,
+        "WSN": 1.01,  # Nationals Park — neutral
+        "NYM": 1.01,  # Citi Field — slight pitcher lean
+        "LAA": 1.01,  # Angel Stadium — neutral
+        "MIN": 1.01,  # Target Field — cold early season
+        "TOR": 1.00,  # Rogers Centre — dome, neutral
+        "CHC": 1.00,  # Wrigley — wind variable, neutral avg
+        "MIA": 1.00,  # LoanDepot — dome, neutral
+        "CWS": 1.00,  # Guaranteed Rate — neutral
+        "CHW": 1.00,
+        # Neutral/slight hitter lean
+        "BAL": 0.99,  # Camden Yards — short RF
+        "DET": 0.98,  # Comerica — large but contact-friendly lineups
+        "CLE": 0.98,  # Progressive Field — contact-friendly
+        # K-suppressing parks
+        "PHI": 0.97,  # Citizens Bank — hitter park
+        "BOS": 0.97,  # Fenway — contact-friendly
+        "NYY": 0.96,  # Yankee Stadium — short porch, big lineups
+        "CIN": 0.95,  # Great American — hitter-friendly, low K park
+        "COL": 0.91,  # Coors Field — thin air kills movement, lowest K park
     }
 
     @st.cache_data(ttl=3600, show_spinner=False)
@@ -6269,8 +6300,10 @@ if st.session_state.active_sport == "mlb":
 
     def mlb_park_signal(home_team):
         pf = _MLB_PARK_FACTORS.get(home_team,1.00)
-        if pf<=0.95: return "Boost"
-        elif pf>=1.06: return "Penalty"
+        # K-specific: >1.0 = more Ks = good for Over = "Boost"
+        #             <1.0 = fewer Ks = bad for Over = "Penalty"
+        if pf >= 1.06:   return "Boost"    # K-friendly park — helps Over
+        elif pf <= 0.95: return "Penalty"  # K-suppressing park — hurts Over
         return "Neutral"
 
     def mlb_apply_adj(weighted, opp_k, park, side):
@@ -6278,7 +6311,7 @@ if st.session_state.active_sport == "mlb":
         if opp_k is not None:
             if opp_k>=0.26:   adj += 0.06 if side=="Over" else -0.06
             elif opp_k<=0.18: adj += -0.06 if side=="Over" else 0.06
-        adj += {"Boost":+0.04,"Neutral":0.0,"Penalty":-0.04}.get(park,0.0)*(1 if side=="Over" else -1)
+        adj += {"Boost":+0.05,"Neutral":0.0,"Penalty":-0.06}.get(park,0.0)*(1 if side=="Over" else -1)
         return max(0.05,min(0.95,adj))
 
     def mlb_verdict(adj, edge, side, pc_ceiling=None, line=None):
@@ -7637,6 +7670,42 @@ if st.session_state.active_sport == "mlb":
                 f"<div style='font-family:JetBrains Mono,monospace;font-size:0.6rem;color:#555;'>{_cl}</div></div>"
                 f"</div></div>",unsafe_allow_html=True)
 
+            # ── Consider the Under? ─────────────────────────────
+            # When the Over is a Pass with strong negative edge,
+            # run the Under model and surface it if it's strong
+            if tier == "Pass" and edge < -1.0:
+                _under_adj = max(0.05, min(0.95,
+                    (1.0 - adj) * 0.85  # rough Under probability
+                ))
+                # Run a quick Under verdict
+                _u_whr = mlb_weighted_hr(mlb_logs, mlb_line, _stat, "Under")
+                _u_adj = max(0.05, min(0.95, _u_whr
+                    - _ha_adj - _form_adj + _rest_adj
+                    + _k9_adj + _swstr_adj + _velo_adj + _vtrend_adj + _ip_adj
+                    + _ump_adj + _wx_adj - _lineup_adj
+                    - _platoon_adj - _pc_adj - _h2h_adj))
+
+                if _u_adj >= 0.63:
+                    _u_tier = "Strong Under" if _u_adj >= 0.72 else "Lean Under"
+                    _u_col  = "#ff3d5c" if _u_adj >= 0.72 else "#f97316"
+                    st.markdown(
+                        f"<div style='background:rgba(255,61,92,0.08);"
+                        f"border:1px solid rgba(255,61,92,0.25);"
+                        f"border-left:4px solid {_u_col};"
+                        f"border-radius:0 12px 12px 0;"
+                        f"padding:0.85rem 1.1rem;margin-bottom:0.75rem;'>"
+                        f"<div style='font-family:Plus Jakarta Sans,sans-serif;"
+                        f"font-size:0.85rem;font-weight:800;color:{_u_col};"
+                        f"margin-bottom:4px;'>💡 Consider the Under instead</div>"
+                        f"<div style='font-family:JetBrains Mono,monospace;"
+                        f"font-size:0.65rem;color:#9aaec4;'>"
+                        f"Line looks high for {mlb_pitcher} · avg {avg_val:.1f} {_lbl} vs {mlb_line} line<br>"
+                        f"PropIQ Under model: <strong style='color:{_u_col};'>"
+                        f"{_u_adj:.0%}</strong> · {_u_tier}</div>"
+                        f"</div>",
+                        unsafe_allow_html=True
+                    )
+
             # ── Add to Parlay button ────────────────────────────────
             if tier not in ("Pass",):
                 _mpc1, _mpc2 = st.columns([3,1])
@@ -7765,7 +7834,7 @@ if st.session_state.active_sport == "mlb":
                                                   f"{okpct:.1%}" if okpct else "N/A",
                                                   None,
                                                   f"{'High K lineup' if (okpct or 0)>=0.26 else 'Low K lineup' if (okpct or 0)<=0.18 else 'Average K lineup'}" if okpct else "No opponent data"),
-                    ("Park factor",               psig,                    None,        f"{mlb_home or 'N/A'} · {'run-friendly park' if psig=='Boost' else 'pitcher-friendly park' if psig=='Penalty' else 'neutral park'}"),
+                    ("Park factor",               psig,                    None,        f"{mlb_home or 'N/A'} · {'K-friendly park — above avg strikeout rate' if psig=='Boost' else 'K-suppressing park — below avg strikeout rate (e.g. Coors)' if psig=='Penalty' else 'neutral park'}"),
                     ("Home/Away split",            f"{_ha_adj:+.0%}" if _ha_adj != 0 else "Neutral",
                                                   _ha_adj,
                                                   "Based on pitcher's H/A K splits from logs"),
