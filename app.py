@@ -4591,8 +4591,8 @@ def _prewarm_cache():
     try:
         import requests as _req
         r = _req.get(
-            "https://api.prizepicks.com/projections",
-            params={"league_id": "7", "per_page": "250", "single_stat": "true"},
+            "https://partner-api.prizepicks.com/projections",
+            params={"league_id": "7", "per_page": "1000", "single_stat": "true"},
             headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
             timeout=10,
         )
@@ -8207,8 +8207,8 @@ if st.session_state.active_sport == "mlb":
         try:
             import requests as _mreq
             _mr = _mreq.get(
-                "https://api.prizepicks.com/projections",
-                params={"league_id": 2, "per_page": 250, "single_stat": "true"},
+                "https://partner-api.prizepicks.com/projections",
+                params={"league_id": 2, "per_page": 1000, "single_stat": "true"},
                 headers={"User-Agent":"Mozilla/5.0","Accept":"application/json",
                          "Referer":"https://prizepicks.com/"},
                 timeout=15
@@ -8444,7 +8444,10 @@ if st.session_state.active_sport == "mlb":
 # ═══════════════════════════════════════════════════════
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_all_pp_props(sport_filter: str = "Both") -> list:
-    """Simple PrizePicks fetch — exact headers that were working."""
+    """
+    Fetch PrizePicks props. Tries partner API first (no Cloudflare),
+    falls back to main API with multiple UA strategies.
+    """
     import requests as _req
     props = []
 
@@ -8452,15 +8455,79 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
     if sport_filter == "NBA":  _all_leagues = [("7", "NBA")]
     elif sport_filter == "MLB": _all_leagues = [("2", "MLB")]
 
+    def _parse(data: dict, sport: str) -> list:
+        result = []
+        pmap = {}
+        for item in data.get("included", []):
+            if item.get("type") == "new_player":
+                a = item.get("attributes", {})
+                pmap[item["id"]] = {
+                    "name": a.get("display_name") or a.get("name", ""),
+                    "team": a.get("team_abbreviation", ""),
+                    "pos":  a.get("position", ""),
+                }
+        seen = {}
+        for proj in data.get("data", []):
+            a         = proj.get("attributes", {})
+            stat      = a.get("stat_type", "")
+            line      = a.get("line_score")
+            odds_type = a.get("odds_type", "standard")
+            if not line or not stat: continue
+            pid  = (proj.get("relationships", {})
+                       .get("new_player", {})
+                       .get("data", {}).get("id"))
+            pi   = pmap.get(pid, {})
+            name = pi.get("name", "")
+            if not name: continue
+            key   = f"{name}|{stat}"
+            entry = {
+                "sport": sport, "player": name,
+                "team": pi.get("team", ""), "stat": stat,
+                "line": float(line),
+                "is_goblin": odds_type == "goblin",
+                "is_demon":  odds_type == "demon",
+                "odds_type": odds_type,
+            }
+            if key not in seen:
+                seen[key] = entry
+                result.append(entry)
+            elif odds_type == "goblin" and not seen[key]["is_goblin"]:
+                result.append(entry)
+        return result
+
     for _league_id, _sport in _all_leagues:
+        _fetched = False
+
+        # ── Strategy 1: Partner API (no Cloudflare, designed for server access)
+        try:
+            r = _req.get(
+                "https://partner-api.prizepicks.com/projections",
+                params={"league_id": _league_id, "per_page": "1000",
+                        "single_stat": "true"},
+                headers={"Accept": "application/json",
+                         "User-Agent": "PropIQ/1.0"},
+                timeout=15
+            )
+            if r.ok and r.json().get("data"):
+                props.extend(_parse(r.json(), _sport))
+                _fetched = True
+        except Exception:
+            pass
+
+        if _fetched:
+            continue
+
+        # ── Strategy 2: Main API with rotating UAs
         for _ua in [
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
         ]:
             try:
                 r = _req.get(
-                    "https://api.prizepicks.com/projections",
-                    params={"league_id": _league_id, "per_page": "250", "single_stat": "true"},
+                    "https://partner-api.prizepicks.com/projections",
+                    params={"league_id": _league_id, "per_page": "250",
+                            "single_stat": "true"},
                     headers={
                         "User-Agent": _ua,
                         "Accept": "application/json, text/plain, */*",
@@ -8470,49 +8537,10 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
                     },
                     timeout=15
                 )
-                if not r.ok:
-                    continue
-                data = r.json()
-                if not data.get("data"):
-                    continue
-
-                pmap = {}
-                for item in data.get("included", []):
-                    if item.get("type") == "new_player":
-                        a = item.get("attributes", {})
-                        pmap[item["id"]] = {
-                            "name": a.get("display_name") or a.get("name", ""),
-                            "team": a.get("team_abbreviation", ""),
-                            "pos":  a.get("position", ""),
-                        }
-                seen = {}
-                for proj in data.get("data", []):
-                    a         = proj.get("attributes", {})
-                    stat      = a.get("stat_type", "")
-                    line      = a.get("line_score")
-                    odds_type = a.get("odds_type", "standard")
-                    if not line or not stat: continue
-                    pid  = (proj.get("relationships", {})
-                               .get("new_player", {})
-                               .get("data", {}).get("id"))
-                    pi   = pmap.get(pid, {})
-                    name = pi.get("name", "")
-                    if not name: continue
-                    key   = f"{name}|{stat}"
-                    entry = {
-                        "sport": _sport, "player": name,
-                        "team": pi.get("team", ""), "stat": stat,
-                        "line": float(line),
-                        "is_goblin": odds_type == "goblin",
-                        "is_demon":  odds_type == "demon",
-                        "odds_type": odds_type,
-                    }
-                    if key not in seen:
-                        seen[key] = entry
-                        props.append(entry)
-                    elif odds_type == "goblin" and not seen[key]["is_goblin"]:
-                        props.append(entry)
-                break  # success — stop trying UAs
+                if r.ok and r.json().get("data"):
+                    props.extend(_parse(r.json(), _sport))
+                    _fetched = True
+                    break
             except Exception:
                 continue
 
@@ -9764,7 +9792,7 @@ if _mode == "🎯  Scanner":
                 _tgt     = _today + timedelta(days=1) if _day_sel == "Tomorrow" else _today
                 _tgt_str = _tgt.strftime("%Y-%m-%d")
                 _r = requests.get(
-                    "https://api.prizepicks.com/projections",
+                    "https://partner-api.prizepicks.com/projections",
                     params={"league_id": 7, "per_page": 250, "single_stat": "true",
                             "game_date": _tgt_str},
                     headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json",
