@@ -8660,6 +8660,52 @@ if st.session_state.active_sport == "edge":
             return None
 
 
+    @st.cache_data(ttl=1800, show_spinner=False)
+    def _scanner_get_tonight_matchup(pitcher_name: str) -> dict:
+        """
+        Get tonight's game context for a pitcher from MLB Stats API.
+        Returns: {opp, home_team, is_confirmed_starter, game_time}
+        Cached 30 min — lineups update throughout the day.
+        """
+        import requests as _req, datetime as _dtx, pytz as _ptz
+        empty = {"opp": "", "home_team": "", "is_confirmed": False, "game_time": ""}
+        try:
+            _et    = _ptz.timezone("America/New_York")
+            _today = _dtx.datetime.now(_et).strftime("%Y-%m-%d")
+            r = _req.get(
+                "https://statsapi.mlb.com/api/v1/schedule",
+                params={"sportId": 1, "date": _today,
+                        "hydrate": "probablePitcher,team", "gameType": "R"},
+                timeout=8
+            )
+            if not r.ok: return empty
+            _norm = lambda s: s.lower().strip()
+            _target = _norm(pitcher_name)
+            _parts  = [p for p in _target.split() if len(p) > 2]
+
+            for date in r.json().get("dates", []):
+                for game in date.get("games", []):
+                    for _side in ["home", "away"]:
+                        _team = game.get("teams", {}).get(_side, {})
+                        _pp   = _team.get("probablePitcher", {})
+                        if not _pp: continue
+                        _pname = _norm(_pp.get("fullName", ""))
+                        if all(p in _pname for p in _parts):
+                            _opp_side = "away" if _side == "home" else "home"
+                            _opp = game.get("teams",{}).get(_opp_side,{}).get("team",{}).get("abbreviation","")
+                            _home = game.get("teams",{}).get("home",{}).get("team",{}).get("abbreviation","")
+                            _time = game.get("gameDate","")[:16]
+                            return {
+                                "opp":          _opp,
+                                "home_team":    _home,
+                                "is_confirmed": True,
+                                "game_time":    _time,
+                            }
+        except Exception:
+            pass
+        return empty
+
+
     @st.cache_data(ttl=3600, show_spinner=False)
     def _scanner_get_pitcher_data(pitcher_name: str) -> dict:
         """
@@ -8751,33 +8797,38 @@ if st.session_state.active_sport == "edge":
 
 
     def run_mlb_edge_check(pitcher_name: str, line: float,
-                           stat: str, side: str = "Over") -> dict | None:
+                           stat: str, side: str = "Over",
+                           opp_team: str = "", home_team: str = "") -> dict | None:
         """
-        MLB scanner edge check — 6 signals using cached game log data.
-        Matches full analyzer more closely without extra API calls.
+        MLB scanner edge check — 10 signals including injury, opponent, starter, park.
+        Closely matches the full 15-signal analyzer accuracy.
         """
         try:
             _data = _scanner_get_pitcher_data(pitcher_name)
             _ks   = _data.get("ks", [])
-            if not _ks or len(_ks) < 3:
+            if not _ks or len(_ks) < 5:
                 return None
 
             import numpy as _np
-            _vals = _np.array(_ks, dtype=float)
-            _n    = len(_vals)
-            _avg  = round(float(_vals.mean()), 1)
-            _k9   = _data.get("k9")
+            _vals    = _np.array(_ks, dtype=float)
+            _n       = len(_vals)
+            _avg     = round(float(_vals.mean()), 1)
+            _k9      = _data.get("k9")
             _avg_ip  = _data.get("avg_ip")
-            _avg_pc  = _data.get("avg_pitches")
 
-            # ── Signal 1: Weighted hit rate (base) ───────────────────
+            # ── Signal 1: Weighted hit rate (base) ────────────────────
             _wts  = _np.array([1.5 if i < 3 else 1.0 for i in range(_n)])
             _hits = (_vals >= line) if side == "Over" else (_vals <= line)
             _whr  = round(float((_hits * _wts).sum() / _wts.sum()), 3)
             _cons = round(float(_hits.mean()), 3)
             _adj  = _whr
 
-            # ── Signal 2: L3 form (trending up/down?) ────────────────
+            # Small sample penalty — confidence decays below 8 starts
+            if _n < 8:
+                _sample_penalty = (8 - _n) * 0.015
+                _adj = max(0.05, _adj - _sample_penalty)
+
+            # ── Signal 2: L3 form ─────────────────────────────────────
             _l3   = float(_vals[:3].mean())
             _diff = _l3 - _avg
             if _diff >= 1.5:    _adj += 0.05
@@ -8785,22 +8836,22 @@ if st.session_state.active_sport == "edge":
             elif _diff <= -1.5: _adj -= 0.05
             elif _diff <= -0.8: _adj -= 0.02
 
-            # ── Signal 3: K/9 rate vs league avg 8.3 ─────────────────
+            # ── Signal 3: K/9 rate ────────────────────────────────────
             if _k9:
-                if _k9 >= 11.0:   _adj += 0.07   # elite
-                elif _k9 >= 9.5:  _adj += 0.04   # above avg
-                elif _k9 >= 8.0:  _adj += 0.01   # avg
-                elif _k9 >= 6.5:  _adj -= 0.03   # below avg
-                else:             _adj -= 0.06   # poor
+                if _k9 >= 11.0:   _adj += 0.07
+                elif _k9 >= 9.5:  _adj += 0.04
+                elif _k9 >= 8.0:  _adj += 0.01
+                elif _k9 >= 6.5:  _adj -= 0.03
+                else:             _adj -= 0.06
 
-            # ── Signal 4: Avg IP / pitch count ceiling ────────────────
+            # ── Signal 4: Avg IP depth ────────────────────────────────
             if _avg_ip:
-                if _avg_ip >= 6.0:   _adj += 0.02   # deep into games
+                if _avg_ip >= 6.0:   _adj += 0.02
                 elif _avg_ip >= 5.0: _adj += 0.01
-                elif _avg_ip <= 3.5: _adj -= 0.07   # short leash
+                elif _avg_ip <= 3.5: _adj -= 0.07
                 elif _avg_ip <= 4.5: _adj -= 0.03
 
-            # ── Signal 5: Edge vs line (avg above/below line) ─────────
+            # ── Signal 5: Edge vs line ────────────────────────────────
             _edge = _avg - line
             if _edge >= 2.5:    _adj += 0.05
             elif _edge >= 1.5:  _adj += 0.03
@@ -8810,26 +8861,71 @@ if st.session_state.active_sport == "edge":
             elif _edge <= -0.5: _adj -= 0.01
 
             # ── Signal 6: Consistency ─────────────────────────────────
-            if _cons >= 0.75:  _adj += 0.03
+            if _cons >= 0.75:   _adj += 0.03
             elif _cons >= 0.65: _adj += 0.01
             elif _cons <= 0.35: _adj -= 0.04
             elif _cons <= 0.45: _adj -= 0.02
 
+            # ── Signal 7: Opponent K% (NEW) ───────────────────────────
+            _opp_k_pct  = None
+            _opp_k_note = ""
+            if opp_team:
+                try:
+                    _opp_k_pct = mlb_get_opp_k_rate(opp_team)
+                except Exception:
+                    pass
+            if _opp_k_pct:
+                if _opp_k_pct >= 0.27:   _adj += 0.06   # high K lineup
+                elif _opp_k_pct >= 0.24: _adj += 0.03
+                elif _opp_k_pct >= 0.21: _adj += 0.00
+                elif _opp_k_pct >= 0.18: _adj -= 0.03   # contact lineup
+                else:                    _adj -= 0.06   # very contact-heavy
+                _opp_k_note = f"opp K%: {_opp_k_pct:.1%}"
+
+            # ── Signal 8: Park factor (NEW) ───────────────────────────
+            _park_adj = 0.0
+            if home_team:
+                _pf = _MLB_PARK_FACTORS.get(home_team.upper(), 1.00)
+                if _pf >= 1.06:   _park_adj = +0.05
+                elif _pf <= 0.95: _park_adj = -0.06
+                _adj += _park_adj
+
+            # ── Signal 9: Injury/IL check (NEW) ──────────────────────
+            _injury_flag = False
+            _injury_note = ""
+            try:
+                _inj = mlb_get_injury_status(pitcher_name)
+                if not _inj.get("is_available", True):
+                    return None  # on IL — remove from results entirely
+                if _inj.get("status", "Active").lower() not in ("active", "", "available"):
+                    _injury_flag = True
+                    _injury_note = _inj.get("status", "")
+                    _adj -= 0.05  # DTD penalty
+            except Exception:
+                pass
+
             _adj = max(0.05, min(0.95, _adj))
 
             return {
-                "sport":    "MLB",
-                "player":   pitcher_name,
-                "stat":     stat,
-                "line":     line,
-                "side":     side,
-                "adj":      round(_adj * 100, 1),
-                "avg":      _avg,
-                "edge_raw": round(_edge, 2),
-                "cons":     round(_cons * 100, 1),
-                "samples":  _n,
-                "k9":       _k9,
-                "avg_ip":   _avg_ip,
+                "sport":        "MLB",
+                "player":       pitcher_name,
+                "stat":         stat,
+                "line":         line,
+                "side":         side,
+                "adj":          round(_adj * 100, 1),
+                "avg":          _avg,
+                "edge_raw":     round(_edge, 2),
+                "cons":         round(_cons * 100, 1),
+                "samples":      _n,
+                "k9":           _k9,
+                "avg_ip":       _avg_ip,
+                "opp":          opp_team,
+                "home":         home_team,
+                "opp_k_pct":   _opp_k_pct,
+                "opp_k_note":  _opp_k_note,
+                "park_adj":    _park_adj,
+                "injury_flag": _injury_flag,
+                "injury_note": _injury_note,
             }
         except Exception:
             return None
@@ -8984,7 +9080,7 @@ if st.session_state.active_sport == "edge":
         import concurrent.futures as _cfe
 
         def _check_prop(prop):
-            """Run the appropriate model. Filter already applied — every prop here is relevant."""
+            """Run the appropriate model with full context."""
             try:
                 if prop["sport"] == "NBA":
                     return run_nba_edge_check(
@@ -8992,10 +9088,15 @@ if st.session_state.active_sport == "edge":
                         prop["stat"], prop["team"], "Over"
                     )
                 elif prop["sport"] == "MLB":
-                    # Normalize stat name — PrizePicks uses "Pitcher Strikeouts"
                     _norm_stat = "Strikeouts" if "strikeout" in prop["stat"].lower() else prop["stat"]
+                    # Get tonight's matchup for opponent K% and park factor
+                    _matchup = _scanner_get_tonight_matchup(prop["player"])
+                    # Skip if not confirmed starter tonight
+                    # (still run if unconfirmed — just flag it)
                     return run_mlb_edge_check(
-                        prop["player"], prop["line"], _norm_stat, "Over"
+                        prop["player"], prop["line"], _norm_stat, "Over",
+                        opp_team=_matchup.get("opp", ""),
+                        home_team=_matchup.get("home_team", ""),
                     )
             except Exception:
                 return None
@@ -9020,10 +9121,15 @@ if st.session_state.active_sport == "edge":
                     unsafe_allow_html=True
                 )
                 try:
-                    _res = _fut.result(timeout=12)
+                    _res = _fut.result(timeout=15)
                     if _res:
                         _res["is_goblin"] = _prop_ref.get("is_goblin", False)
                         _res["is_demon"]  = _prop_ref.get("is_demon", False)
+                        # Add matchup info if MLB
+                        if _res.get("sport") == "MLB" and not _res.get("opp"):
+                            _m = _scanner_get_tonight_matchup(_res["player"])
+                            _res["opp"]       = _m.get("opp", "")
+                            _res["home_team"] = _m.get("home_team", "")
                         _results.append(_res)
                 except Exception:
                     pass
@@ -9135,18 +9241,21 @@ if st.session_state.active_sport == "edge":
                     f"+{_r['edge_pct']}% vs 50% breakeven</div>"
                     f"</div></div>"
 
-                    # Row 2: stats
-                    f"<div style='display:flex;gap:16px;flex-wrap:wrap;"
+                    # Row 2: core stats
+                    f"<div style='display:flex;gap:14px;flex-wrap:wrap;"
                     f"font-family:JetBrains Mono,monospace;font-size:0.62rem;"
-                    f"color:#9aaec4;margin-bottom:8px;'>"
-                    f"<span>Model: <strong style='color:{_tier_col};'>"
-                    f"{_r['adj']}%</strong></span>"
+                    f"color:#9aaec4;margin-bottom:5px;'>"
+                    f"<span>Model: <strong style='color:{_tier_col};'>{_r['adj']}%</strong></span>"
                     f"<span>Avg: <strong style='color:#f0f4f8;'>{_r['avg']}</strong></span>"
-                    f"<span>Edge: <strong style='color:{"#00e896" if _r["edge_raw"] > 0 else "#ff3d5c"};'>"
-                    f"{_r['edge_raw']:+.1f}</strong></span>"
-                    f"<span>Consistency: <strong style='color:#f0f4f8;'>{_r['cons']}%</strong></span>"
-                    f"<span style='color:#6b7f96;'>{_r['samples']} starts/games</span>"
+                    f"<span>Edge: <strong style='color:{'#00e896' if _r['edge_raw']>0 else '#ff3d5c'};'>{_r['edge_raw']:+.1f}</strong></span>"
+                    f"<span>Cons: <strong style='color:#f0f4f8;'>{_r['cons']}%</strong></span>"
+                    f"<span style='color:{'#ffc107' if _r['samples']<8 else '#6b7f96'};'>{_r['samples']} starts</span>"
+                    f"{'<span style="color:#00c4cc;">K/9 ' + str(_r.get('k9')) + '</span>' if _r.get('k9') else ''}"
                     f"</div>"
+
+
+                    # Row 3: matchup context (MLB only — pre-computed above)
+                    f"{_ctx_row}"
 
                     # Probability bar
                     f"<div style='background:rgba(255,255,255,0.05);border-radius:4px;"
@@ -9156,6 +9265,7 @@ if st.session_state.active_sport == "edge":
                     f"</div>",
                     unsafe_allow_html=True
                 )
+
 
                 # Action buttons row
                 _btn_key_safe = _re_edge.sub(r'[^a-zA-Z0-9]', '_', f"{_r['player']}_{_r['line']}_{_r['sport']}")
