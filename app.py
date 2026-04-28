@@ -43,32 +43,6 @@ div[data-testid="stStatusWidget"] { display: none; }
 /* Speed up initial render */
 div[data-testid="stSkeleton"] { display: none; }
 
-/* ── Full width — no sidebar at all ── */
-section[data-testid="stSidebar"],
-section[data-testid="stSidebar"] > div,
-button[data-testid="collapsedControl"],
-button[data-testid="baseButton-header"] {
-    display: none !important;
-    width: 0 !important;
-    min-width: 0 !important;
-    max-width: 0 !important;
-    visibility: hidden !important;
-}
-.main .block-container {
-    max-width: 1200px !important;
-    padding-left: 1.5rem !important;
-    padding-right: 1.5rem !important;
-    margin: 0 auto !important;
-}
-/* Remove the gap left by collapsed sidebar */
-.stApp > .main {
-    margin-left: 0 !important;
-    padding-left: 0 !important;
-}
-[data-testid="stAppViewContainer"] > .main {
-    padding-left: 0 !important;
-}
-
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800;900&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&family=JetBrains+Mono:wght@400;500;700&display=swap');
 
 /* ══════════════════════════════════════════
@@ -1143,77 +1117,25 @@ for key, default in [
     ("logs", None), ("ai_analysis", None), ("ai_error", None),
     ("defense_data", None), ("tracker", []), ("active_tab", "player"),
     ("recent_players", []), ("supabase_loaded", False), ("show_share", False),
-    ("debug_errors", []), ("runtime_health_dismissed", False),
-    ("active_sport", "nba"), ("edge_results", []), ("edge_running", False),
-    ("edge_manual_props", []), ("edge_jump_player", None),
-    ("edge_jump_pitcher", None), ("edge_jump_line", None),
-    ("edge_jump_side", "Over"), ("edge_jump_prop", "Strikeouts"),
-    # Parlay builder
-    ("parlay_legs", []),
-    # MLB prefill
-    ("_mlb_prefill_name", ""), ("_mlb_prefill_line", None),
-    # Recent pick
-    ("_recent_pick", None),
+    ("active_sport", "nba"), ("edge_results", []), ("edge_running", False), ("edge_manual_props", []), ("edge_manual_props", []), ("edge_jump_player", None), ("edge_jump_pitcher", None), ("edge_jump_line", None), ("edge_jump_side", "Over"), ("edge_jump_prop", "Strikeouts"),
+    ("runtime_debug_errors", []),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
 
 
-# ─────────────────────────────────────────────
-# Production guardrails — Railway + Streamlit
-# ─────────────────────────────────────────────
-
-REQUIRED_CONFIG = {
-    "GROQ_API_KEY": "AI analysis",
-    "SUPABASE_URL": "tracker + cache",
-    "SUPABASE_KEY": "tracker + cache",
-}
-
-
-def get_secret_value(name: str, default: str = "") -> str:
-    """Read config from Streamlit secrets first, then Railway/env vars."""
+def record_debug_error(area: str, err) -> None:
+    """Store compact runtime diagnostics without interrupting the app."""
     try:
-        value = st.secrets.get(name)
-        if value:
-            return str(value)
-    except Exception:
-        pass
-    return os.environ.get(name, default)
-
-
-def runtime_config_status() -> dict:
-    """Return missing deploy config without exposing secret values."""
-    missing = [name for name in REQUIRED_CONFIG if not get_secret_value(name)]
-    return {
-        "ok": not missing,
-        "missing": missing,
-        "configured": [name for name in REQUIRED_CONFIG if name not in missing],
-    }
-
-
-def record_debug_error(source: str, error) -> None:
-    """Keep a tiny rolling debug buffer for Railway logs + in-app diagnostics."""
-    try:
-        msg = str(error)
-        st.session_state.debug_errors.append({
-            "time": datetime.utcnow().strftime("%H:%M:%S UTC"),
-            "source": source,
-            "error": msg[:300],
+        msg = str(err)
+        st.session_state.runtime_debug_errors.append({
+            "area": area,
+            "message": msg[:500],
+            "time": datetime.utcnow().isoformat() + "Z",
         })
-        st.session_state.debug_errors = st.session_state.debug_errors[-25:]
+        st.session_state.runtime_debug_errors = st.session_state.runtime_debug_errors[-20:]
     except Exception:
         pass
-
-
-def init_mlb_signal_state() -> dict:
-    """Central defaults for MLB signal variables used by model + UI."""
-    return {
-        "vtrend_adj": 0.0,
-        "vtrend_dir": "Stable",
-        "vtrend_mph": 0.0,
-        "h2h_adj": 0.0,
-        "h2h_note": "No batter-vs-pitcher H2H signal",
-    }
 
 # Load tracker from Supabase on first load
 # ─────────────────────────────────────────────
@@ -2727,11 +2649,8 @@ def playoff_usage_spike_signal(
 def get_supabase_client():
     """Get Supabase client using credentials from Streamlit secrets."""
     try:
-        url = get_secret_value("SUPABASE_URL")
-        key = get_secret_value("SUPABASE_KEY")
-        if not url or not key:
-            record_debug_error("supabase.config", "SUPABASE_URL or SUPABASE_KEY is missing")
-            return None
+        url = st.secrets.get("SUPABASE_URL") or os.environ.get("SUPABASE_URL", "")
+        key = st.secrets.get("SUPABASE_KEY") or os.environ.get("SUPABASE_KEY", "")
         import requests as _req
 
         class _SupabaseClient:
@@ -2782,8 +2701,7 @@ def get_supabase_client():
                 return r.ok
 
         return _SupabaseClient(url, key)
-    except Exception as e:
-        record_debug_error("supabase.client", e)
+    except Exception:
         return None
 
 
@@ -2954,7 +2872,7 @@ def get_cached_pp_props_from_supabase(sport_filter: str, max_age_minutes: int = 
         )
         r = _req.get(url, headers=hdrs, timeout=5)
         if not r.ok:
-            record_debug_error("pp_cache.load", f"HTTP {r.status_code}")
+            record_debug_error("pp_cache.load", f"HTTP {r.status_code}: {r.text[:200]}")
             return None
         rows = r.json()
         if not rows:
@@ -2983,6 +2901,7 @@ def save_pp_props_to_supabase(sport_filter: str, props: list) -> bool:
     try:
         sb = get_supabase_client()
         if not sb:
+            record_debug_error("pp_cache.save", "No Supabase client")
             return False
         import requests as _req, json as _json
         hdrs = {
@@ -3003,10 +2922,58 @@ def save_pp_props_to_supabase(sport_filter: str, props: list) -> bool:
             timeout=6,
         )
         if not r.ok:
-            record_debug_error("pp_cache.save", f"HTTP {r.status_code}")
+            record_debug_error("pp_cache.save", f"HTTP {r.status_code}: {r.text[:200]}")
         return r.ok
     except Exception as e:
         record_debug_error("pp_cache.save", e)
+        return False
+
+
+def _pp_local_cache_path(sport_filter: str) -> str:
+    safe = re.sub(r"[^a-z0-9_-]+", "_", str(sport_filter).strip().lower())
+    return os.path.join("/tmp", "propiq_cache", f"pp_slate_{safe}.json")
+
+
+def get_cached_pp_props_from_local(sport_filter: str, max_age_minutes: int = 720) -> Optional[list]:
+    """Load the last successful PrizePicks slate from local disk (/tmp)."""
+    try:
+        import json as _json
+        path = _pp_local_cache_path(sport_filter)
+        if not os.path.exists(path):
+            return None
+        age_minutes = (time.time() - os.path.getmtime(path)) / 60
+        if age_minutes > max_age_minutes:
+            return None
+        with open(path, "r", encoding="utf-8") as f:
+            payload = _json.load(f)
+        props = payload if isinstance(payload, list) else payload.get("props", [])
+        if isinstance(props, list) and props:
+            st.session_state["edge_fetch_debug"] = [
+                f"Using local cached PrizePicks slate ({age_minutes:.0f} min old)"
+            ]
+            return props
+    except Exception as e:
+        record_debug_error("pp_cache.local_load", e)
+    return None
+
+
+def save_pp_props_to_local(sport_filter: str, props: list) -> bool:
+    """Save last successful PrizePicks slate to /tmp for same-instance fallback."""
+    if not props:
+        return False
+    try:
+        import json as _json
+        path = _pp_local_cache_path(sport_filter)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        payload = {
+            "fetched_at": datetime.utcnow().isoformat() + "Z",
+            "props": props,
+        }
+        with open(path, "w", encoding="utf-8") as f:
+            _json.dump(payload, f)
+        return True
+    except Exception as e:
+        record_debug_error("pp_cache.local_save", e)
         return False
 
 
@@ -4663,7 +4630,10 @@ def build_points_chart(logs: pd.DataFrame, full_name: str, line: float, avg_pts:
 # ─────────────────────────────────────────────
 
 def get_groq_key() -> str:
-    return get_secret_value("GROQ_API_KEY")
+    try:
+        return st.secrets.get("GROQ_API_KEY") or os.environ.get("GROQ_API_KEY", "")
+    except Exception:
+        return os.environ.get("GROQ_API_KEY", "")
 
 def build_analysis_prompt(
     full_name, line, side, n_games, logs,
@@ -4722,11 +4692,7 @@ MODEL OUTPUT: {tier}
 Write 3-4 paragraphs: (1) lead with the prop and lean, (2) what the game log shows, (3) how the opponent defense, venue split, and context affect it tonight, (4) closing verdict. Be direct, use real numbers, write like a sharp bettor."""
 
 def generate_ai_analysis(prompt: str) -> str:
-    groq_key = get_groq_key()
-    if not groq_key:
-        record_debug_error("groq.config", "GROQ_API_KEY is missing")
-        raise RuntimeError("GROQ_API_KEY is not configured")
-    client = Groq(api_key=groq_key)
+    client = Groq(api_key=get_groq_key())
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile", max_tokens=1024,
         messages=[{"role": "user", "content": prompt}],
@@ -4747,8 +4713,8 @@ def _prewarm_cache():
     try:
         import requests as _req
         r = _req.get(
-            "https://partner-api.prizepicks.com/projections",
-            params={"league_id": "7", "per_page": "1000", "single_stat": "true"},
+            "https://api.prizepicks.com/projections",
+            params={"league_id": "7", "per_page": "250", "single_stat": "true"},
             headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
             timeout=10,
         )
@@ -5093,29 +5059,6 @@ with _sp3:
         st.session_state.active_sport = "edge"
         st.rerun()
 
-_runtime_status = runtime_config_status()
-if not _runtime_status["ok"] and not st.session_state.runtime_health_dismissed:
-    _missing_labels = ", ".join(
-        f"{name} ({REQUIRED_CONFIG[name]})" for name in _runtime_status["missing"]
-    )
-    st.markdown(
-        f"<div style='background:#1c1005;border:1px solid #854d0e;"
-        f"border-left:4px solid #f97316;border-radius:0 10px 10px 0;"
-        f"padding:0.65rem 1rem;margin:0.75rem 0;"
-        f"font-family:JetBrains Mono,monospace;font-size:0.65rem;color:#9aaec4;'>"
-        f"<span style='color:#f97316;font-weight:800;'>DEPLOY CONFIG WARNING</span>"
-        f"<span> · Missing: {_missing_labels}. Add these in Railway Variables "
-        f"or Streamlit secrets to enable every feature.</span>"
-        f"</div>",
-        unsafe_allow_html=True
-    )
-    if st.button("Dismiss deploy warning", key="dismiss_runtime_health"):
-        st.session_state.runtime_health_dismissed = True
-        st.rerun()
-
-if st.session_state.debug_errors:
-    with st.expander("Runtime diagnostics", expanded=False):
-        st.dataframe(pd.DataFrame(st.session_state.debug_errors), use_container_width=True)
 
 st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
 
@@ -5123,8 +5066,195 @@ st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
 # Sidebar
 # ─────────────────────────────────────────────
 
-# Sidebar removed — manual_mode defaults to False
-manual_mode = False
+with st.sidebar:
+    st.markdown("""
+    <div style='padding:0.5rem 0 1rem 0; border-bottom:2px solid #00c4cc; margin-bottom:1rem;'>
+        <div style='font-family:Barlow Condensed,sans-serif; font-size:1.3rem; font-weight:900; color:#f0f0f0; letter-spacing:-0.5px; text-transform:uppercase; margin-bottom:2px;'>Prop<span style="color:#00c4cc;">IQ</span></div>
+        <div style='font-family:JetBrains Mono,monospace; font-size:0.55rem; color:#555; letter-spacing:0.18em; text-transform:uppercase;'>Sports Prop Analyzer</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("<div class='section-header'>How To Use PropIQ</div>", unsafe_allow_html=True)
+    st.markdown("""
+    <div style='display:flex;flex-direction:column;gap:8px;'>
+        <div style='display:flex;gap:12px;align-items:flex-start;background:#0d1520;border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:0.75rem 1rem;'>
+            <div style='min-width:28px;height:28px;background:#00c4cc;border-radius:8px;display:flex;align-items:center;justify-content:center;font-family:Outfit,sans-serif;font-weight:800;font-size:0.9rem;color:#fff;flex-shrink:0;'>1</div>
+            <div>
+                <div style='font-family:Outfit,sans-serif;font-weight:600;color:#f1f5f9;font-size:0.85rem;'>Open PrizePicks and find a prop you like</div>
+                <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#6b7f96;margin-top:3px;'>Example: LeBron James — 22.5 pts — Over</div>
+            </div>
+        </div>
+        <div style='display:flex;gap:12px;align-items:flex-start;background:#0d1520;border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:0.75rem 1rem;'>
+            <div style='min-width:28px;height:28px;background:#00c4cc;border-radius:8px;display:flex;align-items:center;justify-content:center;font-family:Outfit,sans-serif;font-weight:800;font-size:0.9rem;color:#fff;flex-shrink:0;'>2</div>
+            <div>
+                <div style='font-family:Outfit,sans-serif;font-weight:600;color:#f1f5f9;font-size:0.85rem;'>Type the player name, enter the line and pick Over or Under</div>
+                <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#6b7f96;margin-top:3px;'>Always use the standard line — not the goblin (lower) or demon (higher)</div>
+            </div>
+        </div>
+        <div style='display:flex;gap:12px;align-items:flex-start;background:#0d1520;border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:0.75rem 1rem;'>
+            <div style='min-width:28px;height:28px;background:#00c4cc;border-radius:8px;display:flex;align-items:center;justify-content:center;font-family:Outfit,sans-serif;font-weight:800;font-size:0.9rem;color:#fff;flex-shrink:0;'>3</div>
+            <div>
+                <div style='font-family:Outfit,sans-serif;font-weight:600;color:#f1f5f9;font-size:0.85rem;'>Hit Analyze Prop and wait ~10 seconds</div>
+                <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#6b7f96;margin-top:3px;'>PropIQ pulls live stats, injuries, matchups, referee data, and more</div>
+            </div>
+        </div>
+        <div style='display:flex;gap:12px;align-items:flex-start;background:#0d1520;border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:0.75rem 1rem;'>
+            <div style='min-width:28px;height:28px;background:#10f590;border-radius:8px;display:flex;align-items:center;justify-content:center;font-family:Outfit,sans-serif;font-weight:800;font-size:0.9rem;color:#041a0e;flex-shrink:0;'>4</div>
+            <div>
+                <div style='font-family:Outfit,sans-serif;font-weight:600;color:#f1f5f9;font-size:0.85rem;'>Read the verdict — only play Strong Over / Strong Under</div>
+                <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#6b7f96;margin-top:3px;'>Lean picks are OK in 2-leg entries only. Always skip Pass.</div>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("<div class='section-header'>Verdict Guide</div>", unsafe_allow_html=True)
+    st.markdown("""
+    <div style='display:flex;flex-direction:column;gap:6px;'>
+        <div style='background:#041a0e;border:1px solid rgba(16,245,144,0.2);border-radius:10px;padding:0.6rem 0.9rem;display:flex;justify-content:space-between;align-items:center;'>
+            <div><span style='font-size:1rem;'>🟢</span> <span style='color:#10f590;font-weight:700;font-family:Outfit,sans-serif;'>Strong Over / Strong Under</span></div>
+            <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#6b7f96;text-align:right;'>64%+ hit rate · edge ≥1.5pts<br><span style='color:#10f590;'>Best bets — play these</span></div>
+        </div>
+        <div style='background:#1a1200;border:1px solid rgba(251,191,36,0.2);border-radius:10px;padding:0.6rem 0.9rem;display:flex;justify-content:space-between;align-items:center;'>
+            <div><span style='font-size:1rem;'>🟡</span> <span style='color:#fbbf24;font-weight:700;font-family:Outfit,sans-serif;'>Lean Over</span> &nbsp;<span style='font-size:1rem;'>🟠</span> <span style='color:#f97316;font-weight:700;font-family:Outfit,sans-serif;'>Lean Under</span></div>
+            <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#6b7f96;text-align:right;'>55–63% hit rate<br><span style='color:#fbbf24;'>OK for 2-leg entries only</span></div>
+        </div>
+        <div style='background:#111;border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:0.6rem 0.9rem;display:flex;justify-content:space-between;align-items:center;'>
+            <div><span style='font-size:1rem;'>⚪</span> <span style='color:#6b7f96;font-weight:700;font-family:Outfit,sans-serif;'>Pass</span></div>
+            <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#6b7f96;text-align:right;'>No clear edge<br><span style='color:#ef4444;'>Skip this prop</span></div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("<div class='section-header'>Confidence Score</div>", unsafe_allow_html=True)
+    st.markdown("""
+    <div style='font-family:JetBrains Mono,monospace;font-size:0.68rem;color:#6b7f96;line-height:1.9;
+                background:#0d1520;border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:0.75rem 1rem;'>
+        The <span style='color:#f1f5f9;'>confidence score (0–100)</span> combines three things:<br>
+        &nbsp;&nbsp;<span style='color:#00c4cc;'>●</span> <span style='color:#94a3b8;'>Hit rate</span> — how often has this player cleared this line?<br>
+        &nbsp;&nbsp;<span style='color:#00c4cc;'>●</span> <span style='color:#94a3b8;'>Edge</span> — how far is their average above/below the line?<br>
+        &nbsp;&nbsp;<span style='color:#00c4cc;'>●</span> <span style='color:#94a3b8;'>Consistency</span> — do they score reliably or all over the place?<br><br>
+        <span style='color:#10f590;'>80+</span> = elite pick &nbsp;·&nbsp; <span style='color:#fbbf24;'>65–79</span> = solid &nbsp;·&nbsp; <span style='color:#ef4444;'>below 65</span> = skip
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("<div class='section-header'>Settings</div>", unsafe_allow_html=True)
+    manual_mode = st.checkbox("Manual input fallback", help="Enter points manually if NBA API is unavailable")
+    if st.button("🔄 Clear Cache"):
+        st.cache_data.clear()
+        st.success("Cache cleared!")
+
+
+    # ── Parlay Builder ────────────────────────────────────────
+    _legs = st.session_state.get("parlay_legs", [])
+    st.markdown(
+        f"<div class='section-header'>🎯 My Parlay ({len(_legs)}/6)</div>",
+        unsafe_allow_html=True
+    )
+
+    if not _legs:
+        st.markdown(
+            "<div style='background:rgba(0,196,204,0.05);border:1px dashed rgba(0,196,204,0.2);"
+            "border-radius:10px;padding:0.85rem;text-align:center;"
+            "font-family:JetBrains Mono,monospace;font-size:0.6rem;color:#6b7f96;'>"
+            "No picks added yet<br>"
+            "<span style='font-size:0.54rem;'>Hit ➕ Add to Parlay after any verdict</span>"
+            "</div>",
+            unsafe_allow_html=True
+        )
+    else:
+        for _i, _leg in enumerate(_legs):
+            _vc = {"Strong Over":"#00e896","Lean Over":"#ffc107",
+                   "Strong Under":"#ff3d5c","Lean Under":"#f97316"}.get(_leg["verdict"],"#6b7f96")
+            _ve = {"Strong Over":"🟢","Lean Over":"🟡",
+                   "Strong Under":"🔴","Lean Under":"🟠"}.get(_leg["verdict"],"⚪")
+            _leg_cols = st.columns([8,1])
+            with _leg_cols[0]:
+                st.markdown(
+                    f"<div class='parlay-leg'>"
+                    f"<div style='flex:1;'>"
+                    f"<div class='parlay-leg-name'>{_leg['player']}</div>"
+                    f"<div style='display:flex;gap:5px;margin-top:3px;flex-wrap:wrap;align-items:center;'>"
+                    f"<span class='parlay-leg-pick'>{_ve} {_leg['side']} {_leg['line']}</span>"
+                    f"<span class='parlay-leg-conf' style='color:{_vc};'>{_leg['adj']}%</span>"
+                    f"<span style='font-family:JetBrains Mono,monospace;font-size:0.52rem;"
+                    f"color:#6b7f96;background:rgba(255,255,255,0.04);padding:1px 5px;"
+                    f"border-radius:4px;'>{_leg.get('sport','')}</span>"
+                    f"</div></div></div>",
+                    unsafe_allow_html=True
+                )
+            with _leg_cols[1]:
+                if st.button("✕", key=f"rm_{_i}", help="Remove this pick"):
+                    st.session_state.parlay_legs.pop(_i)
+                    st.rerun()
+
+        # Combined stats
+        _combined_prob = 1.0
+        for _l in _legs:
+            _combined_prob *= (_l["adj"] / 100.0)
+        _combined_pct = round(_combined_prob * 100, 1)
+        _decimal = round(1.0 / max(_combined_prob, 0.001), 2)
+        _american = (f"+{round((_decimal-1)*100)}"
+                     if _decimal >= 2.0
+                     else f"-{round(100/max(_decimal-1,0.001))}")
+
+        _all_strong = all("Strong" in l["verdict"] for l in _legs)
+        _correlated = len(set(l["sport"] for l in _legs)) == 1 and len(_legs) > 2
+        if _combined_pct >= 20 and _all_strong: _risk="parlay-risk-low";  _rlbl="✅ Strong"
+        elif _combined_pct >= 8:                _risk="parlay-risk-medium";_rlbl="🟡 Moderate"
+        else:                                   _risk="parlay-risk-high";  _rlbl="🔴 Risky"
+
+        _correlated_badge = (
+            "<span class='parlay-risk-badge parlay-risk-medium'>⚠️ Correlated</span>"
+            if _correlated else ""
+        )
+        st.markdown(
+            f"<div class='parlay-summary'>"
+            f"<div style='display:flex;justify-content:space-between;align-items:center;'>"
+            f"<div><div style='font-family:JetBrains Mono,monospace;font-size:0.52rem;"
+            f"color:#6b7f96;'>COMBINED</div>"
+            f"<div class='parlay-odds'>{_combined_pct}%</div></div>"
+            f"<div style='text-align:right;'>"
+            f"<div style='font-family:JetBrains Mono,monospace;font-size:0.52rem;color:#6b7f96;'>ODDS</div>"
+            f"<div style='font-family:Plus Jakarta Sans,sans-serif;font-size:1.1rem;"
+            f"font-weight:800;color:#f0f4f8;'>{_american}</div></div></div>"
+            f"<div style='margin-top:8px;display:flex;gap:5px;flex-wrap:wrap;'>"
+            f"<span class='parlay-risk-badge {_risk}'>{_rlbl}</span>"
+            f"{_correlated_badge}"
+            f"</div></div>",
+            unsafe_allow_html=True
+        )
+
+        # Share
+        with st.expander("📤 Share Parlay"):
+            _pl = ["🎯 PropIQ Parlay"] + [
+                f"{'🟢' if 'Strong Over' in l['verdict'] else '🟡' if 'Lean Over' in l['verdict'] else '🔴' if 'Strong Under' in l['verdict'] else '🟠'} "
+                f"{l['player']} {l['side']} {l['line']} ({l['adj']}%)"
+                for l in _legs
+            ] + [f"Combined: {_combined_pct}% · {_american}", "#PropIQ #PrizePicks"]
+            st.code("\n".join(_pl), language=None)
+
+        if st.button("🗑️ Clear Parlay", key="clear_all_parlay", use_container_width=True):
+            st.session_state.parlay_legs = []
+            st.rerun()
+
+    st.markdown("---")
+    st.markdown("""
+    <div style='margin-top:2rem; padding:0.75rem; background:#0c1018; border:1px solid #1a2333;
+                border-radius:8px; font-family:DM Mono; font-size:0.62rem; color:#6b7f96; line-height:1.7;'>
+        ⚠️ For educational purposes only.<br>Not financial or betting advice.<br>
+        Always bet responsibly.
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.markdown("<div class='section-header'>Advanced Tools</div>", unsafe_allow_html=True)
+    with st.expander("📊  Backtest Engine"):
+        st.markdown("""
+        <div style='font-family:DM Mono;font-size:0.68rem;color:#6b7f96;line-height:1.6;margin-bottom:0.75rem;'>
+        Simulate PropIQ on a full season to see how often each verdict tier actually hit.
+        Use this to validate the model on specific players and lines.
+        </div>
+        """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────
 # Mode selector
@@ -5138,39 +5268,11 @@ for _k in ["scanner_results", "scanner_error"]:
 # MLB MODE
 # ═══════════════════════════════════════════════════════
 
-
-import functools as _ftools
-import datetime as _dtmod
-
-@_ftools.lru_cache(maxsize=1)
-def _get_mlb_roster_cached() -> tuple:
-    """
-    True module-level roster cache using lru_cache.
-    Returns tuple (immutable) so lru_cache can hash it.
-    Call list(list(_get_mlb_roster_cached())) to get the list.
-    """
-    import requests as _rq
-    season = _dtmod.datetime.now().year
-    for _gt in ["R", "S"]:
-        try:
-            r = _rq.get(
-                "https://statsapi.mlb.com/api/v1/sports/1/players",
-                params={"season": season, "gameType": _gt},
-                timeout=8
-            )
-            if r.ok:
-                people = r.json().get("people", [])
-                if people:
-                    return tuple(people)
-        except Exception:
-            pass
-    return tuple()
-
-
 if st.session_state.active_sport == "mlb":
 
     # ── MLB Data Functions ─────────────────────────────
 
+    @st.cache_data(ttl=14400, show_spinner=False)
     @st.cache_data(ttl=3600, show_spinner=False)
     def mlb_get_pitcher_logs(player_name: str, n: int = 10) -> pd.DataFrame:
         """
@@ -5199,22 +5301,20 @@ if st.session_state.active_sport == "mlb":
             people = []
 
             # Strategy A: Full active roster (most reliable)
-            people = list(_get_mlb_roster_cached())
-            if not people:
-                for _gt in ["R", "S", "E"]:
-                    try:
-                        _r = _req.get(
-                            "https://statsapi.mlb.com/api/v1/sports/1/players",
-                            params={"season": season, "gameType": _gt},
-                            timeout=10
-                        )
-                        if _r.ok:
-                            _all = _r.json().get("people", [])
-                            if _all:
-                                people = _all
-                                break
-                    except Exception:
-                        continue
+            for _gt in ["R", "S", "E"]:  # Regular, Spring, Exhibition
+                try:
+                    _r = _req.get(
+                        "https://statsapi.mlb.com/api/v1/sports/1/players",
+                        params={"season": season, "gameType": _gt},
+                        timeout=10
+                    )
+                    if _r.ok:
+                        _all = _r.json().get("people", [])
+                        if _all:
+                            people = _all
+                            break
+                except Exception:
+                    continue
 
             if people:
                 # Match priority: exact > last+first > last only > partial
@@ -5373,53 +5473,22 @@ if st.session_state.active_sport == "mlb":
             return empty
 
     # ── MLB Park factors ──────────────────────────────────────
-    # K-specific park factors — strikeout rate relative to league avg
-    # >1.0 = more Ks at this park, <1.0 = fewer Ks
-    # Source: MLB park-adjusted K rates 2022-2025
     _MLB_PARK_FACTORS = {
-        # Strong K parks (pitcher-friendly, marine layer, dome)
-        "SFG": 1.08,  # Oracle Park — marine layer, cold, elite K park
-        "SDP": 1.07,  # Petco Park — marine layer suppresses offense
-        "SEA": 1.06,  # T-Mobile — marine layer + pitcher dimensions
-        "MIL": 1.06,  # American Family — pitcher-friendly
-        "ARI": 1.05,  # Chase Field — dome, controlled conditions
-        "HOU": 1.05,  # Minute Maid — roof, consistent, K-friendly
-        "LAD": 1.04,  # Dodger Stadium — pitcher park
-        "PIT": 1.04,  # PNC Park — large dimensions
-        "STL": 1.03,  # Busch Stadium — consistent conditions
-        "TBR": 1.03,  # Tropicana — dome, controlled
-        "ATL": 1.03,  # Truist Park — sea level, good movement
-        "TEX": 1.03,  # Globe Life — dry air, good grip
-        "OAK": 1.02,  # Coliseum — foul territory + dimensions
-        "ATH": 1.02,  # Same park
-        "KCR": 1.02,  # Kauffman — large park
-        "KCA": 1.02,
-        "WSN": 1.01,  # Nationals Park — neutral
-        "NYM": 1.01,  # Citi Field — slight pitcher lean
-        "LAA": 1.01,  # Angel Stadium — neutral
-        "MIN": 1.01,  # Target Field — cold early season
-        "TOR": 1.00,  # Rogers Centre — dome, neutral
-        "CHC": 1.00,  # Wrigley — wind variable, neutral avg
-        "MIA": 1.00,  # LoanDepot — dome, neutral
-        "CWS": 1.00,  # Guaranteed Rate — neutral
-        "CHW": 1.00,
-        # Neutral/slight hitter lean
-        "BAL": 0.99,  # Camden Yards — short RF
-        "DET": 0.98,  # Comerica — large but contact-friendly lineups
-        "CLE": 0.98,  # Progressive Field — contact-friendly
-        # K-suppressing parks
-        "PHI": 0.97,  # Citizens Bank — hitter park
-        "BOS": 0.97,  # Fenway — contact-friendly
-        "NYY": 0.96,  # Yankee Stadium — short porch, big lineups
-        "CIN": 0.95,  # Great American — hitter-friendly, low K park
-        "COL": 0.91,  # Coors Field — thin air kills movement, lowest K park
+        "COL": 1.30, "CIN": 1.10, "BOS": 1.08, "PHI": 1.06,
+        "TEX": 1.05, "NYY": 1.04, "CHC": 1.03, "HOU": 1.02,
+        "ATL": 1.01, "MIL": 1.01, "STL": 1.00, "LAD": 0.99,
+        "NYM": 0.99, "TOR": 0.98, "DET": 0.98, "MIN": 0.97,
+        "CLE": 0.97, "ARI": 0.97, "BAL": 0.97, "KCR": 0.96,
+        "PIT": 0.96, "TBR": 0.96, "CHW": 0.95, "SEA": 0.95,
+        "SFG": 0.94, "MIA": 0.94, "LAA": 0.94, "WSN": 0.93,
+        "OAK": 0.93, "SDP": 0.92,
     }
 
     @st.cache_data(ttl=3600, show_spinner=False)
     def mlb_get_opp_k_rate(opp_abbr: str) -> Optional[float]:
         try:
             import requests as _req, datetime
-            season = __import__("datetime").datetime.now().year
+            season = datetime.datetime.now().year
             teams_r = _req.get("https://statsapi.mlb.com/api/v1/teams",
                 params={"sportId":1,"season":season}, timeout=8)
             if not teams_r.ok: return None
@@ -5555,8 +5624,12 @@ if st.session_state.active_sport == "mlb":
             _parts  = [p for p in _target.split() if len(p) > 2]
 
             # Find player ID
-            people = list(_get_mlb_roster_cached())
-            if not people: return empty
+            r = _req.get("https://statsapi.mlb.com/api/v1/sports/1/players",
+                         params={"season": datetime.datetime.now().year, "gameType": "R"},
+                         timeout=8)
+            if not r.ok: return empty
+            people = r.json().get("people", [])
+            # Match by name
             pitcher = next((p for p in people
                            if _norm(p.get("fullName","")) == _target), None)
             if not pitcher:
@@ -5574,7 +5647,7 @@ if st.session_state.active_sport == "mlb":
             sr = _req.get(
                 f"https://statsapi.mlb.com/api/v1/people/{pid}/stats",
                 params={"stats": "season", "group": "pitching",
-                        "season": __import__("datetime").datetime.now().year},
+                        "season": datetime.datetime.now().year},
                 timeout=8
             )
             if not sr.ok: return empty
@@ -5617,7 +5690,7 @@ if st.session_state.active_sport == "mlb":
         empty = {"vs_r": None, "vs_l": None, "overall": None}
         try:
             import requests as _req
-            season = __import__("datetime").datetime.now().year
+            season = datetime.datetime.now().year
             # Get team ID
             tr = _req.get("https://statsapi.mlb.com/api/v1/teams",
                           params={"sportId":1,"season":season}, timeout=7)
@@ -5741,8 +5814,11 @@ if st.session_state.active_sport == "mlb":
             _norm   = lambda s: s.lower().strip()
             _target = _norm(player_name)
             _parts  = [p for p in _target.split() if len(p) > 2]
-            people = list(_get_mlb_roster_cached())
-            if not people: return "R"
+            r = _req.get("https://statsapi.mlb.com/api/v1/sports/1/players",
+                         params={"season": datetime.datetime.now().year,"gameType":"R"},
+                         timeout=7)
+            if not r.ok: return "R"
+            people = r.json().get("people",[])
             p = next((x for x in people
                       if all(pt in _norm(x.get("fullName","")) for pt in _parts)), None)
             if p:
@@ -6026,8 +6102,11 @@ if st.session_state.active_sport == "mlb":
             # Method 3: MLB Stats API K% — always works
             for _yr in [season, season-1]:
                 try:
-                    _ppl = list(_get_mlb_roster_cached())
-                    if not _ppl: continue
+                    _pr = _req.get(
+                        "https://statsapi.mlb.com/api/v1/sports/1/players",
+                        params={"season":_yr,"gameType":"R"}, timeout=8)
+                    if not _pr.ok: continue
+                    _ppl = _pr.json().get("people",[])
                     _pp = next((p for p in _ppl
                                if all(pt in _norm(p.get("fullName",""))
                                       for pt in _parts)), None)
@@ -6134,8 +6213,12 @@ if st.session_state.active_sport == "mlb":
 
             # Find player ID
             for _yr in [season, season - 1]:
-                _ppl = list(_get_mlb_roster_cached())
-                if not _ppl: continue
+                _pr = _req.get(
+                    "https://statsapi.mlb.com/api/v1/sports/1/players",
+                    params={"season": _yr, "gameType": "R"}, timeout=8
+                )
+                if not _pr.ok: continue
+                _ppl = _pr.json().get("people", [])
                 _pp  = next((p for p in _ppl
                              if all(pt in _norm(p.get("fullName",""))
                                     for pt in _parts)), None)
@@ -6193,8 +6276,16 @@ if st.session_state.active_sport == "mlb":
             import requests as _req
             import datetime as _dtx
             season = _dtx.datetime.now().year
-            all_players = list(_get_mlb_roster_cached())
-            if not all_players: return []
+            _pr = _req.get(
+                "https://statsapi.mlb.com/api/v1/sports/1/players",
+                params={"season": season, "gameType": "R"}, timeout=8
+            )
+            if not _pr.ok:
+                return {**base, "lhb_count": 0, "rhb_count": 0,
+                        "lhb_pct": 0.5, "order_with_hands": []}
+
+            all_players = _pr.json().get("people", [])
+            _norm = lambda s: s.lower().strip()
 
             order_with_hands = []
             lhb = 0; rhb = 0
@@ -6243,8 +6334,12 @@ if st.session_state.active_sport == "mlb":
             season  = _dtx.datetime.now().year
 
             # Find player
-            _ppl = list(_get_mlb_roster_cached())
-            if not _ppl: return empty
+            _pr = _req.get(
+                "https://statsapi.mlb.com/api/v1/sports/1/players",
+                params={"season": season, "gameType": "R"}, timeout=8
+            )
+            if not _pr.ok: return empty
+            _ppl = _pr.json().get("people", [])
             _pp  = next((p for p in _ppl
                          if all(pt in _norm(p.get("fullName","")) for pt in _parts)), None)
             if not _pp:
@@ -6409,91 +6504,6 @@ if st.session_state.active_sport == "mlb":
             return empty
 
 
-    @st.cache_data(ttl=3600, show_spinner=False)
-    def mlb_detect_injury_return(logs: pd.DataFrame, pitcher_name: str) -> dict:
-        """
-        Detect if a pitcher is in their injury return window.
-        Looks for a pattern of recent short starts (< 4 IP) after normal starts (5+ IP).
-        Returns: {
-            is_return: bool,
-            return_starts: int,       # how many short starts at beginning of log
-            normal_avg_k: float,      # avg Ks in normal starts
-            suppressed_avg_k: float,  # avg Ks in shortened starts
-            k_suppression: float,     # how many Ks being lost per start
-            confidence: str,          # High / Medium / Low
-            note: str
-        }
-        """
-        empty = {"is_return": False, "return_starts": 0,
-                 "normal_avg_k": 0.0, "suppressed_avg_k": 0.0,
-                 "k_suppression": 0.0, "confidence": "Low", "note": ""}
-
-        if logs is None or logs.empty or len(logs) < 4:
-            return empty
-
-        try:
-            _outs = pd.to_numeric(logs["OUTS"], errors="coerce").fillna(0).tolist()
-            _ks   = pd.to_numeric(logs["K"], errors="coerce").fillna(0).tolist()
-            _ips  = logs["IP"].tolist()
-
-            # A "normal" start = 12+ outs (4+ innings)
-            # A "shortened" start = < 12 outs (< 4 innings)
-            # Injury return pattern: 1-3 shortened starts at the TOP of log
-            # followed by normal starts before that
-
-            _SHORT_OUTS = 12  # < 4 innings = shortened
-
-            # Find how many consecutive short starts are at the beginning (most recent)
-            _return_count = 0
-            for i, outs in enumerate(_outs):
-                if outs < _SHORT_OUTS:
-                    _return_count += 1
-                else:
-                    break  # first normal start — stop
-
-            if _return_count == 0:
-                return empty
-
-            # Need at least 3 normal starts after the short ones
-            _normal_starts = [i for i in range(_return_count, len(_outs))
-                              if _outs[i] >= _SHORT_OUTS]
-            if len(_normal_starts) < 3:
-                return {**empty, "note": "Too few normal starts to compare"}
-
-            # Compare K averages
-            _short_ks  = [_ks[i] for i in range(_return_count)]
-            _normal_ks = [_ks[i] for i in _normal_starts[:8]]  # last 8 normal starts
-
-            _short_avg  = round(sum(_short_ks) / max(len(_short_ks), 1), 1)
-            _normal_avg = round(sum(_normal_ks) / max(len(_normal_ks), 1), 1)
-            _suppression = round(_normal_avg - _short_avg, 1)
-
-            # Only flag if suppression is meaningful (>= 1.5 Ks difference)
-            if _suppression < 1.5:
-                return {**empty,
-                        "note": f"Recent short starts but K rate similar ({_short_avg} vs {_normal_avg})"}
-
-            # Confidence based on pattern clarity
-            _conf = "High" if (_return_count <= 2 and _suppression >= 2.5) else                     "Medium" if _suppression >= 1.5 else "Low"
-
-            _note = (f"Last {_return_count} start{'s' if _return_count > 1 else ''} shortened "
-                     f"(injury return) · avg {_short_avg}K vs true ability {_normal_avg}K · "
-                     f"line likely set {_suppression:.1f}K too low")
-
-            return {
-                "is_return":       True,
-                "return_starts":   _return_count,
-                "normal_avg_k":    _normal_avg,
-                "suppressed_avg_k": _short_avg,
-                "k_suppression":   _suppression,
-                "confidence":      _conf,
-                "note":            _note,
-            }
-
-        except Exception:
-            return empty
-
-
     @st.cache_data(ttl=1800, show_spinner=False)
     def mlb_get_injury_status(pitcher_name: str) -> dict:
         """
@@ -6568,10 +6578,8 @@ if st.session_state.active_sport == "mlb":
 
     def mlb_park_signal(home_team):
         pf = _MLB_PARK_FACTORS.get(home_team,1.00)
-        # K-specific: >1.0 = more Ks = good for Over = "Boost"
-        #             <1.0 = fewer Ks = bad for Over = "Penalty"
-        if pf >= 1.06:   return "Boost"    # K-friendly park — helps Over
-        elif pf <= 0.95: return "Penalty"  # K-suppressing park — hurts Over
+        if pf<=0.95: return "Boost"
+        elif pf>=1.06: return "Penalty"
         return "Neutral"
 
     def mlb_apply_adj(weighted, opp_k, park, side):
@@ -6579,7 +6587,7 @@ if st.session_state.active_sport == "mlb":
         if opp_k is not None:
             if opp_k>=0.26:   adj += 0.06 if side=="Over" else -0.06
             elif opp_k<=0.18: adj += -0.06 if side=="Over" else 0.06
-        adj += {"Boost":+0.05,"Neutral":0.0,"Penalty":-0.06}.get(park,0.0)*(1 if side=="Over" else -1)
+        adj += {"Boost":+0.04,"Neutral":0.0,"Penalty":-0.04}.get(park,0.0)*(1 if side=="Over" else -1)
         return max(0.05,min(0.95,adj))
 
     def mlb_verdict(adj, edge, side, pc_ceiling=None, line=None):
@@ -6588,10 +6596,8 @@ if st.session_state.active_sport == "mlb":
         pc_ceiling: estimated max Ks from pitch count — caps verdict if below line.
         """
         # Pitch count hard cap — if ceiling ≤ line, maximum verdict is Lean
-        # Only hard-cap verdict when ceiling is meaningfully below line (>0.5 gap)
-        # Ceiling just barely below line (e.g. 4.0 vs 4.5) is noise, not a true cap
         _ceiling_capped = (pc_ceiling is not None and line is not None and
-                           pc_ceiling <= line - 0.5)
+                           pc_ceiling <= line)
 
         if side == "Over":
             if not _ceiling_capped:
@@ -6610,295 +6616,11 @@ if st.session_state.active_sport == "mlb":
             if adj >= 0.56 and edge <= 0.5:    return "Lean Under"
         return "Pass"
 
-    # ═══════════════════════════════════════════════════════════
-    # TONIGHT'S MLB TOP PICKS
-    # ═══════════════════════════════════════════════════════════
-
-    @st.cache_data(ttl=1800, show_spinner=False)
-    def mlb_get_tonights_starters() -> list:
-        """
-        Fetch tonight's scheduled MLB starting pitchers from MLB Stats API.
-        Returns list of {name, team, opp, home, game_time} dicts.
-        """
-        import requests as _req, datetime as _dtx
-        today  = _dtx.date.today().strftime("%Y-%m-%d")
-        result = []
-        try:
-            r = _req.get(
-                "https://statsapi.mlb.com/api/v1/schedule",
-                params={"sportId": 1, "date": today,
-                        "hydrate": "probablePitcher,team",
-                        "gameType": "R"},
-                timeout=10
-            )
-            if not r.ok:
-                return []
-            for date in r.json().get("dates", []):
-                for game in date.get("games", []):
-                    _home = game.get("teams", {}).get("home", {})
-                    _away = game.get("teams", {}).get("away", {})
-                    _time = game.get("gameDate", "")[:16]
-                    for _side, _opp_side in [("home", "away"), ("away", "home")]:
-                        _team = game.get("teams", {}).get(_side, {})
-                        _opp  = game.get("teams", {}).get(_opp_side, {})
-                        _pp   = _team.get("probablePitcher", {})
-                        if not _pp:
-                            continue
-                        result.append({
-                            "name":      _pp.get("fullName", ""),
-                            "team":      _team.get("team", {}).get("abbreviation", ""),
-                            "opp":       _opp.get("team", {}).get("abbreviation", ""),
-                            "home":      _side == "home",
-                            "game_time": _time,
-                        })
-        except Exception:
-            pass
-        return result
-
-
-    @st.cache_data(ttl=3600, show_spinner=False)
-    def mlb_get_batter_pitcher_h2h(pitcher_id: int, season_range: int = 3) -> dict:
-        """
-        Fetch career batter vs pitcher H2H stats from MLB Stats API.
-        Returns dict of {batter_name: {ab, k, avg, k_pct}} for all batters
-        who have faced this pitcher in the last N seasons.
-        Aggregated across seasons for sample size.
-        """
-        import requests as _req, datetime as _dtx
-        result = {}
-        current_year = _dtx.datetime.now().year
-        seasons = list(range(current_year - season_range, current_year + 1))
-
-        try:
-            for season in seasons:
-                r = _req.get(
-                    f"https://statsapi.mlb.com/api/v1/people/{pitcher_id}/stats",
-                    params={"stats": "vsPlayer", "group": "pitching",
-                            "season": season, "limit": 500},
-                    timeout=8
-                )
-                if not r.ok:
-                    continue
-                for split in r.json().get("stats", [{}])[0].get("splits", []):
-                    _batter = split.get("batter", {})
-                    _name   = _batter.get("fullName", "")
-                    _st     = split.get("stat", {})
-                    if not _name:
-                        continue
-                    _ab  = int(_st.get("atBats", 0) or 0)
-                    _k   = int(_st.get("strikeOuts", 0) or 0)
-                    _h   = int(_st.get("hits", 0) or 0)
-                    if _ab < 3:
-                        continue  # too small
-                    if _name not in result:
-                        result[_name] = {"ab": 0, "k": 0, "h": 0}
-                    result[_name]["ab"] += _ab
-                    result[_name]["k"]  += _k
-                    result[_name]["h"]  += _h
-        except Exception:
-            pass
-
-        # Compute derived stats
-        for _name, _d in result.items():
-            _ab = max(_d["ab"], 1)
-            _d["k_pct"] = round(_d["k"] / _ab, 3)
-            _d["avg"]   = round(_d["h"] / _ab, 3)
-            _d["ab_total"] = _d["ab"]
-
-        return result
-
-
-    @st.cache_data(ttl=1800, show_spinner=False)
-    def mlb_top_picks_tonight(std_line: float = 4.5) -> list:
-        """
-        Run all tonight's starters through the model and rank by confidence.
-        Returns top picks sorted by adjusted hit rate descending.
-        """
-        starters = mlb_get_tonights_starters()
-        if not starters:
-            return []
-
-        results = []
-        import concurrent.futures as _cfe
-
-        def _check_starter(s):
-            try:
-                _data = _scanner_get_pitcher_data(s["name"])
-                _ks   = _data.get("ks", [])
-                if not _ks or len(_ks) < 3:
-                    return None
-                import numpy as _np
-                _vals = _np.array(_ks, dtype=float)
-                _avg  = float(_vals.mean())
-                _k9   = _data.get("k9")
-                _avg_ip = _data.get("avg_ip")
-
-                # Find the best line for this pitcher (closest to their avg)
-                _line = std_line
-                # Try common lines around their average
-                for _try_line in [3.5, 4.5, 5.5, 6.5]:
-                    if abs(_avg - _try_line - 0.5) < abs(_avg - _line - 0.5):
-                        _line = _try_line
-
-                # Quick model (same as edge scanner)
-                _n    = len(_vals)
-                _wts  = _np.array([1.5 if i < 3 else 1.0 for i in range(_n)])
-                _hits = _vals >= _line
-                _whr  = float((_hits * _wts).sum() / _wts.sum())
-                _cons = float(_hits.mean())
-                _adj  = _whr
-
-                # Signals
-                _l3 = float(_vals[:3].mean())
-                _diff = _l3 - _avg
-                if _diff >= 1.5:    _adj += 0.05
-                elif _diff >= 0.8:  _adj += 0.02
-                elif _diff <= -1.5: _adj -= 0.05
-                elif _diff <= -0.8: _adj -= 0.02
-
-                if _k9:
-                    if _k9 >= 11.0:   _adj += 0.07
-                    elif _k9 >= 9.5:  _adj += 0.04
-                    elif _k9 >= 8.0:  _adj += 0.01
-                    elif _k9 >= 6.5:  _adj -= 0.03
-                    else:             _adj -= 0.06
-
-                if _avg_ip:
-                    if _avg_ip >= 6.0:   _adj += 0.02
-                    elif _avg_ip <= 3.5: _adj -= 0.07
-
-                _edge = _avg - _line
-                if _edge >= 2:    _adj += 0.05
-                elif _edge >= 1:  _adj += 0.02
-                elif _edge <= -2: _adj -= 0.05
-                elif _edge <= -1: _adj -= 0.02
-
-                if _cons >= 0.75:  _adj += 0.03
-                elif _cons <= 0.35: _adj -= 0.04
-
-                _adj = max(0.05, min(0.95, _adj))
-
-                if _adj < 0.55:
-                    return None  # not worth showing
-
-                _tier = ("Strong Over" if _adj >= 0.72 else
-                         "Lean Over"   if _adj >= 0.63 else "Edge")
-
-                return {
-                    "name":    s["name"],
-                    "team":    s["team"],
-                    "opp":     s["opp"],
-                    "home":    s["home"],
-                    "line":    _line,
-                    "avg":     round(_avg, 1),
-                    "adj":     round(_adj * 100, 1),
-                    "k9":      _k9,
-                    "avg_ip":  _avg_ip,
-                    "cons":    round(_cons * 100, 1),
-                    "samples": _n,
-                    "tier":    _tier,
-                    "edge":    round(_edge, 2),
-                }
-            except Exception:
-                return None
-
-        with _cfe.ThreadPoolExecutor(max_workers=8) as _ex:
-            _futs = {_ex.submit(_check_starter, s): s for s in starters}
-            for _f in _cfe.as_completed(_futs):
-                try:
-                    _res = _f.result(timeout=12)
-                    if _res:
-                        results.append(_res)
-                except Exception:
-                    pass
-
-        results.sort(key=lambda x: -x["adj"])
-        return results
-
-
-    # ── Tonight's Top Picks UI ──────────────────────────────────────────
-    st.markdown("<div class='section-header'>⚡ Tonight's Top Pitcher Picks</div>",
-                unsafe_allow_html=True)
-
-    _tonight_picks = mlb_top_picks_tonight()
-
-    if not _tonight_picks:
-        st.markdown(
-            "<div style='background:rgba(0,196,204,0.04);border:1px dashed rgba(0,196,204,0.2);"
-            "border-radius:10px;padding:1rem;text-align:center;"
-            "font-family:JetBrains Mono,monospace;font-size:0.65rem;color:#6b7f96;'>"
-            "No high-confidence picks found for tonight · "
-            "Check back after lineups are posted (~6pm ET)"
-            "</div>",
-            unsafe_allow_html=True
-        )
-    else:
-        # Summary line
-        _strong_tp = [p for p in _tonight_picks if p["tier"] == "Strong Over"]
-        _lean_tp   = [p for p in _tonight_picks if p["tier"] == "Lean Over"]
-        st.markdown(
-            f"<div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;"
-            f"color:#6b7f96;margin-bottom:0.75rem;'>"
-            f"🔥 {len(_strong_tp)} Strong · 🟡 {len(_lean_tp)} Lean · "
-            f"📋 {len(_tonight_picks)} total picks above 55% threshold</div>",
-            unsafe_allow_html=True
-        )
-
-        # Cards — show top 6
-        _tp_cols = st.columns(min(len(_tonight_picks[:6]), 3))
-        for _i, _pick in enumerate(_tonight_picks[:6]):
-            with _tp_cols[_i % 3]:
-                _tc  = "#00e896" if _pick["tier"] == "Strong Over" else "#ffc107"
-                _tbg = ("rgba(0,232,150,0.06)" if _pick["tier"] == "Strong Over"
-                        else "rgba(255,193,7,0.05)")
-                _venue = "🏠" if _pick["home"] else "✈️"
-                st.markdown(
-                    f"<div style='background:{_tbg};border:1px solid {_tc}33;"
-                    f"border-top:3px solid {_tc};border-radius:10px;"
-                    f"padding:0.85rem 0.9rem;margin-bottom:0.5rem;'>"
-                    f"<div style='font-family:Plus Jakarta Sans,sans-serif;"
-                    f"font-size:0.88rem;font-weight:800;color:#f0f4f8;"
-                    f"margin-bottom:4px;white-space:nowrap;overflow:hidden;"
-                    f"text-overflow:ellipsis;'>{_pick['name']}</div>"
-                    f"<div style='font-family:JetBrains Mono,monospace;"
-                    f"font-size:0.6rem;color:#6b7f96;margin-bottom:8px;'>"
-                    f"{_venue} {_pick['team']} vs {_pick['opp']}</div>"
-                    f"<div style='display:flex;justify-content:space-between;"
-                    f"align-items:baseline;margin-bottom:6px;'>"
-                    f"<div><span style='font-family:Plus Jakarta Sans,sans-serif;"
-                    f"font-size:1.4rem;font-weight:900;color:{_tc};'>"
-                    f"{_pick['adj']}%</span>"
-                    f"<span style='font-family:JetBrains Mono,monospace;"
-                    f"font-size:0.55rem;color:#6b7f96;margin-left:4px;'>conf</span></div>"
-                    f"<div style='font-family:JetBrains Mono,monospace;"
-                    f"font-size:0.65rem;color:#f0f4f8;font-weight:700;'>"
-                    f"O {_pick['line']} K</div></div>"
-                    f"<div style='font-family:JetBrains Mono,monospace;"
-                    f"font-size:0.58rem;color:#9aaec4;'>"
-                    f"avg {_pick['avg']}K · {_pick['cons']}% hit · "
-                    f"{'K/9 '+str(_pick['k9']) if _pick['k9'] else ''}</div>"
-                    f"<div style='background:rgba(255,255,255,0.05);"
-                    f"border-radius:4px;height:3px;margin-top:8px;overflow:hidden;'>"
-                    f"<div style='width:{min(100,int(_pick['adj']))}%;height:100%;"
-                    f"background:{_tc};border-radius:4px;'></div></div>"
-                    f"</div>",
-                    unsafe_allow_html=True
-                )
-                # Quick-analyze button
-                if st.button(f"🔍 Analyze", key=f"tp_analyze_{_i}",
-                             use_container_width=True):
-                    st.session_state["_mlb_prefill_name"] = _pick["name"]
-                    st.session_state["_mlb_prefill_line"] = _pick["line"]
-                    st.rerun()
-
-    st.markdown("---")
-
     # ── MLB UI ────────────────────────────────────────────────
     st.markdown("<div class='section-header'>⚾ MLB Pitcher Prop Analyzer</div>", unsafe_allow_html=True)
 
     # ── Dynamic pitcher list from MLB Stats API ──────────────────────────────
     @st.cache_data(ttl=86400, show_spinner=False)  # refresh once a day
-    @st.cache_data(ttl=86400, show_spinner=False)
     def _mlb_fetch_pitcher_list() -> list:
         """
         Fetch all active MLB pitchers from the roster API.
@@ -6909,21 +6631,21 @@ if st.session_state.active_sport == "mlb":
         pitchers = set()
         try:
             # Fetch all active players for the current season
-            people = list(_get_mlb_roster_cached())
-            if not people:
-                # Fallback: direct call
+            for _gt in ["R", "S"]:
                 r = _req.get(
                     "https://statsapi.mlb.com/api/v1/sports/1/players",
-                    params={"season": season, "gameType": "R"}, timeout=8
+                    params={"season": season, "gameType": _gt},
+                    timeout=12
                 )
                 if r.ok:
-                    people = r.json().get("people", [])
-            for p in (people or []):
-                pos = p.get("primaryPosition", {}).get("code", "")
-                if pos in ("1", "P"):
-                    name = p.get("fullName", "").strip()
-                    if name and len(name) > 3:
-                        pitchers.add(name)
+                    for p in r.json().get("people", []):
+                        pos = p.get("primaryPosition", {}).get("code", "")
+                        if pos in ("1", "P"):  # pitchers only
+                            name = p.get("fullName", "").strip()
+                            if name and len(name) > 3:
+                                pitchers.add(name)
+                    if pitchers:
+                        break
         except Exception:
             pass
 
@@ -6945,12 +6667,6 @@ if st.session_state.active_sport == "mlb":
             "Cristopher Sanchez","Zac Gallen","Eduardo Rodriguez","Merrill Kelly",
             "Jordan Montgomery","Graham Ashcraft","Nick Lodolo","Andrew Abbott",
             "Mitch Keller","Marco Gonzales","Taj Bradley","Shane McClanahan",
-            "Chad Patrick","Aaron Civale","Casey Mize","Kai-Wei Teng",
-            "Parker Messick","Dustin May","Randy Vasquez","Ranger Suarez",
-            "Chris Paddack","Steven Matz","Marcus Stroman","Justin Steele",
-            "Nestor Cortes","Clarke Schmidt","Bryce Miller","Tanner Houck",
-            "Sonny Gray","Charlie Morton","Tyler Wells","Dean Kremer",
-            "Zach Eflin","Kyle Gibson","Michael Lorenzen","Wade Miley",
         ]
         for n in _seed:
             pitchers.add(n)
@@ -7002,11 +6718,20 @@ if st.session_state.active_sport == "mlb":
                     f"padding:0.5rem 1rem;margin-bottom:0.5rem;font-family:JetBrains Mono,monospace;"
                     f"font-size:0.68rem;color:#00c4cc;'>🎯 TONIGHT: {_od}</div>",unsafe_allow_html=True)
     elif mlb_pitcher:
+        # Try to figure out next start from recent logs
+        _last_date = None
+        try:
+            _tmp_logs = mlb_get_pitcher_logs(mlb_pitcher, n=1)
+            if not _tmp_logs.empty:
+                _last_date = pd.to_datetime(_tmp_logs.iloc[0]["DATE"]).strftime("%b %d")
+        except Exception:
+            pass
+        _last_str = f" · Last start: {_last_date}" if _last_date else ""
         st.markdown(
             f"<div style='background:#111;border:1px solid #1e2a3a;border-left:3px solid #f97316;"
             f"padding:0.5rem 1rem;margin-bottom:0.5rem;font-family:JetBrains Mono,monospace;"
-            f"font-size:0.68rem;color:#f97316;'>⚠️ No game found for today — {mlb_pitcher} may not be pitching tonight."
-            f" Park + opponent signals unavailable.</div>",
+            f"font-size:0.68rem;color:#f97316;'>⚠️ No game found for today — {mlb_pitcher} may not be scheduled to pitch{_last_str}."
+            f" Park + opponent signals will be unavailable.</div>",
             unsafe_allow_html=True
         )
 
@@ -7022,7 +6747,6 @@ if st.session_state.active_sport == "mlb":
     if mlb_fetch and mlb_pitcher:
         _stat = "K" if mlb_prop=="Strikeouts" else "OUTS"
         _lbl  = "K" if mlb_prop=="Strikeouts" else "Outs"
-        _mlb_signal = init_mlb_signal_state()
 
         _mlb_ph = st.empty()
         _mlb_ph.markdown("<div style='font-family:JetBrains Mono,monospace;font-size:0.7rem;"
@@ -7030,58 +6754,65 @@ if st.session_state.active_sport == "mlb":
                          unsafe_allow_html=True)
         mlb_logs = mlb_get_pitcher_logs(mlb_pitcher, n=10)
 
-        # ── Injury return detection (runs on fetched logs) ──────────
-        _return_data  = mlb_detect_injury_return(mlb_logs, mlb_pitcher)
-        _return_boost = 0.0  # will be set below if return detected
-
         _mlb_ph.markdown("<div style='font-family:JetBrains Mono,monospace;font-size:0.7rem;"
                          "color:#6b7f96;padding:0.5rem 0;'>⏳ LOADING MATCHUP + CONTEXT...</div>",
                          unsafe_allow_html=True)
 
         # Parallel fetch all new signals
-        import concurrent.futures as _cfu, signal as _sig
-        _wx_team = mlb_home or (_tonight.get("home_team","") if _tonight else "")
+        import concurrent.futures as _cfu
+        with _cfu.ThreadPoolExecutor(max_workers=12) as _mex:
+            _f_pstats   = _mex.submit(mlb_get_pitcher_season_stats, mlb_pitcher)
+            _f_phand    = _mex.submit(mlb_get_pitcher_hand, mlb_pitcher)
+            _f_ump      = _mex.submit(mlb_get_umpire_k_tendency, mlb_home) if mlb_home else None
+            _f_splits   = _mex.submit(mlb_get_opp_k_rate_splits, mlb_opp, "R") if mlb_opp else None
+            _f_savant   = _mex.submit(mlb_get_savant_stats, mlb_pitcher)
+            # Weather needs the actual game venue (home team's park)
+            # If pitcher is away, mlb_home is still the home team = correct venue
+            _wx_team    = mlb_home or (_tonight.get("home_team","") if _tonight else "")
+            _f_weather  = _mex.submit(mlb_get_weather, _wx_team) if _wx_team else None
+            _f_lineup   = _mex.submit(mlb_get_batting_order_with_hands, mlb_opp) if mlb_opp else None
+            _f_platoon  = _mex.submit(mlb_get_platoon_splits, mlb_pitcher)
+            _f_pitches  = _mex.submit(mlb_estimate_pitch_count, mlb_pitcher)
+            _f_injury   = _mex.submit(mlb_get_injury_status, mlb_pitcher)
+            _f_vtrender = _mex.submit(mlb_get_velocity_trend, mlb_pitcher)
 
-        def _safe(fn, default, *args, **kwargs):
-            """Call fn with hard 10s timeout using a thread."""
-            try:
-                with _cfu.ThreadPoolExecutor(max_workers=1) as _ex:
-                    return _ex.submit(fn, *args, **kwargs).result(timeout=10)
-            except Exception as e:
-                record_debug_error(f"mlb.{getattr(fn, '__name__', 'signal')}", e)
-                return default
-
-        _pstats   = _safe(mlb_get_pitcher_season_stats, {}, mlb_pitcher)
-        _phand    = _safe(mlb_get_pitcher_hand, "R", mlb_pitcher)
-        _ump      = _safe(mlb_get_umpire_k_tendency, {}, mlb_home) if mlb_home else {}
-        _splits   = _safe(mlb_get_opp_k_rate_splits, {}, mlb_opp, "R") if mlb_opp else {}
-        _savant   = _safe(mlb_get_savant_stats, {}, mlb_pitcher)
+        try:    _pstats  = _f_pstats.result(timeout=12)
+        except: _pstats  = {}
+        try:    _phand   = _f_phand.result(timeout=8)
+        except: _phand   = "R"
+        try:    _ump     = _f_ump.result(timeout=8) if _f_ump else {}
+        except: _ump     = {}
+        try:    _splits  = _f_splits.result(timeout=8) if _f_splits else {}
+        except: _splits  = {}
+        try:    _savant  = _f_savant.result(timeout=12)
+        except: _savant  = {}
+        # Extract velocity from Savant result
         _velo_from_savant = _savant.get("velo") if _savant else None
-        _weather  = _safe(mlb_get_weather, {}, _wx_team) if _wx_team else {}
-        _lineup   = _safe(mlb_get_batting_order_with_hands, {}, mlb_opp) if mlb_opp else {}
-        _platoon  = _safe(mlb_get_platoon_splits, {}, mlb_pitcher)
-        _pitchcnt = _safe(mlb_estimate_pitch_count, {}, mlb_pitcher)
-        _injury   = _safe(mlb_get_injury_status, {"status":"Active","description":"","is_available":True}, mlb_pitcher)
-        _vtrender = _safe(mlb_get_velocity_trend, {}, mlb_pitcher)
-        _h2h_data = {}
-        try:
-            _h2h_parts = [pt for pt in mlb_pitcher.lower().split()[:2] if len(pt) > 2]
-            _h2h_pid   = next((p["id"] for p in list(_get_mlb_roster_cached())
-                               if all(pt in p.get("fullName","").lower()
-                                      for pt in _h2h_parts)), None)
-            if _h2h_pid:
-                _h2h_data = _safe(mlb_get_batter_pitcher_h2h, {}, _h2h_pid)
-        except Exception as e:
-            record_debug_error("mlb.h2h_lookup", e)
+        try:    _weather = _f_weather.result(timeout=8) if _f_weather else {}
+        except: _weather = {}
+        try:    _lineup   = _f_lineup.result(timeout=8) if _f_lineup else {}
+        except: _lineup   = {}
+        try:    _platoon  = _f_platoon.result(timeout=10)
+        except: _platoon  = {}
+        try:    _pitchcnt = _f_pitches.result(timeout=10)
+        except: _pitchcnt = {}
+        try:    _injury   = _f_injury.result(timeout=8)
+        except: _injury   = {"status": "Active", "description": "", "is_available": True}
+        try:    _vtrender = _f_vtrender.result(timeout=12)
+        except: _vtrender = {}
 
-
+        # Initialize all derived signal variables with safe defaults
+        _vtrend_mph = 0.0
+        _vtrend_dir = "Stable"
+        _vtrend_adj = 0.0
+        _is_avail   = _injury.get("is_available", True)
         _inj_status = _injury.get("status", "Active")
         _inj_desc   = _injury.get("description", "")
 
         # Re-fetch splits with correct pitcher hand
         if mlb_opp and _phand:
             try:
-                    _splits = mlb_get_opp_k_rate_splits(mlb_opp, _phand)
+                _splits = mlb_get_opp_k_rate_splits(mlb_opp, _phand)
             except Exception:
                 pass
 
@@ -7094,7 +6825,7 @@ if st.session_state.active_sport == "mlb":
             _mlb_ph.empty()
             # Try to give a helpful message based on what we know
             _err_lines = [
-                f"No game logs found for <strong style='color:#f0f4f8;'>{mlb_pitcher}</strong> in 2026.",
+                f"No game logs found for <strong style='color:#f0f4f8;'>{mlb_pitcher}</strong> in {datetime.datetime.now().year}.",
                 "This usually means one of:",
                 "· Player hasn't started a game yet this season (call-up / IL return)",
                 "· Name spelling — try full name (e.g. 'Cristopher Sanchez' not 'Christopher')",
@@ -7137,26 +6868,12 @@ if st.session_state.active_sport == "mlb":
             # ── Signal 1: Weighted hit rate (L10 starts, recency-weighted)
             whr = mlb_weighted_hr(mlb_logs, mlb_line, _stat, mlb_side)
 
-            # ── Injury return K boost ──────────────────────────────────
-            # If pitcher is in return window, recalculate using normal-start logs only
-            _return_boost = 0.0
-            if _return_data.get("is_return"):
-                _rc = _return_data["return_starts"]
-                # Recalculate hit rate using only normal starts (exclude shortened)
-                _normal_logs = mlb_logs.iloc[_rc:].reset_index(drop=True)
-                if len(_normal_logs) >= 3:
-                    _normal_whr = mlb_weighted_hr(_normal_logs, mlb_line, _stat, mlb_side)
-                    _return_boost = round(_normal_whr - whr, 3)
-                    # Cap the boost — don't overcorrect
-                    _return_boost = min(_return_boost, 0.20)
-
             # ── Signal 2: Opponent K% by handedness (most accurate version)
             _opp_kpct_vs_hand = None
             if _splits:
                 _hand_key = "vs_r" if _phand == "R" else "vs_l"
                 _opp_kpct_vs_hand = _splits.get(_hand_key) or _splits.get("overall")
-            # Use splits data only — no extra API call on main thread
-            okpct = _opp_kpct_vs_hand or _splits.get("overall")
+            okpct = _opp_kpct_vs_hand or (mlb_get_opp_k_rate(mlb_opp) if mlb_opp else None)
 
             # ── Signal 3: Park factor (K-neutral — park factors affect runs not Ks)
             psig = mlb_park_signal(mlb_home) if mlb_home else "Neutral"
@@ -7196,31 +6913,95 @@ if st.session_state.active_sport == "mlb":
             except Exception:
                 pass
 
-            # ── Signal 7: K/9 rate ──────────────────────────────────────
-            _k9        = 0.0
-            _k9_adj    = 0.0
-            _k9_source = "logs"
-            if _pstats.get("k9"):
-                _k9 = float(_pstats["k9"])
-                _k9_source = "season"
-            elif not mlb_logs.empty:
+            # ── Signal 7: K/9 rate — current season, fallback to prior season ──
+            _k9 = _pstats.get("k9", 0.0)
+
+            # K/9 fallback priority:
+            # 1. Current season stats API (if 5+ starts)
+            # 2. Prior season stats API (most reliable — full season sample)
+            # 3. Current game logs (last resort — small sample)
+            # 4. Neutral (no adjustment) — never penalize without data
+            _k9_source = "2026"
+            _needs_fallback = (_k9 == 0.0 or _pstats.get("starts", 0) < 5)
+
+            if _needs_fallback:
+                # Try prior season stats API first (best sample size)
                 try:
-                    _log_ks  = pd.to_numeric(mlb_logs["K"], errors="coerce").dropna().sum()
-                    _log_ips = mlb_logs["IP"].apply(lambda x: (
-                        float(str(x).split(".")[0]) +
-                        float("0."+str(x).split(".")[1])/3
-                        if "." in str(x) else float(str(x) or 0)
-                    )).sum()
-                    if _log_ips >= 10:
-                        _k9 = round(_log_ks / _log_ips * 9, 2)
+                    import requests as _req2, datetime as _dtx2
+                    _pid_r = _req2.get(
+                        "https://statsapi.mlb.com/api/v1/sports/1/players",
+                        params={"season": _dtx2.datetime.now().year, "gameType": "R"},
+                        timeout=8
+                    )
+                    if _pid_r.ok:
+                        _norm2 = lambda s: s.lower().strip()
+                        _ppl   = _pid_r.json().get("people", [])
+                        _pp    = next((p for p in _ppl
+                                      if _norm2(p.get("fullName","")) == _norm2(mlb_pitcher)), None)
+                        if not _pp:
+                            _last_p = _norm2(mlb_pitcher).split()[-1]
+                            _pp = next((p for p in _ppl
+                                       if _last_p in _norm2(p.get("fullName","")) and
+                                       p.get("primaryPosition",{}).get("code")=="1"), None)
+                        if _pp:
+                            for _prev_yr in [_dtx2.datetime.now().year - 1,
+                                             _dtx2.datetime.now().year - 2]:
+                                _prev = _req2.get(
+                                    f"https://statsapi.mlb.com/api/v1/people/{_pp['id']}/stats",
+                                    params={"stats":"season","group":"pitching",
+                                            "season": _prev_yr, "gameType":"R"},
+                                    timeout=8
+                                )
+                                if _prev.ok:
+                                    _ps  = _prev.json().get("stats",[{}])[0].get("splits",[{}])
+                                    _ps  = _ps[0].get("stat",{}) if _ps else {}
+                                    _ip_s = str(_ps.get("inningsPitched","0") or "0")
+                                    try:
+                                        _ip_f = (float(_ip_s.split(".")[0]) +
+                                                 float("0."+_ip_s.split(".")[1])/3
+                                                 if "." in _ip_s else float(_ip_s))
+                                    except:
+                                        _ip_f = 0.0
+                                    if _ip_f >= 30:  # at least 30 IP for reliable K/9
+                                        _k9 = round(float(_ps.get("strikeOuts",0)) / _ip_f * 9, 2)
+                                        _k9_source = str(_prev_yr)
+                                        break
                 except Exception:
                     pass
 
-            if _k9 >= 11.0:   _k9_adj = +0.07
-            elif _k9 >= 9.5:  _k9_adj = +0.04
-            elif _k9 >= 8.0:  _k9_adj = +0.01
-            elif _k9 >= 6.5:  _k9_adj = -0.03
-            elif _k9 > 0:     _k9_adj = -0.06
+                # Last resort: estimate from current game logs (small sample — use cautiously)
+                if _k9 == 0.0 and not mlb_logs.empty:
+                    try:
+                        _log_ks = pd.to_numeric(mlb_logs["K"], errors="coerce").dropna().sum()
+                        _log_ips = mlb_logs["IP"].apply(lambda x: (
+                            float(str(x).split(".")[0]) +
+                            float("0."+str(x).split(".")[1])/3
+                            if "." in str(x) else float(str(x) or 0)
+                        )).sum()
+                        if _log_ips >= 15:  # need at least 15 IP — ~3 starts
+                            _k9 = round(_log_ks / _log_ips * 9, 2)
+                            _k9_source = "logs (small sample)"
+                    except Exception:
+                        pass
+
+            _k9_adj = 0.0
+            # Require minimum 20 IP for K/9 to be meaningful
+            # Bradish-type situations: 13.2 K/9 from 5 innings = noise, not signal
+            _k9_ip = _pstats.get("ip_total", 999)  # IP from season stats
+            _k9_reliable = (_k9_ip >= 20) if _k9_ip < 500 else True  # 999 = unknown
+            if _k9 >= 10.5 and _k9_reliable:  _k9_adj = +0.07
+            elif _k9 >= 10.5:                  _k9_adj = +0.03  # elite but small sample
+            elif _k9 >= 9.0 and _k9_reliable:  _k9_adj = +0.04
+            elif _k9 >= 9.0:                   _k9_adj = +0.02
+            elif _k9 >= 7.5:                   _k9_adj = 0.0
+            elif _k9 >= 6.0:                   _k9_adj = -0.04
+            elif _k9 > 0:                      _k9_adj = -0.07
+            else:
+                _k9_adj = 0.0
+                _k9_source = "no data"
+            # Flag small sample in source label
+            if _k9 > 0 and not _k9_reliable:
+                _k9_source = f"{_k9_source} (small sample)"
 
             # ── Signal 8: Real SwStr% from Baseball Savant (whiff rate)
             # Use Savant real swinging strike % if available, else K/BF proxy
@@ -7228,11 +7009,10 @@ if st.session_state.active_sport == "mlb":
             _swstr_src = "Savant SwStr%" if _swstr_real else ("MLB Stats K%" if (_swstr and not _swstr_real) else "K/BF proxy")
             # Sanity check: real SwStr% should be 5-25%, K/BF ratio is 15-35%
             # If _swstr_real > 0.25 it's likely the K% not real whiff rate
-            # Sanity: real SwStr% max is ~20% (MLB leaders)
-            # Anything above 22% is almost certainly K% not whiff rate
-            if _swstr_real and _swstr_real > 0.22:
-                _swstr_src  = "Savant K%"
-                _swstr_real = None
+            if _swstr_real and _swstr_real > 0.28:
+                _swstr_src  = "Savant K%"  # actually K rate not whiff rate
+                _swstr_real = None          # don't treat as real whiff rate
+                # Re-apply K/BF scale thresholds
                 if _swstr >= 0.28:   _swstr_adj = +0.06
                 elif _swstr >= 0.23: _swstr_adj = +0.03
                 elif _swstr >= 0.18: _swstr_adj = 0.0
@@ -7290,60 +7070,6 @@ if st.session_state.active_sport == "mlb":
                 elif _velo >= 94:  _velo_adj = +0.02  # above avg
                 elif _velo < 90:   _velo_adj = -0.04  # finesse pitcher
 
-            # ── Signal 9c: Velocity trend vs prior season ─────────────────
-            _vtrend_dir = _mlb_signal["vtrend_dir"]
-            _vtrend_mph = _mlb_signal["vtrend_mph"]
-            _vtrend_adj = _mlb_signal["vtrend_adj"]
-            if _vtrender:
-                _vtrend_dir = _vtrender.get("trend", _vtrend_dir)
-            try:
-                _vtrend_mph = float(_vtrender.get("trend_mph", _vtrend_mph) or 0.0) if _vtrender else _vtrend_mph
-            except Exception:
-                record_debug_error("mlb.velocity_trend", "Invalid velocity trend value")
-            if _vtrend_dir == "Up" or _vtrend_mph >= 1.0:
-                _vtrend_adj = +0.03
-            elif _vtrend_dir == "Down" or _vtrend_mph <= -1.0:
-                _vtrend_adj = -0.04
-            if mlb_side == "Under":
-                _vtrend_adj = -_vtrend_adj
-
-            # ── Signal 9d: Batter-vs-pitcher H2H vs posted lineup ─────────
-            _h2h_adj = _mlb_signal["h2h_adj"]
-            _h2h_note = _mlb_signal["h2h_note"]
-            try:
-                _matched_h2h = []
-                for _batter_name in (_lineup_order or []):
-                    _bnorm = _batter_name.lower().replace(".", "").strip()
-                    _blast = _bnorm.split()[-1] if _bnorm else ""
-                    _row = None
-                    for _hname, _hstats in (_h2h_data or {}).items():
-                        _hnorm = str(_hname).lower().replace(".", "").strip()
-                        if _bnorm == _hnorm or (_blast and _blast in _hnorm):
-                            _row = _hstats
-                            break
-                    if _row and _row.get("ab_total", _row.get("ab", 0)) >= 3:
-                        _matched_h2h.append(_row)
-
-                if _matched_h2h:
-                    _ab_total = sum(int(r.get("ab_total", r.get("ab", 0)) or 0) for r in _matched_h2h)
-                    _k_total = sum(int(r.get("k", 0) or 0) for r in _matched_h2h)
-                    if _ab_total > 0:
-                        _h2h_k_pct = _k_total / _ab_total
-                        if _h2h_k_pct >= 0.30:
-                            _h2h_adj = +0.04
-                        elif _h2h_k_pct <= 0.15:
-                            _h2h_adj = -0.04
-                        if mlb_side == "Under":
-                            _h2h_adj = -_h2h_adj
-                        _h2h_note = (
-                            f"{len(_matched_h2h)} lineup bats have H2H: "
-                            f"{_k_total}/{_ab_total} K ({_h2h_k_pct:.0%})"
-                        )
-            except Exception as e:
-                record_debug_error("mlb.h2h_signal", e)
-                _h2h_adj = _mlb_signal["h2h_adj"]
-                _h2h_note = "H2H signal unavailable"
-
             # ── Signal 10: Umpire K tendency
             _ump_tend  = _ump.get("tendency", "Avg") if _ump else "Avg"
             _ump_name  = _ump.get("name") if _ump else None
@@ -7381,10 +7107,10 @@ if st.session_state.active_sport == "mlb":
             if _lineup_confirmed and _order_hands and _platoon_vs_l and _platoon_vs_r:
                 # Weighted K rate for tonight's actual lineup
                 _lineup_kr = (_lhb_pct * _platoon_vs_l +
-                          (1 - _lhb_pct) * _platoon_vs_r)
+                              (1 - _lhb_pct) * _platoon_vs_r)
                 # Vs blended opponent K% from splits
                 _opp_kr_blended = ((_splits.get("vs_l",0) or 0) * _lhb_pct +
-                               (_splits.get("vs_r",0) or 0) * (1-_lhb_pct))
+                                   (_splits.get("vs_r",0) or 0) * (1-_lhb_pct))
                 # Divergence from overall K% — if lineup is more favorable/unfavorable
                 _opp_kr_overall = _splits.get("overall") or (okpct if okpct else 0.22)
                 if _opp_kr_overall > 0:
@@ -7400,29 +7126,25 @@ if st.session_state.active_sport == "mlb":
 
             if _pc_avg:
                 # Estimate K ceiling from pitch count
-                # MLB avg ~15 pitches/inning for starters (not 16)
-                # High-K pitchers work faster per out — use 14.5 for K-heavy guys
-                _pitches_per_inn = 14.5 if (_k9 and _k9 >= 9.0) else 15.0
-                _innings_est    = _pc_avg / _pitches_per_inn
+                # ~16 pitches/inning, K/9 = Ks per 9 innings → K per inning = K/9 ÷ 9
+                _innings_est    = _pc_avg / 16.0           # estimated innings
                 _k_per_inn      = (_k9 / 9.0) if _k9 > 0 else (avg_val / max(_avg_ip, 1.0))
                 _pc_k_ceiling   = round(_innings_est * _k_per_inn, 1)
 
-                # Base adj from pitch count — only penalize genuinely short outings
+                # Base adj from pitch count
                 if _pc_avg >= 100:    _pc_adj = +0.03
                 elif _pc_avg >= 90:   _pc_adj = +0.01
-                elif _pc_avg < 65:    _pc_adj = -0.08   # was 75 — too aggressive
-                elif _pc_avg < 78:    _pc_adj = -0.04   # was 85 — too aggressive
+                elif _pc_avg < 75:    _pc_adj = -0.08
+                elif _pc_avg < 85:    _pc_adj = -0.04
 
-                # Ceiling penalty — only apply when gap is significant
-                # 83p pitcher vs 4.5 line: ceiling ~4.2 = within 0.3, not a true cap
+                # Extra penalty if K ceiling is at or below the line
+                # This catches the case where even a perfect outing can't hit over
                 if _pc_k_ceiling and mlb_prop == "Strikeouts":
                     _ceiling_gap = _pc_k_ceiling - mlb_line
-                    if _ceiling_gap <= -1.0:      # ceiling is well below line (>1 K gap)
-                        _pc_adj = min(_pc_adj, -0.15)
-                    elif _ceiling_gap <= -0.5:    # ceiling is meaningfully below line
-                        _pc_adj = min(_pc_adj, -0.08)
-                    elif _ceiling_gap <= 0:       # ceiling just at/barely below line
-                        _pc_adj = min(_pc_adj, -0.04)
+                    if _ceiling_gap <= 0:        # ceiling is at or below line
+                        _pc_adj = min(_pc_adj, -0.15)  # heavy additional penalty
+                    elif _ceiling_gap <= 0.5:    # very tight ceiling
+                        _pc_adj = min(_pc_adj, -0.10)
 
             # Partial lineup penalty
             if _lineup_order and len(_lineup_order) < 7:
@@ -7434,11 +7156,10 @@ if st.session_state.active_sport == "mlb":
                       + _ha_adj + _form_adj + _rest_adj
                       + _k9_adj + _swstr_adj + _velo_adj + _vtrend_adj + _ip_adj
                       + _ump_adj + _wx_adj + _lineup_adj
-                      + _platoon_adj + _pc_adj + _h2h_adj
-                      + _return_boost))  # injury return correction
+                      + _platoon_adj + _pc_adj))
             tier = mlb_verdict(adj, edge, mlb_side,
-                          pc_ceiling=_pc_k_ceiling,
-                          line=mlb_line)
+                              pc_ceiling=_pc_k_ceiling,
+                              line=mlb_line)
 
             # Consistency
             cv   = vals.std() / avg_val if avg_val > 0 else 1.0
@@ -7566,37 +7287,6 @@ if st.session_state.active_sport == "mlb":
             if _ip_note:
                 _pills.append(f"<span class='flag-pill down'>⚠️ {_ip_note}</span>")
 
-            # ── 🚨 Injury Return Trap Alert ─────────────────────────
-            if _return_data.get("is_return"):
-                _rconf = _return_data.get("confidence","Medium")
-                _rk    = _return_data.get("k_suppression", 0)
-                _rnorm = _return_data.get("normal_avg_k", 0)
-                _rshrt = _return_data.get("suppressed_avg_k", 0)
-                _rc    = _return_data.get("return_starts", 1)
-                _rcol  = "#ffc107" if _rconf == "Medium" else "#00c4cc"
-                _rbg   = "rgba(255,193,7,0.08)" if _rconf == "Medium" else "rgba(0,196,204,0.08)"
-                _rbdr  = "rgba(255,193,7,0.3)" if _rconf == "Medium" else "rgba(0,196,204,0.3)"
-                st.markdown(
-                    f"<div style='background:{_rbg};border:1px solid {_rbdr};"
-                    f"border-left:4px solid {_rcol};"
-                    f"border-radius:0 12px 12px 0;padding:0.85rem 1.1rem;margin-bottom:0.75rem;'>"
-                    f"<div style='font-family:Plus Jakarta Sans,sans-serif;font-weight:800;"
-                    f"color:{_rcol};font-size:0.9rem;margin-bottom:4px;'>"
-                    f"🚨 INJURY RETURN TRAP DETECTED — {_rconf} Confidence</div>"
-                    f"<div style='font-family:JetBrains Mono,monospace;font-size:0.65rem;"
-                    f"color:#9aaec4;line-height:1.8;'>"
-                    f"Last {_rc} start{'s' if _rc > 1 else ''} were shortened (injury return) · "
-                    f"avg <strong style='color:#ff3d5c;'>{_rshrt}K</strong> in those starts<br>"
-                    f"True ability from normal starts: "
-                    f"<strong style='color:#00e896;'>{_rnorm}K avg</strong> · "
-                    f"Line likely set <strong style='color:{_rcol};'>{_rk:.1f}K too low</strong><br>"
-                    f"<span style='color:#f0f4f8;font-weight:600;'>"
-                    f"PropIQ adjusted model using normal starts only "
-                    f"(+{_return_boost:.0%} correction applied)</span>"
-                    f"</div></div>",
-                    unsafe_allow_html=True
-                )
-
             # ── Injury / Status Banner ─────────────────────────────────
             _inj_status = _injury.get("status","Active")
             _inj_desc   = _injury.get("description","")
@@ -7624,26 +7314,26 @@ if st.session_state.active_sport == "mlb":
             with _c1:
                 _ac = "green" if (edge>0 and mlb_side=="Over") or (edge<0 and mlb_side=="Under") else "red"
                 st.markdown(f"<div class='stat-card'><div class='stat-label'>Avg {_lbl} (L{len(vals)})</div>"
-                        f"<div class='stat-value {_ac}'>{avg_val:.1f}</div>"
-                        f"<div class='stat-hint'>Line {mlb_line} · edge {edge:+.1f}</div></div>",unsafe_allow_html=True)
+                            f"<div class='stat-value {_ac}'>{avg_val:.1f}</div>"
+                            f"<div class='stat-hint'>Line {mlb_line} · edge {edge:+.1f}</div></div>",unsafe_allow_html=True)
             with _c2:
                 hc = "green" if whr>=0.64 else ("yellow" if whr>=0.55 else "red")
                 st.markdown(f"<div class='stat-card'><div class='stat-label'>Hit Rate</div>"
-                        f"<div class='stat-value {hc}'>{whr:.0%}</div>"
-                        f"<div class='stat-hint'>Weighted L10 starts</div></div>",unsafe_allow_html=True)
+                            f"<div class='stat-value {hc}'>{whr:.0%}</div>"
+                            f"<div class='stat-hint'>Weighted L10 starts</div></div>",unsafe_allow_html=True)
             with _c3:
                 _k9c = "green" if _k9>=9.0 else ("yellow" if _k9>=7.5 else "red")
                 _k9_display = f"{_k9:.1f}" if _k9>0 else "—"
                 _k9_tier = ("Elite" if _k9>=10.5 else "Above avg" if _k9>=9.0 else
-                        "Average" if _k9>=7.5 else "Below avg" if _k9>=6.0 else
-                        "Contact pitcher" if _k9>0 else "No data yet")
+                            "Average" if _k9>=7.5 else "Below avg" if _k9>=6.0 else
+                            "Contact pitcher" if _k9>0 else "No data yet")
                 st.markdown(f"<div class='stat-card'><div class='stat-label'>K/9 Rate</div>"
-                        f"<div class='stat-value {_k9c}'>{_k9_display}</div>"
-                        f"<div class='stat-hint'>League avg 8.3 · {_k9_tier}</div></div>",unsafe_allow_html=True)
+                            f"<div class='stat-value {_k9c}'>{_k9_display}</div>"
+                            f"<div class='stat-hint'>League avg 8.3 · {_k9_tier}</div></div>",unsafe_allow_html=True)
             with _c4:
                 st.markdown(f"<div class='stat-card'><div class='stat-label'>Confidence</div>"
-                        f"<div class='stat-value' style='color:{_cc};'>{_sc}</div>"
-                        f"<div class='stat-hint'>12 signals · {len(vals)} starts</div></div>",unsafe_allow_html=True)
+                            f"<div class='stat-value' style='color:{_cc};'>{_sc}</div>"
+                            f"<div class='stat-hint'>12 signals · {len(vals)} starts</div></div>",unsafe_allow_html=True)
 
             # Row 2 — new signals
             _c5,_c6,_c7,_c8 = st.columns(4)
@@ -7651,49 +7341,49 @@ if st.session_state.active_sport == "mlb":
                 _sw_c = "green" if (_swstr or 0)>=0.23 else ("yellow" if (_swstr or 0)>=0.18 else "red")
                 _sw_d = f"{_swstr:.0%}" if _swstr else "—"
                 st.markdown(f"<div class='stat-card'><div class='stat-label'>K% (SwStr proxy)</div>"
-                        f"<div class='stat-value {_sw_c}'>{_sw_d}</div>"
-                        f"<div class='stat-hint'>Ks per batter faced · avg 21%</div></div>",unsafe_allow_html=True)
+                            f"<div class='stat-value {_sw_c}'>{_sw_d}</div>"
+                            f"<div class='stat-hint'>Ks per batter faced · avg 21%</div></div>",unsafe_allow_html=True)
             with _c6:
                 _ip_c = "green" if _avg_ip>=6.5 else ("yellow" if _avg_ip>=5.0 else "red")
                 _ip_d = f"{_avg_ip:.1f}" if _avg_ip>0 else "—"
                 st.markdown(f"<div class='stat-card'><div class='stat-label'>Avg IP/Start</div>"
-                        f"<div class='stat-value {_ip_c}'>{_ip_d}</div>"
-                        f"<div class='stat-hint'>{'Deep' if _avg_ip>=6.5 else 'Average' if _avg_ip>=5.0 else '⚠️ Short leash'} · {_ip_source if '_ip_source' in dir() else 'season stats'}</div></div>",unsafe_allow_html=True)
+                            f"<div class='stat-value {_ip_c}'>{_ip_d}</div>"
+                            f"<div class='stat-hint'>{'Deep' if _avg_ip>=6.5 else 'Average' if _avg_ip>=5.0 else '⚠️ Short leash'} · {_ip_source if '_ip_source' in dir() else 'season stats'}</div></div>",unsafe_allow_html=True)
             with _c7:
                 _opp_kd = f"{okpct:.0%}" if okpct else "—"
                 _opp_kc = "green" if (okpct or 0)>=0.26 else ("red" if (okpct or 0)<=0.18 else "yellow")
                 _hand_lbl = f"vs {'R' if _phand=='R' else 'L'}HP"
                 st.markdown(f"<div class='stat-card'><div class='stat-label'>Opp K% {_hand_lbl}</div>"
-                        f"<div class='stat-value {_opp_kc}'>{_opp_kd}</div>"
-                        f"<div class='stat-hint'>{'High K lineup' if (okpct or 0)>=0.26 else 'Low K lineup' if (okpct or 0)<=0.18 else 'Average'} · {mlb_opp or 'TBD'}</div></div>",unsafe_allow_html=True)
+                            f"<div class='stat-value {_opp_kc}'>{_opp_kd}</div>"
+                            f"<div class='stat-hint'>{'High K lineup' if (okpct or 0)>=0.26 else 'Low K lineup' if (okpct or 0)<=0.18 else 'Average'} · {mlb_opp or 'TBD'}</div></div>",unsafe_allow_html=True)
             with _c8:
                 _ump_d = _ump_name.split()[-1] if _ump_name else "TBD"
                 _ump_c = "green" if _ump_tend=="High" else ("red" if _ump_tend=="Low" else "yellow")
                 _ump_kpg = _ump.get("k_per_game",15.5) if _ump else 15.5
                 st.markdown(f"<div class='stat-card'><div class='stat-label'>Umpire Zone</div>"
-                        f"<div class='stat-value {_ump_c}' style='font-size:1.4rem;'>{_ump_d}</div>"
-                        f"<div class='stat-hint'>{_ump_tend} K zone · {_ump_kpg:.1f} K/g avg</div></div>",unsafe_allow_html=True)
+                            f"<div class='stat-value {_ump_c}' style='font-size:1.4rem;'>{_ump_d}</div>"
+                            f"<div class='stat-hint'>{_ump_tend} K zone · {_ump_kpg:.1f} K/g avg</div></div>",unsafe_allow_html=True)
 
-            # Row 3 — Velocity trend + Injury status + H2H
-            _c11, _c12, _c13 = st.columns(3)
+            # Row 3 — Velocity trend + Injury status
+            _c11, _c12 = st.columns(2)
             with _c11:
                 if _vtrender.get("avg_velo"):
                     _vt_col = "green" if _vtrend_dir=="Up" else ("red" if _vtrend_dir=="Down" else "yellow")
                     _vt_icon = "📈" if _vtrend_dir=="Up" else ("📉" if _vtrend_dir=="Down" else "➡️")
                     _vt_diff = f"{_vtrend_mph:+.1f}mph vs {_vtrender.get('prior_velo',''):.0f}" if _vtrender.get("prior_velo") else ""
                     st.markdown(
-                    f"<div class='stat-card'>"
-                    f"<div class='stat-label'>Velocity Trend</div>"
-                    f"<div class='stat-value {_vt_col}' style='font-size:1.4rem;'>{_vt_icon} {_vtrend_dir}</div>"
-                    f"<div class='stat-hint'>{_vtrender.get('avg_velo',0):.1f}mph this season"
-                    f"{(' · ' + _vt_diff) if _vt_diff else ''}</div>"
-                    f"</div>", unsafe_allow_html=True
+                        f"<div class='stat-card'>"
+                        f"<div class='stat-label'>Velocity Trend</div>"
+                        f"<div class='stat-value {_vt_col}' style='font-size:1.4rem;'>{_vt_icon} {_vtrend_dir}</div>"
+                        f"<div class='stat-hint'>{_vtrender.get('avg_velo',0):.1f}mph this season"
+                        f"{(' · ' + _vt_diff) if _vt_diff else ''}</div>"
+                        f"</div>", unsafe_allow_html=True
                     )
                 else:
                     st.markdown(
-                    "<div class='stat-card'><div class='stat-label'>Velocity Trend</div>"
-                    "<div style='color:#6b7f96;font-family:JetBrains Mono,monospace;font-size:0.7rem;margin-top:6px;'>No trend data</div></div>",
-                    unsafe_allow_html=True
+                        "<div class='stat-card'><div class='stat-label'>Velocity Trend</div>"
+                        "<div style='color:#6b7f96;font-family:JetBrains Mono,monospace;font-size:0.7rem;margin-top:6px;'>No trend data</div></div>",
+                        unsafe_allow_html=True
                     )
             with _c12:
                 # Injury status card
@@ -7707,19 +7397,6 @@ if st.session_state.active_sport == "mlb":
                     f"<div class='stat-hint'>{_inj_desc[:60] if _inj_desc else 'No reported issues'}</div>"
                     f"</div>", unsafe_allow_html=True
                 )
-            with _c13:
-                # H2H vs lineup card
-                _h2h_col = ("green" if _h2h_adj >= 0.04 else
-                        "red"   if _h2h_adj <= -0.04 else "yellow")
-                _h2h_val = (f"{_h2h_adj:+.0%}" if _h2h_adj != 0 else "Neutral")
-                st.markdown(
-                    f"<div class='stat-card'>"
-                    f"<div class='stat-label'>H2H vs Lineup</div>"
-                    f"<div class='stat-value {_h2h_col}' style='font-size:1.2rem;font-weight:800;'>"
-                    f"{_h2h_val}</div>"
-                    f"<div class='stat-hint'>{_h2h_note[:70]}</div>"
-                    f"</div>", unsafe_allow_html=True
-                )
 
             # Row 3 — Pitch Count + Platoon (equal columns)
             _c9, _c10 = st.columns([1, 1])
@@ -7728,18 +7405,18 @@ if st.session_state.active_sport == "mlb":
                     _pc_c  = "red" if (_pc_k_ceiling and _pc_k_ceiling <= mlb_line) else ("yellow" if _pc_limit else ("green" if _pc_avg >= 100 else "yellow"))
                     _pc_lbl = "🚫 Hard Cap" if (_pc_k_ceiling and _pc_k_ceiling <= mlb_line) else ("⚠️ On Limit" if _pc_limit else "Normal Depth")
                     st.markdown(
-                    f"<div class='stat-card'>"
-                    f"<div class='stat-label'>Pitch Count Est.</div>"
-                    f"<div class='stat-value {_pc_c}' style='font-size:1.6rem;'>~{_pc_avg}p</div>"
-                    f"<div class='stat-hint'>~{_pc_k_ceiling:.1f}K ceiling · {_pc_lbl}</div>"
-                    f"</div>",
-                    unsafe_allow_html=True
+                        f"<div class='stat-card'>"
+                        f"<div class='stat-label'>Pitch Count Est.</div>"
+                        f"<div class='stat-value {_pc_c}' style='font-size:1.6rem;'>~{_pc_avg}p</div>"
+                        f"<div class='stat-hint'>~{_pc_k_ceiling:.1f}K ceiling · {_pc_lbl}</div>"
+                        f"</div>",
+                        unsafe_allow_html=True
                     )
                 else:
                     st.markdown(
-                    "<div class='stat-card'><div class='stat-label'>Pitch Count Est.</div>"
-                    "<div style='color:#6b7f96;font-family:JetBrains Mono,monospace;font-size:0.7rem;margin-top:6px;'>No data yet</div></div>",
-                    unsafe_allow_html=True
+                        "<div class='stat-card'><div class='stat-label'>Pitch Count Est.</div>"
+                        "<div style='color:#6b7f96;font-family:JetBrains Mono,monospace;font-size:0.7rem;margin-top:6px;'>No data yet</div></div>",
+                        unsafe_allow_html=True
                     )
             with _c10:
                 if _platoon_vs_l and _platoon_vs_r:
@@ -7747,20 +7424,20 @@ if st.session_state.active_sport == "mlb":
                     _hand_c     = "green" if max(_platoon_vs_l, _platoon_vs_r) >= 0.28 else "yellow"
                     _phand_desc = f"vsL: {_platoon_vs_l:.0%} · vsR: {_platoon_vs_r:.0%}"
                     st.markdown(
-                    f"<div class='stat-card'>"
-                    f"<div class='stat-label'>Platoon K%</div>"
-                    f"<div class='stat-value {_hand_c}' style='font-size:1.4rem;'>{_phand_desc}</div>"
-                    f"<div class='stat-hint'>Favors {'lefties' if _hand_fav=='LHB' else 'righties'}"
-                    f"{f' · {_lhb_count}L/{_rhb_count}R tonight' if _order_hands else ' · lineup TBD'}</div>"
-                    f"</div>",
-                    unsafe_allow_html=True
+                        f"<div class='stat-card'>"
+                        f"<div class='stat-label'>Platoon K%</div>"
+                        f"<div class='stat-value {_hand_c}' style='font-size:1.4rem;'>{_phand_desc}</div>"
+                        f"<div class='stat-hint'>Favors {'lefties' if _hand_fav=='LHB' else 'righties'}"
+                        f"{f' · {_lhb_count}L/{_rhb_count}R tonight' if _order_hands else ' · lineup TBD'}</div>"
+                        f"</div>",
+                        unsafe_allow_html=True
                     )
                 else:
                     _plat_note = "No career splits yet" if not _platoon.get("vs_l") else "Loading splits..."
                     st.markdown(
-                    f"<div class='stat-card'><div class='stat-label'>Platoon K%</div>"
-                    f"<div style='color:#6b7f96;font-family:JetBrains Mono,monospace;font-size:0.7rem;margin-top:6px;'>{_plat_note}</div></div>",
-                    unsafe_allow_html=True
+                        f"<div class='stat-card'><div class='stat-label'>Platoon K%</div>"
+                        f"<div style='color:#6b7f96;font-family:JetBrains Mono,monospace;font-size:0.7rem;margin-top:6px;'>{_plat_note}</div></div>",
+                        unsafe_allow_html=True
                     )
 
             # Consistency
@@ -7781,32 +7458,32 @@ if st.session_state.active_sport == "mlb":
                     _wx_c = {"Helps Over":"#00e896","Hurts Over":"#ff3d5c","Neutral":"#9aaec4"}.get(_wx_impact,"#9aaec4")
                     _wx_bg= {"Helps Over":"rgba(0,232,150,0.07)","Hurts Over":"rgba(255,61,92,0.07)","Neutral":"rgba(255,255,255,0.02)"}.get(_wx_impact,"rgba(255,255,255,0.02)")
                     st.markdown(
-                    f"<div class='stat-card' style='border-color:{_wx_c}33;background:{_wx_bg};'>"
-                    f"<div class='stat-label'>🌡️ Game Weather</div>"
-                    f"<div style='font-family:Plus Jakarta Sans,sans-serif;font-size:1.5rem;"
-                    f"font-weight:800;color:{_wx_c};letter-spacing:-0.5px;'>"
-                    f"{_weather['temp_f']:.0f}°F · {_weather['wind_mph']:.0f}mph {_weather['wind_dir']}</div>"
-                    f"<div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;"
-                    f"color:#6b7f96;margin-top:4px;'>{_weather['condition']}</div>"
-                    f"<div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;"
-                    f"color:{_wx_c};margin-top:3px;'>{_wx_note}</div>"
-                    f"</div>", unsafe_allow_html=True
+                        f"<div class='stat-card' style='border-color:{_wx_c}33;background:{_wx_bg};'>"
+                        f"<div class='stat-label'>🌡️ Game Weather</div>"
+                        f"<div style='font-family:Plus Jakarta Sans,sans-serif;font-size:1.5rem;"
+                        f"font-weight:800;color:{_wx_c};letter-spacing:-0.5px;'>"
+                        f"{_weather['temp_f']:.0f}°F · {_weather['wind_mph']:.0f}mph {_weather['wind_dir']}</div>"
+                        f"<div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;"
+                        f"color:#6b7f96;margin-top:4px;'>{_weather['condition']}</div>"
+                        f"<div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;"
+                        f"color:{_wx_c};margin-top:3px;'>{_wx_note}</div>"
+                        f"</div>", unsafe_allow_html=True
                     )
                 elif _weather and _weather.get("condition") == "Dome/Retractable":
                     st.markdown(
-                    "<div class='stat-card'><div class='stat-label'>🏟️ Game Weather</div>"
-                    "<div style='font-family:Plus Jakarta Sans,sans-serif;font-size:1.1rem;"
-                    "font-weight:700;color:#9aaec4;'>Indoor</div>"
-                    "<div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;"
-                    "color:#6b7f96;margin-top:4px;'>Dome / Retractable roof — weather irrelevant</div>"
-                    "</div>", unsafe_allow_html=True
+                        "<div class='stat-card'><div class='stat-label'>🏟️ Game Weather</div>"
+                        "<div style='font-family:Plus Jakarta Sans,sans-serif;font-size:1.1rem;"
+                        "font-weight:700;color:#9aaec4;'>Indoor</div>"
+                        "<div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;"
+                        "color:#6b7f96;margin-top:4px;'>Dome / Retractable roof — weather irrelevant</div>"
+                        "</div>", unsafe_allow_html=True
                     )
                 else:
                     st.markdown(
-                    "<div class='stat-card'><div class='stat-label'>🌡️ Game Weather</div>"
-                    "<div style='color:#6b7f96;font-family:JetBrains Mono,monospace;"
-                    "font-size:0.7rem;margin-top:6px;'>Weather data unavailable</div></div>",
-                    unsafe_allow_html=True
+                        "<div class='stat-card'><div class='stat-label'>🌡️ Game Weather</div>"
+                        "<div style='color:#6b7f96;font-family:JetBrains Mono,monospace;"
+                        "font-size:0.7rem;margin-top:6px;'>Weather data unavailable</div></div>",
+                        unsafe_allow_html=True
                     )
 
             with _gctx_cols[1]:
@@ -7816,7 +7493,7 @@ if st.session_state.active_sport == "mlb":
                     _lo_bg = "rgba(0,232,150,0.07)" if _lineup_confirmed else "rgba(255,193,7,0.07)"
                     _order_str = " · ".join(_lineup_order[:5]) + ("..." if len(_lineup_order) > 5 else "")
                     st.markdown(
-                    f"<div class='stat-card' style='border-color:{_lo_c}33;background:{_lo_bg};'>"
+                        f"<div class='stat-card' style='border-color:{_lo_c}33;background:{_lo_bg};'>"
                         f"<div class='stat-label'>📋 Opposing Batting Order</div>"
                         f"<div style='font-family:Plus Jakarta Sans,sans-serif;font-size:0.92rem;"
                         f"font-weight:700;color:{_lo_c};'>"
@@ -7948,42 +7625,6 @@ if st.session_state.active_sport == "mlb":
                 f"<div style='font-family:JetBrains Mono,monospace;font-size:0.6rem;color:#555;'>{_cl}</div></div>"
                 f"</div></div>",unsafe_allow_html=True)
 
-            # ── Consider the Under? ─────────────────────────────
-            # When the Over is a Pass with strong negative edge,
-            # run the Under model and surface it if it's strong
-            if tier == "Pass" and edge < -1.0:
-                _under_adj = max(0.05, min(0.95,
-                    (1.0 - adj) * 0.85  # rough Under probability
-                ))
-                # Run a quick Under verdict
-                _u_whr = mlb_weighted_hr(mlb_logs, mlb_line, _stat, "Under")
-                _u_adj = max(0.05, min(0.95, _u_whr
-                    - _ha_adj - _form_adj + _rest_adj
-                    + _k9_adj + _swstr_adj + _velo_adj + _vtrend_adj + _ip_adj
-                    + _ump_adj + _wx_adj - _lineup_adj
-                    - _platoon_adj - _pc_adj - _h2h_adj))
-
-                if _u_adj >= 0.63:
-                    _u_tier = "Strong Under" if _u_adj >= 0.72 else "Lean Under"
-                    _u_col  = "#ff3d5c" if _u_adj >= 0.72 else "#f97316"
-                    st.markdown(
-                        f"<div style='background:rgba(255,61,92,0.08);"
-                        f"border:1px solid rgba(255,61,92,0.25);"
-                        f"border-left:4px solid {_u_col};"
-                        f"border-radius:0 12px 12px 0;"
-                        f"padding:0.85rem 1.1rem;margin-bottom:0.75rem;'>"
-                        f"<div style='font-family:Plus Jakarta Sans,sans-serif;"
-                        f"font-size:0.85rem;font-weight:800;color:{_u_col};"
-                        f"margin-bottom:4px;'>💡 Consider the Under instead</div>"
-                        f"<div style='font-family:JetBrains Mono,monospace;"
-                        f"font-size:0.65rem;color:#9aaec4;'>"
-                        f"Line looks high for {mlb_pitcher} · avg {avg_val:.1f} {_lbl} vs {mlb_line} line<br>"
-                        f"PropIQ Under model: <strong style='color:{_u_col};'>"
-                        f"{_u_adj:.0%}</strong> · {_u_tier}</div>"
-                        f"</div>",
-                        unsafe_allow_html=True
-                    )
-
             # ── Add to Parlay button ────────────────────────────────
             if tier not in ("Pass",):
                 _mpc1, _mpc2 = st.columns([3,1])
@@ -8015,41 +7656,9 @@ if st.session_state.active_sport == "mlb":
                             st.toast("Parlay full (6 legs max)", icon="🚫")
 
             # Share button
-            _mlb_share_col, _mlb_track_col = st.columns(2)
-            with _mlb_share_col:
-                with st.expander("📤 Share this pick", expanded=False):
-                    st.code(_share_txt, language=None)
-                    st.caption("Copy and paste into Discord, group chats, or social media")
-            with _mlb_track_col:
-                if st.button("➕ Add to Prop Tracker", key=f"mlb_tracker_{mlb_pitcher}_{mlb_line}",
-                             use_container_width=True):
-                    import datetime as _mbt
-                    _mlb_entry = {
-                        "Player":      mlb_pitcher,
-                        "Line":        f"{mlb_line} {_lbl} {mlb_side}",
-                        "Opponent":    mlb_opp or "—",
-                        "Matchup":     tier,
-                        "Venue":       mlb_home or "—",
-                        "Avg PTS":     avg_val,
-                        "Hit Rate":    f"{whr:.0%}",
-                        "Adjusted":    f"{adj:.0%}",
-                        "Consistency": f"{cons:.0%}",
-                        "Verdict":     tier,
-                        "Result":      "Pending",
-                        "Sport":       "MLB",
-                    }
-                    _mlb_existing = [i for i, e in enumerate(st.session_state.tracker)
-                                     if e["Player"] == mlb_pitcher and
-                                     e["Line"] == f"{mlb_line} {_lbl} {mlb_side}"]
-                    if _mlb_existing:
-                        st.session_state.tracker[_mlb_existing[0]] = _mlb_entry
-                        st.success(f"Updated {mlb_pitcher} in tracker.")
-                    else:
-                        _new_id = save_to_supabase(st.session_state.session_id, _mlb_entry)
-                        if _new_id:
-                            _mlb_entry["id"] = _new_id
-                        st.session_state.tracker.append(_mlb_entry)
-                        st.success(f"✅ {mlb_pitcher} added to tracker!")
+            with st.expander("📤 Share this pick", expanded=False):
+                st.code(_share_txt, language=None)
+                st.caption("Copy and paste into Discord, group chats, or social media")
 
             # ── MLB Signal Debugger ──────────────────────────────────
             with st.expander("🔬  Show signal breakdown (debug)"):
@@ -8112,7 +7721,7 @@ if st.session_state.active_sport == "mlb":
                                                   f"{okpct:.1%}" if okpct else "N/A",
                                                   None,
                                                   f"{'High K lineup' if (okpct or 0)>=0.26 else 'Low K lineup' if (okpct or 0)<=0.18 else 'Average K lineup'}" if okpct else "No opponent data"),
-                    ("Park factor",               psig,                    None,        f"{mlb_home or 'N/A'} · {'K-friendly park — above avg strikeout rate' if psig=='Boost' else 'K-suppressing park — below avg strikeout rate (e.g. Coors)' if psig=='Penalty' else 'neutral park'}"),
+                    ("Park factor",               psig,                    None,        f"{mlb_home or 'N/A'} · {'run-friendly park' if psig=='Boost' else 'pitcher-friendly park' if psig=='Penalty' else 'neutral park'}"),
                     ("Home/Away split",            f"{_ha_adj:+.0%}" if _ha_adj != 0 else "Neutral",
                                                   _ha_adj,
                                                   "Based on pitcher's H/A K splits from logs"),
@@ -8199,12 +7808,6 @@ if st.session_state.active_sport == "mlb":
                     "Batting order":    f"{len(_lineup_order)}/9 · {_lhb_count}L/{_rhb_count}R" if _order_hands else (f"{len(_lineup_order)}/9" if _lineup_order else "Not posted"),
                     "Platoon matchup":  f"vsL:{_platoon_vs_l:.1%} vsR:{_platoon_vs_r:.1%} · {_lhb_count}L/{_rhb_count}R tonight" if (_platoon_vs_l and _platoon_vs_r) else "Lineup TBD",
                     "Pitch count est":  f"~{_pc_avg}p → ~{_pc_k_ceiling:.1f} K ceiling · {'⚠️ On limit' if _pc_limit else 'No limit detected'}" if _pc_avg else "N/A",
-                    "Batter vs Pitcher": _h2h_note,
-                    "Injury return":     (f"⚠️ {_return_data['return_starts']} shortened start(s) detected · "
-                                         f"true ability {_return_data['normal_avg_k']}K vs "
-                                         f"suppressed {_return_data['suppressed_avg_k']}K · "
-                                         f"+{_return_boost:.0%} correction applied"
-                                         if _return_data.get("is_return") else "No return pattern detected"),
                 }
 
                 for _lbl2, _a, _bef, _aft in _mlb_steps:
@@ -8349,8 +7952,8 @@ if st.session_state.active_sport == "mlb":
         try:
             import requests as _mreq
             _mr = _mreq.get(
-                "https://partner-api.prizepicks.com/projections",
-                params={"league_id": 2, "per_page": 1000, "single_stat": "true"},
+                "https://api.prizepicks.com/projections",
+                params={"league_id": 2, "per_page": 250, "single_stat": "true"},
                 headers={"User-Agent":"Mozilla/5.0","Accept":"application/json",
                          "Referer":"https://prizepicks.com/"},
                 timeout=15
@@ -8587,17 +8190,43 @@ if st.session_state.active_sport == "mlb":
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_all_pp_props(sport_filter: str = "Both") -> list:
     """
-    Fetch PrizePicks props. Tries partner API first (no Cloudflare),
-    falls back to main API with multiple UA strategies.
+    Fetch PrizePicks props. Tries partner API first, backs off quickly on
+    rate limits, and falls back to cached slates.
     """
     import requests as _req
+    import time as _time
     props = []
     fetch_notes = []
 
-    # Fresh shared cache first. This avoids hammering PrizePicks across Railway sessions.
     cached_props = get_cached_pp_props_from_supabase(sport_filter, max_age_minutes=15)
     if cached_props:
         return cached_props
+    cached_props = get_cached_pp_props_from_local(sport_filter, max_age_minutes=15)
+    if cached_props:
+        return cached_props
+
+    def _stale_cache() -> Optional[list]:
+        return (
+            get_cached_pp_props_from_supabase(sport_filter, max_age_minutes=720)
+            or get_cached_pp_props_from_local(sport_filter, max_age_minutes=720)
+        )
+
+    cooldown_key = f"pp_rate_limit_until_{sport_filter.lower()}"
+    cooldown_until = float(st.session_state.get(cooldown_key, 0) or 0)
+    now = _time.time()
+    if cooldown_until > now:
+        cached_props = _stale_cache()
+        wait_min = max(1, int((cooldown_until - now) / 60) + 1)
+        if cached_props:
+            st.session_state["edge_fetch_debug"] = (
+                st.session_state.get("edge_fetch_debug", [])
+                + [f"PrizePicks cooldown active ({wait_min} min left); using cached slate."]
+            )
+            return cached_props
+        raise RuntimeError(
+            f"PrizePicks is rate-limiting this Railway instance. Wait about {wait_min} minutes, "
+            "then clear cache and retry."
+        )
 
     _all_leagues = [("7", "NBA"), ("2", "MLB")]
     if sport_filter == "NBA":  _all_leagues = [("7", "NBA")]
@@ -8620,14 +8249,16 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
             stat      = a.get("stat_type", "")
             line      = a.get("line_score")
             odds_type = a.get("odds_type", "standard")
-            if not line or not stat: continue
-            pid  = (proj.get("relationships", {})
-                       .get("new_player", {})
-                       .get("data", {}).get("id"))
-            pi   = pmap.get(pid, {})
+            if not line or not stat:
+                continue
+            pid = (proj.get("relationships", {})
+                      .get("new_player", {})
+                      .get("data", {}).get("id"))
+            pi = pmap.get(pid, {})
             name = pi.get("name", "")
-            if not name: continue
-            key   = f"{name}|{stat}"
+            if not name:
+                continue
+            key = f"{name}|{stat}"
             entry = {
                 "sport": sport, "player": name,
                 "team": pi.get("team", ""), "stat": stat,
@@ -8644,10 +8275,10 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
         return result
 
     _endpoints = [
-        "https://partner-api.prizepicks.com/projections",
-        "https://api.prizepicks.com/projections",
+        ("https://partner-api.prizepicks.com/projections", "partner-api.prizepicks.com"),
+        ("https://api.prizepicks.com/projections", "api.prizepicks.com"),
     ]
-    _page_sizes = ["250", "100", "50"]
+    _page_sizes = ["250", "100"]
     _base_headers = {
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "en-US,en;q=0.9",
@@ -8659,53 +8290,53 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
 
     for _league_id, _sport in _all_leagues:
         _fetched = False
-
-        for _endpoint in _endpoints:
-            if _fetched:
+        _blocked = False
+        for _endpoint, _url_label in _endpoints:
+            if _fetched or _blocked:
                 break
             for _per_page in _page_sizes:
-                if _fetched:
+                if _fetched or _blocked:
                     break
-                # Try with and without single_stat. PrizePicks changes this behavior occasionally.
-                for _single_stat in ("true", None):
-                    _params = {"league_id": _league_id, "per_page": _per_page}
-                    if _single_stat:
-                        _params["single_stat"] = _single_stat
-                    # Add projection_type as a harmless hint for the main API.
-                    _params["projection_type"] = "Single Stat"
-                    _url_label = _endpoint.replace("https://", "").split("/")[0]
-                    try:
-                        r = _req.get(
-                            _endpoint,
-                            params=_params,
-                            headers=_base_headers,
-                            timeout=15
-                        )
-                        if r.status_code == 429:
-                            fetch_notes.append(f"{_sport} {_url_label} {_per_page}: 429 rate-limited")
-                            continue
-                        if not r.ok:
-                            fetch_notes.append(f"{_sport} {_url_label} {_per_page}: HTTP {r.status_code}")
-                            continue
-                        data = r.json()
-                        row_count = len(data.get("data", []) or [])
-                        if row_count:
-                            parsed = _parse(data, _sport)
-                            props.extend(parsed)
-                            fetch_notes.append(f"{_sport} {_url_label} {_per_page}: {row_count} rows, {len(parsed)} parsed")
-                            _fetched = True
-                            break
-                        fetch_notes.append(f"{_sport} {_url_label} {_per_page}: empty data")
-                    except Exception as e:
-                        fetch_notes.append(f"{_sport} {_url_label} {_per_page}: {type(e).__name__}")
-                        record_debug_error("prizepicks.fetch", e)
+                _params = {
+                    "league_id": _league_id,
+                    "per_page": _per_page,
+                    "single_stat": "true",
+                    "projection_type": "Single Stat",
+                }
+                try:
+                    r = _req.get(_endpoint, params=_params, headers=_base_headers, timeout=15)
+                    if r.status_code == 429:
+                        fetch_notes.append(f"{_sport} {_url_label} {_per_page}: 429 rate-limited")
+                        st.session_state[cooldown_key] = _time.time() + (10 * 60)
+                        _blocked = True
+                        break
+                    if r.status_code == 403:
+                        fetch_notes.append(f"{_sport} {_url_label} {_per_page}: HTTP 403 blocked")
+                        if "api.prizepicks.com" in _url_label:
+                            _blocked = True
+                        break
+                    if not r.ok:
+                        fetch_notes.append(f"{_sport} {_url_label} {_per_page}: HTTP {r.status_code}")
+                        continue
+                    data = r.json()
+                    row_count = len(data.get("data", []) or [])
+                    if row_count:
+                        parsed = _parse(data, _sport)
+                        props.extend(parsed)
+                        fetch_notes.append(f"{_sport} {_url_label} {_per_page}: {row_count} rows, {len(parsed)} parsed")
+                        _fetched = True
+                        break
+                    fetch_notes.append(f"{_sport} {_url_label} {_per_page}: empty data")
+                except Exception as e:
+                    fetch_notes.append(f"{_sport} {_url_label} {_per_page}: {type(e).__name__}")
+                    record_debug_error("prizepicks.fetch", e)
 
     if not props:
-        cached_props = get_cached_pp_props_from_supabase(sport_filter, max_age_minutes=720)
+        cached_props = _stale_cache()
         if cached_props:
             st.session_state["edge_fetch_debug"] = (
                 st.session_state.get("edge_fetch_debug", [])
-                + ["Live PrizePicks fetch failed; using last successful Supabase slate."]
+                + ["Live PrizePicks fetch failed; using last successful cached slate."]
             )
             return cached_props
         detail = " | ".join(fetch_notes[-8:]) if fetch_notes else "No attempts completed"
@@ -8714,148 +8345,8 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
 
     st.session_state["edge_fetch_debug"] = fetch_notes[-12:]
     save_pp_props_to_supabase(sport_filter, props)
+    save_pp_props_to_local(sport_filter, props)
     return props
-
-
-
-def _scanner_get_tonight_matchup(pitcher_name: str) -> dict:
-    """
-    Get tonight's game context for a pitcher from MLB Stats API.
-    Returns: {opp, home_team, is_confirmed_starter, game_time}
-    Cached 30 min — lineups update throughout the day.
-    """
-    import requests as _req, datetime as _dtx, pytz as _ptz
-    empty = {"opp": "", "home_team": "", "is_confirmed": False, "game_time": ""}
-    try:
-        _et    = _ptz.timezone("America/New_York")
-        _today = _dtx.datetime.now(_et).strftime("%Y-%m-%d")
-        r = _req.get(
-            "https://statsapi.mlb.com/api/v1/schedule",
-            params={"sportId": 1, "date": _today,
-                    "hydrate": "probablePitcher,team", "gameType": "R"},
-            timeout=8
-        )
-        if not r.ok: return empty
-        _norm = lambda s: s.lower().strip()
-        _target = _norm(pitcher_name)
-        _parts  = [p for p in _target.split() if len(p) > 2]
-
-        for date in r.json().get("dates", []):
-            for game in date.get("games", []):
-                for _side in ["home", "away"]:
-                    _team = game.get("teams", {}).get(_side, {})
-                    _pp   = _team.get("probablePitcher", {})
-                    if not _pp: continue
-                    _pname = _norm(_pp.get("fullName", ""))
-                    if all(p in _pname for p in _parts):
-                        _opp_side = "away" if _side == "home" else "home"
-                        _opp = game.get("teams",{}).get(_opp_side,{}).get("team",{}).get("abbreviation","")
-                        _home = game.get("teams",{}).get("home",{}).get("team",{}).get("abbreviation","")
-                        _time = game.get("gameDate","")[:16]
-                        return {
-                            "opp":          _opp,
-                            "home_team":    _home,
-                            "is_confirmed": True,
-                            "game_time":    _time,
-                        }
-    except Exception:
-        pass
-    return empty
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def _scanner_get_all_players() -> list:
-    """Fetch full MLB player list once — shared across all pitcher lookups."""
-    try:
-        people = list(_get_mlb_roster_cached())
-        if people:
-            return people
-    except Exception as e:
-        record_debug_error("mlb.roster_cache", e)
-    return []
-
-
-@st.cache_data(ttl=3600, show_spinner=False)
-def _scanner_get_pitcher_data(pitcher_name: str) -> dict:
-    """
-    Fast pitcher data fetch for the scanner.
-    Uses shared player cache — only 1 API call per pitcher (game logs).
-    """
-    import requests as _req, datetime as _dtx
-    empty = {"ks": [], "k9": None, "avg_ip": None, "avg_pitches": None, "sample": 0}
-    _norm   = lambda s: s.lower().strip().replace(".", "").replace("-", " ")
-    _target = _norm(pitcher_name)
-    _parts  = [p for p in _target.split() if len(p) > 2]
-    _last   = _target.split()[-1]
-    season  = _dtx.datetime.now().year
-
-    try:
-        # Step 1: find player ID from shared cached roster
-        _ppl = _scanner_get_all_players()
-        if not _ppl:
-            return empty
-        _pp  = next((p for p in _ppl
-                     if all(pt in _norm(p.get("fullName","")) for pt in _parts)), None)
-        if not _pp:
-            _pp = next((p for p in _ppl
-                       if _last in _norm(p.get("fullName","")) and
-                       p.get("primaryPosition",{}).get("code") == "1"), None)
-        if not _pp:
-            return empty
-
-        pid = _pp["id"]
-
-        # Step 2: game logs — get K, IP, pitch count per start
-        r2 = _req.get(
-            f"https://statsapi.mlb.com/api/v1/people/{pid}/stats",
-            params={"stats": "gameLog", "group": "pitching",
-                    "season": season, "gameType": "R", "limit": 12},
-            timeout=5
-        )
-        if not r2.ok:
-            return empty
-
-        splits = r2.json().get("stats", [{}])[0].get("splits", [])
-
-        ks, ips, pitches = [], [], []
-        for s in splits:
-            st   = s.get("stat", {})
-            date = s.get("date", "")
-            np_v = int(st.get("numberOfPitches", 0) or 0)
-            if np_v < 40:
-                continue  # skip bullpen appearances
-            try:
-                if _dtx.date.fromisoformat(date[:10]).month < 4:
-                    continue  # skip spring training
-            except Exception:
-                pass
-            ks.append(int(st.get("strikeOuts", 0) or 0))
-            # Parse IP (stored as float e.g. 5.1 = 5 innings + 1 out)
-            _ip_raw = float(st.get("inningsPitched", 0) or 0)
-            _ip_full = int(_ip_raw) + ((_ip_raw % 1) * 10 / 3)
-            ips.append(_ip_full)
-            pitches.append(np_v)
-
-        if not ks:
-            return empty
-
-        # Season K/9 from totals (more reliable than per-game avg)
-        _ip_tot = sum(ips) if ips else 0
-        _k_tot  = sum(ks)
-        _k9     = round((_k_tot / _ip_tot * 9), 1) if _ip_tot >= 10 else None
-        _avg_ip = round(sum(ips) / len(ips), 1) if ips else None
-        _avg_pc = round(sum(pitches) / len(pitches), 0) if pitches else None
-
-        return {
-            "ks":          ks,
-            "k9":          _k9,
-            "avg_ip":      _avg_ip,
-            "avg_pitches": _avg_pc,
-            "sample":      len(ks),
-        }
-
-    except Exception:
-        return empty
 
 
 if st.session_state.active_sport == "edge":
@@ -8962,12 +8453,101 @@ if st.session_state.active_sport == "edge":
             return None
 
 
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def _scanner_get_pitcher_data(pitcher_name: str) -> dict:
+        """
+        Fast pitcher data fetch for the scanner.
+        Two API calls, 5s timeout each.
+        Returns K logs + season K/9 + avg IP — everything needed for 6-signal model.
+        """
+        import requests as _req, datetime as _dtx
+        empty = {"ks": [], "k9": None, "avg_ip": None, "avg_pitches": None, "sample": 0}
+        _norm   = lambda s: s.lower().strip().replace(".", "").replace("-", " ")
+        _target = _norm(pitcher_name)
+        _parts  = [p for p in _target.split() if len(p) > 2]
+        _last   = _target.split()[-1]
+        season  = _dtx.datetime.now().year
+
+        try:
+            # Step 1: find player ID
+            r = _req.get(
+                "https://statsapi.mlb.com/api/v1/sports/1/players",
+                params={"season": season, "gameType": "R"},
+                timeout=5
+            )
+            if not r.ok:
+                return empty
+
+            _ppl = r.json().get("people", [])
+            _pp  = next((p for p in _ppl
+                         if all(pt in _norm(p.get("fullName","")) for pt in _parts)), None)
+            if not _pp:
+                _pp = next((p for p in _ppl
+                           if _last in _norm(p.get("fullName","")) and
+                           p.get("primaryPosition",{}).get("code") == "1"), None)
+            if not _pp:
+                return empty
+
+            pid = _pp["id"]
+
+            # Step 2: game logs — get K, IP, pitch count per start
+            r2 = _req.get(
+                f"https://statsapi.mlb.com/api/v1/people/{pid}/stats",
+                params={"stats": "gameLog", "group": "pitching",
+                        "season": season, "gameType": "R", "limit": 12},
+                timeout=5
+            )
+            if not r2.ok:
+                return empty
+
+            splits = r2.json().get("stats", [{}])[0].get("splits", [])
+
+            ks, ips, pitches = [], [], []
+            for s in splits:
+                st   = s.get("stat", {})
+                date = s.get("date", "")
+                np_v = int(st.get("numberOfPitches", 0) or 0)
+                if np_v < 40:
+                    continue  # skip bullpen appearances
+                try:
+                    if _dtx.date.fromisoformat(date[:10]).month < 4:
+                        continue  # skip spring training
+                except Exception:
+                    pass
+                ks.append(int(st.get("strikeOuts", 0) or 0))
+                # Parse IP (stored as float e.g. 5.1 = 5 innings + 1 out)
+                _ip_raw = float(st.get("inningsPitched", 0) or 0)
+                _ip_full = int(_ip_raw) + ((_ip_raw % 1) * 10 / 3)
+                ips.append(_ip_full)
+                pitches.append(np_v)
+
+            if not ks:
+                return empty
+
+            # Season K/9 from totals (more reliable than per-game avg)
+            _ip_tot = sum(ips) if ips else 0
+            _k_tot  = sum(ks)
+            _k9     = round((_k_tot / _ip_tot * 9), 1) if _ip_tot >= 10 else None
+            _avg_ip = round(sum(ips) / len(ips), 1) if ips else None
+            _avg_pc = round(sum(pitches) / len(pitches), 0) if pitches else None
+
+            return {
+                "ks":          ks,
+                "k9":          _k9,
+                "avg_ip":      _avg_ip,
+                "avg_pitches": _avg_pc,
+                "sample":      len(ks),
+            }
+
+        except Exception:
+            return empty
+
 
     def run_mlb_edge_check(pitcher_name: str, line: float,
                            stat: str, side: str = "Over") -> dict | None:
         """
-        MLB scanner edge check using _scanner_get_pitcher_data
-        which is top-level cached — safe to call from threads.
+        MLB scanner edge check — 6 signals using cached game log data.
+        Matches full analyzer more closely without extra API calls.
         """
         try:
             _data = _scanner_get_pitcher_data(pitcher_name)
@@ -8980,38 +8560,40 @@ if st.session_state.active_sport == "edge":
             _n    = len(_vals)
             _avg  = round(float(_vals.mean()), 1)
             _k9   = _data.get("k9")
-            _avg_ip = _data.get("avg_ip")
+            _avg_ip  = _data.get("avg_ip")
+            _avg_pc  = _data.get("avg_pitches")
 
+            # ── Signal 1: Weighted hit rate (base) ───────────────────
             _wts  = _np.array([1.5 if i < 3 else 1.0 for i in range(_n)])
-            _hits = _vals >= line
+            _hits = (_vals >= line) if side == "Over" else (_vals <= line)
             _whr  = round(float((_hits * _wts).sum() / _wts.sum()), 3)
             _cons = round(float(_hits.mean()), 3)
             _adj  = _whr
 
-            # Form
+            # ── Signal 2: L3 form (trending up/down?) ────────────────
             _l3   = float(_vals[:3].mean())
             _diff = _l3 - _avg
-            if _diff >= 1.2:    _adj += 0.05
-            elif _diff >= 0.6:  _adj += 0.02
-            elif _diff <= -1.2: _adj -= 0.05
-            elif _diff <= -0.6: _adj -= 0.02
+            if _diff >= 1.5:    _adj += 0.05
+            elif _diff >= 0.8:  _adj += 0.02
+            elif _diff <= -1.5: _adj -= 0.05
+            elif _diff <= -0.8: _adj -= 0.02
 
-            # K/9
+            # ── Signal 3: K/9 rate vs league avg 8.3 ─────────────────
             if _k9:
-                if _k9 >= 11.0:   _adj += 0.07
-                elif _k9 >= 9.5:  _adj += 0.04
-                elif _k9 >= 8.0:  _adj += 0.01
-                elif _k9 >= 6.5:  _adj -= 0.03
-                else:             _adj -= 0.06
+                if _k9 >= 11.0:   _adj += 0.07   # elite
+                elif _k9 >= 9.5:  _adj += 0.04   # above avg
+                elif _k9 >= 8.0:  _adj += 0.01   # avg
+                elif _k9 >= 6.5:  _adj -= 0.03   # below avg
+                else:             _adj -= 0.06   # poor
 
-            # IP depth
+            # ── Signal 4: Avg IP / pitch count ceiling ────────────────
             if _avg_ip:
-                if _avg_ip >= 6.0:   _adj += 0.02
+                if _avg_ip >= 6.0:   _adj += 0.02   # deep into games
                 elif _avg_ip >= 5.0: _adj += 0.01
-                elif _avg_ip <= 3.5: _adj -= 0.07
+                elif _avg_ip <= 3.5: _adj -= 0.07   # short leash
                 elif _avg_ip <= 4.5: _adj -= 0.03
 
-            # Edge vs line
+            # ── Signal 5: Edge vs line (avg above/below line) ─────────
             _edge = _avg - line
             if _edge >= 2.5:    _adj += 0.05
             elif _edge >= 1.5:  _adj += 0.03
@@ -9020,11 +8602,11 @@ if st.session_state.active_sport == "edge":
             elif _edge <= -1.5: _adj -= 0.03
             elif _edge <= -0.5: _adj -= 0.01
 
-            # Consistency
-            if _cons >= 0.75:    _adj += 0.03
-            elif _cons >= 0.65:  _adj += 0.01
-            elif _cons <= 0.35:  _adj -= 0.04
-            elif _cons <= 0.45:  _adj -= 0.02
+            # ── Signal 6: Consistency ─────────────────────────────────
+            if _cons >= 0.75:  _adj += 0.03
+            elif _cons >= 0.65: _adj += 0.01
+            elif _cons <= 0.35: _adj -= 0.04
+            elif _cons <= 0.45: _adj -= 0.02
 
             _adj = max(0.05, min(0.95, _adj))
 
@@ -9040,6 +8622,7 @@ if st.session_state.active_sport == "edge":
                 "cons":     round(_cons * 100, 1),
                 "samples":  _n,
                 "k9":       _k9,
+                "avg_ip":   _avg_ip,
             }
         except Exception:
             return None
@@ -9129,15 +8712,9 @@ if st.session_state.active_sport == "edge":
         if not _all_props:
             fetch_all_pp_props.clear()
             st.warning(
-                "⚠️ PrizePicks did not return a usable slate. "
-                "This can be a temporary rate limit or an empty response from their API. "
-                "Nothing was cached, so you can retry in a moment."
+                "⚠️ PrizePicks is temporarily blocking server requests (Cloudflare). "
+                "This resolves on its own — **try again in a few hours**. Cache cleared."
             )
-            _edge_dbg = st.session_state.get("edge_fetch_debug", [])
-            if _edge_dbg:
-                with st.expander("PrizePicks fetch diagnostics"):
-                    for _line in _edge_dbg:
-                        st.write(_line)
             st.stop()
 
 
@@ -9153,7 +8730,7 @@ if st.session_state.active_sport == "edge":
         # 484 threads for 20 actual props
         _STAT_MAP = {
             "Points":               lambda s: s.lower() in ("points", "pts", "point"),
-            "Strikeouts":           lambda s: "strikeout" in s.lower() or "strike out" in s.lower(),
+            "Strikeouts":           lambda s: s.lower() == "pitcher strikeouts",
             "Rebounds":             lambda s: "rebound" in s.lower() or s.lower() == "reb",
             "Assists":              lambda s: s.lower() in ("assists", "ast"),
             "Hits":                 lambda s: s.lower() == "hits",
@@ -9180,10 +8757,7 @@ if st.session_state.active_sport == "edge":
         _filtered = list(_deduped.values())
 
         if not _filtered:
-            st.warning("PrizePicks loaded, but no props matched your filters.")
-            with st.expander("Loaded PrizePicks stat types"):
-                _loaded_types = sorted({p.get("stat", "") for p in _all_props})
-                st.write(_loaded_types)
+            st.warning("No props found matching your filters. Try broadening the sport or stat filter.")
             st.stop()
 
         # Build human-readable label
@@ -9202,11 +8776,8 @@ if st.session_state.active_sport == "edge":
 
         import concurrent.futures as _cfe
 
-        # ── Pre-fetch all tonight's MLB matchups in ONE API call ─────────
-        # Much faster than per-pitcher lookups inside threads
-        @st.cache_data(ttl=1800, show_spinner=False)
         def _check_prop(prop):
-            """Run model — no API calls inside threads."""
+            """Run the appropriate model. Filter already applied — every prop here is relevant."""
             try:
                 if prop["sport"] == "NBA":
                     return run_nba_edge_check(
@@ -9214,55 +8785,41 @@ if st.session_state.active_sport == "edge":
                         prop["stat"], prop["team"], "Over"
                     )
                 elif prop["sport"] == "MLB":
-                    _norm_stat = ("Strikeouts" if "strikeout" in prop["stat"].lower()
-                                  else prop["stat"])
+                    # Normalize stat name — PrizePicks uses "Pitcher Strikeouts"
+                    _norm_stat = "Strikeouts" if "strikeout" in prop["stat"].lower() else prop["stat"]
                     return run_mlb_edge_check(
                         prop["player"], prop["line"], _norm_stat, "Over"
                     )
             except Exception:
                 return None
 
-
-        # Pre-fetch roster once so all threads share it (no duplicate downloads)
-        if any(p["sport"] == "MLB" for p in _filtered):
-            with st.spinner("Pre-loading pitcher roster..."):
-                _scanner_get_all_players()  # warms shared cache in 1 call
-
         _total = max(len(_filtered), 1)
         _done  = 0
 
-        # Pre-warm shared roster cache once before threads start
-        if any(p["sport"] == "MLB" for p in _filtered):
-            _scanner_get_all_players()
-
-        _workers = 6 if _edge_sport == "MLB" else 8
+        # MLB uses cached single-call fetch — can handle more workers
+        _workers = 8 if _edge_sport == "MLB" else (8 if _edge_sport == "NBA" else 8)
 
         with _cfe.ThreadPoolExecutor(max_workers=_workers) as _ex:
             _fmap = {_ex.submit(_check_prop, p): p for p in _filtered}
-            # Hard overall timeout — never hang more than 90s total
-            try:
-                for _fut in _cfe.as_completed(_fmap, timeout=90):
-                    _done += 1
-                    _prog.progress(min(_done / _total, 1.0))
-                    _prop_ref = _fmap[_fut]
-                    _status.markdown(
-                        f"<span style='font-family:JetBrains Mono,monospace;"
-                        f"font-size:0.62rem;color:#6b7f96;'>"
-                        f"[{_done}/{_total}] {_prop_ref['player']} "
-                        f"{_prop_ref['stat']} {_prop_ref['line']}...</span>",
-                        unsafe_allow_html=True
-                    )
-                    try:
-                        _res = _fut.result(timeout=8)
-                        if _res:
-                            _res["is_goblin"] = _prop_ref.get("is_goblin", False)
-                            _res["is_demon"]  = _prop_ref.get("is_demon", False)
-                            _results.append(_res)
-                    except Exception:
-                        pass  # skip timed-out props
-            except _cfe.TimeoutError:
-                # Some props timed out — show what we have
-                st.warning(f"⚡ Scan timed out after 90s — showing {len(_results)} results found so far.")
+            for _fut in _cfe.as_completed(_fmap):
+                _done += 1
+                _prog.progress(min(_done / _total, 1.0))
+                _prop_ref = _fmap[_fut]
+                _status.markdown(
+                    f"<span style='font-family:JetBrains Mono,monospace;"
+                    f"font-size:0.62rem;color:#6b7f96;'>"
+                    f"[{_done}/{_total}] {_prop_ref['player']} "
+                    f"{_prop_ref['stat']} {_prop_ref['line']}...</span>",
+                    unsafe_allow_html=True
+                )
+                try:
+                    _res = _fut.result(timeout=12)
+                    if _res:
+                        _res["is_goblin"] = _prop_ref.get("is_goblin", False)
+                        _res["is_demon"]  = _prop_ref.get("is_demon", False)
+                        _results.append(_res)
+                except Exception:
+                    pass
 
         _prog.empty()
         _status.empty()
@@ -9340,46 +8897,7 @@ if st.session_state.active_sport == "edge":
                     if _r.get("is_goblin") else ""
                 )
                 _bar_w = min(100, int(_r["adj"]))
-
-                # ── Context vars ──────────────────────────────────────
-                _sample_warn = ""
-                _line_flag   = ""
-                _k9_str      = ""
-                _ctx_row     = ""
-
-                if _r.get("samples", 99) < 8:
-                    _sample_warn = (f"<span style='background:rgba(255,193,7,0.15);"
-                                    f"border:1px solid rgba(255,193,7,0.3);"
-                                    f"border-radius:4px;padding:1px 6px;"
-                                    f"font-size:0.52rem;color:#ffc107;margin-left:6px;'>"
-                                    f"⚠️ {_r.get('samples',0)} starts only</span>")
-
-                if _r.get("is_goblin") and _r.get("edge_raw", 0) >= -0.5:
-                    _line_flag = ("<span style='background:rgba(255,193,7,0.2);"
-                                  "border:1px solid rgba(255,193,7,0.4);color:#ffc107;"
-                                  "font-size:0.5rem;font-weight:800;padding:1px 5px;"
-                                  "border-radius:4px;margin-left:6px;'>"
-                                  "💰 VALUE</span>")
-
-                if _r.get("k9"):
-                    _k9_str = f"<span style='color:#00c4cc;'>K/9 {_r['k9']}</span>"
-
-                if _r.get("sport") == "MLB":
-                    _os  = (f"<span style='color:#6b7f96;'>vs {_r['opp']}</span>"
-                            if _r.get("opp") else "")
-                    _okc = ("#00e896" if (_r.get("opp_k_pct") or 0) >= 0.24
-                            else "#ff3d5c" if (_r.get("opp_k_pct") or 0) <= 0.19
-                            else "#9aaec4")
-                    _oks = (f"<span style='color:{_okc};'>Opp K% {_r['opp_k_pct']:.1%}</span>"
-                            if _r.get("opp_k_pct") else "")
-                    _ins = (f"<span style='color:#f97316;'>⚠️ {_r.get('injury_note','DTD')}</span>"
-                            if _r.get("injury_flag") else "")
-                    if _os or _oks or _ins:
-                        _ctx_row = (
-                            "<div style='display:flex;gap:10px;flex-wrap:wrap;"
-                            "margin-bottom:5px;font-family:JetBrains Mono,monospace;"
-                            f"font-size:0.58rem;'>{_os}{_oks}{_ins}</div>"
-                        )
+                _edge_raw_col = "#00e896" if _r["edge_raw"] > 0 else "#ff3d5c"
 
                 st.markdown(
                     f"<div style='background:{_tier_bg};"
@@ -9411,21 +8929,18 @@ if st.session_state.active_sport == "edge":
                     f"+{_r['edge_pct']}% vs 50% breakeven</div>"
                     f"</div></div>"
 
-                    # Row 2: core stats
-                    f"<div style='display:flex;gap:14px;flex-wrap:wrap;"
+                    # Row 2: stats
+                    f"<div style='display:flex;gap:16px;flex-wrap:wrap;"
                     f"font-family:JetBrains Mono,monospace;font-size:0.62rem;"
-                    f"color:#9aaec4;margin-bottom:5px;'>"
-                    f"<span>Model: <strong style='color:{_tier_col};'>{_r['adj']}%</strong></span>"
+                    f"color:#9aaec4;margin-bottom:8px;'>"
+                    f"<span>Model: <strong style='color:{_tier_col};'>"
+                    f"{_r['adj']}%</strong></span>"
                     f"<span>Avg: <strong style='color:#f0f4f8;'>{_r['avg']}</strong></span>"
-                    f"<span>Edge: <strong style='color:{'#00e896' if _r['edge_raw']>0 else '#ff3d5c'};'>{_r['edge_raw']:+.1f}</strong></span>"
-                    f"<span>Cons: <strong style='color:#f0f4f8;'>{_r['cons']}%</strong></span>"
-                    f"<span style='color:{'#ffc107' if _r['samples']<8 else '#6b7f96'};'>{_r['samples']} starts</span>"
-                    f"{_k9_str}"
+                    f"<span>Edge: <strong style='color:{_edge_raw_col};'>"
+                    f"{_r['edge_raw']:+.1f}</strong></span>"
+                    f"<span>Consistency: <strong style='color:#f0f4f8;'>{_r['cons']}%</strong></span>"
+                    f"<span style='color:#6b7f96;'>{_r['samples']} starts/games</span>"
                     f"</div>"
-
-
-                    # Row 3: matchup context (MLB only — pre-computed above)
-                    f"{_ctx_row}"
 
                     # Probability bar
                     f"<div style='background:rgba(255,255,255,0.05);border-radius:4px;"
@@ -9435,7 +8950,6 @@ if st.session_state.active_sport == "edge":
                     f"</div>",
                     unsafe_allow_html=True
                 )
-
 
                 # Action buttons row
                 _btn_key_safe = _re_edge.sub(r'[^a-zA-Z0-9]', '_', f"{_r['player']}_{_r['line']}_{_r['sport']}")
@@ -9507,438 +9021,6 @@ if st.session_state.active_sport == "edge":
             "</div></div>",
             unsafe_allow_html=True
         )
-
-
-    # ═══════════════════════════════════════════════════════
-    # MLB BATTER STRIKEOUTS ANALYZER
-    # ═══════════════════════════════════════════════════════
-
-    st.markdown("---")
-    st.markdown("<div class='section-header'>🏏 MLB Batter Strikeouts Analyzer</div>",
-                unsafe_allow_html=True)
-    st.markdown(
-        "<div style='font-family:DM Sans,sans-serif;font-size:0.82rem;color:#9aaec4;"
-        "margin-bottom:1rem;'>Analyze whether a batter will go Over or Under their "
-        "strikeout line. Uses the batter's K rate, the pitcher's stuff, park factor, "
-        "lineup spot, and recent form.</div>",
-        unsafe_allow_html=True
-    )
-
-    # ── Batter data functions ────────────────────────────────────────────
-
-    @st.cache_data(ttl=3600, show_spinner=False)
-    def batter_get_season_stats(player_name: str) -> dict:
-        """Fetch batter season stats from MLB Stats API — K%, BB%, AVG, PA."""
-        import requests as _req, datetime as _dtx
-        empty = {"k_pct": None, "bb_pct": None, "avg": None, "pa": 0, "name": player_name}
-        _norm   = lambda s: s.lower().strip().replace(".", "").replace("-", " ")
-        _target = _norm(player_name)
-        _parts  = [p for p in _target.split() if len(p) > 2]
-        season  = _dtx.datetime.now().year
-        try:
-            _ppl = list(_get_mlb_roster_cached())
-            if not _ppl: return empty
-            _pp = next((p for p in _ppl
-                        if all(pt in _norm(p.get("fullName","")) for pt in _parts)
-                        and p.get("primaryPosition",{}).get("code") not in ("1","P")), None)
-            if not _pp:
-                _pp = next((p for p in _ppl
-                           if _parts[-1] in _norm(p.get("fullName",""))
-                           and p.get("primaryPosition",{}).get("code") not in ("1","P")), None)
-            pid = _pp["id"]
-            r2 = _req.get(
-                f"https://statsapi.mlb.com/api/v1/people/{pid}/stats",
-                params={"stats": "season", "group": "hitting",
-                        "season": season, "gameType": "R"}, timeout=6
-            )
-            if not r2.ok: return empty
-            st = r2.json().get("stats",[{}])[0].get("splits",[{}])
-            if not st: return empty
-            _s  = st[0].get("stat", {})
-            _pa = int(_s.get("plateAppearances", 0) or 0)
-            _so = int(_s.get("strikeOuts", 0) or 0)
-            _bb = int(_s.get("baseOnBalls", 0) or 0)
-            return {
-                "k_pct":    round(_so / max(_pa, 1), 3),
-                "bb_pct":   round(_bb / max(_pa, 1), 3),
-                "avg":      float(_s.get("avg", 0) or 0),
-                "pa":       _pa,
-                "k_total":  _so,
-                "name":     _pp.get("fullName", player_name),
-                "pid":      pid,
-                "hand":     _pp.get("batSide", {}).get("code", "R"),
-            }
-        except Exception:
-            return empty
-
-
-    @st.cache_data(ttl=3600, show_spinner=False)
-    def batter_get_game_logs(player_name: str, n: int = 15) -> list:
-        """Get batter game logs — returns list of K per game."""
-        import requests as _req, datetime as _dtx
-        _norm   = lambda s: s.lower().strip().replace(".", "").replace("-", " ")
-        _target = _norm(player_name)
-        _parts  = [p for p in _target.split() if len(p) > 2]
-        season  = _dtx.datetime.now().year
-        try:
-            _ppl = list(_get_mlb_roster_cached())
-            if not _ppl: return []
-            _pp = next((p for p in _ppl
-                        if all(pt in _norm(p.get("fullName","")) for pt in _parts)
-                        and p.get("primaryPosition",{}).get("code") not in ("1","P")), None)
-            pid = _pp["id"]
-            r2 = _req.get(
-                f"https://statsapi.mlb.com/api/v1/people/{pid}/stats",
-                params={"stats": "gameLog", "group": "hitting",
-                        "season": season, "gameType": "R", "limit": n}, timeout=6
-            )
-            if not r2.ok: return []
-            ks = []
-            for sp in r2.json().get("stats",[{}])[0].get("splits",[]):
-                _st = sp.get("stat", {})
-                _ab = int(_st.get("atBats", 0) or 0)
-                if _ab == 0: continue  # skip no-AB games
-                ks.append(int(_st.get("strikeOuts", 0) or 0))
-            return ks
-        except Exception:
-            return []
-
-
-    @st.cache_data(ttl=3600, show_spinner=False)
-    def batter_get_savant_stats(player_name: str) -> dict:
-        """Get batter K% and hard hit% from Baseball Savant."""
-        import requests as _req, io
-        empty = {"k_pct": None, "hard_hit_pct": None, "exit_velo": None}
-        _norm   = lambda s: s.lower().strip().replace(".", "").replace("-", " ")
-        _target = _norm(player_name)
-        _parts  = [p for p in _target.split() if len(p) > 2]
-        _last   = _target.split()[-1]
-        try:
-            r = _req.get(
-                "https://baseballsavant.mlb.com/leaderboard/custom",
-                params={"year": "2026", "type": "batter", "filter": "",
-                        "min": "50", "selections": "k_percent,hard_hit_percent,"
-                               "exit_velocity_avg", "csv": "true"},
-                headers={"User-Agent": "Mozilla/5.0", "Referer": "https://baseballsavant.mlb.com/"},
-                timeout=10
-            )
-            if not r.ok or len(r.text) < 200: return empty
-            import pandas as _pd2
-            df = _pd2.read_csv(io.StringIO(r.text), low_memory=False)
-            _nc = next((c for c in df.columns if "name" in c.lower()), None)
-            if not _nc: return empty
-            df["_n"] = df[_nc].astype(str).apply(
-                lambda x: _norm(" ".join(reversed(x.split(", ")))
-                          if ", " in x else x))
-            rows = df[df["_n"].apply(lambda x: all(p in x for p in _parts))]
-            if rows.empty:
-                rows = df[df["_n"].apply(lambda x: _last in x)]
-            if rows.empty: return empty
-            row = rows.iloc[0]
-            return {
-                "k_pct":        float(row.get("k_percent", 0) or 0) / 100,
-                "hard_hit_pct": float(row.get("hard_hit_percent", 0) or 0) / 100,
-                "exit_velo":    float(row.get("exit_velocity_avg", 0) or 0),
-            }
-        except Exception:
-            return empty
-
-
-    # ── Batter UI ─────────────────────────────────────────────────────────
-    _bat_c1, _bat_c2, _bat_c3, _bat_c4 = st.columns([3, 1.5, 1, 1])
-    with _bat_c1:
-        batter_name = st.text_input(
-            "BATTER — TYPE NAME",
-            placeholder="e.g. Francisco Lindor, Yordan Alvarez",
-            key="batter_name_input",
-            label_visibility="collapsed"
-        )
-    with _bat_c2:
-        bat_pitcher = st.text_input(
-            "OPPOSING PITCHER",
-            placeholder="Pitcher name (optional)",
-            key="bat_pitcher_input",
-            label_visibility="collapsed"
-        )
-    with _bat_c3:
-        bat_line = st.number_input(
-            "K Line", min_value=0.5, max_value=5.0,
-            value=1.5, step=0.5, key="bat_line_input"
-        )
-    with _bat_c4:
-        bat_side = st.selectbox("O/U", ["Over","Under"], key="bat_side_input")
-
-    bat_fetch = st.button("⚡ Analyze Batter Strikeouts",
-                          key="bat_analyze", type="primary")
-
-    if bat_fetch and batter_name:
-        with st.spinner(f"Analyzing {batter_name}..."):
-            import concurrent.futures as _bat_cfe
-
-            with _bat_cfe.ThreadPoolExecutor(max_workers=4) as _bex:
-                _f_bat_stats  = _bex.submit(batter_get_season_stats, batter_name)
-                _f_bat_logs   = _bex.submit(batter_get_game_logs, batter_name, 15)
-                _f_bat_savant = _bex.submit(batter_get_savant_stats, batter_name)
-                _f_bat_pitcher = (_bex.submit(mlb_get_savant_stats, bat_pitcher)
-                                  if bat_pitcher else None)
-
-            _bat_stats  = _f_bat_stats.result(timeout=10)
-            _bat_logs   = _f_bat_logs.result(timeout=10)
-            _bat_savant = _f_bat_savant.result(timeout=12)
-            _bat_pitcher_stats = (_f_bat_pitcher.result(timeout=10)
-                                  if _f_bat_pitcher else {})
-
-        if not _bat_logs or len(_bat_logs) < 3:
-            st.error(f"Could not find game logs for {batter_name}. "
-                     "Check the spelling or try their full name.")
-        else:
-            import numpy as _bnp
-            _bvals = _bnp.array(_bat_logs, dtype=float)
-            _bavg  = round(float(_bvals.mean()), 2)
-            _bn    = len(_bvals)
-
-            # ── Weighted hit rate ────────────────────────────
-            _bwts  = _bnp.array([1.5 if i < 3 else 1.0 for i in range(_bn)])
-            _bhits = (_bvals >= bat_line) if bat_side == "Over" else (_bvals <= bat_line)
-            _bwhr  = float((_bhits * _bwts).sum() / _bwts.sum())
-            _bcons = float(_bhits.mean())
-            _badj  = _bwhr
-
-            # ── Signal 1: Season K% vs league avg 22% ────────
-            _bk9_adj  = 0.0
-            _bk9_note = "No data"
-            _bk_pct   = _bat_savant.get("k_pct") or _bat_stats.get("k_pct")
-            if _bk_pct:
-                _lg_k = 0.22
-                _kdiff = _bk_pct - _lg_k
-                if _kdiff >= 0.10:   _bk9_adj = +0.08  # high K batter
-                elif _kdiff >= 0.06: _bk9_adj = +0.05
-                elif _kdiff >= 0.03: _bk9_adj = +0.02
-                elif _kdiff <= -0.10:_bk9_adj = -0.08  # contact hitter
-                elif _kdiff <= -0.06:_bk9_adj = -0.05
-                elif _kdiff <= -0.03:_bk9_adj = -0.02
-                _bk9_note = (f"{_bk_pct:.1%} K rate · "
-                             f"{'High K' if _kdiff>0.05 else 'Low K' if _kdiff<-0.05 else 'Average'}")
-
-            # ── Signal 2: L3 recent form ─────────────────────
-            _bl3_adj  = 0.0
-            _bl3      = float(_bvals[:3].mean())
-            _bdiff    = _bl3 - _bavg
-            if _bdiff >= 0.8:    _bl3_adj = +0.05
-            elif _bdiff >= 0.4:  _bl3_adj = +0.02
-            elif _bdiff <= -0.8: _bl3_adj = -0.05
-            elif _bdiff <= -0.4: _bl3_adj = -0.02
-
-            # ── Signal 3: Opposing pitcher stuff ─────────────
-            _bpit_adj  = 0.0
-            _bpit_note = "No pitcher specified"
-            if bat_pitcher and _bat_pitcher_stats:
-                _pit_k9    = _bat_pitcher_stats.get("k9") or _bat_pitcher_stats.get("so9")
-                _pit_swstr = _bat_pitcher_stats.get("swstr") or _bat_pitcher_stats.get("whiff_pct")
-                if _pit_k9:
-                    if _pit_k9 >= 11.0:   _bpit_adj += 0.07  # elite K pitcher
-                    elif _pit_k9 >= 9.5:  _bpit_adj += 0.04
-                    elif _pit_k9 >= 8.0:  _bpit_adj += 0.01
-                    elif _pit_k9 <= 6.5:  _bpit_adj -= 0.04  # soft pitcher
-                    _bpit_note = f"Pitcher K/9: {_pit_k9:.1f}"
-                if _pit_swstr and _pit_swstr < 0.25:
-                    if _pit_swstr >= 0.14: _bpit_adj += 0.03
-                    elif _pit_swstr >= 0.12: _bpit_adj += 0.01
-
-            # ── Signal 4: Edge vs line ────────────────────────
-            _bedge_adj = 0.0
-            _bedge     = _bavg - bat_line
-            if bat_side == "Over":
-                if _bedge >= 0.5:    _bedge_adj = +0.04
-                elif _bedge >= 0.2:  _bedge_adj = +0.02
-                elif _bedge <= -0.8: _bedge_adj = -0.06
-                elif _bedge <= -0.4: _bedge_adj = -0.03
-            else:
-                if _bedge <= -0.5:   _bedge_adj = +0.04
-                elif _bedge <= -0.2: _bedge_adj = +0.02
-                elif _bedge >= 0.8:  _bedge_adj = -0.06
-                elif _bedge >= 0.4:  _bedge_adj = -0.03
-
-            # ── Signal 5: Consistency ─────────────────────────
-            _bcon_adj = 0.0
-            if _bcons >= 0.75: _bcon_adj = +0.03
-            elif _bcons >= 0.65: _bcon_adj = +0.01
-            elif _bcons <= 0.35: _bcon_adj = -0.04
-            elif _bcons <= 0.45: _bcon_adj = -0.02
-
-            # ── Apply all signals ─────────────────────────────
-            _badj = max(0.05, min(0.95,
-                        _bwhr + _bk9_adj + _bl3_adj + _bpit_adj
-                        + _bedge_adj + _bcon_adj))
-
-            # ── Verdict ───────────────────────────────────────
-            if bat_side == "Over":
-                if _badj >= 0.72:              _bverdict = "Strong Over"
-                elif _badj >= 0.63 and _bedge >= -0.5: _bverdict = "Lean Over"
-                elif _badj >= 0.55 and _bedge > 0:     _bverdict = "Lean Over"
-                else:                          _bverdict = "Pass"
-            else:
-                if _badj >= 0.72:              _bverdict = "Strong Under"
-                elif _badj >= 0.63 and _bedge <= 0.5:  _bverdict = "Lean Under"
-                elif _badj >= 0.55 and _bedge < 0:     _bverdict = "Lean Under"
-                else:                          _bverdict = "Pass"
-
-            _bcscore = min(99, int(
-                max(0, (_badj - 0.5) / 0.45) * 65 +
-                min(abs(_bedge) / 2.0, 1.0) * 25 +
-                _bcons * 10
-            ))
-
-            _bvcss = {"Strong Over":"green","Lean Over":"yellow",
-                      "Lean Under":"orange","Strong Under":"red","Pass":"gray"}
-            _bvemoji = {"Strong Over":"🟢","Lean Over":"🟡",
-                        "Lean Under":"🟠","Strong Under":"🔴","Pass":"⚪"}
-
-            # ── Key stats cards ───────────────────────────────
-            st.markdown("<div class='section-header'>Key Stats</div>",
-                        unsafe_allow_html=True)
-            _bs1, _bs2, _bs3, _bs4 = st.columns(4)
-            with _bs1:
-                st.markdown(
-                    f"<div class='stat-card'><div class='stat-label'>Season Avg K/Game</div>"
-                    f"<div class='stat-value {'green' if _bavg >= bat_line else 'red'}'"
-                    f" style='font-size:2rem;'>{_bavg}</div>"
-                    f"<div class='stat-hint'>Line {bat_line} · edge {_bedge:+.1f}</div>"
-                    f"</div>", unsafe_allow_html=True
-                )
-            with _bs2:
-                _bkc = "green" if (_bk_pct or 0) > 0.24 else "red" if (_bk_pct or 0) < 0.18 else "yellow"
-                st.markdown(
-                    f"<div class='stat-card'><div class='stat-label'>K Rate (Savant)</div>"
-                    f"<div class='stat-value {_bkc}'>{f'{_bk_pct:.1%}' if _bk_pct else 'N/A'}</div>"
-                    f"<div class='stat-hint'>League avg 22%</div>"
-                    f"</div>", unsafe_allow_html=True
-                )
-            with _bs3:
-                st.markdown(
-                    f"<div class='stat-card'><div class='stat-label'>Hit Rate (L{_bn})</div>"
-                    f"<div class='stat-value {'green' if _bcons>=0.65 else 'yellow' if _bcons>=0.5 else 'red'}'>"
-                    f"{_bcons:.0%}</div>"
-                    f"<div class='stat-hint'>{int(_bcons*_bn)}/{_bn} games {bat_side}</div>"
-                    f"</div>", unsafe_allow_html=True
-                )
-            with _bs4:
-                st.markdown(
-                    f"<div class='stat-card'><div class='stat-label'>Confidence</div>"
-                    f"<div class='stat-value {'green' if _bcscore>=75 else 'yellow' if _bcscore>=55 else 'red'}'>"
-                    f"{_bcscore}</div>"
-                    f"<div class='stat-hint'>5 signals · {_bn} games</div>"
-                    f"</div>", unsafe_allow_html=True
-                )
-
-            # ── Probability bar ───────────────────────────────
-            _bbar_col = ("#00e896" if "Over" in _bverdict else
-                         "#ff3d5c" if "Under" in _bverdict else "#6b7f96")
-            _bbar_pct = min(100, int(_badj * 100))
-            st.markdown(
-                f"<div style='margin:0.75rem 0;'>"
-                f"<div style='display:flex;justify-content:space-between;"
-                f"font-family:JetBrains Mono,monospace;font-size:0.56rem;"
-                f"color:#6b7f96;margin-bottom:5px;'>"
-                f"<span>Model probability</span>"
-                f"<span style='color:{_bbar_col};font-weight:700;'>{_bbar_pct}%</span></div>"
-                f"<div class='prob-bar-wrap' style='height:8px;'>"
-                f"<div class='prob-bar-fill' style='width:{_bbar_pct}%;"
-                f"background:linear-gradient(90deg,{_bbar_col}99,{_bbar_col});'></div>"
-                f"</div></div>",
-                unsafe_allow_html=True
-            )
-
-            # ── Verdict banner ────────────────────────────────
-            st.markdown("<div class='section-header'>Verdict</div>",
-                        unsafe_allow_html=True)
-            _bcss = _bvcss.get(_bverdict, "gray")
-            st.markdown(
-                f"<div class='verdict-banner {_bcss}'>"
-                f"<div><div class='verdict-label'>"
-                f"{_bat_stats.get('name', batter_name)} · {bat_line} K · {bat_side}</div>"
-                f"<div class='verdict-tier {_bcss}'>"
-                f"{_bvemoji.get(_bverdict,'⚪')} {_bverdict}</div></div>"
-                f"<div style='display:flex;gap:2rem;flex-wrap:wrap;'>"
-                f"<div><div class='verdict-label'>Adj Probability</div>"
-                f"<div style='font-size:1.8rem;font-weight:900;color:{_bbar_col};'>"
-                f"{_badj:.0%}</div></div>"
-                f"<div><div class='verdict-label'>Confidence</div>"
-                f"<div style='font-size:1.8rem;font-weight:900;"
-                f"color:{'#00c4cc' if _bcscore>=75 else '#ffc107' if _bcscore>=55 else '#f97316'};'>"
-                f"{_bcscore}</div></div>"
-                f"</div></div>",
-                unsafe_allow_html=True
-            )
-
-            # ── Signal breakdown ──────────────────────────────
-            with st.expander("🔬 Signal Breakdown"):
-                _bsig_rows = [
-                    ("Weighted hit rate", f"{_bwhr:.1%}", "—", "Starting point"),
-                    ("Season K rate", _bk9_note, f"{_bk9_adj:+.0%}", "vs league avg 22%"),
-                    ("Recent form (L3)", f"L3: {_bl3:.2f} vs avg {_bavg}", f"{_bl3_adj:+.0%}",
-                     "Trending up" if _bdiff > 0.3 else "Trending down" if _bdiff < -0.3 else "Stable"),
-                    ("Opposing pitcher", _bpit_note, f"{_bpit_adj:+.0%}",
-                     "Elite K pitcher" if _bpit_adj >= 0.06 else "Soft contact pitcher" if _bpit_adj <= -0.04 else "Average"),
-                    ("Edge vs line", f"avg {_bavg} vs line {bat_line}", f"{_bedge_adj:+.0%}",
-                     f"{'Over' if bat_side=='Over' else 'Under'} edge: {_bedge:+.2f}"),
-                    ("Consistency", f"{_bcons:.0%}", f"{_bcon_adj:+.0%}",
-                     f"{int(_bcons*_bn)}/{_bn} games hit"),
-                ]
-                _bsig_html = "".join(
-                    f"<tr style='border-bottom:1px solid rgba(255,255,255,0.04);'>"
-                    f"<td style='padding:6px 10px;color:#6b7f96;font-size:0.68rem;'>{r[0]}</td>"
-                    f"<td style='padding:6px 10px;color:#f0f4f8;font-size:0.7rem;font-weight:600;'>{r[1]}</td>"
-                    f"<td style='padding:6px 10px;color:{'#00e896' if '+' in r[2] else '#ff3d5c' if '-' in r[2] else '#6b7f96'};font-size:0.7rem;font-weight:700;'>{r[2]}</td>"
-                    f"<td style='padding:6px 10px;color:#9aaec4;font-size:0.65rem;'>{r[3]}</td>"
-                    f"</tr>"
-                    for r in _bsig_rows
-                )
-                st.markdown(
-                    f"<table style='width:100%;border-collapse:collapse;"
-                    f"font-family:JetBrains Mono,monospace;'>"
-                    f"<thead><tr style='border-bottom:1px solid rgba(255,255,255,0.1);'>"
-                    f"<th style='padding:4px 10px;color:#6b7f96;font-size:0.56rem;text-align:left;letter-spacing:0.1em;'>SIGNAL</th>"
-                    f"<th style='padding:4px 10px;color:#6b7f96;font-size:0.56rem;text-align:left;letter-spacing:0.1em;'>VALUE</th>"
-                    f"<th style='padding:4px 10px;color:#6b7f96;font-size:0.56rem;text-align:left;letter-spacing:0.1em;'>ADJ</th>"
-                    f"<th style='padding:4px 10px;color:#6b7f96;font-size:0.56rem;text-align:left;letter-spacing:0.1em;'>NOTES</th>"
-                    f"</tr></thead><tbody>{_bsig_html}</tbody></table>",
-                    unsafe_allow_html=True
-                )
-
-            # ── Add to parlay ─────────────────────────────────
-            if _bverdict != "Pass":
-                _bpc1, _bpc2 = st.columns([3,1])
-                with _bpc2:
-                    if st.button("➕ Add to Parlay", key=f"bat_parlay_{batter_name}_{bat_line}",
-                                 use_container_width=True):
-                        import datetime as _bdt
-                        _bleg = {
-                            "player":     _bat_stats.get("name", batter_name),
-                            "prop":       f"Batter K {bat_side}",
-                            "line":       bat_line,
-                            "side":       bat_side,
-                            "verdict":    _bverdict,
-                            "confidence": _bcscore,
-                            "adj":        round(_badj * 100, 1),
-                            "sport":      "MLB",
-                            "added":      _bdt.datetime.now().strftime("%I:%M %p"),
-                        }
-                        _bdup = any(
-                            l["player"] == _bleg["player"] and
-                            abs(l["line"] - bat_line) < 0.1
-                            for l in st.session_state.parlay_legs
-                        )
-                        if not _bdup and len(st.session_state.parlay_legs) < 6:
-                            st.session_state.parlay_legs.append(_bleg)
-                            st.toast(f"✅ {batter_name} added!", icon="🎯")
-                        elif _bdup:
-                            st.toast("Already in parlay", icon="⚠️")
-                        else:
-                            st.toast("Parlay full", icon="🚫")
-
-    elif bat_fetch and not batter_name:
-        st.warning("Enter a batter name first.")
 
     st.stop()
 
@@ -10071,7 +9153,7 @@ if _mode == "🎯  Scanner":
                 _tgt     = _today + timedelta(days=1) if _day_sel == "Tomorrow" else _today
                 _tgt_str = _tgt.strftime("%Y-%m-%d")
                 _r = requests.get(
-                    "https://partner-api.prizepicks.com/projections",
+                    "https://api.prizepicks.com/projections",
                     params={"league_id": 7, "per_page": 250, "single_stat": "true",
                             "game_date": _tgt_str},
                     headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json",
@@ -11399,15 +10481,13 @@ if st.session_state.logs is not None:
         _f_role      = _pool.submit(espn_get_player_role, full_name, player_team) if player_team else None
 
         try:
-            matchup_auto, opp_pts, league_avg = _f_matchup.result(timeout=5)
-        except Exception as e:
-            record_debug_error("nba.matchup", e)
+            matchup_auto, opp_pts, league_avg = _f_matchup.result(timeout=10)
+        except Exception:
             matchup_auto, opp_pts, league_avg = "Neutral", None, "114.5"
 
         try:
-            _h2h_full = _f_h2h.result(timeout=8) if _f_h2h else pd.DataFrame()
-        except Exception as e:
-            record_debug_error("nba.h2h", e)
+            _h2h_full = _f_h2h.result(timeout=22) if _f_h2h else pd.DataFrame()
+        except Exception:
             _h2h_full = pd.DataFrame()
 
         # Split H2H: series games (signal) + reg season (context)
@@ -11433,62 +10513,53 @@ if st.session_state.logs is not None:
             _reg_h2h_df = pd.DataFrame()
 
         try:
-            _f_season.result(timeout=6)
-        except Exception as e:
-            record_debug_error("nba.season_logs", e)
+            _f_season.result(timeout=20)
+        except Exception:
+            pass
 
         try:
-            _playoff = _f_playoff.result(timeout=4) if _f_playoff else {}
-        except Exception as e:
-            record_debug_error("nba.playoff_picture", e)
+            _playoff = _f_playoff.result(timeout=8) if _f_playoff else {}
+        except Exception:
             _playoff = {}
 
         try:
-            _series = _f_series.result(timeout=4) if _f_series else {}
-        except Exception as e:
-            record_debug_error("nba.series_context", e)
+            _series = _f_series.result(timeout=8) if _f_series else {}
+        except Exception:
             _series = {}
 
         try:
-            _ref_sig, _ref_ppg, _ref_names = _f_refs.result(timeout=4) if _f_refs else ("Neutral", None, [])
-        except Exception as e:
-            record_debug_error("nba.refs", e)
+            _ref_sig, _ref_ppg, _ref_names = _f_refs.result(timeout=8) if _f_refs else ("Neutral", None, [])
+        except Exception:
             _ref_sig, _ref_ppg, _ref_names = "Neutral", None, []
 
         try:
-            _opp_absent, _opp_inj_html = _f_opp_inj.result(timeout=4) if _f_opp_inj else ([], "")
-        except Exception as e:
-            record_debug_error("nba.opp_injuries", e)
+            _opp_absent, _opp_inj_html = _f_opp_inj.result(timeout=10) if _f_opp_inj else ([], "")
+        except Exception:
             _opp_absent, _opp_inj_html = [], ""
 
         try:
-            _def_form = _f_def_form.result(timeout=4) if _f_def_form else {}
-        except Exception as e:
-            record_debug_error("nba.def_form", e)
+            _def_form = _f_def_form.result(timeout=10) if _f_def_form else {}
+        except Exception:
             _def_form = {}
 
         try:
-            _po_logs = _f_po_logs.result(timeout=6) if _f_po_logs else pd.DataFrame()
-        except Exception as e:
-            record_debug_error("nba.playoff_logs", e)
+            _po_logs = _f_po_logs.result(timeout=12) if _f_po_logs else pd.DataFrame()
+        except Exception:
             _po_logs = pd.DataFrame()
 
         try:
-            _espn_last_game = _f_last_game.result(timeout=3) if _f_last_game else None
-        except Exception as e:
-            record_debug_error("nba.last_game", e)
+            _espn_last_game = _f_last_game.result(timeout=8) if _f_last_game else None
+        except Exception:
             _espn_last_game = None
 
         try:
-            _player_news = _f_news.result(timeout=3)
-        except Exception as e:
-            record_debug_error("nba.news", e)
+            _player_news = _f_news.result(timeout=8)
+        except Exception:
             _player_news = []
 
         try:
-            _player_role = _f_role.result(timeout=3) if _f_role else {}
-        except Exception as e:
-            record_debug_error("nba.role", e)
+            _player_role = _f_role.result(timeout=6) if _f_role else {}
+        except Exception:
             _player_role = {}
     finally:
         try:
@@ -12202,9 +11273,9 @@ if st.session_state.logs is not None:
             ) if _nlink else ""
             _desc_html = (
                 f"<div style='font-family:JetBrains Mono,monospace;font-size:0.65rem;"
-                f"color:#6b7f96;margin-top:4px;line-height:1.5;'>"
-                f"{_ndesc[:150]}...</div>"
-            ) if _ndesc else ""
+                f"color:#6b7f96;margin-top:4px;line-height:1.5;'>{_ndesc[:150]}...</div>"
+                if _ndesc else ""
+            )
             st.markdown(
                 f"<div style='background:#0d1520;border:1px solid rgba(255,255,255,0.06);"
                 f"border-left:3px solid #00c4cc;border-radius:0 10px 10px 0;"
@@ -13171,7 +12242,6 @@ if st.session_state.logs is not None:
                         "Consistency": f"{consistency:.0%}",
                         "Verdict":     tier,
                         "Result":      "Pending",
-                        "Sport":       "NBA",
                     }
                     existing = [i for i, e in enumerate(st.session_state.tracker)
                                 if e["Player"] == full_name and e["Line"] == f"{line} {side}"]
@@ -13229,45 +12299,21 @@ else:
     if _auto_updated:
         st.rerun()
 
-    # Win rate summary — overall + by sport
+    # Win rate summary
     _hits    = sum(1 for e in st.session_state.tracker if e.get("Result") == "Hit")
     _misses  = sum(1 for e in st.session_state.tracker if e.get("Result") == "Miss")
     _pending = sum(1 for e in st.session_state.tracker if e.get("Result", "Pending") == "Pending")
     _settled = _hits + _misses
     _wr      = f"{_hits/_settled:.0%}" if _settled > 0 else "—"
-    _wr_color = ("#22c55e" if _settled > 0 and _hits/_settled >= 0.6
-                 else "#ef4444" if _settled > 0 and _hits/_settled < 0.4
-                 else "#eab308")
-
-    # Sport-specific records
-    _mlb_entries = [e for e in st.session_state.tracker if e.get("Sport","") == "MLB"]
-    _nba_entries = [e for e in st.session_state.tracker if e.get("Sport","") == "NBA"]
-    _mlb_h = sum(1 for e in _mlb_entries if e.get("Result") == "Hit")
-    _mlb_m = sum(1 for e in _mlb_entries if e.get("Result") == "Miss")
-    _nba_h = sum(1 for e in _nba_entries if e.get("Result") == "Hit")
-    _nba_m = sum(1 for e in _nba_entries if e.get("Result") == "Miss")
-
-    _sport_breakdown = ""
-    if _mlb_h + _mlb_m > 0:
-        _mlb_wr = f"{_mlb_h/(_mlb_h+_mlb_m):.0%}"
-        _sport_breakdown += (f"<span style='color:#9aaec4;margin-left:12px;'>"
-                             f"⚾ MLB {_mlb_h}-{_mlb_m} ({_mlb_wr})</span>")
-    if _nba_h + _nba_m > 0:
-        _nba_wr = f"{_nba_h/(_nba_h+_nba_m):.0%}"
-        _sport_breakdown += (f"<span style='color:#9aaec4;margin-left:12px;'>"
-                             f"🏀 NBA {_nba_h}-{_nba_m} ({_nba_wr})</span>")
+    _wr_color = "#22c55e" if _settled > 0 and _hits/_settled >= 0.6 else ("#ef4444" if _settled > 0 and _hits/_settled < 0.4 else "#eab308")
 
     st.markdown(
-        f"<div style='background:rgba(0,196,204,0.05);border:1px solid rgba(0,196,204,0.15);"
-        f"border-radius:10px;padding:0.75rem 1rem;margin-bottom:0.75rem;"
-        f"display:flex;flex-wrap:wrap;align-items:center;gap:12px;"
-        f"font-family:JetBrains Mono,monospace;font-size:0.68rem;'>"
-        f"<span style='color:{_wr_color};font-weight:800;font-size:0.85rem;'>"
-        f"Overall: {_hits}-{_misses} ({_wr})</span>"
-        f"<span style='color:#22c55e;'>✅ {_hits}</span>"
-        f"<span style='color:#ef4444;'>❌ {_misses}</span>"
+        f"<div style='display:flex;gap:1.5rem;flex-wrap:wrap;margin-bottom:0.75rem;"
+        f"font-family:DM Mono;font-size:0.7rem;'>"
+        f"<span style='color:{_wr_color};font-weight:800;'>Win Rate: {_wr}</span>"
+        f"<span style='color:#22c55e;'>✅ {_hits} Hit</span>"
+        f"<span style='color:#ef4444;'>❌ {_misses} Miss</span>"
         f"<span style='color:#6b7f96;'>⏳ {_pending} Pending</span>"
-        f"{_sport_breakdown}"
         f"</div>",
         unsafe_allow_html=True
     )
