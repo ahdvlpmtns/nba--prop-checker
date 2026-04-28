@@ -1339,8 +1339,16 @@ def _nba_get_game_logs_uncached(player_id: int, season: str, n: int = 10, _date:
         return df[["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A","FG3M","PLUS_MINUS","WL"]]
 
     def _save(df):
-        try: save_logs_to_supabase(player_id, season, df)
-        except Exception: pass
+        try:
+            import threading as _threading
+            _threading.Thread(
+                target=save_logs_to_supabase,
+                args=(player_id, season, df.copy()),
+                daemon=True,
+            ).start()
+        except Exception:
+            try: save_logs_to_supabase(player_id, season, df)
+            except Exception: pass
 
     import requests as _req
 
@@ -1367,7 +1375,38 @@ def _nba_get_game_logs_uncached(player_id: int, season: str, n: int = 10, _date:
         "Origin": "https://www.nba.com",
         "Connection": "keep-alive",
     }
-    for attempt in range(3):
+
+    # ── Method 1: Direct NBA Stats REST ───────────────────────────
+    # Faster than nba_api in production because it avoids endpoint wrapper overhead.
+    for attempt in range(2):
+        try:
+            r = _req.get(
+                "https://stats.nba.com/stats/playergamelog",
+                params={
+                    "PlayerID": player_id,
+                    "Season": season,
+                    "SeasonType": "Regular Season",
+                    "LeagueID": "00",
+                },
+                headers=_HEADERS,
+                timeout=8,
+            )
+            if r.ok:
+                rs = r.json().get("resultSets", [{}])[0]
+                hdrs = rs.get("headers", [])
+                rows = rs.get("rowSet", [])
+                if hdrs and rows:
+                    result = _process(pd.DataFrame(rows, columns=hdrs))
+                    if result is not None:
+                        _save(result)
+                        return result
+        except Exception as e:
+            record_debug_error("nba.logs.direct", e)
+            if attempt == 0:
+                time.sleep(0.5)
+
+    # ── Method 2: nba_api library fallback ────────────────────────
+    for attempt in range(2):
         try:
             def _fetch():
                 try:
@@ -1376,18 +1415,18 @@ def _nba_get_game_logs_uncached(player_id: int, season: str, n: int = 10, _date:
                 except Exception:
                     pass
                 return playergamelog.PlayerGameLog(
-                    player_id=player_id, season=season, timeout=20,
+                    player_id=player_id, season=season, timeout=12,
                 ).get_data_frames()[0]
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-                df = ex.submit(_fetch).result(timeout=22)
+                df = ex.submit(_fetch).result(timeout=14)
             result = _process(df)
             if result is not None:
                 _save(result)
                 return result
         except Exception:
-            if attempt < 2:
-                time.sleep(2 * (attempt + 1))
+            if attempt == 0:
+                time.sleep(1)
 
     return empty
 
@@ -1491,6 +1530,28 @@ def nba_get_game_logs(player_id: int, season: str, n: int = 10, _date: str = Non
     if result is None or result.empty:
         raise RuntimeError("NBA API returned no data — do not cache this failure")
     return result
+
+
+def warm_nba_player_core(player_id: int, season: str, team_abbr: Optional[str] = None) -> None:
+    """Pre-warm slow NBA caches while the user is setting up the prop."""
+    try:
+        nba_get_game_logs(player_id, season, n=15, _date=_cache_date())
+    except Exception as e:
+        record_debug_error("nba.warm.logs", e)
+    try:
+        nba_get_full_season_logs_cached(player_id, season, _date=_cache_date())
+    except Exception as e:
+        record_debug_error("nba.warm.season", e)
+    if team_abbr:
+        try:
+            opp_abbr, _, _ = espn_get_next_game(team_abbr)
+            if opp_abbr:
+                get_h2h_logs(player_id, opp_abbr, season, _date=_cache_date())
+                classify_matchup_espn(opp_abbr, _date=_cache_date())
+                get_opp_recent_defensive_form(opp_abbr)
+        except Exception as e:
+            record_debug_error("nba.warm.next_game", e)
+
 
 @st.cache_data(ttl=21600, show_spinner=False)
 def nba_get_player_team(player_id: int) -> Optional[str]:
@@ -10205,6 +10266,20 @@ if player_id is None:
     hint = f" Did you mean: {', '.join(_close)}?" if _close else ""
     st.error(f"Could not find '{selected_player}' in NBA database.{hint}")
     st.stop()
+
+# Quietly warm the slow NBA caches before the Analyze button is clicked.
+try:
+    _warm_key = f"nba_core_{player_id}_{season_str_clean}_{_cache_date()}"
+    if st.session_state.get("_nba_warm_key") != _warm_key:
+        import threading as _threading
+        st.session_state["_nba_warm_key"] = _warm_key
+        _threading.Thread(
+            target=warm_nba_player_core,
+            args=(player_id, season_str_clean, player_team),
+            daemon=True,
+        ).start()
+except Exception as e:
+    record_debug_error("nba.warm.start", e)
 
 # ── Injury status check ──────────────────────────────────────
 with st.spinner("Checking injury status..."):
