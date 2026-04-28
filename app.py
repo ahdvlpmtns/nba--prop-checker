@@ -6965,18 +6965,18 @@ if st.session_state.active_sport == "mlb":
             # ── Signal 1: Weighted hit rate (L10 starts, recency-weighted)
             whr = mlb_weighted_hr(mlb_logs, mlb_line, _stat, mlb_side)
 
-        # ── Injury return K boost ──────────────────────────────────
-        # If pitcher is in return window, recalculate using normal-start logs only
-        _return_boost = 0.0
-        if _return_data.get("is_return"):
-            _rc = _return_data["return_starts"]
-            # Recalculate hit rate using only normal starts (exclude shortened)
-            _normal_logs = mlb_logs.iloc[_rc:].reset_index(drop=True)
-            if len(_normal_logs) >= 3:
-                _normal_whr = mlb_weighted_hr(_normal_logs, mlb_line, _stat, mlb_side)
-                _return_boost = round(_normal_whr - whr, 3)
-                # Cap the boost — don't overcorrect
-                _return_boost = min(_return_boost, 0.20)
+            # ── Injury return K boost ──────────────────────────────────
+            # If pitcher is in return window, recalculate using normal-start logs only
+            _return_boost = 0.0
+            if _return_data.get("is_return"):
+                _rc = _return_data["return_starts"]
+                # Recalculate hit rate using only normal starts (exclude shortened)
+                _normal_logs = mlb_logs.iloc[_rc:].reset_index(drop=True)
+                if len(_normal_logs) >= 3:
+                    _normal_whr = mlb_weighted_hr(_normal_logs, mlb_line, _stat, mlb_side)
+                    _return_boost = round(_normal_whr - whr, 3)
+                    # Cap the boost — don't overcorrect
+                    _return_boost = min(_return_boost, 0.20)
 
             # ── Signal 2: Opponent K% by handedness (most accurate version)
             _opp_kpct_vs_hand = None
@@ -7024,90 +7024,31 @@ if st.session_state.active_sport == "mlb":
             except Exception:
                 pass
 
-            # ── Signal 7: K/9 rate — current season, fallback to prior season ──
-            _k9 = _pstats.get("k9", 0.0)
-
-            # K/9 fallback priority:
-            # 1. Current season stats API (if 5+ starts)
-            # 2. Prior season stats API (most reliable — full season sample)
-            # 3. Current game logs (last resort — small sample)
-            # 4. Neutral (no adjustment) — never penalize without data
-            _k9_source = "2026"
-            _needs_fallback = (_k9 == 0.0 or _pstats.get("starts", 0) < 5)
-
-            if _needs_fallback:
-                # Try prior season stats API first (best sample size)
+            # ── Signal 7: K/9 rate ──────────────────────────────────────
+            _k9        = 0.0
+            _k9_adj    = 0.0
+            _k9_source = "logs"
+            if _pstats.get("k9"):
+                _k9 = float(_pstats["k9"])
+                _k9_source = "season"
+            elif not mlb_logs.empty:
                 try:
-                    import requests as _req2, datetime as _dtx2
-                    # Use cached roster — no fresh download
-                    _norm2 = lambda s: s.lower().strip()
-                    _ppl   = list(_get_mlb_roster_cached())
-                    _pp    = next((p for p in _ppl
-                                  if _norm2(p.get("fullName","")) == _norm2(mlb_pitcher)), None)
-                    if not _pp:
-                        _last_p = _norm2(mlb_pitcher).split()[-1]
-                        _pp = next((p for p in _ppl
-                                   if _last_p in _norm2(p.get("fullName","")) and
-                                   p.get("primaryPosition",{}).get("code")=="1"), None)
-                    if _pp:
-                            for _prev_yr in [_dtx2.datetime.now().year - 1,
-                                             _dtx2.datetime.now().year - 2]:
-                                _prev = _req2.get(
-                                    f"https://statsapi.mlb.com/api/v1/people/{_pp['id']}/stats",
-                                    params={"stats":"season","group":"pitching",
-                                            "season": _prev_yr, "gameType":"R"},
-                                    timeout=8
-                                )
-                                if _prev.ok:
-                                    _ps  = _prev.json().get("stats",[{}])[0].get("splits",[{}])
-                                    _ps  = _ps[0].get("stat",{}) if _ps else {}
-                                    _ip_s = str(_ps.get("inningsPitched","0") or "0")
-                                    try:
-                                        _ip_f = (float(_ip_s.split(".")[0]) +
-                                                 float("0."+_ip_s.split(".")[1])/3
-                                                 if "." in _ip_s else float(_ip_s))
-                                    except:
-                                        _ip_f = 0.0
-                                    if _ip_f >= 30:  # at least 30 IP for reliable K/9
-                                        _k9 = round(float(_ps.get("strikeOuts",0)) / _ip_f * 9, 2)
-                                        _k9_source = str(_prev_yr)
-                                        break
+                    _log_ks  = pd.to_numeric(mlb_logs["K"], errors="coerce").dropna().sum()
+                    _log_ips = mlb_logs["IP"].apply(lambda x: (
+                        float(str(x).split(".")[0]) +
+                        float("0."+str(x).split(".")[1])/3
+                        if "." in str(x) else float(str(x) or 0)
+                    )).sum()
+                    if _log_ips >= 10:
+                        _k9 = round(_log_ks / _log_ips * 9, 2)
                 except Exception:
                     pass
 
-                # Last resort: estimate from current game logs (small sample — use cautiously)
-                if _k9 == 0.0 and not mlb_logs.empty:
-                    try:
-                        _log_ks = pd.to_numeric(mlb_logs["K"], errors="coerce").dropna().sum()
-                        _log_ips = mlb_logs["IP"].apply(lambda x: (
-                            float(str(x).split(".")[0]) +
-                            float("0."+str(x).split(".")[1])/3
-                            if "." in str(x) else float(str(x) or 0)
-                        )).sum()
-                        if _log_ips >= 15:  # need at least 15 IP — ~3 starts
-                            _k9 = round(_log_ks / _log_ips * 9, 2)
-                            _k9_source = "logs (small sample)"
-                    except Exception:
-                        pass
-
-            _k9_adj = 0.0
-            # Require minimum 20 IP for K/9 to be meaningful
-            # Bradish-type situations: 13.2 K/9 from 5 innings = noise, not signal
-            _k9_ip = _pstats.get("ip_total", 999)  # IP from season stats
-            _k9_reliable = (_k9_ip >= 20) if _k9_ip < 500 else True  # 999 = unknown
-            if _k9 >= 10.5 and _k9_reliable:  _k9_adj = +0.07
-            elif _k9 >= 10.5:                  _k9_adj = +0.03  # elite but small sample
-            elif _k9 >= 9.0 and _k9_reliable:  _k9_adj = +0.04
-            elif _k9 >= 9.0:                   _k9_adj = +0.02
-            elif _k9 >= 7.5:                   _k9_adj = 0.0
-            elif _k9 >= 6.0:                   _k9_adj = -0.04
-            elif _k9 > 0:                      _k9_adj = -0.07
-            else:
-                _k9_adj = 0.0
-                _k9_source = "no data"
-            # Flag small sample in source label
-            if _k9 > 0 and not _k9_reliable:
-                _k9_source = f"{_k9_source} (small sample)"
+            if _k9 >= 11.0:   _k9_adj = +0.07
+            elif _k9 >= 9.5:  _k9_adj = +0.04
+            elif _k9 >= 8.0:  _k9_adj = +0.01
+            elif _k9 >= 6.5:  _k9_adj = -0.03
+            elif _k9 > 0:     _k9_adj = -0.06
 
             # ── Signal 8: Real SwStr% from Baseball Savant (whiff rate)
             # Use Savant real swinging strike % if available, else K/BF proxy
@@ -7214,10 +7155,10 @@ if st.session_state.active_sport == "mlb":
             if _lineup_confirmed and _order_hands and _platoon_vs_l and _platoon_vs_r:
                 # Weighted K rate for tonight's actual lineup
                 _lineup_kr = (_lhb_pct * _platoon_vs_l +
-                              (1 - _lhb_pct) * _platoon_vs_r)
+                          (1 - _lhb_pct) * _platoon_vs_r)
                 # Vs blended opponent K% from splits
                 _opp_kr_blended = ((_splits.get("vs_l",0) or 0) * _lhb_pct +
-                                   (_splits.get("vs_r",0) or 0) * (1-_lhb_pct))
+                               (_splits.get("vs_r",0) or 0) * (1-_lhb_pct))
                 # Divergence from overall K% — if lineup is more favorable/unfavorable
                 _opp_kr_overall = _splits.get("overall") or (okpct if okpct else 0.22)
                 if _opp_kr_overall > 0:
@@ -7251,11 +7192,11 @@ if st.session_state.active_sport == "mlb":
                 if _pc_k_ceiling and mlb_prop == "Strikeouts":
                     _ceiling_gap = _pc_k_ceiling - mlb_line
                     if _ceiling_gap <= -1.0:      # ceiling is well below line (>1 K gap)
-                        _pc_adj = min(_pc_adj, -0.15)  # genuine hard cap
+                        _pc_adj = min(_pc_adj, -0.15)
                     elif _ceiling_gap <= -0.5:    # ceiling is meaningfully below line
                         _pc_adj = min(_pc_adj, -0.08)
                     elif _ceiling_gap <= 0:       # ceiling just at/barely below line
-                        _pc_adj = min(_pc_adj, -0.04)  # mild penalty only
+                        _pc_adj = min(_pc_adj, -0.04)
 
             # Partial lineup penalty
             if _lineup_order and len(_lineup_order) < 7:
@@ -7270,8 +7211,8 @@ if st.session_state.active_sport == "mlb":
                       + _platoon_adj + _pc_adj + _h2h_adj
                       + _return_boost))  # injury return correction
             tier = mlb_verdict(adj, edge, mlb_side,
-                              pc_ceiling=_pc_k_ceiling,
-                              line=mlb_line)
+                          pc_ceiling=_pc_k_ceiling,
+                          line=mlb_line)
 
             # Consistency
             cv   = vals.std() / avg_val if avg_val > 0 else 1.0
@@ -7455,26 +7396,26 @@ if st.session_state.active_sport == "mlb":
             with _c1:
                 _ac = "green" if (edge>0 and mlb_side=="Over") or (edge<0 and mlb_side=="Under") else "red"
                 st.markdown(f"<div class='stat-card'><div class='stat-label'>Avg {_lbl} (L{len(vals)})</div>"
-                            f"<div class='stat-value {_ac}'>{avg_val:.1f}</div>"
-                            f"<div class='stat-hint'>Line {mlb_line} · edge {edge:+.1f}</div></div>",unsafe_allow_html=True)
+                        f"<div class='stat-value {_ac}'>{avg_val:.1f}</div>"
+                        f"<div class='stat-hint'>Line {mlb_line} · edge {edge:+.1f}</div></div>",unsafe_allow_html=True)
             with _c2:
                 hc = "green" if whr>=0.64 else ("yellow" if whr>=0.55 else "red")
                 st.markdown(f"<div class='stat-card'><div class='stat-label'>Hit Rate</div>"
-                            f"<div class='stat-value {hc}'>{whr:.0%}</div>"
-                            f"<div class='stat-hint'>Weighted L10 starts</div></div>",unsafe_allow_html=True)
+                        f"<div class='stat-value {hc}'>{whr:.0%}</div>"
+                        f"<div class='stat-hint'>Weighted L10 starts</div></div>",unsafe_allow_html=True)
             with _c3:
                 _k9c = "green" if _k9>=9.0 else ("yellow" if _k9>=7.5 else "red")
                 _k9_display = f"{_k9:.1f}" if _k9>0 else "—"
                 _k9_tier = ("Elite" if _k9>=10.5 else "Above avg" if _k9>=9.0 else
-                            "Average" if _k9>=7.5 else "Below avg" if _k9>=6.0 else
-                            "Contact pitcher" if _k9>0 else "No data yet")
+                        "Average" if _k9>=7.5 else "Below avg" if _k9>=6.0 else
+                        "Contact pitcher" if _k9>0 else "No data yet")
                 st.markdown(f"<div class='stat-card'><div class='stat-label'>K/9 Rate</div>"
-                            f"<div class='stat-value {_k9c}'>{_k9_display}</div>"
-                            f"<div class='stat-hint'>League avg 8.3 · {_k9_tier}</div></div>",unsafe_allow_html=True)
+                        f"<div class='stat-value {_k9c}'>{_k9_display}</div>"
+                        f"<div class='stat-hint'>League avg 8.3 · {_k9_tier}</div></div>",unsafe_allow_html=True)
             with _c4:
                 st.markdown(f"<div class='stat-card'><div class='stat-label'>Confidence</div>"
-                            f"<div class='stat-value' style='color:{_cc};'>{_sc}</div>"
-                            f"<div class='stat-hint'>12 signals · {len(vals)} starts</div></div>",unsafe_allow_html=True)
+                        f"<div class='stat-value' style='color:{_cc};'>{_sc}</div>"
+                        f"<div class='stat-hint'>12 signals · {len(vals)} starts</div></div>",unsafe_allow_html=True)
 
             # Row 2 — new signals
             _c5,_c6,_c7,_c8 = st.columns(4)
@@ -7482,28 +7423,28 @@ if st.session_state.active_sport == "mlb":
                 _sw_c = "green" if (_swstr or 0)>=0.23 else ("yellow" if (_swstr or 0)>=0.18 else "red")
                 _sw_d = f"{_swstr:.0%}" if _swstr else "—"
                 st.markdown(f"<div class='stat-card'><div class='stat-label'>K% (SwStr proxy)</div>"
-                            f"<div class='stat-value {_sw_c}'>{_sw_d}</div>"
-                            f"<div class='stat-hint'>Ks per batter faced · avg 21%</div></div>",unsafe_allow_html=True)
+                        f"<div class='stat-value {_sw_c}'>{_sw_d}</div>"
+                        f"<div class='stat-hint'>Ks per batter faced · avg 21%</div></div>",unsafe_allow_html=True)
             with _c6:
                 _ip_c = "green" if _avg_ip>=6.5 else ("yellow" if _avg_ip>=5.0 else "red")
                 _ip_d = f"{_avg_ip:.1f}" if _avg_ip>0 else "—"
                 st.markdown(f"<div class='stat-card'><div class='stat-label'>Avg IP/Start</div>"
-                            f"<div class='stat-value {_ip_c}'>{_ip_d}</div>"
-                            f"<div class='stat-hint'>{'Deep' if _avg_ip>=6.5 else 'Average' if _avg_ip>=5.0 else '⚠️ Short leash'} · {_ip_source if '_ip_source' in dir() else 'season stats'}</div></div>",unsafe_allow_html=True)
+                        f"<div class='stat-value {_ip_c}'>{_ip_d}</div>"
+                        f"<div class='stat-hint'>{'Deep' if _avg_ip>=6.5 else 'Average' if _avg_ip>=5.0 else '⚠️ Short leash'} · {_ip_source if '_ip_source' in dir() else 'season stats'}</div></div>",unsafe_allow_html=True)
             with _c7:
                 _opp_kd = f"{okpct:.0%}" if okpct else "—"
                 _opp_kc = "green" if (okpct or 0)>=0.26 else ("red" if (okpct or 0)<=0.18 else "yellow")
                 _hand_lbl = f"vs {'R' if _phand=='R' else 'L'}HP"
                 st.markdown(f"<div class='stat-card'><div class='stat-label'>Opp K% {_hand_lbl}</div>"
-                            f"<div class='stat-value {_opp_kc}'>{_opp_kd}</div>"
-                            f"<div class='stat-hint'>{'High K lineup' if (okpct or 0)>=0.26 else 'Low K lineup' if (okpct or 0)<=0.18 else 'Average'} · {mlb_opp or 'TBD'}</div></div>",unsafe_allow_html=True)
+                        f"<div class='stat-value {_opp_kc}'>{_opp_kd}</div>"
+                        f"<div class='stat-hint'>{'High K lineup' if (okpct or 0)>=0.26 else 'Low K lineup' if (okpct or 0)<=0.18 else 'Average'} · {mlb_opp or 'TBD'}</div></div>",unsafe_allow_html=True)
             with _c8:
                 _ump_d = _ump_name.split()[-1] if _ump_name else "TBD"
                 _ump_c = "green" if _ump_tend=="High" else ("red" if _ump_tend=="Low" else "yellow")
                 _ump_kpg = _ump.get("k_per_game",15.5) if _ump else 15.5
                 st.markdown(f"<div class='stat-card'><div class='stat-label'>Umpire Zone</div>"
-                            f"<div class='stat-value {_ump_c}' style='font-size:1.4rem;'>{_ump_d}</div>"
-                            f"<div class='stat-hint'>{_ump_tend} K zone · {_ump_kpg:.1f} K/g avg</div></div>",unsafe_allow_html=True)
+                        f"<div class='stat-value {_ump_c}' style='font-size:1.4rem;'>{_ump_d}</div>"
+                        f"<div class='stat-hint'>{_ump_tend} K zone · {_ump_kpg:.1f} K/g avg</div></div>",unsafe_allow_html=True)
 
             # Row 3 — Velocity trend + Injury status + H2H
             _c11, _c12, _c13 = st.columns(3)
@@ -7513,18 +7454,18 @@ if st.session_state.active_sport == "mlb":
                     _vt_icon = "📈" if _vtrend_dir=="Up" else ("📉" if _vtrend_dir=="Down" else "➡️")
                     _vt_diff = f"{_vtrend_mph:+.1f}mph vs {_vtrender.get('prior_velo',''):.0f}" if _vtrender.get("prior_velo") else ""
                     st.markdown(
-                        f"<div class='stat-card'>"
-                        f"<div class='stat-label'>Velocity Trend</div>"
-                        f"<div class='stat-value {_vt_col}' style='font-size:1.4rem;'>{_vt_icon} {_vtrend_dir}</div>"
-                        f"<div class='stat-hint'>{_vtrender.get('avg_velo',0):.1f}mph this season"
-                        f"{(' · ' + _vt_diff) if _vt_diff else ''}</div>"
-                        f"</div>", unsafe_allow_html=True
+                    f"<div class='stat-card'>"
+                    f"<div class='stat-label'>Velocity Trend</div>"
+                    f"<div class='stat-value {_vt_col}' style='font-size:1.4rem;'>{_vt_icon} {_vtrend_dir}</div>"
+                    f"<div class='stat-hint'>{_vtrender.get('avg_velo',0):.1f}mph this season"
+                    f"{(' · ' + _vt_diff) if _vt_diff else ''}</div>"
+                    f"</div>", unsafe_allow_html=True
                     )
                 else:
                     st.markdown(
-                        "<div class='stat-card'><div class='stat-label'>Velocity Trend</div>"
-                        "<div style='color:#6b7f96;font-family:JetBrains Mono,monospace;font-size:0.7rem;margin-top:6px;'>No trend data</div></div>",
-                        unsafe_allow_html=True
+                    "<div class='stat-card'><div class='stat-label'>Velocity Trend</div>"
+                    "<div style='color:#6b7f96;font-family:JetBrains Mono,monospace;font-size:0.7rem;margin-top:6px;'>No trend data</div></div>",
+                    unsafe_allow_html=True
                     )
             with _c12:
                 # Injury status card
@@ -7541,7 +7482,7 @@ if st.session_state.active_sport == "mlb":
             with _c13:
                 # H2H vs lineup card
                 _h2h_col = ("green" if _h2h_adj >= 0.04 else
-                            "red"   if _h2h_adj <= -0.04 else "yellow")
+                        "red"   if _h2h_adj <= -0.04 else "yellow")
                 _h2h_val = (f"{_h2h_adj:+.0%}" if _h2h_adj != 0 else "Neutral")
                 st.markdown(
                     f"<div class='stat-card'>"
@@ -7559,18 +7500,18 @@ if st.session_state.active_sport == "mlb":
                     _pc_c  = "red" if (_pc_k_ceiling and _pc_k_ceiling <= mlb_line) else ("yellow" if _pc_limit else ("green" if _pc_avg >= 100 else "yellow"))
                     _pc_lbl = "🚫 Hard Cap" if (_pc_k_ceiling and _pc_k_ceiling <= mlb_line) else ("⚠️ On Limit" if _pc_limit else "Normal Depth")
                     st.markdown(
-                        f"<div class='stat-card'>"
-                        f"<div class='stat-label'>Pitch Count Est.</div>"
-                        f"<div class='stat-value {_pc_c}' style='font-size:1.6rem;'>~{_pc_avg}p</div>"
-                        f"<div class='stat-hint'>~{_pc_k_ceiling:.1f}K ceiling · {_pc_lbl}</div>"
-                        f"</div>",
-                        unsafe_allow_html=True
+                    f"<div class='stat-card'>"
+                    f"<div class='stat-label'>Pitch Count Est.</div>"
+                    f"<div class='stat-value {_pc_c}' style='font-size:1.6rem;'>~{_pc_avg}p</div>"
+                    f"<div class='stat-hint'>~{_pc_k_ceiling:.1f}K ceiling · {_pc_lbl}</div>"
+                    f"</div>",
+                    unsafe_allow_html=True
                     )
                 else:
                     st.markdown(
-                        "<div class='stat-card'><div class='stat-label'>Pitch Count Est.</div>"
-                        "<div style='color:#6b7f96;font-family:JetBrains Mono,monospace;font-size:0.7rem;margin-top:6px;'>No data yet</div></div>",
-                        unsafe_allow_html=True
+                    "<div class='stat-card'><div class='stat-label'>Pitch Count Est.</div>"
+                    "<div style='color:#6b7f96;font-family:JetBrains Mono,monospace;font-size:0.7rem;margin-top:6px;'>No data yet</div></div>",
+                    unsafe_allow_html=True
                     )
             with _c10:
                 if _platoon_vs_l and _platoon_vs_r:
@@ -7578,20 +7519,20 @@ if st.session_state.active_sport == "mlb":
                     _hand_c     = "green" if max(_platoon_vs_l, _platoon_vs_r) >= 0.28 else "yellow"
                     _phand_desc = f"vsL: {_platoon_vs_l:.0%} · vsR: {_platoon_vs_r:.0%}"
                     st.markdown(
-                        f"<div class='stat-card'>"
-                        f"<div class='stat-label'>Platoon K%</div>"
-                        f"<div class='stat-value {_hand_c}' style='font-size:1.4rem;'>{_phand_desc}</div>"
-                        f"<div class='stat-hint'>Favors {'lefties' if _hand_fav=='LHB' else 'righties'}"
-                        f"{f' · {_lhb_count}L/{_rhb_count}R tonight' if _order_hands else ' · lineup TBD'}</div>"
-                        f"</div>",
-                        unsafe_allow_html=True
+                    f"<div class='stat-card'>"
+                    f"<div class='stat-label'>Platoon K%</div>"
+                    f"<div class='stat-value {_hand_c}' style='font-size:1.4rem;'>{_phand_desc}</div>"
+                    f"<div class='stat-hint'>Favors {'lefties' if _hand_fav=='LHB' else 'righties'}"
+                    f"{f' · {_lhb_count}L/{_rhb_count}R tonight' if _order_hands else ' · lineup TBD'}</div>"
+                    f"</div>",
+                    unsafe_allow_html=True
                     )
                 else:
                     _plat_note = "No career splits yet" if not _platoon.get("vs_l") else "Loading splits..."
                     st.markdown(
-                        f"<div class='stat-card'><div class='stat-label'>Platoon K%</div>"
-                        f"<div style='color:#6b7f96;font-family:JetBrains Mono,monospace;font-size:0.7rem;margin-top:6px;'>{_plat_note}</div></div>",
-                        unsafe_allow_html=True
+                    f"<div class='stat-card'><div class='stat-label'>Platoon K%</div>"
+                    f"<div style='color:#6b7f96;font-family:JetBrains Mono,monospace;font-size:0.7rem;margin-top:6px;'>{_plat_note}</div></div>",
+                    unsafe_allow_html=True
                     )
 
             # Consistency
@@ -7612,32 +7553,32 @@ if st.session_state.active_sport == "mlb":
                     _wx_c = {"Helps Over":"#00e896","Hurts Over":"#ff3d5c","Neutral":"#9aaec4"}.get(_wx_impact,"#9aaec4")
                     _wx_bg= {"Helps Over":"rgba(0,232,150,0.07)","Hurts Over":"rgba(255,61,92,0.07)","Neutral":"rgba(255,255,255,0.02)"}.get(_wx_impact,"rgba(255,255,255,0.02)")
                     st.markdown(
-                        f"<div class='stat-card' style='border-color:{_wx_c}33;background:{_wx_bg};'>"
-                        f"<div class='stat-label'>🌡️ Game Weather</div>"
-                        f"<div style='font-family:Plus Jakarta Sans,sans-serif;font-size:1.5rem;"
-                        f"font-weight:800;color:{_wx_c};letter-spacing:-0.5px;'>"
-                        f"{_weather['temp_f']:.0f}°F · {_weather['wind_mph']:.0f}mph {_weather['wind_dir']}</div>"
-                        f"<div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;"
-                        f"color:#6b7f96;margin-top:4px;'>{_weather['condition']}</div>"
-                        f"<div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;"
-                        f"color:{_wx_c};margin-top:3px;'>{_wx_note}</div>"
-                        f"</div>", unsafe_allow_html=True
+                    f"<div class='stat-card' style='border-color:{_wx_c}33;background:{_wx_bg};'>"
+                    f"<div class='stat-label'>🌡️ Game Weather</div>"
+                    f"<div style='font-family:Plus Jakarta Sans,sans-serif;font-size:1.5rem;"
+                    f"font-weight:800;color:{_wx_c};letter-spacing:-0.5px;'>"
+                    f"{_weather['temp_f']:.0f}°F · {_weather['wind_mph']:.0f}mph {_weather['wind_dir']}</div>"
+                    f"<div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;"
+                    f"color:#6b7f96;margin-top:4px;'>{_weather['condition']}</div>"
+                    f"<div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;"
+                    f"color:{_wx_c};margin-top:3px;'>{_wx_note}</div>"
+                    f"</div>", unsafe_allow_html=True
                     )
                 elif _weather and _weather.get("condition") == "Dome/Retractable":
                     st.markdown(
-                        "<div class='stat-card'><div class='stat-label'>🏟️ Game Weather</div>"
-                        "<div style='font-family:Plus Jakarta Sans,sans-serif;font-size:1.1rem;"
-                        "font-weight:700;color:#9aaec4;'>Indoor</div>"
-                        "<div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;"
-                        "color:#6b7f96;margin-top:4px;'>Dome / Retractable roof — weather irrelevant</div>"
-                        "</div>", unsafe_allow_html=True
+                    "<div class='stat-card'><div class='stat-label'>🏟️ Game Weather</div>"
+                    "<div style='font-family:Plus Jakarta Sans,sans-serif;font-size:1.1rem;"
+                    "font-weight:700;color:#9aaec4;'>Indoor</div>"
+                    "<div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;"
+                    "color:#6b7f96;margin-top:4px;'>Dome / Retractable roof — weather irrelevant</div>"
+                    "</div>", unsafe_allow_html=True
                     )
                 else:
                     st.markdown(
-                        "<div class='stat-card'><div class='stat-label'>🌡️ Game Weather</div>"
-                        "<div style='color:#6b7f96;font-family:JetBrains Mono,monospace;"
-                        "font-size:0.7rem;margin-top:6px;'>Weather data unavailable</div></div>",
-                        unsafe_allow_html=True
+                    "<div class='stat-card'><div class='stat-label'>🌡️ Game Weather</div>"
+                    "<div style='color:#6b7f96;font-family:JetBrains Mono,monospace;"
+                    "font-size:0.7rem;margin-top:6px;'>Weather data unavailable</div></div>",
+                    unsafe_allow_html=True
                     )
 
             with _gctx_cols[1]:
@@ -7647,7 +7588,7 @@ if st.session_state.active_sport == "mlb":
                     _lo_bg = "rgba(0,232,150,0.07)" if _lineup_confirmed else "rgba(255,193,7,0.07)"
                     _order_str = " · ".join(_lineup_order[:5]) + ("..." if len(_lineup_order) > 5 else "")
                     st.markdown(
-                        f"<div class='stat-card' style='border-color:{_lo_c}33;background:{_lo_bg};'>"
+                    f"<div class='stat-card' style='border-color:{_lo_c}33;background:{_lo_bg};'>"
                         f"<div class='stat-label'>📋 Opposing Batting Order</div>"
                         f"<div style='font-family:Plus Jakarta Sans,sans-serif;font-size:0.92rem;"
                         f"font-weight:700;color:{_lo_c};'>"
