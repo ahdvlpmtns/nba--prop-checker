@@ -2926,6 +2926,90 @@ def delete_from_supabase(row_id: str) -> bool:
         return False
 
 
+# ── PrizePicks slate cache ───────────────────────────────────
+
+def get_cached_pp_props_from_supabase(sport_filter: str, max_age_minutes: int = 720) -> Optional[list]:
+    """
+    Load the last successful PrizePicks slate from Supabase.
+    Optional table: pp_slate_cache(cache_key text unique, props_json text, fetched_at timestamptz).
+    Fails quietly if the table does not exist.
+    """
+    try:
+        sb = get_supabase_client()
+        if not sb:
+            return None
+        import requests as _req, json as _json
+        cache_key = f"edge_slate_{sport_filter.lower()}"
+        hdrs = {
+            "apikey": sb.key,
+            "Authorization": f"Bearer {sb.key}",
+            "Content-Type": "application/json",
+        }
+        url = (
+            f"{sb.url}/rest/v1/pp_slate_cache"
+            f"?cache_key=eq.{cache_key}"
+            f"&select=props_json,fetched_at"
+            f"&order=fetched_at.desc"
+            f"&limit=1"
+        )
+        r = _req.get(url, headers=hdrs, timeout=5)
+        if not r.ok:
+            record_debug_error("pp_cache.load", f"HTTP {r.status_code}")
+            return None
+        rows = r.json()
+        if not rows:
+            return None
+        fetched_at = pd.to_datetime(rows[0].get("fetched_at"), utc=True, errors="coerce")
+        if pd.isna(fetched_at):
+            return None
+        age_minutes = (pd.Timestamp.utcnow() - fetched_at).total_seconds() / 60
+        if age_minutes > max_age_minutes:
+            return None
+        props = _json.loads(rows[0].get("props_json", "[]"))
+        if isinstance(props, list) and props:
+            st.session_state["edge_fetch_debug"] = [
+                f"Using Supabase cached PrizePicks slate ({age_minutes:.0f} min old)"
+            ]
+            return props
+    except Exception as e:
+        record_debug_error("pp_cache.load", e)
+    return None
+
+
+def save_pp_props_to_supabase(sport_filter: str, props: list) -> bool:
+    """Save last successful PrizePicks slate for rate-limit fallback."""
+    if not props:
+        return False
+    try:
+        sb = get_supabase_client()
+        if not sb:
+            return False
+        import requests as _req, json as _json
+        hdrs = {
+            "apikey": sb.key,
+            "Authorization": f"Bearer {sb.key}",
+            "Content-Type": "application/json",
+            "Prefer": "resolution=merge-duplicates,return=minimal",
+        }
+        payload = {
+            "cache_key": f"edge_slate_{sport_filter.lower()}",
+            "props_json": _json.dumps(props),
+            "fetched_at": datetime.utcnow().isoformat() + "Z",
+        }
+        r = _req.post(
+            f"{sb.url}/rest/v1/pp_slate_cache?on_conflict=cache_key",
+            headers=hdrs,
+            json=payload,
+            timeout=6,
+        )
+        if not r.ok:
+            record_debug_error("pp_cache.save", f"HTTP {r.status_code}")
+        return r.ok
+    except Exception as e:
+        record_debug_error("pp_cache.save", e)
+        return False
+
+
 # ── Auto prop result detection ───────────────────────────────
 
 def auto_detect_result(entry: dict) -> Optional[str]:
@@ -8508,6 +8592,12 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
     """
     import requests as _req
     props = []
+    fetch_notes = []
+
+    # Fresh shared cache first. This avoids hammering PrizePicks across Railway sessions.
+    cached_props = get_cached_pp_props_from_supabase(sport_filter, max_age_minutes=15)
+    if cached_props:
+        return cached_props
 
     _all_leagues = [("7", "NBA"), ("2", "MLB")]
     if sport_filter == "NBA":  _all_leagues = [("7", "NBA")]
@@ -8553,55 +8643,77 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
                 result.append(entry)
         return result
 
+    _endpoints = [
+        "https://partner-api.prizepicks.com/projections",
+        "https://api.prizepicks.com/projections",
+    ]
+    _page_sizes = ["250", "100", "50"]
+    _base_headers = {
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Referer": "https://prizepicks.com/",
+        "Origin": "https://prizepicks.com",
+    }
+
     for _league_id, _sport in _all_leagues:
         _fetched = False
 
-        # ── Strategy 1: Partner API (no Cloudflare, designed for server access)
-        try:
-            r = _req.get(
-                "https://partner-api.prizepicks.com/projections",
-                params={"league_id": _league_id, "per_page": "1000",
-                        "single_stat": "true"},
-                headers={"Accept": "application/json",
-                         "User-Agent": "PropIQ/1.0"},
-                timeout=15
-            )
-            if r.ok and r.json().get("data"):
-                props.extend(_parse(r.json(), _sport))
-                _fetched = True
-        except Exception:
-            pass
-
-        if _fetched:
-            continue
-
-        # ── Strategy 2: Main API with rotating UAs
-        for _ua in [
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
-        ]:
-            try:
-                r = _req.get(
-                    "https://partner-api.prizepicks.com/projections",
-                    params={"league_id": _league_id, "per_page": "250",
-                            "single_stat": "true"},
-                    headers={
-                        "User-Agent": _ua,
-                        "Accept": "application/json, text/plain, */*",
-                        "Accept-Language": "en-US,en;q=0.9",
-                        "Referer": "https://prizepicks.com/",
-                        "Origin": "https://prizepicks.com",
-                    },
-                    timeout=15
-                )
-                if r.ok and r.json().get("data"):
-                    props.extend(_parse(r.json(), _sport))
-                    _fetched = True
+        for _endpoint in _endpoints:
+            if _fetched:
+                break
+            for _per_page in _page_sizes:
+                if _fetched:
                     break
-            except Exception:
-                continue
+                # Try with and without single_stat. PrizePicks changes this behavior occasionally.
+                for _single_stat in ("true", None):
+                    _params = {"league_id": _league_id, "per_page": _per_page}
+                    if _single_stat:
+                        _params["single_stat"] = _single_stat
+                    # Add projection_type as a harmless hint for the main API.
+                    _params["projection_type"] = "Single Stat"
+                    _url_label = _endpoint.replace("https://", "").split("/")[0]
+                    try:
+                        r = _req.get(
+                            _endpoint,
+                            params=_params,
+                            headers=_base_headers,
+                            timeout=15
+                        )
+                        if r.status_code == 429:
+                            fetch_notes.append(f"{_sport} {_url_label} {_per_page}: 429 rate-limited")
+                            continue
+                        if not r.ok:
+                            fetch_notes.append(f"{_sport} {_url_label} {_per_page}: HTTP {r.status_code}")
+                            continue
+                        data = r.json()
+                        row_count = len(data.get("data", []) or [])
+                        if row_count:
+                            parsed = _parse(data, _sport)
+                            props.extend(parsed)
+                            fetch_notes.append(f"{_sport} {_url_label} {_per_page}: {row_count} rows, {len(parsed)} parsed")
+                            _fetched = True
+                            break
+                        fetch_notes.append(f"{_sport} {_url_label} {_per_page}: empty data")
+                    except Exception as e:
+                        fetch_notes.append(f"{_sport} {_url_label} {_per_page}: {type(e).__name__}")
+                        record_debug_error("prizepicks.fetch", e)
 
+    if not props:
+        cached_props = get_cached_pp_props_from_supabase(sport_filter, max_age_minutes=720)
+        if cached_props:
+            st.session_state["edge_fetch_debug"] = (
+                st.session_state.get("edge_fetch_debug", [])
+                + ["Live PrizePicks fetch failed; using last successful Supabase slate."]
+            )
+            return cached_props
+        detail = " | ".join(fetch_notes[-8:]) if fetch_notes else "No attempts completed"
+        record_debug_error("prizepicks.fetch", detail)
+        raise RuntimeError(f"PrizePicks returned no props. {detail}")
+
+    st.session_state["edge_fetch_debug"] = fetch_notes[-12:]
+    save_pp_props_to_supabase(sport_filter, props)
     return props
 
 
@@ -8654,13 +8766,12 @@ def _scanner_get_tonight_matchup(pitcher_name: str) -> dict:
 @st.cache_data(ttl=3600, show_spinner=False)
 def _scanner_get_all_players() -> list:
     """Fetch full MLB player list once — shared across all pitcher lookups."""
-    import requests as _req, datetime as _dtx
-    season = _dtx.datetime.now().year
     try:
-            people = list(_get_mlb_roster_cached())
-            if not people: return empty
-    except Exception:
-        pass
+        people = list(_get_mlb_roster_cached())
+        if people:
+            return people
+    except Exception as e:
+        record_debug_error("mlb.roster_cache", e)
     return []
 
 
@@ -9018,9 +9129,15 @@ if st.session_state.active_sport == "edge":
         if not _all_props:
             fetch_all_pp_props.clear()
             st.warning(
-                "⚠️ Could not reach PrizePicks right now. "
-                "Try again in a moment or hit **Clear Cache** and retry."
+                "⚠️ PrizePicks did not return a usable slate. "
+                "This can be a temporary rate limit or an empty response from their API. "
+                "Nothing was cached, so you can retry in a moment."
             )
+            _edge_dbg = st.session_state.get("edge_fetch_debug", [])
+            if _edge_dbg:
+                with st.expander("PrizePicks fetch diagnostics"):
+                    for _line in _edge_dbg:
+                        st.write(_line)
             st.stop()
 
 
@@ -9036,7 +9153,7 @@ if st.session_state.active_sport == "edge":
         # 484 threads for 20 actual props
         _STAT_MAP = {
             "Points":               lambda s: s.lower() in ("points", "pts", "point"),
-            "Strikeouts":           lambda s: s.lower() == "pitcher strikeouts",
+            "Strikeouts":           lambda s: "strikeout" in s.lower() or "strike out" in s.lower(),
             "Rebounds":             lambda s: "rebound" in s.lower() or s.lower() == "reb",
             "Assists":              lambda s: s.lower() in ("assists", "ast"),
             "Hits":                 lambda s: s.lower() == "hits",
@@ -9063,7 +9180,10 @@ if st.session_state.active_sport == "edge":
         _filtered = list(_deduped.values())
 
         if not _filtered:
-            st.warning("No props found matching your filters. Try broadening the sport or stat filter.")
+            st.warning("PrizePicks loaded, but no props matched your filters.")
+            with st.expander("Loaded PrizePicks stat types"):
+                _loaded_types = sorted({p.get("stat", "") for p in _all_props})
+                st.write(_loaded_types)
             st.stop()
 
         # Build human-readable label
@@ -11263,7 +11383,8 @@ if st.session_state.logs is not None:
 
     # ── Fire slow calls in parallel ──────────────────────────────
     import concurrent.futures as _cf
-    with _cf.ThreadPoolExecutor(max_workers=5) as _pool:
+    _pool = _cf.ThreadPoolExecutor(max_workers=10)
+    try:
         _f_matchup  = _pool.submit(classify_matchup_espn, opp_abbr)
         _f_h2h      = _pool.submit(get_h2h_logs, player_id, opp_abbr, season_str_clean) if opp_abbr else None
         _f_season   = _pool.submit(nba_get_full_season_logs_cached, player_id, season_str_clean)
@@ -11278,13 +11399,15 @@ if st.session_state.logs is not None:
         _f_role      = _pool.submit(espn_get_player_role, full_name, player_team) if player_team else None
 
         try:
-            matchup_auto, opp_pts, league_avg = _f_matchup.result(timeout=10)
-        except Exception:
+            matchup_auto, opp_pts, league_avg = _f_matchup.result(timeout=5)
+        except Exception as e:
+            record_debug_error("nba.matchup", e)
             matchup_auto, opp_pts, league_avg = "Neutral", None, "114.5"
 
         try:
-            _h2h_full = _f_h2h.result(timeout=22) if _f_h2h else pd.DataFrame()
-        except Exception:
+            _h2h_full = _f_h2h.result(timeout=8) if _f_h2h else pd.DataFrame()
+        except Exception as e:
+            record_debug_error("nba.h2h", e)
             _h2h_full = pd.DataFrame()
 
         # Split H2H: series games (signal) + reg season (context)
@@ -11310,54 +11433,68 @@ if st.session_state.logs is not None:
             _reg_h2h_df = pd.DataFrame()
 
         try:
-            _f_season.result(timeout=20)
-        except Exception:
-            pass
+            _f_season.result(timeout=6)
+        except Exception as e:
+            record_debug_error("nba.season_logs", e)
 
         try:
-            _playoff = _f_playoff.result(timeout=8) if _f_playoff else {}
-        except Exception:
+            _playoff = _f_playoff.result(timeout=4) if _f_playoff else {}
+        except Exception as e:
+            record_debug_error("nba.playoff_picture", e)
             _playoff = {}
 
         try:
-            _series = _f_series.result(timeout=8) if _f_series else {}
-        except Exception:
+            _series = _f_series.result(timeout=4) if _f_series else {}
+        except Exception as e:
+            record_debug_error("nba.series_context", e)
             _series = {}
 
         try:
-            _ref_sig, _ref_ppg, _ref_names = _f_refs.result(timeout=8) if _f_refs else ("Neutral", None, [])
-        except Exception:
+            _ref_sig, _ref_ppg, _ref_names = _f_refs.result(timeout=4) if _f_refs else ("Neutral", None, [])
+        except Exception as e:
+            record_debug_error("nba.refs", e)
             _ref_sig, _ref_ppg, _ref_names = "Neutral", None, []
 
         try:
-            _opp_absent, _opp_inj_html = _f_opp_inj.result(timeout=10) if _f_opp_inj else ([], "")
-        except Exception:
+            _opp_absent, _opp_inj_html = _f_opp_inj.result(timeout=4) if _f_opp_inj else ([], "")
+        except Exception as e:
+            record_debug_error("nba.opp_injuries", e)
             _opp_absent, _opp_inj_html = [], ""
 
         try:
-            _def_form = _f_def_form.result(timeout=10) if _f_def_form else {}
-        except Exception:
+            _def_form = _f_def_form.result(timeout=4) if _f_def_form else {}
+        except Exception as e:
+            record_debug_error("nba.def_form", e)
             _def_form = {}
 
         try:
-            _po_logs = _f_po_logs.result(timeout=12) if _f_po_logs else pd.DataFrame()
-        except Exception:
+            _po_logs = _f_po_logs.result(timeout=6) if _f_po_logs else pd.DataFrame()
+        except Exception as e:
+            record_debug_error("nba.playoff_logs", e)
             _po_logs = pd.DataFrame()
 
         try:
-            _espn_last_game = _f_last_game.result(timeout=8) if _f_last_game else None
-        except Exception:
+            _espn_last_game = _f_last_game.result(timeout=3) if _f_last_game else None
+        except Exception as e:
+            record_debug_error("nba.last_game", e)
             _espn_last_game = None
 
         try:
-            _player_news = _f_news.result(timeout=8)
-        except Exception:
+            _player_news = _f_news.result(timeout=3)
+        except Exception as e:
+            record_debug_error("nba.news", e)
             _player_news = []
 
         try:
-            _player_role = _f_role.result(timeout=6) if _f_role else {}
-        except Exception:
+            _player_role = _f_role.result(timeout=3) if _f_role else {}
+        except Exception as e:
+            record_debug_error("nba.role", e)
             _player_role = {}
+    finally:
+        try:
+            _pool.shutdown(wait=False, cancel_futures=True)
+        except TypeError:
+            _pool.shutdown(wait=False)
 
     # ── Matchup upgrade if key opp players out ──────────────────────────
     if _opp_absent and len(_opp_absent) >= 2 and matchup_auto == "Neutral":
