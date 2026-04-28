@@ -2710,8 +2710,20 @@ def playoff_usage_spike_signal(
 def get_supabase_client():
     """Get Supabase client using credentials from Streamlit secrets."""
     try:
-        url = st.secrets.get("SUPABASE_URL") or os.environ.get("SUPABASE_URL", "")
-        key = st.secrets.get("SUPABASE_KEY") or os.environ.get("SUPABASE_KEY", "")
+        url = (
+            st.secrets.get("SUPABASE_URL")
+            or os.environ.get("SUPABASE_URL", "")
+        )
+        key = (
+            st.secrets.get("SUPABASE_KEY")
+            or st.secrets.get("SUPABASE_SERVICE_ROLE_KEY")
+            or os.environ.get("SUPABASE_KEY", "")
+            or os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+            or os.environ.get("SUPABASE_SERVICE_KEY", "")
+        )
+        if not url or not key:
+            record_debug_error("supabase.config", "Missing SUPABASE_URL or SUPABASE_KEY")
+            return None
         import requests as _req
 
         class _SupabaseClient:
@@ -2958,11 +2970,13 @@ def get_cached_pp_props_from_supabase(sport_filter: str, max_age_minutes: int = 
 def save_pp_props_to_supabase(sport_filter: str, props: list) -> bool:
     """Save last successful PrizePicks slate for rate-limit fallback."""
     if not props:
+        st.session_state["edge_cache_save_status"] = "Supabase cache skipped: no props to save."
         return False
     try:
         sb = get_supabase_client()
         if not sb:
             record_debug_error("pp_cache.save", "No Supabase client")
+            st.session_state["edge_cache_save_status"] = "Supabase cache save failed: no Supabase client/config."
             return False
         import requests as _req, json as _json
         hdrs = {
@@ -2982,11 +2996,36 @@ def save_pp_props_to_supabase(sport_filter: str, props: list) -> bool:
             json=payload,
             timeout=6,
         )
+        if r.ok:
+            st.session_state["edge_cache_save_status"] = (
+                f"Supabase cache saved: edge_slate_{sport_filter.lower()} ({len(props)} props)."
+            )
+            return True
+
+        # Some users accidentally create props_json as json/jsonb instead of text.
+        # Retry with a native JSON payload so the cache still works.
+        payload_json = dict(payload)
+        payload_json["props_json"] = props
+        r2 = _req.post(
+            f"{sb.url}/rest/v1/pp_slate_cache?on_conflict=cache_key",
+            headers=hdrs,
+            json=payload_json,
+            timeout=6,
+        )
+        if r2.ok:
+            st.session_state["edge_cache_save_status"] = (
+                f"Supabase cache saved: edge_slate_{sport_filter.lower()} ({len(props)} props)."
+            )
+            return True
+
         if not r.ok:
-            record_debug_error("pp_cache.save", f"HTTP {r.status_code}: {r.text[:200]}")
-        return r.ok
+            detail = f"HTTP {r.status_code}: {r.text[:200]} | retry HTTP {r2.status_code}: {r2.text[:200]}"
+            record_debug_error("pp_cache.save", detail)
+            st.session_state["edge_cache_save_status"] = f"Supabase cache save failed: {detail}"
+        return False
     except Exception as e:
         record_debug_error("pp_cache.save", e)
+        st.session_state["edge_cache_save_status"] = f"Supabase cache save failed: {e}"
         return False
 
 
@@ -8264,6 +8303,7 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
         return cached_props
     cached_props = get_cached_pp_props_from_local(sport_filter, max_age_minutes=15)
     if cached_props:
+        save_pp_props_to_supabase(sport_filter, cached_props)
         return cached_props
 
     def _stale_cache() -> Optional[list]:
@@ -8283,6 +8323,7 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
                 st.session_state.get("edge_fetch_debug", [])
                 + [f"PrizePicks cooldown active ({wait_min} min left); using cached slate."]
             )
+            save_pp_props_to_supabase(sport_filter, cached_props)
             return cached_props
         raise RuntimeError(
             f"PrizePicks is rate-limiting this Railway instance. Wait about {wait_min} minutes, "
@@ -8399,6 +8440,7 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
                 st.session_state.get("edge_fetch_debug", [])
                 + ["Live PrizePicks fetch failed; using last successful cached slate."]
             )
+            save_pp_props_to_supabase(sport_filter, cached_props)
             return cached_props
         detail = " | ".join(fetch_notes[-8:]) if fetch_notes else "No attempts completed"
         record_debug_error("prizepicks.fetch", detail)
@@ -8770,6 +8812,13 @@ if st.session_state.active_sport == "edge":
                 _all_props = []
                 st.error(f"Fetch error: {_fetch_err}")
 
+        _cache_status = st.session_state.get("edge_cache_save_status")
+        if _cache_status:
+            if "failed" in _cache_status.lower():
+                st.warning(_cache_status)
+            else:
+                st.caption(_cache_status)
+
         if not _all_props:
             fetch_all_pp_props.clear()
             st.warning(
@@ -8791,7 +8840,7 @@ if st.session_state.active_sport == "edge":
         # 484 threads for 20 actual props
         _STAT_MAP = {
             "Points":               lambda s: s.lower() in ("points", "pts", "point"),
-            "Strikeouts":           lambda s: s.lower() == "pitcher strikeouts",
+            "Strikeouts":           lambda s: "strikeout" in s.lower() or "strike out" in s.lower(),
             "Rebounds":             lambda s: "rebound" in s.lower() or s.lower() == "reb",
             "Assists":              lambda s: s.lower() in ("assists", "ast"),
             "Hits":                 lambda s: s.lower() == "hits",
