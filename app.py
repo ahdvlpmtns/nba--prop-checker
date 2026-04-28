@@ -7118,6 +7118,56 @@ if st.session_state.active_sport == "mlb":
                 elif _velo >= 94:  _velo_adj = +0.02  # above avg
                 elif _velo < 90:   _velo_adj = -0.04  # finesse pitcher
 
+            # ── Signal 9c: Velocity trend vs prior season ─────────────────
+            _vtrend_dir = _vtrender.get("trend", "Stable") if _vtrender else "Stable"
+            try:
+                _vtrend_mph = float(_vtrender.get("trend_mph", 0.0) or 0.0) if _vtrender else 0.0
+            except Exception:
+                _vtrend_mph = 0.0
+            _vtrend_adj = 0.0
+            if _vtrend_dir == "Up" or _vtrend_mph >= 1.0:
+                _vtrend_adj = +0.03
+            elif _vtrend_dir == "Down" or _vtrend_mph <= -1.0:
+                _vtrend_adj = -0.04
+            if mlb_side == "Under":
+                _vtrend_adj = -_vtrend_adj
+
+            # ── Signal 9d: Batter-vs-pitcher H2H vs posted lineup ─────────
+            _h2h_adj = 0.0
+            _h2h_note = "No batter-vs-pitcher H2H signal"
+            try:
+                _matched_h2h = []
+                for _batter_name in (_lineup_order or []):
+                    _bnorm = _batter_name.lower().replace(".", "").strip()
+                    _blast = _bnorm.split()[-1] if _bnorm else ""
+                    _row = None
+                    for _hname, _hstats in (_h2h_data or {}).items():
+                        _hnorm = str(_hname).lower().replace(".", "").strip()
+                        if _bnorm == _hnorm or (_blast and _blast in _hnorm):
+                            _row = _hstats
+                            break
+                    if _row and _row.get("ab_total", _row.get("ab", 0)) >= 3:
+                        _matched_h2h.append(_row)
+
+                if _matched_h2h:
+                    _ab_total = sum(int(r.get("ab_total", r.get("ab", 0)) or 0) for r in _matched_h2h)
+                    _k_total = sum(int(r.get("k", 0) or 0) for r in _matched_h2h)
+                    if _ab_total > 0:
+                        _h2h_k_pct = _k_total / _ab_total
+                        if _h2h_k_pct >= 0.30:
+                            _h2h_adj = +0.04
+                        elif _h2h_k_pct <= 0.15:
+                            _h2h_adj = -0.04
+                        if mlb_side == "Under":
+                            _h2h_adj = -_h2h_adj
+                        _h2h_note = (
+                            f"{len(_matched_h2h)} lineup bats have H2H: "
+                            f"{_k_total}/{_ab_total} K ({_h2h_k_pct:.0%})"
+                        )
+            except Exception:
+                _h2h_adj = 0.0
+                _h2h_note = "H2H signal unavailable"
+
             # ── Signal 10: Umpire K tendency
             _ump_tend  = _ump.get("tendency", "Avg") if _ump else "Avg"
             _ump_name  = _ump.get("name") if _ump else None
@@ -7274,7 +7324,8 @@ if st.session_state.active_sport == "mlb":
                 _pills.append("<span class='flag-pill flat'>🧑‍⚖️ Umpire TBD</span>")
 
             # Park
-            _pills.append(f"<span class='flag-pill {"up" if psig=="Boost" else "down" if psig=="Penalty" else "flat"}'>{psig} park</span>")
+            _park_flag = "up" if psig == "Boost" else ("down" if psig == "Penalty" else "flat")
+            _pills.append(f"<span class='flag-pill {_park_flag}'>{psig} park</span>")
 
             # Form
             if _form_adj > 0:  _pills.append("<span class='flag-pill up'>📈 Form trending up</span>")
@@ -7322,7 +7373,8 @@ if st.session_state.active_sport == "mlb":
             # Weather
             if _weather and _weather.get("temp_f"):
                 _wx_col = "up" if _wx_impact=="Helps Over" else ("down" if _wx_impact=="Hurts Over" else "flat")
-                _pills.append(f"<span class='flag-pill {_wx_col}'>🌡️ {_wx_note or _weather.get("condition","")}</span>")
+                _wx_label = _wx_note or _weather.get("condition", "")
+                _pills.append(f"<span class='flag-pill {_wx_col}'>🌡️ {_wx_label}</span>")
             elif mlb_home and _weather.get("condition") == "Dome/Retractable":
                 _pills.append("<span class='flag-pill flat'>🏟️ Indoor — weather N/A</span>")
 
@@ -9156,7 +9208,7 @@ if st.session_state.active_sport == "edge":
                     f"<span>Edge: <strong style='color:{'#00e896' if _r['edge_raw']>0 else '#ff3d5c'};'>{_r['edge_raw']:+.1f}</strong></span>"
                     f"<span>Cons: <strong style='color:#f0f4f8;'>{_r['cons']}%</strong></span>"
                     f"<span style='color:{'#ffc107' if _r['samples']<8 else '#6b7f96'};'>{_r['samples']} starts</span>"
-                    f"{'<span style="color:#00c4cc;">K/9 ' + str(_r.get('k9')) + '</span>' if _r.get('k9') else ''}"
+                    f"{_k9_str}"
                     f"</div>"
 
 
@@ -11919,6 +11971,11 @@ if st.session_state.logs is not None:
                 f"<a href='{_nlink}' target='_blank' style='color:#00c4cc;"
                 f"font-size:0.6rem;font-family:JetBrains Mono,monospace;'>Read more →</a>"
             ) if _nlink else ""
+            _desc_html = (
+                f"<div style='font-family:JetBrains Mono,monospace;font-size:0.65rem;"
+                f"color:#6b7f96;margin-top:4px;line-height:1.5;'>"
+                f"{_ndesc[:150]}...</div>"
+            ) if _ndesc else ""
             st.markdown(
                 f"<div style='background:#0d1520;border:1px solid rgba(255,255,255,0.06);"
                 f"border-left:3px solid #00c4cc;border-radius:0 10px 10px 0;"
@@ -11928,7 +11985,7 @@ if st.session_state.logs is not None:
                 f"color:#f1f5f9;line-height:1.4;'>{_nhead}</div>"
                 f"<div style='font-family:JetBrains Mono,monospace;font-size:0.58rem;color:#6b7f96;"
                 f"white-space:nowrap;flex-shrink:0;'>{_ndate}</div></div>"
-                f"{f'<div style="font-family:JetBrains Mono,monospace;font-size:0.65rem;color:#6b7f96;margin-top:4px;line-height:1.5;">{_ndesc[:150]}...</div>' if _ndesc else ''}"
+                f"{_desc_html}"
                 f"<div style='margin-top:6px;'>{_link_html}</div>"
                 f"</div>",
                 unsafe_allow_html=True
