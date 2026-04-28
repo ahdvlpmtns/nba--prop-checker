@@ -1143,6 +1143,7 @@ for key, default in [
     ("logs", None), ("ai_analysis", None), ("ai_error", None),
     ("defense_data", None), ("tracker", []), ("active_tab", "player"),
     ("recent_players", []), ("supabase_loaded", False), ("show_share", False),
+    ("debug_errors", []), ("runtime_health_dismissed", False),
     ("active_sport", "nba"), ("edge_results", []), ("edge_running", False),
     ("edge_manual_props", []), ("edge_jump_player", None),
     ("edge_jump_pitcher", None), ("edge_jump_line", None),
@@ -1156,6 +1157,63 @@ for key, default in [
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
+
+
+# ─────────────────────────────────────────────
+# Production guardrails — Railway + Streamlit
+# ─────────────────────────────────────────────
+
+REQUIRED_CONFIG = {
+    "GROQ_API_KEY": "AI analysis",
+    "SUPABASE_URL": "tracker + cache",
+    "SUPABASE_KEY": "tracker + cache",
+}
+
+
+def get_secret_value(name: str, default: str = "") -> str:
+    """Read config from Streamlit secrets first, then Railway/env vars."""
+    try:
+        value = st.secrets.get(name)
+        if value:
+            return str(value)
+    except Exception:
+        pass
+    return os.environ.get(name, default)
+
+
+def runtime_config_status() -> dict:
+    """Return missing deploy config without exposing secret values."""
+    missing = [name for name in REQUIRED_CONFIG if not get_secret_value(name)]
+    return {
+        "ok": not missing,
+        "missing": missing,
+        "configured": [name for name in REQUIRED_CONFIG if name not in missing],
+    }
+
+
+def record_debug_error(source: str, error) -> None:
+    """Keep a tiny rolling debug buffer for Railway logs + in-app diagnostics."""
+    try:
+        msg = str(error)
+        st.session_state.debug_errors.append({
+            "time": datetime.utcnow().strftime("%H:%M:%S UTC"),
+            "source": source,
+            "error": msg[:300],
+        })
+        st.session_state.debug_errors = st.session_state.debug_errors[-25:]
+    except Exception:
+        pass
+
+
+def init_mlb_signal_state() -> dict:
+    """Central defaults for MLB signal variables used by model + UI."""
+    return {
+        "vtrend_adj": 0.0,
+        "vtrend_dir": "Stable",
+        "vtrend_mph": 0.0,
+        "h2h_adj": 0.0,
+        "h2h_note": "No batter-vs-pitcher H2H signal",
+    }
 
 # Load tracker from Supabase on first load
 # ─────────────────────────────────────────────
@@ -2669,8 +2727,11 @@ def playoff_usage_spike_signal(
 def get_supabase_client():
     """Get Supabase client using credentials from Streamlit secrets."""
     try:
-        url = st.secrets.get("SUPABASE_URL") or os.environ.get("SUPABASE_URL", "")
-        key = st.secrets.get("SUPABASE_KEY") or os.environ.get("SUPABASE_KEY", "")
+        url = get_secret_value("SUPABASE_URL")
+        key = get_secret_value("SUPABASE_KEY")
+        if not url or not key:
+            record_debug_error("supabase.config", "SUPABASE_URL or SUPABASE_KEY is missing")
+            return None
         import requests as _req
 
         class _SupabaseClient:
@@ -2721,7 +2782,8 @@ def get_supabase_client():
                 return r.ok
 
         return _SupabaseClient(url, key)
-    except Exception:
+    except Exception as e:
+        record_debug_error("supabase.client", e)
         return None
 
 
@@ -4517,10 +4579,7 @@ def build_points_chart(logs: pd.DataFrame, full_name: str, line: float, avg_pts:
 # ─────────────────────────────────────────────
 
 def get_groq_key() -> str:
-    try:
-        return st.secrets.get("GROQ_API_KEY") or os.environ.get("GROQ_API_KEY", "")
-    except Exception:
-        return os.environ.get("GROQ_API_KEY", "")
+    return get_secret_value("GROQ_API_KEY")
 
 def build_analysis_prompt(
     full_name, line, side, n_games, logs,
@@ -4579,7 +4638,11 @@ MODEL OUTPUT: {tier}
 Write 3-4 paragraphs: (1) lead with the prop and lean, (2) what the game log shows, (3) how the opponent defense, venue split, and context affect it tonight, (4) closing verdict. Be direct, use real numbers, write like a sharp bettor."""
 
 def generate_ai_analysis(prompt: str) -> str:
-    client = Groq(api_key=get_groq_key())
+    groq_key = get_groq_key()
+    if not groq_key:
+        record_debug_error("groq.config", "GROQ_API_KEY is missing")
+        raise RuntimeError("GROQ_API_KEY is not configured")
+    client = Groq(api_key=groq_key)
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile", max_tokens=1024,
         messages=[{"role": "user", "content": prompt}],
@@ -4946,6 +5009,29 @@ with _sp3:
         st.session_state.active_sport = "edge"
         st.rerun()
 
+_runtime_status = runtime_config_status()
+if not _runtime_status["ok"] and not st.session_state.runtime_health_dismissed:
+    _missing_labels = ", ".join(
+        f"{name} ({REQUIRED_CONFIG[name]})" for name in _runtime_status["missing"]
+    )
+    st.markdown(
+        f"<div style='background:#1c1005;border:1px solid #854d0e;"
+        f"border-left:4px solid #f97316;border-radius:0 10px 10px 0;"
+        f"padding:0.65rem 1rem;margin:0.75rem 0;"
+        f"font-family:JetBrains Mono,monospace;font-size:0.65rem;color:#9aaec4;'>"
+        f"<span style='color:#f97316;font-weight:800;'>DEPLOY CONFIG WARNING</span>"
+        f"<span> · Missing: {_missing_labels}. Add these in Railway Variables "
+        f"or Streamlit secrets to enable every feature.</span>"
+        f"</div>",
+        unsafe_allow_html=True
+    )
+    if st.button("Dismiss deploy warning", key="dismiss_runtime_health"):
+        st.session_state.runtime_health_dismissed = True
+        st.rerun()
+
+if st.session_state.debug_errors:
+    with st.expander("Runtime diagnostics", expanded=False):
+        st.dataframe(pd.DataFrame(st.session_state.debug_errors), use_container_width=True)
 
 st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
 
@@ -6852,6 +6938,7 @@ if st.session_state.active_sport == "mlb":
     if mlb_fetch and mlb_pitcher:
         _stat = "K" if mlb_prop=="Strikeouts" else "OUTS"
         _lbl  = "K" if mlb_prop=="Strikeouts" else "Outs"
+        _mlb_signal = init_mlb_signal_state()
 
         _mlb_ph = st.empty()
         _mlb_ph.markdown("<div style='font-family:JetBrains Mono,monospace;font-size:0.7rem;"
@@ -6876,7 +6963,8 @@ if st.session_state.active_sport == "mlb":
             try:
                 with _cfu.ThreadPoolExecutor(max_workers=1) as _ex:
                     return _ex.submit(fn, *args, **kwargs).result(timeout=10)
-            except Exception:
+            except Exception as e:
+                record_debug_error(f"mlb.{getattr(fn, '__name__', 'signal')}", e)
                 return default
 
         _pstats   = _safe(mlb_get_pitcher_season_stats, {}, mlb_pitcher)
@@ -6899,8 +6987,8 @@ if st.session_state.active_sport == "mlb":
                                       for pt in _h2h_parts)), None)
             if _h2h_pid:
                 _h2h_data = _safe(mlb_get_batter_pitcher_h2h, {}, _h2h_pid)
-        except Exception:
-            pass
+        except Exception as e:
+            record_debug_error("mlb.h2h_lookup", e)
 
 
         _inj_status = _injury.get("status", "Active")
@@ -7119,12 +7207,15 @@ if st.session_state.active_sport == "mlb":
                 elif _velo < 90:   _velo_adj = -0.04  # finesse pitcher
 
             # ── Signal 9c: Velocity trend vs prior season ─────────────────
-            _vtrend_dir = _vtrender.get("trend", "Stable") if _vtrender else "Stable"
+            _vtrend_dir = _mlb_signal["vtrend_dir"]
+            _vtrend_mph = _mlb_signal["vtrend_mph"]
+            _vtrend_adj = _mlb_signal["vtrend_adj"]
+            if _vtrender:
+                _vtrend_dir = _vtrender.get("trend", _vtrend_dir)
             try:
-                _vtrend_mph = float(_vtrender.get("trend_mph", 0.0) or 0.0) if _vtrender else 0.0
+                _vtrend_mph = float(_vtrender.get("trend_mph", _vtrend_mph) or 0.0) if _vtrender else _vtrend_mph
             except Exception:
-                _vtrend_mph = 0.0
-            _vtrend_adj = 0.0
+                record_debug_error("mlb.velocity_trend", "Invalid velocity trend value")
             if _vtrend_dir == "Up" or _vtrend_mph >= 1.0:
                 _vtrend_adj = +0.03
             elif _vtrend_dir == "Down" or _vtrend_mph <= -1.0:
@@ -7133,8 +7224,8 @@ if st.session_state.active_sport == "mlb":
                 _vtrend_adj = -_vtrend_adj
 
             # ── Signal 9d: Batter-vs-pitcher H2H vs posted lineup ─────────
-            _h2h_adj = 0.0
-            _h2h_note = "No batter-vs-pitcher H2H signal"
+            _h2h_adj = _mlb_signal["h2h_adj"]
+            _h2h_note = _mlb_signal["h2h_note"]
             try:
                 _matched_h2h = []
                 for _batter_name in (_lineup_order or []):
@@ -7164,8 +7255,9 @@ if st.session_state.active_sport == "mlb":
                             f"{len(_matched_h2h)} lineup bats have H2H: "
                             f"{_k_total}/{_ab_total} K ({_h2h_k_pct:.0%})"
                         )
-            except Exception:
-                _h2h_adj = 0.0
+            except Exception as e:
+                record_debug_error("mlb.h2h_signal", e)
+                _h2h_adj = _mlb_signal["h2h_adj"]
                 _h2h_note = "H2H signal unavailable"
 
             # ── Signal 10: Umpire K tendency
