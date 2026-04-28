@@ -6879,30 +6879,18 @@ if st.session_state.active_sport == "mlb":
             except Exception:
                 return default
 
-        _mlb_ph.markdown("⏳ fetching pitcher stats...", unsafe_allow_html=False)
         _pstats   = _safe(mlb_get_pitcher_season_stats, {}, mlb_pitcher)
-        _mlb_ph.markdown("⏳ fetching hand...", unsafe_allow_html=False)
         _phand    = _safe(mlb_get_pitcher_hand, "R", mlb_pitcher)
-        _mlb_ph.markdown("⏳ fetching umpire...", unsafe_allow_html=False)
         _ump      = _safe(mlb_get_umpire_k_tendency, {}, mlb_home) if mlb_home else {}
-        _mlb_ph.markdown("⏳ fetching opp splits...", unsafe_allow_html=False)
         _splits   = _safe(mlb_get_opp_k_rate_splits, {}, mlb_opp, "R") if mlb_opp else {}
-        _mlb_ph.markdown("⏳ fetching savant...", unsafe_allow_html=False)
         _savant   = _safe(mlb_get_savant_stats, {}, mlb_pitcher)
         _velo_from_savant = _savant.get("velo") if _savant else None
-        _mlb_ph.markdown("⏳ fetching weather...", unsafe_allow_html=False)
         _weather  = _safe(mlb_get_weather, {}, _wx_team) if _wx_team else {}
-        _mlb_ph.markdown("⏳ fetching lineup...", unsafe_allow_html=False)
         _lineup   = _safe(mlb_get_batting_order_with_hands, {}, mlb_opp) if mlb_opp else {}
-        _mlb_ph.markdown("⏳ fetching platoon...", unsafe_allow_html=False)
         _platoon  = _safe(mlb_get_platoon_splits, {}, mlb_pitcher)
-        _mlb_ph.markdown("⏳ fetching pitch count...", unsafe_allow_html=False)
         _pitchcnt = _safe(mlb_estimate_pitch_count, {}, mlb_pitcher)
-        _mlb_ph.markdown("⏳ fetching injury...", unsafe_allow_html=False)
         _injury   = _safe(mlb_get_injury_status, {"status":"Active","description":"","is_available":True}, mlb_pitcher)
-        _mlb_ph.markdown("⏳ fetching velocity...", unsafe_allow_html=False)
         _vtrender = _safe(mlb_get_velocity_trend, {}, mlb_pitcher)
-        _mlb_ph.markdown("⏳ fetching H2H...", unsafe_allow_html=False)
         _h2h_data = {}
         try:
             _h2h_parts = [pt for pt in mlb_pitcher.lower().split()[:2] if len(pt) > 2]
@@ -6913,7 +6901,6 @@ if st.session_state.active_sport == "mlb":
                 _h2h_data = _safe(mlb_get_batter_pitcher_h2h, {}, _h2h_pid)
         except Exception:
             pass
-        _mlb_ph.markdown("⏳ all signals loaded", unsafe_allow_html=False)
 
 
         _inj_status = _injury.get("status", "Active")
@@ -6996,7 +6983,8 @@ if st.session_state.active_sport == "mlb":
             if _splits:
                 _hand_key = "vs_r" if _phand == "R" else "vs_l"
                 _opp_kpct_vs_hand = _splits.get(_hand_key) or _splits.get("overall")
-            okpct = _opp_kpct_vs_hand or (mlb_get_opp_k_rate(mlb_opp) if mlb_opp else None)
+            # Use splits data only — no extra API call on main thread
+            okpct = _opp_kpct_vs_hand or _splits.get("overall")
 
             # ── Signal 3: Park factor (K-neutral — park factors affect runs not Ks)
             psig = mlb_park_signal(mlb_home) if mlb_home else "Neutral"
