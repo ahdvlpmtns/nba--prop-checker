@@ -1352,16 +1352,6 @@ def _nba_get_game_logs_uncached(player_id: int, season: str, n: int = 10, _date:
 
     import requests as _req
 
-    # ── Method 0: Supabase cache ──────────────────────────────────
-    try:
-        _cached = get_cached_logs_from_supabase(player_id, season)
-        if _cached is not None and not _cached.empty:
-            result = _process(_cached)
-            if result is not None:
-                return result
-    except Exception:
-        pass
-
     # ── Method 1: nba_api library ────────────────────────────────
     import concurrent.futures
     _HEADERS = {
@@ -1428,10 +1418,23 @@ def _nba_get_game_logs_uncached(player_id: int, season: str, n: int = 10, _date:
             if attempt == 0:
                 time.sleep(1)
 
+    # ── Method 3: Supabase fallback ───────────────────────────────
+    # Use this only after live NBA sources fail, so today's newest game is not hidden
+    # by an older same-day cache row.
+    try:
+        _cached = get_cached_logs_from_supabase(player_id, season)
+        if _cached is not None and not _cached.empty:
+            result = _process(_cached)
+            if result is not None:
+                record_debug_error("nba.logs.fallback", "Using Supabase game-log fallback after live fetch failed")
+                return result
+    except Exception:
+        pass
+
     return empty
 
 
-@st.cache_data(ttl=1800, show_spinner=False)
+@st.cache_data(ttl=600, show_spinner=False)
 def _fetch_playoff_game_logs_raw(player_id: int, season: str) -> pd.DataFrame:
     """
     Fetch playoff game logs from NBA Stats API.
@@ -1502,30 +1505,16 @@ def _merge_playoff_logs(reg_logs: pd.DataFrame, player_id: int, season: str, n: 
         return reg_logs
 
 
-@st.cache_data(ttl=14400, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False)
 def nba_get_game_logs(player_id: int, season: str, n: int = 10, _date: str = None) -> pd.DataFrame:
     """
     Cached wrapper — only caches successful (non-empty) results.
     Falls back to uncached fetch on every call if cache misses.
     TTL set to 30min during playoffs so game logs refresh quickly after games.
     """
-    # Check Supabase first — fastest path
-    try:
-        _cached = get_cached_logs_from_supabase(player_id, season)
-        if _cached is not None and not _cached.empty:
-            _df = _cached.copy()
-            _df["GAME_DATE"] = pd.to_datetime(_df["GAME_DATE"])
-            _df = _df.sort_values("GAME_DATE", ascending=False).head(n).reset_index(drop=True)
-            for c in ["MATCHUP","MIN","PTS","FGA","FTA","FG3A"]:
-                if c not in _df.columns: _df[c] = None
-            for c in ["FG3M"]:
-                if c not in _df.columns: _df[c] = 0
-            for c in ["PLUS_MINUS","WL"]:
-                if c not in _df.columns: _df[c] = None
-            return _df[["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A","FG3M","PLUS_MINUS","WL"]]
-    except Exception:
-        pass
-    # Hit NBA API — result gets cached by st.cache_data only if non-empty
+    # Hit live NBA sources first — result gets cached by st.cache_data only if non-empty.
+    # Supabase is now fallback-only inside _nba_get_game_logs_uncached to avoid stale
+    # same-day rows hiding the latest completed game.
     result = _nba_get_game_logs_uncached(player_id, season, n, _date)
     if result is None or result.empty:
         raise RuntimeError("NBA API returned no data — do not cache this failure")
@@ -1707,7 +1696,7 @@ def h2h_signal(h2h_df: pd.DataFrame, line: float, side: str) -> Tuple[str, Optio
         return "Neutral", None, len(pts)
 
     avg = float(pts.mean())
-    hit = float((pts >= line).sum() / len(pts)) if side == "Over" else float((pts <= line).sum() / len(pts))
+    hit = float((pts > line).sum() / len(pts)) if side == "Over" else float((pts < line).sum() / len(pts))
 
     if hit >= 0.65 and avg > line:
         return "Strong", avg, len(pts)
@@ -4062,7 +4051,7 @@ def hit_rate(df: pd.DataFrame, line: float, side: str) -> float:
     pts = pd.to_numeric(df["PTS"], errors="coerce").dropna()
     if len(pts) == 0:
         return 0.0
-    hits = (pts >= line).sum() if side == "Over" else (pts <= line).sum()
+    hits = (pts > line).sum() if side == "Over" else (pts < line).sum()
     return float(hits / len(pts))
 
 def weighted_hit_rate(df: pd.DataFrame, line: float, side: str, stat_col: str = "PTS",
@@ -4097,9 +4086,9 @@ def weighted_hit_rate(df: pd.DataFrame, line: float, side: str, stat_col: str = 
 
     total_weight = sum(weights)
     if side == "Over":
-        weighted_hits = sum(w for p, w in zip(pts_series, weights) if p >= line)
+        weighted_hits = sum(w for p, w in zip(pts_series, weights) if p > line)
     else:
-        weighted_hits = sum(w for p, w in zip(pts_series, weights) if p <= line)
+        weighted_hits = sum(w for p, w in zip(pts_series, weights) if p < line)
     return weighted_hits / total_weight
 
 def consistency_score(df: pd.DataFrame, line: float, stat_col: str = "PTS") -> float:
@@ -4160,12 +4149,12 @@ def home_away_split(df: pd.DataFrame, line: float, side: str, player_team: Optio
     home_df = df[df["IS_HOME"] == True].dropna(subset=["PTS_NUM"])
     away_df = df[df["IS_HOME"] == False].dropna(subset=["PTS_NUM"])
     if len(home_df) >= 2:
-        home_hits = (home_df["PTS_NUM"] >= line).sum() if side == "Over" else (home_df["PTS_NUM"] <= line).sum()
+        home_hits = (home_df["PTS_NUM"] > line).sum() if side == "Over" else (home_df["PTS_NUM"] < line).sum()
         result["home_rate"]  = round(float(home_hits / len(home_df)), 2)
         result["home_games"] = len(home_df)
         result["home_avg"]   = round(float(home_df["PTS_NUM"].mean()), 1)
     if len(away_df) >= 2:
-        away_hits = (away_df["PTS_NUM"] >= line).sum() if side == "Over" else (away_df["PTS_NUM"] <= line).sum()
+        away_hits = (away_df["PTS_NUM"] > line).sum() if side == "Over" else (away_df["PTS_NUM"] < line).sum()
         result["away_rate"]  = round(float(away_hits / len(away_df)), 2)
         result["away_games"] = len(away_df)
         result["away_avg"]   = round(float(away_df["PTS_NUM"].mean()), 1)
@@ -4437,9 +4426,9 @@ def run_backtest(
 
         # Did the bet actually hit?
         if side == "Over":
-            hit = bool(actual_pts >= line)
+            hit = bool(actual_pts > line)
         else:
-            hit = bool(actual_pts <= line)
+            hit = bool(actual_pts < line)
 
         # Was the model right?
         model_says_bet = tier not in ("Pass",)
@@ -4568,15 +4557,22 @@ def filter_blowouts(df: pd.DataFrame, threshold: int = 15) -> tuple:
     """
     Remove blowout games (margin ≥ threshold in either direction).
     Returns (filtered_df, blowout_count, blowout_games).
-    Uses PLUS_MINUS column — positive = player's team won by that margin.
+    Uses a true final-score margin column only. NBA PLUS_MINUS is player
+    on-court plus/minus, not game margin, so it must not be used as a
+    blowout proxy.
     """
     if df is None or df.empty:
         return df, 0, []
 
-    if "PLUS_MINUS" not in df.columns:
+    margin_col = next(
+        (c for c in ["TEAM_MARGIN", "GAME_MARGIN", "SCORE_MARGIN"]
+         if c in df.columns),
+        None
+    )
+    if not margin_col:
         return df, 0, []
 
-    pm = pd.to_numeric(df["PLUS_MINUS"], errors="coerce")
+    pm = pd.to_numeric(df[margin_col], errors="coerce")
     blowout_mask = pm.abs() >= threshold
     blowout_count = int(blowout_mask.sum())
 
@@ -4751,7 +4747,10 @@ def build_analysis_prompt(
         pts     = row["PTS"]
         mins    = row["MIN"]
         fga     = row["FGA"]
-        hit     = "✓" if pd.notna(pts) and float(pts) >= line else "✗"
+        if side == "Over":
+            hit = "✓" if pd.notna(pts) and float(pts) > line else "✗"
+        else:
+            hit = "✓" if pd.notna(pts) and float(pts) < line else "✗"
         game_rows.append(f"  {date} | {matchup} | {pts} pts | {mins} min | {fga} FGA | {hit}")
     defense_note = f"\nOpponent ({opp_abbr}) allows {opp_pts:.1f} pts/game (league avg: {league_avg})" if opp_abbr and opp_pts else ""
     sp = splits or {}
@@ -10554,6 +10553,18 @@ if st.session_state.logs is not None:
         _blowout_count = 0
         _blowout_games = []
 
+    # Display the raw fetched log, but show exactly which games fed the formula.
+    # This prevents latest blowout games from looking like they were never fetched.
+    _game_log_display = logs_raw.copy()
+    try:
+        _used_idx = set(logs.index)
+        _game_log_display["Used in Formula"] = [
+            "Yes" if idx in _used_idx else "No - blowout filter"
+            for idx in _game_log_display.index
+        ]
+    except Exception:
+        _game_log_display["Used in Formula"] = "Yes"
+
     # ── Core stats ────────────────────────────
     baseline       = hit_rate(logs, line, side)
     weighted_base  = weighted_hit_rate(logs, line, side)  # recomputed after opp_abbr is set
@@ -11280,7 +11291,7 @@ if st.session_state.logs is not None:
     # ── Chart ─────────────────────────────────
 
     with st.expander("📋  Game Log"):
-        st.dataframe(logs.reset_index(drop=True), use_container_width=True)
+        st.dataframe(_game_log_display.reset_index(drop=True), use_container_width=True)
 
     # All signals auto-computed — no manual overrides needed
     matchup_sel = matchup_auto
@@ -11521,11 +11532,20 @@ if st.session_state.logs is not None:
                     _reg_avg_h2h = float(_reg_pts_arr.mean())
                     # Blend: 60% series game, 40% reg season (series is more relevant)
                     _blended_avg = 0.6 * h2h_avg + 0.4 * _reg_avg_h2h
-                    _blended_hit = (0.6 * (1.0 if (h2h_avg >= line) else 0.0) +
-                                    0.4 * float((_reg_pts_arr >= line).mean()))
-                    if _blended_hit >= 0.65 and _blended_avg > line:
+                    if side == "Over":
+                        _series_hit = 1.0 if h2h_avg > line else 0.0
+                        _reg_hit = float((_reg_pts_arr > line).mean())
+                        _avg_favors = _blended_avg > line
+                        _avg_risk = _blended_avg < line - 3
+                    else:
+                        _series_hit = 1.0 if h2h_avg < line else 0.0
+                        _reg_hit = float((_reg_pts_arr < line).mean())
+                        _avg_favors = _blended_avg < line
+                        _avg_risk = _blended_avg > line + 3
+                    _blended_hit = (0.6 * _series_hit) + (0.4 * _reg_hit)
+                    if _blended_hit >= 0.65 and _avg_favors:
                         _h2h_sig_final = "Strong"
-                    elif _blended_hit <= 0.35 or _blended_avg < line - 3:
+                    elif _blended_hit <= 0.35 or _avg_risk:
                         _h2h_sig_final = "Risk"
                     else:
                         _h2h_sig_final = "Neutral"
@@ -11668,7 +11688,7 @@ if st.session_state.logs is not None:
     st.markdown("<div class='section-header'>Verdict</div>", unsafe_allow_html=True)
 
     # Compute confidence score for player prop (same formula as scanner)
-    _score_adj  = max(0, min((adjusted - 0.50) / 0.45, 1.0) * 65)
+    _score_adj  = max(0, min((_display_adj - 0.50) / 0.45, 1.0) * 65)
     _score_edge = min(abs(line_diff) / 7.0, 1.0) * 25
     _score_cons = consistency * 10
     _conf_score = min(99, int(_score_adj + _score_edge + _score_cons))
@@ -11689,13 +11709,13 @@ if st.session_state.logs is not None:
         f"<span style='font-family:Outfit,sans-serif;font-size:0.95rem;"
         f"font-weight:600;color:{_pm[1]};'>{_pm[0]}</span>"
         f"<span style='font-family:JetBrains Mono,monospace;font-size:0.65rem;color:#6b7f96;'>"
-        f"Confidence {_conf_score}/100 · Adjusted {adjusted:.0%}</span>"
+        f"Confidence {_conf_score}/100 · Adjusted {_display_adj:.0%}</span>"
         f"</div>",
         unsafe_allow_html=True
     )
 
     # ── Animated probability bar ─────────────────────────────────
-    _bar_pct = min(100, int(adjusted * 100))
+    _bar_pct = min(100, int(_display_adj * 100))
     _bar_col = (_pm[1] if _pm[1] != "#6b7f96" else "#6b7f96")
     st.markdown(
         f"<div style='margin-bottom:0.75rem;'>"
@@ -12295,7 +12315,7 @@ if st.session_state.logs is not None:
                     "side":       side,
                     "verdict":    _display_tier,
                     "confidence": _conf_score,
-                    "adj":        round(adjusted * 100, 1),
+                    "adj":        round(_display_adj * 100, 1),
                     "sport":      "NBA",
                     "added":      _dtnow.datetime.now().strftime("%I:%M %p"),
                 }
@@ -12319,7 +12339,7 @@ if st.session_state.logs is not None:
         _tier_emoji = {
             "Strong Over":  "🟢", "Lean Over":   "🟡",
             "Strong Under": "🔴", "Lean Under":  "🟠", "Pass": "⚪"
-        }.get(tier, "⚪")
+        }.get(_display_tier, "⚪")
         _opp_str    = f"vs {opp_abbr}" if opp_abbr else ""
         _venue_str  = f"({tonight_venue})" if tonight_venue else ""
         # Playoff line — use already-fetched data
@@ -12331,9 +12351,9 @@ if st.session_state.logs is not None:
         _blowout_str = f"\n🚫 {_blowout_count} blowout game{'s' if _blowout_count > 1 else ''} excluded" if _blowout_count > 0 else ""
 
         _share_text = (
-            f"{_tier_emoji} {tier.upper()} — {full_name}\n"
-            f"📊 {line} pts {side} {_opp_str} {_venue_str}\n"
-            f"Hit Rate: {adjusted:.0%} · Edge: {line_diff:+.1f} · Consistency: {consistency:.0%}"
+            f"{_tier_emoji} {_display_tier.upper()} — {full_name}\n"
+            f"📊 {line} pts {_display_side} {_opp_str} {_venue_str}\n"
+            f"Hit Rate: {_display_adj:.0%} · Edge: {line_diff:+.1f} · Consistency: {consistency:.0%}"
             f"{_blowout_str}"
             f"{_playoff_str}\n"
             f"🎯 PropIQ"
@@ -12356,19 +12376,19 @@ if st.session_state.logs is not None:
         if st.button("➕  Add to Prop Tracker", use_container_width=True):
                     entry = {
                         "Player":      full_name,
-                        "Line":        f"{line} {side}",
+                        "Line":        f"{line} {_display_side}",
                         "Opponent":    opp_abbr or "—",
                         "Matchup":     matchup_sel,
                         "Venue":       f"{tonight_venue or '?'} ({venue_adj})",
                         "Avg PTS":     round(sample_avg_pts, 1),
                         "Hit Rate":    f"{weighted_base:.0%}",
-                        "Adjusted":    f"{adjusted:.0%}",
+                        "Adjusted":    f"{_display_adj:.0%}",
                         "Consistency": f"{consistency:.0%}",
-                        "Verdict":     tier,
+                        "Verdict":     _display_tier,
                         "Result":      "Pending",
                     }
                     existing = [i for i, e in enumerate(st.session_state.tracker)
-                                if e["Player"] == full_name and e["Line"] == f"{line} {side}"]
+                                if e["Player"] == full_name and e["Line"] == f"{line} {_display_side}"]
                     if existing:
                         # Update existing entry
                         old_id = st.session_state.tracker[existing[0]].get("id")
