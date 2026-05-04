@@ -9872,51 +9872,12 @@ if st.session_state.active_sport == "edge":
 if st.session_state.active_sport not in ("nba",):
     st.stop()
 
-# ── Tab switcher ────────────────────────────────────────────
-_p_active = st.session_state.active_tab == "player"
-_s_active = st.session_state.active_tab == "scanner"
+# ── NBA Player Prop mode ─────────────────────────────────────
+# The old NBA Slate Scanner has been replaced by the cross-sport Edge Scanner.
+if st.session_state.active_tab != "player":
+    st.session_state.active_tab = "player"
 
-st.markdown(f"""
-<style>
-/* Force equal height and width on tab buttons */
-div[data-testid="stHorizontalBlock"] div[data-testid="stButton"] button {{
-    height: 44px !important;
-    min-height: 44px !important;
-    display: flex !important;
-    align-items: center !important;
-    justify-content: center !important;
-    clip-path: none !important;
-    border-radius: 0 !important;
-    text-transform: uppercase !important;
-    letter-spacing: 0.12em !important;
-    font-size: 0.78rem !important;
-}}
-</style>
-""", unsafe_allow_html=True)
-
-_ul_c1, _ul_c2, _ul_c3 = st.columns([1, 1, 3])
-with _ul_c1:
-    if st.button("Player Prop", key="tab_player", use_container_width=True,
-                 type="primary" if _p_active else "secondary"):
-        st.session_state.active_tab = "player"
-        st.rerun()
-with _ul_c2:
-    if st.button("Slate Scanner", key="tab_scanner", use_container_width=True,
-                 type="primary" if _s_active else "secondary"):
-        st.session_state.active_tab = "scanner"
-        st.rerun()
-
-# Underline bar
-st.markdown(f"""
-<div class="ul-tab-bar" style="position:relative; margin-top:-4px;">
-    <div class="ul-tab-underline" style="
-        width: 50%;
-        transform: translateX({'0%' if _p_active else '100%'});
-    "></div>
-</div>
-""", unsafe_allow_html=True)
-
-_mode = "🎯  Scanner" if st.session_state.active_tab == "scanner" else "🏀  Player Prop"
+_mode = "🏀  Player Prop"
 st.markdown("<div style='height:0.1rem'></div>", unsafe_allow_html=True)
 
 if _IS_PLAYOFFS:
