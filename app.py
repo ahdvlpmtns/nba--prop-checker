@@ -10849,32 +10849,60 @@ if "player_key" not in st.session_state:
 col_a, col_b, col_c, col_d, col_e = st.columns([2.5, 1, 1, 1, 0.8])
 
 with col_a:
-    # Fuzzy search — resolve alias before passing to selectbox
-    if "player_alias_input" not in st.session_state:
-        st.session_state.player_alias_input = ""
-
     # Pre-select if a recent player was tapped OR jumped from Edge Scanner
     _recent_pick   = st.session_state.pop("_recent_pick", None)
     _edge_jump_nba = st.session_state.pop("edge_jump_player", None)
     _pick_target   = _edge_jump_nba or _recent_pick
-    _preselect_idx = 0
-    if _pick_target and _pick_target in player_names_list:
-        _preselect_idx = player_names_list.index(_pick_target) + 1
     # Also pre-set line if jumped from edge
     if _edge_jump_nba and st.session_state.get("edge_jump_line"):
         st.session_state["_edge_prefill_line"] = st.session_state.pop("edge_jump_line", None)
 
-    player_query = st.selectbox(
+    _player_input_key = f"player_search_{st.session_state.player_key}"
+    if _pick_target:
+        st.session_state[_player_input_key] = _pick_target
+
+    player_query_raw = st.text_input(
         "Player — type name, nickname, or initials",
-        options=[""] + player_names_list,
-        index=_preselect_idx,
-        format_func=lambda x: "— search by name, nickname, or initials —" if x == "" else x,
-        key=f"player_sel_{st.session_state.player_key}",
+        key=_player_input_key,
+        placeholder="Search player name, nickname, or initials",
     )
+    player_query = player_query_raw.strip()
 
     # Resolve alias: if user typed a known nickname, swap to full name
-    if player_query and player_query in _aliases:
-        player_query = _aliases[player_query]
+    _alias_map = {normalize_name(k): v for k, v in _aliases.items()}
+    if player_query and normalize_name(player_query) in _alias_map:
+        player_query = _alias_map[normalize_name(player_query)]
+
+    def _player_initials(name: str) -> str:
+        return "".join(part[0] for part in name.split() if part).lower()
+
+    _exact_player = next(
+        (p for p in player_names_list if normalize_name(p) == normalize_name(player_query)),
+        None,
+    ) if player_query else None
+    if _exact_player:
+        player_query = _exact_player
+    elif player_query:
+        _q_norm = normalize_name(player_query)
+        _q_compact = re.sub(r"[^a-z0-9]+", "", _q_norm)
+        _matches = [
+            p for p in player_names_list
+            if _q_norm in normalize_name(p)
+            or _q_compact == _player_initials(p)
+            or _q_compact in re.sub(r"[^a-z0-9]+", "", normalize_name(p))
+        ][:8]
+        if _matches:
+            st.markdown(
+                "<div style='font-family:JetBrains Mono,monospace;font-size:0.56rem;"
+                "color:#6b7f96;letter-spacing:0.1em;text-transform:uppercase;"
+                "margin:6px 0 4px 0;'>Suggestions</div>",
+                unsafe_allow_html=True
+            )
+            for _mi, _match in enumerate(_matches):
+                if st.button(_match, key=f"player_suggest_{st.session_state.player_key}_{_mi}", use_container_width=True):
+                    st.session_state[_player_input_key] = _match
+                    st.rerun()
+        player_query = ""
 
     # Overlay ✕ button — only visible when a player is selected
     if player_query:
