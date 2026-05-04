@@ -4416,6 +4416,10 @@ def apply_adjustments(weighted: float, context: dict, side: str = "Over") -> flo
         "minutes":  {"Strong": +0.05, "Okay": 0.00, "Risk": -0.07},
         "role":     {"Strong": +0.04, "Okay": 0.00, "Risk": -0.05},
         "shots":    {"High":   +0.03, "Medium": 0.00, "Low": -0.06},
+        # Usage quality: expected scoring path from FGA + FTA vs the line
+        "usage_quality": {"Strong": +0.05, "Okay": 0.00, "Risk": -0.07},
+        # Free-throw volume stabilizes points props; low-FTA scorers depend more on jump shooting
+        "ft_volume": {"Strong": +0.03, "Okay": 0.00, "Risk": -0.03},
         "matchup":  {"Good":   +0.06, "Neutral": 0.00, "Bad": -0.06},
         "script":   {"Competitive": +0.02, "Neutral": 0.00, "Blowout risk": -0.04},
         "venue":    {"Boost": +0.04, "Neutral": 0.00, "Penalty": -0.05},
@@ -8986,6 +8990,8 @@ if st.session_state.active_sport == "edge":
                 reasons.append(f"Next vs {result['opp']}")
             if result.get("matchup") and result.get("matchup") != "Neutral":
                 reasons.append(f"Defense matchup {result['matchup'].lower()}")
+            if result.get("usage_expected") is not None:
+                reasons.append(f"Usage path {result['usage_expected']} pts")
 
         if edge:
             reasons.append(f"Avg edge {edge:+.1f}")
@@ -9086,6 +9092,7 @@ if st.session_state.active_sport == "edge":
 
             # ── Signal 6: matchup context for points only ─────────────
             _matchup_sig = "Neutral"
+            _usage_expected = None
             if _opp_abbr and _stat_label == "Points":
                 try:
                     _matchup_sig, _, _ = classify_matchup_espn(_opp_abbr, _date=_cache_date())
@@ -9095,6 +9102,53 @@ if st.session_state.active_sport == "edge":
                         _adj -= 0.03 if side == "Over" else -0.03
                 except Exception:
                     _matchup_sig = "Neutral"
+
+            # ── Signal 6b: points usage path (FGA + FTA) ──────────────
+            if _stat_label == "Points" and "FGA" in _logs.columns and "FTA" in _logs.columns:
+                try:
+                    _fga_avg = float(pd.to_numeric(_logs["FGA"], errors="coerce").dropna().mean())
+                    _fta_avg = float(pd.to_numeric(_logs["FTA"], errors="coerce").dropna().mean())
+                    _usage_expected = round((_fga_avg * 1.04) + (_fta_avg * 0.78), 1)
+                    _usage_gap = _usage_expected - line
+                    if side == "Over":
+                        if _fga_avg >= 15 and _usage_gap >= 2.0:
+                            _adj += 0.04
+                        elif _usage_gap >= 1.0 and _fga_avg >= 12:
+                            _adj += 0.02
+                        elif _usage_gap <= -3.0 or _fga_avg < 9:
+                            _adj -= 0.06
+                        elif _usage_gap <= -1.5 and _fga_avg < 13:
+                            _adj -= 0.03
+                        if _fta_avg >= 6.0:
+                            _adj += 0.02
+                        elif _fta_avg < 2.0 and line >= 15:
+                            _adj -= 0.02
+                    else:
+                        if _usage_gap <= -3.0 or _fga_avg < 9:
+                            _adj += 0.05
+                        elif _usage_gap <= -1.5 and _fga_avg < 13:
+                            _adj += 0.03
+                        elif _usage_gap >= 3.0:
+                            _adj -= 0.05
+                        elif _usage_gap >= 1.5 and _fga_avg >= 14:
+                            _adj -= 0.03
+                        if _fta_avg >= 6.0:
+                            _adj -= 0.02
+                        elif _fta_avg < 2.0 and line >= 15:
+                            _adj += 0.02
+
+                    if side == "Over":
+                        if _usage_expected <= line - 3.0:
+                            _adj = min(_adj, 0.61)
+                        elif _usage_expected <= line - 1.5 and _wb < 0.65:
+                            _adj = min(_adj, 0.68)
+                    else:
+                        if _usage_expected >= line + 4.0:
+                            _adj = min(_adj, 0.61)
+                        elif _usage_expected >= line + 2.5 and _wb < 0.65:
+                            _adj = min(_adj, 0.68)
+                except Exception:
+                    _usage_expected = None
 
             # ── Signal 7: suppress tiny/fragile edges ─────────────────
             if len(_vals) < 6:
@@ -9119,6 +9173,7 @@ if st.session_state.active_sport == "edge":
                 "opp":      _opp_abbr or "",
                 "venue":    _venue or "",
                 "matchup":  _matchup_sig,
+                "usage_expected": _usage_expected,
             }
         except Exception:
             return None
@@ -11675,6 +11730,34 @@ if st.session_state.logs is not None:
     pace_sig, player_pace, opp_pace = pace_adjustment(player_team, opp_abbr, side)
     shoot_sig, recent_3pt, recent_ts = shooting_efficiency_signal(logs, side, n_recent=3)
 
+    # ── NBA points path: usage-quality + FT stability ───────────────────
+    # FGA and FTA are better forward-looking opportunity signals than raw PTS alone.
+    # This is intentionally conservative: it nudges the hit-rate model, then the
+    # guardrails below prevent a Strong call when usage does not support the line.
+    _usage_expected_pts = None
+    _usage_quality_sig = "Okay"
+    _ft_volume_sig = "Okay"
+    try:
+        _usage_expected_pts = round((float(avg_fga) * 1.04) + (float(avg_fta) * 0.78), 1)
+        _usage_gap = _usage_expected_pts - float(line)
+        if avg_fga >= 15 and _usage_gap >= 2.0:
+            _usage_quality_sig = "Strong"
+        elif avg_fga >= 12 and _usage_gap >= 1.0:
+            _usage_quality_sig = "Strong"
+        elif avg_fga < 9 or _usage_gap <= -3.0:
+            _usage_quality_sig = "Risk"
+        elif _usage_gap <= -1.5 and avg_fga < 13:
+            _usage_quality_sig = "Risk"
+
+        if avg_fta >= 6.0:
+            _ft_volume_sig = "Strong"
+        elif avg_fta < 2.0 and line >= 15:
+            _ft_volume_sig = "Risk"
+    except Exception:
+        _usage_expected_pts = None
+        _usage_quality_sig = "Okay"
+        _ft_volume_sig = "Okay"
+
     # Get last 3 games minutes for restriction check
     _last3_mins = (
         pd.to_numeric(logs["MIN"], errors="coerce")
@@ -12433,6 +12516,8 @@ if st.session_state.logs is not None:
         "minutes":    _minutes_ctx,
         "role":       _role_ctx,
         "shots":      shots_sel,
+        "usage_quality": _usage_quality_sig,
+        "ft_volume":  _ft_volume_sig,
         "matchup":    matchup_sel,
         "script":     script_sel,
         "venue":      venue_adj,
@@ -12452,6 +12537,40 @@ if st.session_state.logs is not None:
     }
 
     adjusted  = apply_adjustments(weighted_base, context, side)
+    _adjusted_before_points_guardrail = adjusted
+    _points_guardrail_note = ""
+
+    # Points-specific guardrails. These only cap overconfident calls; they do
+    # not remove any signal or data from the page.
+    try:
+        if _usage_expected_pts is not None:
+            if side == "Over":
+                if _usage_expected_pts <= line - 3.0:
+                    adjusted = min(adjusted, 0.61)
+                    _points_guardrail_note = f"Usage path {_usage_expected_pts:.1f} pts is well below line"
+                elif _usage_expected_pts <= line - 1.5 and weighted_base < 0.65:
+                    adjusted = min(adjusted, 0.68)
+                    _points_guardrail_note = f"Usage path {_usage_expected_pts:.1f} pts is thin vs line"
+                if avg_min < 28 and line >= 18:
+                    adjusted = min(adjusted, 0.63)
+                    _points_guardrail_note = "Minutes floor below 28 on a high points line"
+                if avg_fga < 10 and avg_fta < 3 and line >= 15:
+                    adjusted = min(adjusted, 0.62)
+                    _points_guardrail_note = "Low FGA + low FTA scoring path"
+            else:
+                if _usage_expected_pts >= line + 4.0:
+                    adjusted = min(adjusted, 0.61)
+                    _points_guardrail_note = f"Usage path {_usage_expected_pts:.1f} pts is well above line"
+                elif _usage_expected_pts >= line + 2.5 and weighted_base < 0.65:
+                    adjusted = min(adjusted, 0.68)
+                    _points_guardrail_note = f"Usage path {_usage_expected_pts:.1f} pts is thin for Under"
+                if avg_fga >= 17 and avg_min >= 32:
+                    adjusted = min(adjusted, 0.66)
+                    _points_guardrail_note = "High-volume starter risk for Under"
+    except Exception:
+        pass
+    _points_guardrail_applied = adjusted < _adjusted_before_points_guardrail - 0.001
+
     # In playoffs, weight this-series games 3x for edge calc (matches weighted_hit_rate)
     if _IS_PLAYOFFS and opp_abbr and "MATCHUP" in logs.columns and "GAME_DATE" in logs.columns:
         try:
@@ -12970,6 +13089,8 @@ if st.session_state.logs is not None:
             "starter":    {"Starter": +0.03, "Neutral": 0.00, "Bench": -0.06, "DNP": -0.20},
             "role":     {"Strong": +0.04, "Okay": 0.00, "Risk": -0.05},
             "shots":    {"High":   +0.03, "Medium": 0.00, "Low": -0.06},
+            "usage_quality": {"Strong": +0.05, "Okay": 0.00, "Risk": -0.07},
+            "ft_volume": {"Strong": +0.03, "Okay": 0.00, "Risk": -0.03},
             "matchup":  {"Good":   +0.06, "Neutral": 0.00, "Bad": -0.06},
             "script":   {"Competitive": +0.02, "Neutral": 0.00, "Blowout risk": -0.04},
             "venue":    {"Boost": +0.04, "Neutral": 0.00, "Penalty": -0.05},
@@ -12986,6 +13107,8 @@ if st.session_state.logs is not None:
             "minutes":   "Minutes load",
             "role":      "Role/usage",
             "shots":     "Shot volume",
+            "usage_quality": "Usage vs line",
+            "ft_volume": "Free throw volume",
             "matchup":   "Opponent defense",
             "script":    "Game script",
             "venue":     "Home/Away split",
@@ -13060,6 +13183,12 @@ if st.session_state.logs is not None:
                 </td>
                 <td style='padding:3px 8px; color:#6b7f96;'>Season avg</td>
                 <td style='color:#e2e8f0;'>{f"{season_avg:.1f} pts" if season_avg else "N/A"}</td>
+            </tr>
+            <tr>
+                <td style='padding:3px 8px 3px 0; color:#6b7f96;'>Usage path</td>
+                <td style='color:#e2e8f0;'>{f"{_usage_expected_pts:.1f} expected pts" if _usage_expected_pts is not None else "N/A"}</td>
+                <td style='padding:3px 8px; color:#6b7f96;'>FGA / FTA</td>
+                <td style='color:#e2e8f0;'>{avg_fga:.1f} / {avg_fta:.1f}</td>
             </tr>
         </table>
 
@@ -13136,6 +13265,12 @@ if st.session_state.logs is not None:
                       "<td colspan='3' style='color:#ffc107;font-size:0.65rem;'>"
                       "Signals pushed above 100%% — capped. Last signals show 0%% impact.</td></tr>"
                       if adjusted >= 0.95 else "")
+        _guard_row = (
+            f"<tr><td style='padding:3px 8px 3px 0;color:#6b7f96;'>Points guardrail</td>"
+            f"<td colspan='3' style='color:#ffc107;font-size:0.65rem;'>"
+            f"Capped from {_adjusted_before_points_guardrail:.1%} to {adjusted:.1%} · {_points_guardrail_note}</td></tr>"
+            if _points_guardrail_applied else ""
+        )
 
         st.markdown(f"""
         <div style='color:#f97316; font-size:0.65rem; letter-spacing:0.15em; text-transform:uppercase;
@@ -13163,6 +13298,7 @@ if st.session_state.logs is not None:
                 <td style='padding:3px 8px 3px 0; color:#6b7f96;'>Signal cap</td>
                 <td colspan='3' style='color:#6b7f96;'>{"±18pp · playoff mode" if _IS_PLAYOFFS else "±12pp · regular season"}</td>
             </tr>
+            {_guard_row}
             <tr style='border-top:1px solid #1a2333; margin-top:4px;'>
                 <td style='padding:6px 8px 3px 0; color:#6b7f96;'>Final tier</td>
                 <td colspan='3' style='font-size:0.9rem; font-weight:800; color:{_tier_color};'>
