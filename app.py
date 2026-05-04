@@ -937,6 +937,10 @@ div[data-testid="stDataFrame"] {
 .stat-card:nth-child(4) { animation-delay: 0.16s; }
 
 /* ── Mobile ── */
+button[key="mobile_quick_analyze"] {
+    display: none !important;
+}
+
 /* ── Mobile — iPhone-first layout ── */
 @media (max-width: 768px) {
     /* Layout */
@@ -944,8 +948,12 @@ div[data-testid="stDataFrame"] {
         padding-left: 0.5rem !important;
         padding-right: 0.5rem !important;
         padding-top: 0 !important;
-        padding-bottom: 6rem !important;
+        padding-bottom: 9rem !important;
         max-width: 100% !important;
+    }
+    .main .block-container {
+        padding-left: 0.6rem !important;
+        padding-right: 0.6rem !important;
     }
     /* Header */
     .pl-header { padding: 0.7rem 0.9rem !important; }
@@ -1001,17 +1009,77 @@ div[data-testid="stDataFrame"] {
     .section-header { font-size: 0.55rem !important; margin: 1.5rem 0 0.6rem !important; }
 
     /* Inputs — bigger touch targets */
+    div[data-testid="stTextInput"] input {
+        min-height: 52px !important;
+        font-size: 1rem !important;
+        border-radius: 12px !important;
+    }
     div[data-testid="stNumberInput"] input { font-size: 1.1rem !important; }
-    div[data-testid="stSelectbox"] > div > div { font-size: 0.9rem !important; }
+    div[data-testid="stSelectbox"] > div > div {
+        min-height: 52px !important;
+        font-size: 0.95rem !important;
+        border-radius: 12px !important;
+    }
+
+    /* Keep the sport switcher reachable as users scroll */
+    button[key="sport_nba"],
+    button[key="sport_mlb"],
+    button[key="sport_edge"] {
+        position: sticky !important;
+        top: 0 !important;
+        z-index: 900 !important;
+        min-height: 46px !important;
+        padding: 0.7rem 0.45rem !important;
+        font-size: 0.72rem !important;
+    }
 
     /* Expanders */
     div[data-testid="stExpander"] summary { font-size: 0.82rem !important; }
+    div[data-testid="stExpander"] {
+        margin-bottom: 0.55rem !important;
+    }
 
     /* Game context cards */
     .score-strip { gap: 6px !important; padding: 6px 0 10px 0 !important; }
 
     /* Parlay cards */
     .parlay-leg { padding: 0.75rem 0.9rem !important; }
+
+    /* Cleaner mobile cards */
+    .defense-card {
+        flex-direction: column !important;
+        align-items: flex-start !important;
+        gap: 0.65rem !important;
+        padding: 0.85rem 0.95rem !important;
+    }
+    .verdict-banner > div:last-child {
+        width: 100% !important;
+        gap: 1rem !important;
+        justify-content: space-between !important;
+    }
+    .ai-box, .explainer, .model-note {
+        font-size: 0.76rem !important;
+        line-height: 1.6 !important;
+        padding: 0.85rem 0.95rem !important;
+    }
+
+    /* Mobile bottom action button */
+    button[key="mobile_quick_analyze"] {
+        display: flex !important;
+        position: fixed !important;
+        left: 12px !important;
+        right: 12px !important;
+        bottom: calc(14px + env(safe-area-inset-bottom)) !important;
+        width: calc(100vw - 24px) !important;
+        z-index: 9999 !important;
+        min-height: 58px !important;
+        border-radius: 16px !important;
+        box-shadow: 0 12px 42px rgba(0,0,0,0.7), 0 0 0 1px rgba(0,196,204,0.25) !important;
+        justify-content: center !important;
+    }
+    button[key="analyze_prop_main"] {
+        margin-bottom: 0.35rem !important;
+    }
 }
 
 /* Very small phones */
@@ -11043,7 +11111,13 @@ if _drilldown_fetch:
     st.session_state.pop("_drilldown_fetch", None)
     st.session_state.pop("_drilldown_line", None)
     st.session_state.pop("_drilldown_side", None)
-fetch = st.button("🔍  Analyze Prop") or _drilldown_fetch
+_main_fetch = st.button("🔍  Analyze Prop", key="analyze_prop_main", use_container_width=True)
+_mobile_fetch = st.button(
+    f"🔍 Analyze {full_name.split()[0]} · {line} {side}",
+    key="mobile_quick_analyze",
+    use_container_width=True,
+)
+fetch = _main_fetch or _mobile_fetch or _drilldown_fetch
 _status_ph = st.empty()  # persistent status placeholder across fetch + parallel block
 st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
 
