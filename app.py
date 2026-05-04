@@ -6968,8 +6968,12 @@ if st.session_state.active_sport == "mlb":
     def mlb_apply_adj(weighted, opp_k, park, side):
         adj = weighted
         if opp_k is not None:
-            if opp_k>=0.26:   adj += 0.06 if side=="Over" else -0.06
-            elif opp_k<=0.18: adj += -0.06 if side=="Over" else 0.06
+            if opp_k >= 0.285:   adj += 0.08 if side=="Over" else -0.08
+            elif opp_k >= 0.260: adj += 0.06 if side=="Over" else -0.06
+            elif opp_k >= 0.245: adj += 0.03 if side=="Over" else -0.03
+            elif opp_k <= 0.175: adj += -0.08 if side=="Over" else 0.08
+            elif opp_k <= 0.195: adj += -0.05 if side=="Over" else 0.05
+            elif opp_k <= 0.210: adj += -0.02 if side=="Over" else 0.02
         adj += {"Boost":+0.04,"Neutral":0.0,"Penalty":-0.04}.get(park,0.0)*(1 if side=="Over" else -1)
         return max(0.05,min(0.95,adj))
 
@@ -7257,6 +7261,9 @@ if st.session_state.active_sport == "mlb":
                 _hand_key = "vs_r" if _phand == "R" else "vs_l"
                 _opp_kpct_vs_hand = _splits.get(_hand_key) or _splits.get("overall")
             okpct = _opp_kpct_vs_hand or (mlb_get_opp_k_rate(mlb_opp) if mlb_opp else None)
+            _okpct_source = f"vs {'R' if _phand=='R' else 'L'}HP"
+            _lineup_okpct = None
+            _contact_adj = 0.0
 
             # ── Signal 3: Park factor (K-neutral — park factors affect runs not Ks)
             psig = mlb_park_signal(mlb_home) if mlb_home else "Neutral"
@@ -7500,19 +7507,50 @@ if st.session_state.active_sport == "mlb":
                     _platoon_div = (_lineup_kr / _opp_kr_overall) - 1.0
                     _platoon_adj = max(-0.06, min(0.06, _platoon_div * 0.25))
 
+            # Confirmed-lineup opponent K% override.
+            # Once the batting order is posted, the aggregate team split is less
+            # valuable than the actual handedness mix the pitcher will face.
+            if mlb_prop == "Strikeouts" and _lineup_confirmed and _order_hands and _splits:
+                try:
+                    _opp_vs_l = _splits.get("vs_l")
+                    _opp_vs_r = _splits.get("vs_r")
+                    if (_opp_vs_l and _opp_vs_r and
+                        0.10 <= float(_opp_vs_l) <= 0.40 and
+                        0.10 <= float(_opp_vs_r) <= 0.40):
+                        _lineup_okpct = (_lhb_pct * float(_opp_vs_l) +
+                                         (1.0 - _lhb_pct) * float(_opp_vs_r))
+                        okpct = _lineup_okpct
+                        _okpct_source = f"confirmed lineup ({_lhb_count}L/{_rhb_count}R)"
+                except Exception:
+                    pass
+
+            # Contact-heavy / swing-and-miss lineup guardrail.
+            # This is separate from mlb_apply_adj so it shows in the debugger.
+            if mlb_prop == "Strikeouts" and okpct is not None:
+                if okpct >= 0.285:   _contact_adj = +0.03
+                elif okpct >= 0.260: _contact_adj = +0.015
+                elif okpct <= 0.175: _contact_adj = -0.05
+                elif okpct <= 0.195: _contact_adj = -0.03
+                if mlb_side == "Under":
+                    _contact_adj = -_contact_adj
+
             # Pitch count estimate
             _pc_avg    = _pitchcnt.get("avg_pitches") if _pitchcnt else None
             _pc_limit  = _pitchcnt.get("on_limit", False) if _pitchcnt else False
             _pc_est    = _pitchcnt.get("limit_est") if _pitchcnt else None
             _pc_adj    = 0.0
-            _pc_k_ceiling = None  # expected max Ks given pitch count
+            _pc_expected_k = None
+            _pc_k_ceiling = None  # optimistic upper band from pitch count
 
             if _pc_avg:
-                # Estimate K ceiling from pitch count
-                # ~16 pitches/inning, K/9 = Ks per 9 innings → K per inning = K/9 ÷ 9
-                _innings_est    = _pc_avg / 16.0           # estimated innings
+                # Estimate expected Ks and an optimistic ceiling from pitch count.
+                # Expected uses conservative 16 pitches/IP. Ceiling uses 14.5 p/IP
+                # plus a small cushion, so "ceiling" is no longer just the average path.
+                _innings_est    = _pc_avg / 16.0
+                _ceiling_ip_est = _pc_avg / 14.5
                 _k_per_inn      = (_k9 / 9.0) if _k9 > 0 else (avg_val / max(_avg_ip, 1.0))
-                _pc_k_ceiling   = round(_innings_est * _k_per_inn, 1)
+                _pc_expected_k  = round(_innings_est * _k_per_inn, 1)
+                _pc_k_ceiling   = round((_ceiling_ip_est * _k_per_inn) + 0.4, 1)
 
                 # Base adj from pitch count
                 if _pc_avg >= 100:    _pc_adj = +0.03
@@ -7522,12 +7560,21 @@ if st.session_state.active_sport == "mlb":
 
                 # Extra penalty if K ceiling is at or below the line
                 # This catches the case where even a perfect outing can't hit over
-                if _pc_k_ceiling and mlb_prop == "Strikeouts":
-                    _ceiling_gap = _pc_k_ceiling - mlb_line
-                    if _ceiling_gap <= 0:        # ceiling is at or below line
-                        _pc_adj = min(_pc_adj, -0.15)  # heavy additional penalty
-                    elif _ceiling_gap <= 0.5:    # very tight ceiling
-                        _pc_adj = min(_pc_adj, -0.10)
+                if mlb_prop == "Strikeouts":
+                    if _pc_expected_k:
+                        _expected_gap = _pc_expected_k - mlb_line
+                        if _expected_gap <= -1.0:
+                            _pc_adj = min(_pc_adj, -0.12)
+                        elif _expected_gap <= -0.25:
+                            _pc_adj = min(_pc_adj, -0.08)
+                        elif _expected_gap >= 1.5:
+                            _pc_adj = max(_pc_adj, +0.03)
+                    if _pc_k_ceiling:
+                        _ceiling_gap = _pc_k_ceiling - mlb_line
+                        if _ceiling_gap <= 0:        # ceiling is at or below line
+                            _pc_adj = min(_pc_adj, -0.16)
+                        elif _ceiling_gap <= 0.5:    # very tight ceiling
+                            _pc_adj = min(_pc_adj, -0.11)
 
             # Partial lineup penalty
             if _lineup_order and len(_lineup_order) < 7:
@@ -7539,7 +7586,23 @@ if st.session_state.active_sport == "mlb":
                       + _ha_adj + _form_adj + _rest_adj
                       + _k9_adj + _swstr_adj + _velo_adj + _vtrend_adj + _ip_adj
                       + _ump_adj + _wx_adj + _lineup_adj
-                      + _platoon_adj + _pc_adj))
+                      + _platoon_adj + _contact_adj + _pc_adj))
+
+            # Strong-pick guardrails for strikeouts. These do not hide data; they
+            # prevent "Strong Over" when the realistic route to the line is thin.
+            if mlb_prop == "Strikeouts":
+                if mlb_side == "Over":
+                    if _pc_expected_k and _pc_expected_k <= mlb_line - 0.25:
+                        adj = min(adj, 0.68)
+                    if _pc_k_ceiling and _pc_k_ceiling <= mlb_line + 0.25:
+                        adj = min(adj, 0.63)
+                    if not _lineup_confirmed and abs(edge) < 1.0:
+                        adj = min(adj, 0.72)
+                else:
+                    if _pc_expected_k and _pc_expected_k >= mlb_line + 1.0:
+                        adj = min(adj, 0.68)
+                    if not _lineup_confirmed and abs(edge) < 1.0:
+                        adj = min(adj, 0.72)
             tier = mlb_verdict(adj, edge, mlb_side,
                               pc_ceiling=_pc_k_ceiling,
                               line=mlb_line)
@@ -7576,10 +7639,16 @@ if st.session_state.active_sport == "mlb":
 
             # Opponent K% by handedness
             if okpct is not None:
-                _hand_lbl = f"vs {'R' if _phand=='R' else 'L'}HP"
-                _opp_lbl  = f"High-K opp {_hand_lbl}" if okpct>=0.26 else (f"Low-K opp {_hand_lbl}" if okpct<=0.18 else f"Avg-K opp {_hand_lbl}")
-                _opp_flag = "up" if okpct>=0.26 else ("down" if okpct<=0.18 else "flat")
+                _hand_lbl = _okpct_source
+                _opp_lbl  = f"High-K opp {_hand_lbl}" if okpct>=0.26 else (f"Low-K opp {_hand_lbl}" if okpct<=0.195 else f"Avg-K opp {_hand_lbl}")
+                _opp_flag = "up" if okpct>=0.26 else ("down" if okpct<=0.195 else "flat")
                 _pills.append(f"<span class='flag-pill {_opp_flag}'>{_opp_lbl} {okpct:.0%}</span>")
+                if abs(_contact_adj) > 0.001:
+                    _contact_flag = "up" if _contact_adj > 0 else "down"
+                    _contact_txt = "swing-and-miss lineup" if _contact_adj > 0 else "contact-heavy lineup"
+                    if mlb_side == "Under":
+                        _contact_txt = "contact-heavy lineup" if _contact_adj > 0 else "swing-and-miss lineup"
+                    _pills.append(f"<span class='flag-pill {_contact_flag}'>🎯 {_contact_txt}</span>")
 
             # K/9
             if _k9 > 0:
@@ -7632,11 +7701,11 @@ if st.session_state.active_sport == "mlb":
             if _pc_avg:
                 _pc_flag = "down" if (_pc_limit or (_pc_k_ceiling and _pc_k_ceiling <= mlb_line)) else ("up" if _pc_avg >= 100 else "flat")
                 if _pc_k_ceiling and _pc_k_ceiling <= mlb_line:
-                    _pc_warn = f"🚫 ~{_pc_avg}p → ~{_pc_k_ceiling:.1f}K ceiling ≤ line {mlb_line} — hard cap"
+                    _pc_warn = f"🚫 ~{_pc_avg}p → exp {_pc_expected_k:.1f}K / ceil {_pc_k_ceiling:.1f}K ≤ line"
                 elif _pc_limit:
-                    _pc_warn = f"⚠️ ~{_pc_avg}p limit → ~{_pc_k_ceiling:.1f}K ceiling"
+                    _pc_warn = f"⚠️ ~{_pc_avg}p limit → exp {_pc_expected_k:.1f}K"
                 else:
-                    _pc_warn = f"📊 ~{_pc_avg}p avg → ~{_pc_k_ceiling:.1f}K est ({_pitchcnt.get('starts_analyzed',0)} starts)"
+                    _pc_warn = f"📊 ~{_pc_avg}p avg → exp {_pc_expected_k:.1f}K / ceil {_pc_k_ceiling:.1f}K"
                 _pills.append(f"<span class='flag-pill {_pc_flag}'>{_pc_warn}</span>")
 
             # Velocity
@@ -7791,7 +7860,7 @@ if st.session_state.active_sport == "mlb":
                         f"<div class='stat-card'>"
                         f"<div class='stat-label'>Pitch Count Est.</div>"
                         f"<div class='stat-value {_pc_c}' style='font-size:1.6rem;'>~{_pc_avg}p</div>"
-                        f"<div class='stat-hint'>~{_pc_k_ceiling:.1f}K ceiling · {_pc_lbl}</div>"
+                        f"<div class='stat-hint'>Exp {_pc_expected_k:.1f}K · ceil {_pc_k_ceiling:.1f}K · {_pc_lbl}</div>"
                         f"</div>",
                         unsafe_allow_html=True
                     )
@@ -8100,7 +8169,7 @@ if st.session_state.active_sport == "mlb":
                 _mlb_signals = [
                     # (label, value, adj_applied, description)
                     ("Weighted hit rate (base)",  f"{whr:.1%}",           None,        "Starting point — recency-weighted L10 starts"),
-                    ("Opp K% " + (f"vs {'R' if _phand=='R' else 'L'}HP"),
+                    ("Opp K% " + _okpct_source,
                                                   f"{okpct:.1%}" if okpct else "N/A",
                                                   None,
                                                   f"{'High K lineup' if (okpct or 0)>=0.26 else 'Low K lineup' if (okpct or 0)<=0.18 else 'Average K lineup'}" if okpct else "No opponent data"),
@@ -8136,6 +8205,9 @@ if st.session_state.active_sport == "mlb":
                     ("Batting order",             f"{len(_lineup_order)}/9 posted" if _lineup_order else "Not posted",
                                                   _lineup_adj,
                                                   _lineup_note_txt if _lineup_note_txt else "Lineup not yet posted"),
+                    ("Contact profile",           f"{okpct:.1%} K profile" if okpct else "N/A",
+                                                  _contact_adj,
+                                                  "Extra guardrail for contact-heavy or swing-and-miss confirmed/opponent profile"),
                 ]
 
                 # Build mlb_apply_adj step trace
@@ -8143,11 +8215,12 @@ if st.session_state.active_sport == "mlb":
                 _mlb_base_adj = mlb_apply_adj(whr, okpct, psig, mlb_side)
                 _mlb_adjs = [_ha_adj, _form_adj, _rest_adj, _k9_adj,
                              _swstr_adj, _velo_adj, _ip_adj, _ump_adj, _wx_adj,
-                             _lineup_adj, _platoon_adj, _pc_adj]
+                             _lineup_adj, _platoon_adj, _contact_adj, _pc_adj]
                 _mlb_adj_labels = [
                     "Home/Away split", "Recent form", "Rest days", "K/9 rate",
                     "SwStr%/K%", "Velocity", "Avg IP/start", "Umpire zone",
-                    "Weather", "Batting order", "Platoon matchup", "Pitch count est"
+                    "Weather", "Batting order", "Platoon matchup", "Contact profile",
+                    "Pitch count est"
                 ]
                 _mlb_running = _mlb_base_adj
                 _mlb_steps = []
@@ -8190,7 +8263,8 @@ if st.session_state.active_sport == "mlb":
                     "Weather":          _weather.get("condition","N/A") if _weather else "N/A",
                     "Batting order":    f"{len(_lineup_order)}/9 · {_lhb_count}L/{_rhb_count}R" if _order_hands else (f"{len(_lineup_order)}/9" if _lineup_order else "Not posted"),
                     "Platoon matchup":  f"vsL:{_platoon_vs_l:.1%} vsR:{_platoon_vs_r:.1%} · {_lhb_count}L/{_rhb_count}R tonight" if (_platoon_vs_l and _platoon_vs_r) else "Lineup TBD",
-                    "Pitch count est":  f"~{_pc_avg}p → ~{_pc_k_ceiling:.1f} K ceiling · {'⚠️ On limit' if _pc_limit else 'No limit detected'}" if _pc_avg else "N/A",
+                    "Contact profile":  f"{okpct:.1%} · {_okpct_source}" if okpct else "N/A",
+                    "Pitch count est":  f"~{_pc_avg}p → exp {_pc_expected_k:.1f}K / ceil {_pc_k_ceiling:.1f}K · {'⚠️ On limit' if _pc_limit else 'No limit detected'}" if _pc_avg else "N/A",
                 }
 
                 for _lbl2, _a, _bef, _aft in _mlb_steps:
@@ -9383,10 +9457,12 @@ if st.session_state.active_sport == "edge":
                     elif _opp_k <= 0.18:  _adj -= 0.03  # contact-heavy lineups grind pitch counts
                     elif _opp_k <= 0.20:  _adj -= 0.01
                 else:
-                    if _opp_k >= 0.26:    _adj += 0.05
-                    elif _opp_k >= 0.24:  _adj += 0.02
-                    elif _opp_k <= 0.18:  _adj -= 0.05
-                    elif _opp_k <= 0.20:  _adj -= 0.02
+                    if _opp_k >= 0.285:   _adj += 0.07
+                    elif _opp_k >= 0.260: _adj += 0.05
+                    elif _opp_k >= 0.245: _adj += 0.025
+                    elif _opp_k <= 0.175: _adj -= 0.07
+                    elif _opp_k <= 0.195: _adj -= 0.045
+                    elif _opp_k <= 0.210: _adj -= 0.02
             if _park_sig == "Boost":
                 _adj += 0.02
             elif _park_sig == "Penalty":
@@ -9394,17 +9470,24 @@ if st.session_state.active_sport == "edge":
 
             # If pitch-count math puts the realistic ceiling below the line,
             # prevent the scanner from labeling it a strong play.
+            _pc_expected = None
             _pc_ceiling = None
             if _avg_pc:
                 _est_ip = _avg_pc / 16.0
+                _ceil_ip = _avg_pc / 14.5
                 if _is_outs:
-                    _pc_ceiling = round(_est_ip * 3, 1)
+                    _pc_expected = round(_est_ip * 3, 1)
+                    _pc_ceiling = round(_ceil_ip * 3, 1)
                 elif _k9:
-                    _pc_ceiling = round(_est_ip * (_k9 / 9.0), 1)
-                if _pc_ceiling <= line:
-                    _adj = min(_adj, 0.62)
-                elif _pc_ceiling <= line + 0.5:
-                    _adj = min(_adj, 0.71)
+                    _pc_expected = round(_est_ip * (_k9 / 9.0), 1)
+                    _pc_ceiling = round((_ceil_ip * (_k9 / 9.0)) + 0.4, 1)
+                if _pc_expected is not None and _pc_expected <= line - (1.0 if _is_outs else 0.25):
+                    _adj = min(_adj, 0.68)
+                if _pc_ceiling is not None:
+                    if _pc_ceiling <= line:
+                        _adj = min(_adj, 0.62)
+                    elif _pc_ceiling <= line + 0.5:
+                        _adj = min(_adj, 0.71)
 
             _adj = max(0.05, min(0.95, _adj))
 
@@ -9425,6 +9508,7 @@ if st.session_state.active_sport == "edge":
                 "opp_k":    round(_opp_k * 100, 1) if _opp_k is not None else None,
                 "park":     _park_sig,
                 "pc":       _avg_pc,
+                "pc_expected": _pc_expected,
                 "pc_ceiling": _pc_ceiling,
                 "game_date": _game_date,
                 "last_start": _last_start,
