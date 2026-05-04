@@ -1020,6 +1020,17 @@ button[key="mobile_quick_analyze"] {
         font-size: 0.95rem !important;
         border-radius: 12px !important;
     }
+    div[data-baseweb="popover"] {
+        z-index: 10000 !important;
+        max-width: calc(100vw - 20px) !important;
+    }
+    div[data-baseweb="menu"],
+    ul[role="listbox"],
+    ul[data-testid="stSelectboxVirtualDropdown"] {
+        max-height: 46vh !important;
+        overflow-y: auto !important;
+        -webkit-overflow-scrolling: touch !important;
+    }
 
     /* Keep the sport switcher reachable as users scroll */
     button[key="sport_nba"],
@@ -8883,12 +8894,15 @@ if st.session_state.active_sport == "edge":
             grade, color = "Edge Play", "#9aaec4"
 
         if result.get("sport") == "MLB":
+            is_outs_prop = "out" in str(result.get("stat", "")).lower()
             if result.get("l3") is not None:
                 reasons.append(f"L3 avg {result['l3']}")
-            if result.get("opp_k") is not None:
+            if result.get("opp_k") is not None and not is_outs_prop:
                 reasons.append(f"Opponent K% {result['opp_k']}%")
             if result.get("pc_ceiling") is not None:
                 reasons.append(f"Pitch-count ceiling {result['pc_ceiling']}")
+            if is_outs_prop and result.get("avg_ip"):
+                reasons.append(f"Avg {result['avg_ip']} IP/start")
             if result.get("park") and result.get("park") != "Neutral":
                 reasons.append(f"Park {result['park'].lower()}")
         else:
@@ -9045,7 +9059,7 @@ if st.session_state.active_sport == "edge":
         """
         import requests as _req, datetime as _dtx
         empty = {
-            "ks": [], "k9": None, "avg_ip": None, "avg_pitches": None,
+            "ks": [], "outs": [], "k9": None, "avg_ip": None, "avg_pitches": None,
             "sample": 0, "last_start_date": None,
         }
         _norm   = lambda s: s.lower().strip().replace(".", "").replace("-", " ")
@@ -9088,7 +9102,7 @@ if st.session_state.active_sport == "edge":
 
             splits = r2.json().get("stats", [{}])[0].get("splits", [])
 
-            ks, ips, pitches, start_dates = [], [], [], []
+            ks, outs_list, ips, pitches, start_dates = [], [], [], [], []
             for s in splits:
                 st   = s.get("stat", {})
                 date = s.get("date", "")
@@ -9106,6 +9120,7 @@ if st.session_state.active_sport == "edge":
                 _ip_raw = float(st.get("inningsPitched", 0) or 0)
                 _ip_full = int(_ip_raw) + ((_ip_raw % 1) * 10 / 3)
                 ips.append(_ip_full)
+                outs_list.append(int(round(_ip_full * 3)))
                 pitches.append(np_v)
                 if start_dt:
                     start_dates.append(start_dt)
@@ -9122,6 +9137,7 @@ if st.session_state.active_sport == "edge":
 
             return {
                 "ks":          ks,
+                "outs":        outs_list,
                 "k9":          _k9,
                 "avg_ip":      _avg_ip,
                 "avg_pitches": _avg_pc,
@@ -9246,11 +9262,20 @@ if st.session_state.active_sport == "edge":
         try:
             _data = _scanner_get_pitcher_data(pitcher_name)
             _ks   = _data.get("ks", [])
-            if not _ks or len(_ks) < 3:
+            _outs = _data.get("outs", [])
+            _stat_norm = str(stat).lower()
+            _is_outs = (
+                "out" in _stat_norm
+                or "inning" in _stat_norm
+                or "pitching outs" in _stat_norm
+            )
+            _stat_label = "Outs Recorded" if _is_outs else "Strikeouts"
+            _raw_vals = _outs if _is_outs else _ks
+            if not _raw_vals or len(_raw_vals) < 3:
                 return None
 
             import numpy as _np
-            _vals = _np.array(_ks, dtype=float)
+            _vals = _np.array(_raw_vals, dtype=float)
             _n    = len(_vals)
             _avg  = round(float(_vals.mean()), 1)
             _k9   = _data.get("k9")
@@ -9292,13 +9317,15 @@ if st.session_state.active_sport == "edge":
             # ── Signal 2: L3 form (trending up/down?) ────────────────
             _l3   = float(_vals[:3].mean())
             _diff = _l3 - _avg
-            if _diff >= 1.5:    _adj += 0.05
-            elif _diff >= 0.8:  _adj += 0.02
-            elif _diff <= -1.5: _adj -= 0.05
-            elif _diff <= -0.8: _adj -= 0.02
+            _form_big = 3.0 if _is_outs else 1.5
+            _form_med = 1.5 if _is_outs else 0.8
+            if _diff >= _form_big:    _adj += 0.05
+            elif _diff >= _form_med:  _adj += 0.02
+            elif _diff <= -_form_big: _adj -= 0.05
+            elif _diff <= -_form_med: _adj -= 0.02
 
             # ── Signal 3: K/9 rate vs league avg 8.3 ─────────────────
-            if _k9:
+            if _k9 and not _is_outs:
                 if _k9 >= 11.0:   _adj += 0.07   # elite
                 elif _k9 >= 9.5:  _adj += 0.04   # above avg
                 elif _k9 >= 8.0:  _adj += 0.01   # avg
@@ -9307,26 +9334,41 @@ if st.session_state.active_sport == "edge":
 
             # ── Signal 4: Avg IP / pitch count ceiling ────────────────
             if _avg_ip:
-                if _avg_ip >= 6.0:   _adj += 0.02   # deep into games
-                elif _avg_ip >= 5.0: _adj += 0.01
-                elif _avg_ip <= 3.5: _adj -= 0.07   # short leash
-                elif _avg_ip <= 4.5: _adj -= 0.03
+                if _is_outs:
+                    if _avg_ip >= 6.3:   _adj += 0.06
+                    elif _avg_ip >= 5.7: _adj += 0.03
+                    elif _avg_ip <= 4.5: _adj -= 0.08
+                    elif _avg_ip <= 5.0: _adj -= 0.04
+                else:
+                    if _avg_ip >= 6.0:   _adj += 0.02   # deep into games
+                    elif _avg_ip >= 5.0: _adj += 0.01
+                    elif _avg_ip <= 3.5: _adj -= 0.07   # short leash
+                    elif _avg_ip <= 4.5: _adj -= 0.03
 
             # ── Signal 4b: pitch count leash ─────────────────────────
             if _avg_pc:
-                if _avg_pc >= 98:    _adj += 0.03
-                elif _avg_pc >= 90:  _adj += 0.01
-                elif _avg_pc < 75:   _adj -= 0.06
-                elif _avg_pc < 85:   _adj -= 0.03
+                if _is_outs:
+                    if _avg_pc >= 100:   _adj += 0.05
+                    elif _avg_pc >= 92:  _adj += 0.02
+                    elif _avg_pc < 75:   _adj -= 0.08
+                    elif _avg_pc < 85:   _adj -= 0.04
+                else:
+                    if _avg_pc >= 98:    _adj += 0.03
+                    elif _avg_pc >= 90:  _adj += 0.01
+                    elif _avg_pc < 75:   _adj -= 0.06
+                    elif _avg_pc < 85:   _adj -= 0.03
 
             # ── Signal 5: Edge vs line (avg above/below line) ─────────
             _edge = _avg - line
-            if _edge >= 2.5:    _adj += 0.05
-            elif _edge >= 1.5:  _adj += 0.03
-            elif _edge >= 0.5:  _adj += 0.01
-            elif _edge <= -2.5: _adj -= 0.05
-            elif _edge <= -1.5: _adj -= 0.03
-            elif _edge <= -0.5: _adj -= 0.01
+            _edge_big = 4.0 if _is_outs else 2.5
+            _edge_med = 2.0 if _is_outs else 1.5
+            _edge_min = 1.0 if _is_outs else 0.5
+            if _edge >= _edge_big:    _adj += 0.05
+            elif _edge >= _edge_med:  _adj += 0.03
+            elif _edge >= _edge_min:  _adj += 0.01
+            elif _edge <= -_edge_big: _adj -= 0.05
+            elif _edge <= -_edge_med: _adj -= 0.03
+            elif _edge <= -_edge_min: _adj -= 0.01
 
             # ── Signal 6: Consistency ─────────────────────────────────
             if _cons >= 0.75:  _adj += 0.03
@@ -9336,21 +9378,29 @@ if st.session_state.active_sport == "edge":
 
             # ── Signal 7: opponent K rate and park context ───────────
             if _opp_k is not None:
-                if _opp_k >= 0.26:    _adj += 0.05
-                elif _opp_k >= 0.24:  _adj += 0.02
-                elif _opp_k <= 0.18:  _adj -= 0.05
-                elif _opp_k <= 0.20:  _adj -= 0.02
+                if _is_outs:
+                    if _opp_k >= 0.26:    _adj += 0.02  # fewer balls in play can help escape innings
+                    elif _opp_k <= 0.18:  _adj -= 0.03  # contact-heavy lineups grind pitch counts
+                    elif _opp_k <= 0.20:  _adj -= 0.01
+                else:
+                    if _opp_k >= 0.26:    _adj += 0.05
+                    elif _opp_k >= 0.24:  _adj += 0.02
+                    elif _opp_k <= 0.18:  _adj -= 0.05
+                    elif _opp_k <= 0.20:  _adj -= 0.02
             if _park_sig == "Boost":
                 _adj += 0.02
             elif _park_sig == "Penalty":
                 _adj -= 0.02
 
-            # If pitch-count math puts the realistic K ceiling below the line,
+            # If pitch-count math puts the realistic ceiling below the line,
             # prevent the scanner from labeling it a strong play.
             _pc_ceiling = None
-            if _avg_pc and _k9:
+            if _avg_pc:
                 _est_ip = _avg_pc / 16.0
-                _pc_ceiling = round(_est_ip * (_k9 / 9.0), 1)
+                if _is_outs:
+                    _pc_ceiling = round(_est_ip * 3, 1)
+                elif _k9:
+                    _pc_ceiling = round(_est_ip * (_k9 / 9.0), 1)
                 if _pc_ceiling <= line:
                     _adj = min(_adj, 0.62)
                 elif _pc_ceiling <= line + 0.5:
@@ -9361,7 +9411,7 @@ if st.session_state.active_sport == "edge":
             return {
                 "sport":    "MLB",
                 "player":   pitcher_name,
-                "stat":     stat,
+                "stat":     _stat_label,
                 "line":     line,
                 "side":     side,
                 "adj":      round(_adj * 100, 1),
@@ -9416,11 +9466,11 @@ if st.session_state.active_sport == "edge":
                 "PRA", "PR", "PA", "RA", "Steals", "Blocks",
             ],
             "MLB": [
-                "All Stats", "Strikeouts", "Hits", "Total Bases",
+                "All Stats", "Strikeouts", "Pitcher Outs", "Hits", "Total Bases",
                 "Hits+Runs+RBIs", "Earned Runs Allowed",
             ],
             "Both": [
-                "All Stats", "Points", "Strikeouts", "Rebounds", "Assists",
+                "All Stats", "Points", "Strikeouts", "Pitcher Outs", "Rebounds", "Assists",
                 "3PM", "PRA", "PR", "PA", "RA", "Steals", "Blocks",
                 "Hits", "Total Bases", "Hits+Runs+RBIs", "Earned Runs Allowed",
             ],
@@ -9520,6 +9570,7 @@ if st.session_state.active_sport == "edge":
         _STAT_MAP = {
             "Points":               lambda s: "point" in s.lower() or s.lower() == "pts",
             "Strikeouts":           lambda s: "strikeout" in s.lower() or "strike out" in s.lower(),
+            "Pitcher Outs":          lambda s: "out" in s.lower() or "inning" in s.lower(),
             "Rebounds":             lambda s: "rebound" in s.lower() or s.lower() == "reb",
             "Assists":              lambda s: "assist" in s.lower() or s.lower() == "ast",
             "3PM":                  lambda s: "3" in s.lower() or "three" in s.lower(),
@@ -9562,6 +9613,7 @@ if st.session_state.active_sport == "edge":
         # Map display name to actual PP stat string for clarity
         _pp_stat_actual = {
             "Strikeouts": "Pitcher Strikeouts",
+            "Pitcher Outs": "Pitcher Outs",
             "Points": "Points",
         }.get(_edge_stat, _edge_stat)
         st.info(f"Analyzing {len(_filtered)} props ({_pp_stat_actual}) — {_sport_lbl}...")
@@ -9581,8 +9633,14 @@ if st.session_state.active_sport == "edge":
                         prop["stat"], prop["team"], "Over"
                     )
                 elif prop["sport"] == "MLB":
-                    # Normalize stat name — PrizePicks uses "Pitcher Strikeouts"
-                    _norm_stat = "Strikeouts" if "strikeout" in prop["stat"].lower() else prop["stat"]
+                    # Normalize stat names — PrizePicks uses several pitcher labels
+                    _pl_stat = prop["stat"].lower()
+                    if "strikeout" in _pl_stat or "strike out" in _pl_stat:
+                        _norm_stat = "Strikeouts"
+                    elif "out" in _pl_stat or "inning" in _pl_stat:
+                        _norm_stat = "Outs Recorded"
+                    else:
+                        _norm_stat = prop["stat"]
                     return run_mlb_edge_check(
                         prop["player"], prop["line"], _norm_stat, "Over", prop.get("team", "")
                     )
@@ -10878,60 +10936,32 @@ if "player_key" not in st.session_state:
 col_a, col_b, col_c, col_d, col_e = st.columns([2.5, 1, 1, 1, 0.8])
 
 with col_a:
+    # Fuzzy search — native searchable selectbox is fastest and smoother on mobile.
+    if "player_alias_input" not in st.session_state:
+        st.session_state.player_alias_input = ""
+
     # Pre-select if a recent player was tapped OR jumped from Edge Scanner
     _recent_pick   = st.session_state.pop("_recent_pick", None)
     _edge_jump_nba = st.session_state.pop("edge_jump_player", None)
     _pick_target   = _edge_jump_nba or _recent_pick
+    _preselect_idx = 0
+    if _pick_target and _pick_target in player_names_list:
+        _preselect_idx = player_names_list.index(_pick_target) + 1
     # Also pre-set line if jumped from edge
     if _edge_jump_nba and st.session_state.get("edge_jump_line"):
         st.session_state["_edge_prefill_line"] = st.session_state.pop("edge_jump_line", None)
 
-    _player_input_key = f"player_search_{st.session_state.player_key}"
-    if _pick_target:
-        st.session_state[_player_input_key] = _pick_target
-
-    player_query_raw = st.text_input(
+    player_query = st.selectbox(
         "Player — type name, nickname, or initials",
-        key=_player_input_key,
-        placeholder="Search player name, nickname, or initials",
+        options=[""] + player_names_list,
+        index=_preselect_idx,
+        format_func=lambda x: "— search by name, nickname, or initials —" if x == "" else x,
+        key=f"player_sel_{st.session_state.player_key}",
     )
-    player_query = player_query_raw.strip()
 
     # Resolve alias: if user typed a known nickname, swap to full name
-    _alias_map = {normalize_name(k): v for k, v in _aliases.items()}
-    if player_query and normalize_name(player_query) in _alias_map:
-        player_query = _alias_map[normalize_name(player_query)]
-
-    def _player_initials(name: str) -> str:
-        return "".join(part[0] for part in name.split() if part).lower()
-
-    _exact_player = next(
-        (p for p in player_names_list if normalize_name(p) == normalize_name(player_query)),
-        None,
-    ) if player_query else None
-    if _exact_player:
-        player_query = _exact_player
-    elif player_query:
-        _q_norm = normalize_name(player_query)
-        _q_compact = re.sub(r"[^a-z0-9]+", "", _q_norm)
-        _matches = [
-            p for p in player_names_list
-            if _q_norm in normalize_name(p)
-            or _q_compact == _player_initials(p)
-            or _q_compact in re.sub(r"[^a-z0-9]+", "", normalize_name(p))
-        ][:8]
-        if _matches:
-            st.markdown(
-                "<div style='font-family:JetBrains Mono,monospace;font-size:0.56rem;"
-                "color:#6b7f96;letter-spacing:0.1em;text-transform:uppercase;"
-                "margin:6px 0 4px 0;'>Suggestions</div>",
-                unsafe_allow_html=True
-            )
-            for _mi, _match in enumerate(_matches):
-                if st.button(_match, key=f"player_suggest_{st.session_state.player_key}_{_mi}", use_container_width=True):
-                    st.session_state[_player_input_key] = _match
-                    st.rerun()
-        player_query = ""
+    if player_query and player_query in _aliases:
+        player_query = _aliases[player_query]
 
     # Overlay ✕ button — only visible when a player is selected
     if player_query:
