@@ -1148,6 +1148,30 @@ def record_debug_error(area: str, err) -> None:
 from nba_api.stats.static import players as nba_players
 from nba_api.stats.endpoints import playergamelog, commonplayerinfo
 
+NBA_GAME_LOG_COLS = [
+    "GAME_DATE", "MATCHUP", "MIN", "PTS", "REB", "AST", "STL", "BLK", "TO",
+    "FGA", "FTA", "FG3A", "FG3M", "PLUS_MINUS", "WL",
+]
+
+def normalize_nba_game_log_cols(df: pd.DataFrame, n: Optional[int] = None) -> pd.DataFrame:
+    """Normalize NBA game logs so all scanner/analyzer stats are available."""
+    if df is None or df.empty:
+        return pd.DataFrame(columns=NBA_GAME_LOG_COLS)
+    df = df.copy()
+    df["GAME_DATE"] = pd.to_datetime(df.get("GAME_DATE"), errors="coerce")
+    if "TO" not in df.columns and "TOV" in df.columns:
+        df["TO"] = df["TOV"]
+    for c in ["MATCHUP", "WL"]:
+        if c not in df.columns:
+            df[c] = None
+    for c in ["MIN", "PTS", "REB", "AST", "STL", "BLK", "TO", "FGA", "FTA", "FG3A", "FG3M", "PLUS_MINUS"]:
+        if c not in df.columns:
+            df[c] = 0
+    df = df.sort_values("GAME_DATE", ascending=False)
+    if n:
+        df = df.head(n)
+    return df[NBA_GAME_LOG_COLS].reset_index(drop=True)
+
 # ── Cache date key — forces daily reset at midnight ET ────────
 def _cache_date() -> str:
     """Returns today's date in ET — used to bust caches at midnight."""
@@ -1322,21 +1346,12 @@ def nba_find_player(player_name: str) -> Tuple[Optional[int], Optional[str]]:
 
 def _nba_get_game_logs_uncached(player_id: int, season: str, n: int = 10, _date: str = None) -> pd.DataFrame:
     """Internal uncached fetch — called by the cached wrapper below."""
-    empty = pd.DataFrame(columns=["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A","FG3M","PLUS_MINUS","WL"])
+    empty = pd.DataFrame(columns=NBA_GAME_LOG_COLS)
 
     def _process(df):
         if df is None or df.empty:
             return None
-        df = df.copy()
-        df["GAME_DATE"] = pd.to_datetime(df["GAME_DATE"])
-        df = df.sort_values("GAME_DATE", ascending=False).head(n).reset_index(drop=True)
-        for c in ["MATCHUP","MIN","PTS","FGA","FTA","FG3A"]:
-            if c not in df.columns: df[c] = None
-        for c in ["FG3M"]:
-            if c not in df.columns: df[c] = 0
-        for c in ["PLUS_MINUS","WL"]:
-            if c not in df.columns: df[c] = None
-        return df[["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A","FG3M","PLUS_MINUS","WL"]]
+        return normalize_nba_game_log_cols(df, n=n)
 
     def _save(df):
         try:
@@ -1449,7 +1464,7 @@ def _fetch_playoff_game_logs_raw(player_id: int, season: str) -> pd.DataFrame:
         "Referer": "https://www.nba.com/",
         "Origin": "https://www.nba.com",
     }
-    empty = pd.DataFrame(columns=["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A","FG3M","PLUS_MINUS","WL"])
+    empty = pd.DataFrame(columns=NBA_GAME_LOG_COLS)
     try:
         import requests as _req
         r = _req.get(
@@ -1465,15 +1480,7 @@ def _fetch_playoff_game_logs_raw(player_id: int, season: str) -> pd.DataFrame:
         rows = rs.get("rowSet", [])
         if not rows:
             return empty
-        df = pd.DataFrame(rows, columns=hdrs)
-        df["GAME_DATE"] = pd.to_datetime(df["GAME_DATE"], errors="coerce")
-        for c in ["MATCHUP","MIN","PTS","FGA","FTA","FG3A"]:
-            if c not in df.columns: df[c] = None
-        for c in ["FG3M"]:
-            if c not in df.columns: df[c] = 0
-        for c in ["PLUS_MINUS","WL"]:
-            if c not in df.columns: df[c] = None
-        return df[["GAME_DATE","MATCHUP","MIN","PTS","FGA","FTA","FG3A","FG3M","PLUS_MINUS","WL"]]
+        return normalize_nba_game_log_cols(pd.DataFrame(rows, columns=hdrs))
     except Exception:
         return empty
 
@@ -2696,22 +2703,47 @@ def playoff_usage_spike_signal(
 
 # ── Supabase ──────────────────────────────────────────────────
 
+def get_config_value(*names: str) -> str:
+    """Read config from Railway/env first, then Streamlit secrets if available."""
+    for name in names:
+        val = os.environ.get(name, "")
+        if val:
+            return str(val).strip()
+    for name in names:
+        try:
+            val = st.secrets.get(name, "")
+            if val:
+                return str(val).strip()
+        except Exception:
+            continue
+    return ""
+
+
 def get_supabase_client():
-    """Get Supabase client using credentials from Streamlit secrets."""
+    """Get Supabase client using credentials from Railway env vars or Streamlit secrets."""
     try:
-        url = (
-            st.secrets.get("SUPABASE_URL")
-            or os.environ.get("SUPABASE_URL", "")
+        url = get_config_value(
+            "SUPABASE_URL",
+            "SUPABASE_PROJECT_URL",
+            "NEXT_PUBLIC_SUPABASE_URL",
         )
-        key = (
-            st.secrets.get("SUPABASE_KEY")
-            or st.secrets.get("SUPABASE_SERVICE_ROLE_KEY")
-            or os.environ.get("SUPABASE_KEY", "")
-            or os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
-            or os.environ.get("SUPABASE_SERVICE_KEY", "")
+        key = get_config_value(
+            "SUPABASE_SERVICE_ROLE_KEY",
+            "SUPABASE_SERVICE_KEY",
+            "SUPABASE_KEY",
+            "SUPABASE_ANON_KEY",
+            "NEXT_PUBLIC_SUPABASE_ANON_KEY",
         )
         if not url or not key:
-            record_debug_error("supabase.config", "Missing SUPABASE_URL or SUPABASE_KEY")
+            env_seen = [name for name in [
+                "SUPABASE_URL", "SUPABASE_PROJECT_URL", "NEXT_PUBLIC_SUPABASE_URL",
+                "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_SERVICE_KEY", "SUPABASE_KEY",
+                "SUPABASE_ANON_KEY", "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+            ] if os.environ.get(name)]
+            record_debug_error(
+                "supabase.config",
+                f"Missing Supabase URL/key. Env vars detected: {', '.join(env_seen) or 'none'}"
+            )
             return None
         import requests as _req
 
@@ -8455,11 +8487,135 @@ if st.session_state.active_sport == "edge":
 
     import re as _re_edge
 
+    def _edge_weighted_rate_from_values(vals: pd.Series, line: float, side: str,
+                                        weights: Optional[List[float]] = None) -> float:
+        vals = pd.to_numeric(vals, errors="coerce").dropna().reset_index(drop=True)
+        n = len(vals)
+        if n == 0:
+            return 0.0
+        if weights is None or len(weights) != n:
+            weights = [n - i for i in range(n)]
+        total_weight = sum(weights)
+        if total_weight <= 0:
+            return 0.0
+        if side == "Over":
+            hits = sum(w for v, w in zip(vals, weights) if v > line)
+        else:
+            hits = sum(w for v, w in zip(vals, weights) if v < line)
+        return float(hits / total_weight)
+
+    def _edge_consistency_from_values(vals: pd.Series, line: float) -> float:
+        vals = pd.to_numeric(vals, errors="coerce").dropna()
+        if len(vals) == 0:
+            return 0.5
+        avg = float(vals.mean())
+        std = float(vals.std()) if len(vals) > 1 else 0.0
+        if avg <= 0:
+            return 0.1
+        cv = std / avg
+        base = max(0.05, min(0.95, 1.0 - (cv * 0.8)))
+        edge = abs(avg - line)
+        if edge >= 8:
+            edge_boost = 0.20
+        elif edge >= 5:
+            edge_boost = 0.12
+        elif edge >= 3:
+            edge_boost = 0.06
+        else:
+            edge_boost = 0.0
+        return min(0.95, base + edge_boost)
+
+    def _nba_edge_stat_values(logs: pd.DataFrame, stat: str) -> Tuple[Optional[pd.Series], str]:
+        """Return a normalized stat series for NBA single and combo props."""
+        s = re.sub(r"[^a-z0-9+ ]+", " ", str(stat).lower())
+        s = re.sub(r"\s+", " ", s).strip()
+
+        aliases = {
+            "points": ("PTS", "Points"),
+            "pts": ("PTS", "Points"),
+            "rebounds": ("REB", "Rebounds"),
+            "total rebounds": ("REB", "Rebounds"),
+            "reb": ("REB", "Rebounds"),
+            "assists": ("AST", "Assists"),
+            "ast": ("AST", "Assists"),
+            "3 pointers made": ("FG3M", "3PM"),
+            "3 pointer made": ("FG3M", "3PM"),
+            "3 pointers": ("FG3M", "3PM"),
+            "3pm": ("FG3M", "3PM"),
+            "three pointers made": ("FG3M", "3PM"),
+            "3 point field goals made": ("FG3M", "3PM"),
+            "steals": ("STL", "Steals"),
+            "blocks": ("BLK", "Blocks"),
+            "blocked shots": ("BLK", "Blocks"),
+            "turnovers": ("TO", "Turnovers"),
+            "tov": ("TO", "Turnovers"),
+        }
+        combo_aliases = {
+            "points rebounds assists": (["PTS", "REB", "AST"], "PRA"),
+            "pts reb ast": (["PTS", "REB", "AST"], "PRA"),
+            "pra": (["PTS", "REB", "AST"], "PRA"),
+            "points + rebounds + assists": (["PTS", "REB", "AST"], "PRA"),
+            "points rebounds": (["PTS", "REB"], "PR"),
+            "pts reb": (["PTS", "REB"], "PR"),
+            "pr": (["PTS", "REB"], "PR"),
+            "points + rebounds": (["PTS", "REB"], "PR"),
+            "points assists": (["PTS", "AST"], "PA"),
+            "pts ast": (["PTS", "AST"], "PA"),
+            "pa": (["PTS", "AST"], "PA"),
+            "points + assists": (["PTS", "AST"], "PA"),
+            "rebounds assists": (["REB", "AST"], "RA"),
+            "reb ast": (["REB", "AST"], "RA"),
+            "ra": (["REB", "AST"], "RA"),
+            "rebounds + assists": (["REB", "AST"], "RA"),
+            "steals blocks": (["STL", "BLK"], "Stocks"),
+            "steals + blocks": (["STL", "BLK"], "Stocks"),
+            "stocks": (["STL", "BLK"], "Stocks"),
+        }
+
+        if s in aliases:
+            col, label = aliases[s]
+            if col not in logs.columns:
+                return None, label
+            return pd.to_numeric(logs[col], errors="coerce"), label
+        if s in combo_aliases:
+            cols, label = combo_aliases[s]
+            if any(c not in logs.columns for c in cols):
+                return None, label
+            series = sum(pd.to_numeric(logs[c], errors="coerce").fillna(0) for c in cols)
+            return series, label
+
+        # Last-resort fuzzy matching for PrizePicks naming variants.
+        if "point" in s and "rebound" in s and "assist" in s:
+            return sum(pd.to_numeric(logs[c], errors="coerce").fillna(0) for c in ["PTS", "REB", "AST"]), "PRA"
+        if "point" in s and "rebound" in s:
+            return pd.to_numeric(logs["PTS"], errors="coerce").fillna(0) + pd.to_numeric(logs["REB"], errors="coerce").fillna(0), "PR"
+        if "point" in s and "assist" in s:
+            return pd.to_numeric(logs["PTS"], errors="coerce").fillna(0) + pd.to_numeric(logs["AST"], errors="coerce").fillna(0), "PA"
+        if "rebound" in s and "assist" in s:
+            return pd.to_numeric(logs["REB"], errors="coerce").fillna(0) + pd.to_numeric(logs["AST"], errors="coerce").fillna(0), "RA"
+        if "steal" in s and "block" in s:
+            return pd.to_numeric(logs["STL"], errors="coerce").fillna(0) + pd.to_numeric(logs["BLK"], errors="coerce").fillna(0), "Stocks"
+        if "point" in s:
+            return pd.to_numeric(logs["PTS"], errors="coerce"), "Points"
+        if "rebound" in s:
+            return pd.to_numeric(logs["REB"], errors="coerce"), "Rebounds"
+        if "assist" in s:
+            return pd.to_numeric(logs["AST"], errors="coerce"), "Assists"
+        if "three" in s or "3" in s:
+            return pd.to_numeric(logs["FG3M"], errors="coerce"), "3PM"
+        if "steal" in s:
+            return pd.to_numeric(logs["STL"], errors="coerce"), "Steals"
+        if "block" in s:
+            return pd.to_numeric(logs["BLK"], errors="coerce"), "Blocks"
+        if "turnover" in s:
+            return pd.to_numeric(logs["TO"], errors="coerce"), "Turnovers"
+        return None, stat
+
 
     def run_nba_edge_check(player_name: str, line: float, stat: str,
                            team: str, side: str = "Over") -> dict | None:
         """
-        NBA edge check — uses cached game logs + 5 fast signals.
+        NBA edge check — uses current game logs + stat-specific context signals.
         Matches individual analyzer more closely for consistent results.
         """
         try:
@@ -8472,34 +8628,33 @@ if st.session_state.active_sport == "edge":
             if _logs is None or _logs.empty or len(_logs) < 3:
                 return None
 
-            # Stat column map — handle all PrizePicks stat name variations
-            _stat_map = {
-                "points":           "PTS",
-                "pts":              "PTS",
-                "rebounds":         "REB",
-                "total rebounds":   "REB",
-                "assists":          "AST",
-                "3-pointers made":  "FG3M",
-                "3 pointers made":  "FG3M",
-                "3-point field goals made": "FG3M",
-                "steals":           "STL",
-                "blocks":           "BLK",
-                "turnovers":        "TO",
-            }
-            _col = _stat_map.get(stat.lower())
-            if not _col or _col not in _logs.columns:
-                _col = next((c for c in _logs.columns
-                             if stat.upper()[:3] in c.upper()), None)
-                if not _col:
-                    return None
-
-            _vals = pd.to_numeric(_logs[_col], errors="coerce").dropna()
+            _series, _stat_label = _nba_edge_stat_values(_logs, stat)
+            if _series is None:
+                return None
+            _vals = pd.to_numeric(_series, errors="coerce").dropna().reset_index(drop=True)
             if len(_vals) < 3:
                 return None
 
             _avgv = float(_vals.mean())
-            _wb   = weighted_hit_rate(_logs, line, side, opp_abbr=None)
-            _cons = consistency_score(_logs, line)
+            _team_abbr = _norm_team_abbr(team) if team else None
+            _opp_abbr, _game_date, _venue = espn_get_next_game(_team_abbr) if _team_abbr else (None, None, None)
+
+            _weights = [len(_vals) - i for i in range(len(_vals))]
+            if _IS_PLAYOFFS and _opp_abbr and "MATCHUP" in _logs.columns and "GAME_DATE" in _logs.columns:
+                try:
+                    _opp_up = _opp_abbr.upper()
+                    _dates = pd.to_datetime(_logs["GAME_DATE"], errors="coerce").reset_index(drop=True)
+                    _matchups = _logs["MATCHUP"].astype(str).reset_index(drop=True)
+                    _playoff_start = pd.Timestamp("2026-04-14").normalize()
+                    for _i in range(min(len(_weights), len(_logs))):
+                        if pd.notna(_dates[_i]) and _opp_up in _matchups[_i].upper():
+                            if _dates[_i].normalize() >= _playoff_start:
+                                _weights[_i] *= 3
+                except Exception:
+                    pass
+
+            _wb   = _edge_weighted_rate_from_values(_vals, line, side, weights=_weights)
+            _cons = _edge_consistency_from_values(_vals, line)
 
             # ── Signal 1: weighted hit rate (base) ────────────────────
             _adj = _wb
@@ -8516,12 +8671,14 @@ if st.session_state.active_sport == "edge":
 
             # ── Signal 3: season avg vs line (edge quality) ───────────
             _edge = _avgv - line
-            if _edge >= 4:    _adj += 0.06
-            elif _edge >= 2:  _adj += 0.03
-            elif _edge >= 1:  _adj += 0.01
-            elif _edge <= -4: _adj -= 0.06
-            elif _edge <= -2: _adj -= 0.03
-            elif _edge <= -1: _adj -= 0.01
+            _side_mult = 1 if side == "Over" else -1
+            _side_edge = _edge * _side_mult
+            if _side_edge >= 4:    _adj += 0.06
+            elif _side_edge >= 2:  _adj += 0.03
+            elif _side_edge >= 1:  _adj += 0.01
+            elif _side_edge <= -4: _adj -= 0.06
+            elif _side_edge <= -2: _adj -= 0.03
+            elif _side_edge <= -1: _adj -= 0.01
 
             # ── Signal 4: consistency ─────────────────────────────────
             if _cons >= 0.75:  _adj += 0.03
@@ -8536,13 +8693,39 @@ if st.session_state.active_sport == "edge":
                     _min_cv = float(_mins.std() / _mins.mean()) if _mins.mean() > 0 else 1
                     if _min_cv < 0.1:   _adj += 0.02   # very consistent minutes
                     elif _min_cv > 0.3: _adj -= 0.02   # erratic minutes = risky
+                    _min_l3 = float(_mins.head(3).mean())
+                    _min_l10 = float(_mins.head(min(10, len(_mins))).mean())
+                    if _min_l10 >= 10:
+                        _min_drop = _min_l10 - _min_l3
+                        if _min_drop >= 5:
+                            _adj -= 0.04
+                        elif _min_drop >= 3:
+                            _adj -= 0.02
+
+            # ── Signal 6: matchup context for points only ─────────────
+            _matchup_sig = "Neutral"
+            if _opp_abbr and _stat_label == "Points":
+                try:
+                    _matchup_sig, _, _ = classify_matchup_espn(_opp_abbr, _date=_cache_date())
+                    if _matchup_sig == "Good":
+                        _adj += 0.03 if side == "Over" else -0.03
+                    elif _matchup_sig == "Bad":
+                        _adj -= 0.03 if side == "Over" else -0.03
+                except Exception:
+                    _matchup_sig = "Neutral"
+
+            # ── Signal 7: suppress tiny/fragile edges ─────────────────
+            if len(_vals) < 6:
+                _adj = min(_adj, 0.68)
+            if _cons < 0.30 and _side_edge < 2.0:
+                _adj -= 0.04
 
             _adj = max(0.05, min(0.95, _adj))
 
             return {
                 "sport":    "NBA",
                 "player":   _fn or player_name,
-                "stat":     stat,
+                "stat":     _stat_label,
                 "line":     line,
                 "side":     side,
                 "adj":      round(_adj * 100, 1),
@@ -8550,6 +8733,10 @@ if st.session_state.active_sport == "edge":
                 "edge_raw": round(_edge, 2),
                 "cons":     round(_cons * 100, 1),
                 "samples":  len(_vals),
+                "l3":       round(_l3, 1),
+                "opp":      _opp_abbr or "",
+                "venue":    _venue or "",
+                "matchup":  _matchup_sig,
             }
         except Exception:
             return None
@@ -8645,8 +8832,101 @@ if st.session_state.active_sport == "edge":
             return empty
 
 
+    @st.cache_data(ttl=900, show_spinner=False)
+    def _scanner_get_mlb_game_context(team_abbr: str) -> dict:
+        """Fast team-based MLB game lookup for Edge Scanner matchup context."""
+        empty = {"opp": "", "home_team": "", "away_team": "", "venue": "", "side": ""}
+        if not team_abbr:
+            return empty
+        try:
+            import requests as _req, datetime as _dtx, pytz as _ptz
+            et = _ptz.timezone("America/New_York")
+            for offset in (0, 1):
+                date_str = (
+                    _dtx.datetime.now(et) + _dtx.timedelta(days=offset)
+                ).strftime("%Y-%m-%d")
+                r = _req.get(
+                    "https://statsapi.mlb.com/api/v1/schedule",
+                    params={"sportId": 1, "date": date_str, "hydrate": "team,venue"},
+                    timeout=6,
+                )
+                if not r.ok:
+                    continue
+                for day in r.json().get("dates", []):
+                    for game in day.get("games", []):
+                        home = game.get("teams", {}).get("home", {}).get("team", {}).get("abbreviation", "")
+                        away = game.get("teams", {}).get("away", {}).get("team", {}).get("abbreviation", "")
+                        venue = game.get("venue", {}).get("name", "")
+                        if home.upper() == team_abbr.upper():
+                            return {"opp": away, "home_team": home, "away_team": away, "venue": venue, "side": "home"}
+                        if away.upper() == team_abbr.upper():
+                            return {"opp": home, "home_team": home, "away_team": away, "venue": venue, "side": "away"}
+        except Exception as e:
+            record_debug_error("mlb.edge.game_context", e)
+        return empty
+
+
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def _scanner_get_mlb_opp_k_rate(opp_abbr: str) -> Optional[float]:
+        """Opponent batting K rate from MLB Stats API."""
+        if not opp_abbr:
+            return None
+        try:
+            import requests as _req, datetime as _dtx
+            season = _dtx.datetime.now().year
+            tr = _req.get(
+                "https://statsapi.mlb.com/api/v1/teams",
+                params={"sportId": 1, "season": season},
+                timeout=6,
+            )
+            if not tr.ok:
+                return None
+            team = next(
+                (t for t in tr.json().get("teams", [])
+                 if t.get("abbreviation", "").upper() == opp_abbr.upper()),
+                None,
+            )
+            if not team:
+                return None
+            sr = _req.get(
+                f"https://statsapi.mlb.com/api/v1/teams/{team['id']}/stats",
+                params={"stats": "season", "group": "hitting", "season": season},
+                timeout=6,
+            )
+            if not sr.ok:
+                return None
+            stat = sr.json().get("stats", [{}])[0].get("splits", [{}])[0].get("stat", {})
+            ab = int(stat.get("atBats", 0) or 0)
+            k = int(stat.get("strikeOuts", 0) or 0)
+            return round(k / ab, 3) if ab > 0 else None
+        except Exception as e:
+            record_debug_error("mlb.edge.opp_k", e)
+            return None
+
+
+    def _scanner_mlb_park_signal(home_team: str) -> str:
+        """Simple K-friendly park signal. Run-friendly parks slightly hurt Ks."""
+        park_factors = {
+            "COL": 1.30, "CIN": 1.10, "BOS": 1.08, "PHI": 1.06,
+            "TEX": 1.05, "NYY": 1.04, "CHC": 1.03, "HOU": 1.02,
+            "ATL": 1.01, "MIL": 1.01, "STL": 1.00, "LAD": 0.99,
+            "NYM": 0.99, "TOR": 0.98, "DET": 0.98, "MIN": 0.97,
+            "CLE": 0.97, "ARI": 0.97, "BAL": 0.97, "KCR": 0.96,
+            "PIT": 0.96, "TBR": 0.96, "CHW": 0.95, "CWS": 0.95,
+            "SEA": 0.95, "SFG": 0.94, "MIA": 0.94, "LAA": 0.94,
+            "WSN": 0.93, "OAK": 0.93, "ATH": 0.93, "SDP": 0.92,
+        }
+        pf = park_factors.get(str(home_team).upper(), 1.00)
+        if pf <= 0.95:
+            return "Boost"
+        if pf >= 1.06:
+            return "Penalty"
+        return "Neutral"
+
+
     def run_mlb_edge_check(pitcher_name: str, line: float,
-                           stat: str, side: str = "Over") -> dict | None:
+                           stat: str, side: str = "Over",
+                           team: str = "") -> dict | None:
         """
         MLB scanner edge check — 6 signals using cached game log data.
         Matches full analyzer more closely without extra API calls.
@@ -8664,10 +8944,15 @@ if st.session_state.active_sport == "edge":
             _k9   = _data.get("k9")
             _avg_ip  = _data.get("avg_ip")
             _avg_pc  = _data.get("avg_pitches")
+            _game_ctx = _scanner_get_mlb_game_context(team)
+            _opp = _game_ctx.get("opp", "")
+            _home = _game_ctx.get("home_team", "")
+            _opp_k = _scanner_get_mlb_opp_k_rate(_opp) if _opp else None
+            _park_sig = _scanner_mlb_park_signal(_home) if _home else "Neutral"
 
             # ── Signal 1: Weighted hit rate (base) ───────────────────
             _wts  = _np.array([1.5 if i < 3 else 1.0 for i in range(_n)])
-            _hits = (_vals >= line) if side == "Over" else (_vals <= line)
+            _hits = (_vals > line) if side == "Over" else (_vals < line)
             _whr  = round(float((_hits * _wts).sum() / _wts.sum()), 3)
             _cons = round(float(_hits.mean()), 3)
             _adj  = _whr
@@ -8695,6 +8980,13 @@ if st.session_state.active_sport == "edge":
                 elif _avg_ip <= 3.5: _adj -= 0.07   # short leash
                 elif _avg_ip <= 4.5: _adj -= 0.03
 
+            # ── Signal 4b: pitch count leash ─────────────────────────
+            if _avg_pc:
+                if _avg_pc >= 98:    _adj += 0.03
+                elif _avg_pc >= 90:  _adj += 0.01
+                elif _avg_pc < 75:   _adj -= 0.06
+                elif _avg_pc < 85:   _adj -= 0.03
+
             # ── Signal 5: Edge vs line (avg above/below line) ─────────
             _edge = _avg - line
             if _edge >= 2.5:    _adj += 0.05
@@ -8709,6 +9001,28 @@ if st.session_state.active_sport == "edge":
             elif _cons >= 0.65: _adj += 0.01
             elif _cons <= 0.35: _adj -= 0.04
             elif _cons <= 0.45: _adj -= 0.02
+
+            # ── Signal 7: opponent K rate and park context ───────────
+            if _opp_k is not None:
+                if _opp_k >= 0.26:    _adj += 0.05
+                elif _opp_k >= 0.24:  _adj += 0.02
+                elif _opp_k <= 0.18:  _adj -= 0.05
+                elif _opp_k <= 0.20:  _adj -= 0.02
+            if _park_sig == "Boost":
+                _adj += 0.02
+            elif _park_sig == "Penalty":
+                _adj -= 0.02
+
+            # If pitch-count math puts the realistic K ceiling below the line,
+            # prevent the scanner from labeling it a strong play.
+            _pc_ceiling = None
+            if _avg_pc and _k9:
+                _est_ip = _avg_pc / 16.0
+                _pc_ceiling = round(_est_ip * (_k9 / 9.0), 1)
+                if _pc_ceiling <= line:
+                    _adj = min(_adj, 0.62)
+                elif _pc_ceiling <= line + 0.5:
+                    _adj = min(_adj, 0.71)
 
             _adj = max(0.05, min(0.95, _adj))
 
@@ -8725,6 +9039,11 @@ if st.session_state.active_sport == "edge":
                 "samples":  _n,
                 "k9":       _k9,
                 "avg_ip":   _avg_ip,
+                "opp":      _opp or "?",
+                "opp_k":    round(_opp_k * 100, 1) if _opp_k is not None else None,
+                "park":     _park_sig,
+                "pc":       _avg_pc,
+                "pc_ceiling": _pc_ceiling,
             }
         except Exception:
             return None
@@ -8759,6 +9078,7 @@ if st.session_state.active_sport == "edge":
         _edge_stat = st.selectbox(
             "Stat filter",
             ["All Stats", "Points", "Strikeouts", "Rebounds", "Assists",
+             "3PM", "PRA", "PR", "PA", "RA", "Steals", "Blocks",
              "Hits", "Total Bases", "Hits+Runs+RBIs", "Earned Runs Allowed"],
             key="edge_stat_filter",
             label_visibility="collapsed"
@@ -8838,10 +9158,17 @@ if st.session_state.active_sport == "edge":
         # Stat filter — applied BEFORE threading so we don't spin up
         # 484 threads for 20 actual props
         _STAT_MAP = {
-            "Points":               lambda s: s.lower() in ("points", "pts", "point"),
+            "Points":               lambda s: "point" in s.lower() or s.lower() == "pts",
             "Strikeouts":           lambda s: "strikeout" in s.lower() or "strike out" in s.lower(),
             "Rebounds":             lambda s: "rebound" in s.lower() or s.lower() == "reb",
-            "Assists":              lambda s: s.lower() in ("assists", "ast"),
+            "Assists":              lambda s: "assist" in s.lower() or s.lower() == "ast",
+            "3PM":                  lambda s: "3" in s.lower() or "three" in s.lower(),
+            "PRA":                  lambda s: all(x in s.lower() for x in ("point", "rebound", "assist")) or s.lower() == "pra",
+            "PR":                   lambda s: "assist" not in s.lower() and ("point" in s.lower() and "rebound" in s.lower() or s.lower() == "pr"),
+            "PA":                   lambda s: "rebound" not in s.lower() and ("point" in s.lower() and "assist" in s.lower() or s.lower() == "pa"),
+            "RA":                   lambda s: "point" not in s.lower() and ("rebound" in s.lower() and "assist" in s.lower() or s.lower() == "ra"),
+            "Steals":               lambda s: "steal" in s.lower(),
+            "Blocks":               lambda s: "block" in s.lower(),
             "Hits":                 lambda s: s.lower() == "hits",
             "Total Bases":          lambda s: s.lower() == "total bases",
             "Hits+Runs+RBIs":       lambda s: s.lower() in ("hits+runs+rbis", "h+r+rbi"),
@@ -8897,7 +9224,7 @@ if st.session_state.active_sport == "edge":
                     # Normalize stat name — PrizePicks uses "Pitcher Strikeouts"
                     _norm_stat = "Strikeouts" if "strikeout" in prop["stat"].lower() else prop["stat"]
                     return run_mlb_edge_check(
-                        prop["player"], prop["line"], _norm_stat, "Over"
+                        prop["player"], prop["line"], _norm_stat, "Over", prop.get("team", "")
                     )
             except Exception:
                 return None
@@ -8906,7 +9233,7 @@ if st.session_state.active_sport == "edge":
         _done  = 0
 
         # MLB uses cached single-call fetch — can handle more workers
-        _workers = 8 if _edge_sport == "MLB" else (8 if _edge_sport == "NBA" else 8)
+        _workers = 8 if _edge_sport == "MLB" else (5 if _edge_sport == "NBA" else 6)
 
         with _cfe.ThreadPoolExecutor(max_workers=_workers) as _ex:
             _fmap = {_ex.submit(_check_prop, p): p for p in _filtered}
@@ -9007,6 +9334,32 @@ if st.session_state.active_sport == "edge":
                 )
                 _bar_w = min(100, int(_r["adj"]))
                 _edge_raw_col = "#00e896" if _r["edge_raw"] > 0 else "#ff3d5c"
+                _mlb_ctx_html = ""
+                _nba_ctx_html = ""
+                if _r["sport"] == "NBA":
+                    if _r.get("opp"):
+                        _nba_ctx_html += (
+                            f"<span>Opp: <strong style='color:#f0f4f8;'>{_r.get('opp')}</strong></span>"
+                        )
+                    if _r.get("venue"):
+                        _nba_ctx_html += (
+                            f"<span>Venue: <strong style='color:#f0f4f8;'>{_r.get('venue')}</strong></span>"
+                        )
+                    if _r.get("l3") is not None:
+                        _nba_ctx_html += (
+                            f"<span>L3: <strong style='color:#f0f4f8;'>{_r.get('l3')}</strong></span>"
+                        )
+                if _r["sport"] == "MLB":
+                    _mlb_ctx_html += (
+                        f"<span>Opp: <strong style='color:#f0f4f8;'>{_r.get('opp', '?')}</strong></span>"
+                    )
+                    if _r.get("opp_k") is not None:
+                        _mlb_ctx_html += (
+                            f"<span>Opp K%: <strong style='color:#f0f4f8;'>{_r.get('opp_k')}</strong></span>"
+                        )
+                    _mlb_ctx_html += (
+                        f"<span>Park: <strong style='color:#f0f4f8;'>{_r.get('park', 'Neutral')}</strong></span>"
+                    )
 
                 st.markdown(
                     f"<div style='background:{_tier_bg};"
@@ -9048,6 +9401,8 @@ if st.session_state.active_sport == "edge":
                     f"<span>Edge: <strong style='color:{_edge_raw_col};'>"
                     f"{_r['edge_raw']:+.1f}</strong></span>"
                     f"<span>Consistency: <strong style='color:#f0f4f8;'>{_r['cons']}%</strong></span>"
+                    f"{_nba_ctx_html}"
+                    f"{_mlb_ctx_html}"
                     f"<span style='color:#6b7f96;'>{_r['samples']} starts/games</span>"
                     f"</div>"
 
