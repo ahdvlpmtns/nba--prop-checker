@@ -11015,6 +11015,8 @@ if st.session_state.logs is not None:
 
     # ── Fire slow calls in parallel ──────────────────────────────
     import concurrent.futures as _cf
+    import time as _ctx_time
+    _season_df = None
     _pool = _cf.ThreadPoolExecutor(max_workers=10)
     try:
         _f_matchup  = _pool.submit(classify_matchup_espn, opp_abbr)
@@ -11030,15 +11032,28 @@ if st.session_state.logs is not None:
         _f_news      = _pool.submit(espn_get_player_news, full_name)
         _f_role      = _pool.submit(espn_get_player_role, full_name, player_team) if player_team else None
 
-        try:
-            matchup_auto, opp_pts, league_avg = _f_matchup.result(timeout=10)
-        except Exception:
-            matchup_auto, opp_pts, league_avg = "Neutral", None, "114.5"
+        _context_deadline = _ctx_time.monotonic() + 14.0
 
-        try:
-            _h2h_full = _f_h2h.result(timeout=22) if _f_h2h else pd.DataFrame()
-        except Exception:
-            _h2h_full = pd.DataFrame()
+        def _ctx_result(future, default, timeout=1.0, label="nba.context"):
+            if not future:
+                return default
+            remaining = _context_deadline - _ctx_time.monotonic()
+            if remaining <= 0:
+                record_debug_error(label, "Context budget expired")
+                return default
+            try:
+                return future.result(timeout=max(0.05, min(timeout, remaining)))
+            except Exception as e:
+                record_debug_error(label, e)
+                return default
+
+        matchup_auto, opp_pts, league_avg = _ctx_result(
+            _f_matchup, ("Neutral", None, "114.5"), timeout=4.0, label="nba.context.matchup"
+        )
+
+        _h2h_full = _ctx_result(
+            _f_h2h, pd.DataFrame(), timeout=5.0, label="nba.context.h2h"
+        ) if _f_h2h else pd.DataFrame()
 
         # Split H2H: series games (signal) + reg season (context)
         if _IS_PLAYOFFS and not _h2h_full.empty:
@@ -11062,55 +11077,36 @@ if st.session_state.logs is not None:
             h2h_df      = _h2h_full
             _reg_h2h_df = pd.DataFrame()
 
-        try:
-            _f_season.result(timeout=20)
-        except Exception:
-            pass
-
-        try:
-            _playoff = _f_playoff.result(timeout=8) if _f_playoff else {}
-        except Exception:
-            _playoff = {}
-
-        try:
-            _series = _f_series.result(timeout=8) if _f_series else {}
-        except Exception:
-            _series = {}
-
-        try:
-            _ref_sig, _ref_ppg, _ref_names = _f_refs.result(timeout=8) if _f_refs else ("Neutral", None, [])
-        except Exception:
-            _ref_sig, _ref_ppg, _ref_names = "Neutral", None, []
-
-        try:
-            _opp_absent, _opp_inj_html = _f_opp_inj.result(timeout=10) if _f_opp_inj else ([], "")
-        except Exception:
-            _opp_absent, _opp_inj_html = [], ""
-
-        try:
-            _def_form = _f_def_form.result(timeout=10) if _f_def_form else {}
-        except Exception:
-            _def_form = {}
-
-        try:
-            _po_logs = _f_po_logs.result(timeout=12) if _f_po_logs else pd.DataFrame()
-        except Exception:
-            _po_logs = pd.DataFrame()
-
-        try:
-            _espn_last_game = _f_last_game.result(timeout=8) if _f_last_game else None
-        except Exception:
-            _espn_last_game = None
-
-        try:
-            _player_news = _f_news.result(timeout=8)
-        except Exception:
-            _player_news = []
-
-        try:
-            _player_role = _f_role.result(timeout=6) if _f_role else {}
-        except Exception:
-            _player_role = {}
+        _season_df = _ctx_result(
+            _f_season, None, timeout=0.75, label="nba.context.season"
+        )
+        _playoff = _ctx_result(
+            _f_playoff, {}, timeout=1.5, label="nba.context.playoff"
+        ) if _f_playoff else {}
+        _series = _ctx_result(
+            _f_series, {}, timeout=1.5, label="nba.context.series"
+        ) if _f_series else {}
+        _ref_sig, _ref_ppg, _ref_names = _ctx_result(
+            _f_refs, ("Neutral", None, []), timeout=1.5, label="nba.context.refs"
+        ) if _f_refs else ("Neutral", None, [])
+        _opp_absent, _opp_inj_html = _ctx_result(
+            _f_opp_inj, ([], ""), timeout=1.5, label="nba.context.opp_injury"
+        ) if _f_opp_inj else ([], "")
+        _def_form = _ctx_result(
+            _f_def_form, {}, timeout=1.0, label="nba.context.def_form"
+        ) if _f_def_form else {}
+        _po_logs = _ctx_result(
+            _f_po_logs, pd.DataFrame(), timeout=1.0, label="nba.context.playoff_logs"
+        ) if _f_po_logs else pd.DataFrame()
+        _espn_last_game = _ctx_result(
+            _f_last_game, None, timeout=1.0, label="nba.context.last_game"
+        ) if _f_last_game else None
+        _player_news = _ctx_result(
+            _f_news, [], timeout=1.0, label="nba.context.news"
+        )
+        _player_role = _ctx_result(
+            _f_role, {}, timeout=1.0, label="nba.context.role"
+        ) if _f_role else {}
     finally:
         try:
             _pool.shutdown(wait=False, cancel_futures=True)
@@ -11163,8 +11159,22 @@ if st.session_state.logs is not None:
         rest_status = detect_rest_days(logs, game_date)
     if b2b_status == "B2B":
         rest_status = "B2B"
-    season_avg     = nba_get_season_avg(player_id, season_str_clean, logs_l10=logs)
-    season_avg_min = nba_get_season_avg_min(player_id, season_str_clean, logs_l10=logs)
+    try:
+        _season_pts = pd.to_numeric(_season_df["PTS"], errors="coerce").dropna() if _season_df is not None else pd.Series(dtype=float)
+        _season_min = pd.to_numeric(_season_df["MIN"], errors="coerce").dropna() if _season_df is not None else pd.Series(dtype=float)
+        season_avg = round(float(_season_pts.mean()), 1) if len(_season_pts) >= 5 else None
+        season_avg_min = round(float(_season_min.mean()), 1) if len(_season_min) >= 5 else None
+    except Exception:
+        season_avg = None
+        season_avg_min = None
+    if season_avg is None and logs is not None and not logs.empty:
+        _pts_fallback = pd.to_numeric(logs["PTS"], errors="coerce").dropna()
+        if len(_pts_fallback) >= 3:
+            season_avg = round(float(_pts_fallback.mean()), 1)
+    if season_avg_min is None and logs is not None and not logs.empty:
+        _min_fallback = pd.to_numeric(logs["MIN"], errors="coerce").dropna()
+        if len(_min_fallback) >= 3:
+            season_avg_min = round(float(_min_fallback.mean()), 1)
 
     # ── Playoff minutes floor warning ────────────────────────────────
     # In playoffs, role players get buried. Flag anyone under 28 min avg
