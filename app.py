@@ -2593,6 +2593,17 @@ def espn_get_opp_pts_allowed(opp_abbr: str, _date: str = None) -> Optional[float
 
     try:
         pts_allowed_list = []
+        _opp_norm = _norm_team_abbr(opp_abbr)
+        _ESPN_REVERSE = {
+            "GSW":"GS", "SAS":"SA", "NYK":"NY", "NOP":"NO", "WAS":"WSH",
+            "BKN":"BK", "UTA":"UTAH",
+        }
+        _candidates = {_opp_norm, opp_abbr.upper(), _ESPN_REVERSE.get(_opp_norm, _opp_norm)}
+
+        def _team_matches(_abbr: str) -> bool:
+            _a = str(_abbr or "").upper()
+            return _a in _candidates or _norm_team_abbr(_a) == _opp_norm
+
         # Look back up to 30 days to find 15 completed games
         for offset in range(1, 35):
             if len(pts_allowed_list) >= 15:
@@ -2608,7 +2619,7 @@ def espn_get_opp_pts_allowed(opp_abbr: str, _date: str = None) -> Optional[float
                     # Find this team
                     team_comp = next(
                         (c for c in competitors
-                         if c.get("team", {}).get("abbreviation", "") == opp_abbr),
+                         if _team_matches(c.get("team", {}).get("abbreviation", ""))),
                         None
                     )
                     if not team_comp:
@@ -2620,7 +2631,7 @@ def espn_get_opp_pts_allowed(opp_abbr: str, _date: str = None) -> Optional[float
                     # Opponent score = the other team's score
                     opp_comp = next(
                         (c for c in competitors
-                         if c.get("team", {}).get("abbreviation", "") != opp_abbr),
+                         if not _team_matches(c.get("team", {}).get("abbreviation", ""))),
                         None
                     )
                     if opp_comp:
@@ -5391,6 +5402,7 @@ with st.expander("Runtime Diagnostics", expanded=False):
         ("pp_slate", "Slate Cache"),
         ("supabase", "Supabase Cache"),
         ("nba_logs", "NBA Logs"),
+        ("nba_context", "NBA Context"),
     ]:
         _m = _metrics.get(_name, {})
         _detail = _m.get("detail", "not checked")
@@ -11186,6 +11198,12 @@ nba_id, full_name = nba_find_player(selected_player)
 # ESPN player lookup for team abbr (already loaded in roster)
 espn_player = next((p for p in espn_get_all_players(_date=_cache_date()) if normalize_name(p["full_name"]) == normalize_name(selected_player)), None)
 player_team = _norm_team_abbr(espn_player["team_abbr"]) if espn_player else None
+if not player_team and nba_id:
+    try:
+        player_team = _norm_team_abbr(nba_get_player_team(nba_id) or "")
+    except Exception as e:
+        record_debug_error("nba.player_team_fallback", e)
+        player_team = None
 
 # Pre-fetch teammate minutes in background thread so it doesn't block button render
 if player_team:
@@ -11486,6 +11504,16 @@ if st.session_state.logs is not None:
             runtime_status_pill("NBA Data Freshness", _nba_log_metric.get("status", "info"), _nba_fresh_detail),
             unsafe_allow_html=True,
         )
+    _nba_context_metric = st.session_state.get("runtime_metrics", {}).get("nba_context", {})
+    if _nba_context_metric:
+        st.markdown(
+            runtime_status_pill(
+                "NBA Context",
+                _nba_context_metric.get("status", "info"),
+                _nba_context_metric.get("detail", ""),
+            ),
+            unsafe_allow_html=True,
+        )
 
     # ── Core stats ────────────────────────────
     baseline       = hit_rate(logs, line, side)
@@ -11636,6 +11664,35 @@ if st.session_state.logs is not None:
     elif _def_trend == "Tightening" and matchup_auto in ("Neutral", "Good"):
         # Defense is locking in — downgrade matchup
         matchup_auto = "Bad" if matchup_auto == "Neutral" else "Neutral"
+
+    _nba_context_missing = []
+    if not opp_abbr:
+        _nba_context_missing.append("next opponent")
+    if opp_abbr and opp_pts is None:
+        _nba_context_missing.append("defense points allowed")
+    if not game_date:
+        _nba_context_missing.append("game date")
+    if opp_abbr and (_h2h_full is None or getattr(_h2h_full, "empty", True)):
+        _nba_context_missing.append("H2H")
+    _critical_context_missing = any(
+        item in _nba_context_missing for item in ["next opponent", "defense points allowed", "game date"]
+    )
+    if _nba_context_missing:
+        set_runtime_metric(
+            "nba_context", "warn",
+            "Missing: " + ", ".join(_nba_context_missing[:4]),
+            player=full_name,
+            team=player_team,
+            opponent=opp_abbr,
+        )
+    else:
+        set_runtime_metric(
+            "nba_context", "ok",
+            f"Loaded opponent, defense, schedule, H2H for {full_name}",
+            player=full_name,
+            team=player_team,
+            opponent=opp_abbr,
+        )
 
     _status_ph.empty()  # clear loading message — results are about to render
     h2h_sig, h2h_avg, h2h_count = h2h_signal(h2h_df, line, side)
@@ -12571,6 +12628,21 @@ if st.session_state.logs is not None:
         pass
     _points_guardrail_applied = adjusted < _adjusted_before_points_guardrail - 0.001
 
+    _adjusted_before_context_guardrail = adjusted
+    _context_guardrail_note = ""
+    try:
+        if _critical_context_missing:
+            _hard_missing = ("next opponent" in _nba_context_missing or "game date" in _nba_context_missing)
+            if _hard_missing:
+                adjusted = min(adjusted, 0.68)
+                _context_guardrail_note = "Missing schedule/opponent context"
+            else:
+                adjusted = min(adjusted, 0.74)
+                _context_guardrail_note = "Defense context unavailable; matchup held Neutral"
+    except Exception:
+        pass
+    _context_guardrail_applied = adjusted < _adjusted_before_context_guardrail - 0.001
+
     # In playoffs, weight this-series games 3x for edge calc (matches weighted_hit_rate)
     if _IS_PLAYOFFS and opp_abbr and "MATCHUP" in logs.columns and "GAME_DATE" in logs.columns:
         try:
@@ -13271,6 +13343,12 @@ if st.session_state.logs is not None:
             f"Capped from {_adjusted_before_points_guardrail:.1%} to {adjusted:.1%} · {_points_guardrail_note}</td></tr>"
             if _points_guardrail_applied else ""
         )
+        _context_guard_row = (
+            f"<tr><td style='padding:3px 8px 3px 0;color:#6b7f96;'>Context guardrail</td>"
+            f"<td colspan='3' style='color:#ffc107;font-size:0.65rem;'>"
+            f"Capped from {_adjusted_before_context_guardrail:.1%} to {adjusted:.1%} · {_context_guardrail_note}</td></tr>"
+            if _context_guardrail_applied else ""
+        )
 
         st.markdown(f"""
         <div style='color:#f97316; font-size:0.65rem; letter-spacing:0.15em; text-transform:uppercase;
@@ -13299,6 +13377,7 @@ if st.session_state.logs is not None:
                 <td colspan='3' style='color:#6b7f96;'>{"±18pp · playoff mode" if _IS_PLAYOFFS else "±12pp · regular season"}</td>
             </tr>
             {_guard_row}
+            {_context_guard_row}
             <tr style='border-top:1px solid #1a2333; margin-top:4px;'>
                 <td style='padding:6px 8px 3px 0; color:#6b7f96;'>Final tier</td>
                 <td colspan='3' style='font-size:0.9rem; font-weight:800; color:{_tier_color};'>
