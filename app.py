@@ -8750,7 +8750,10 @@ if st.session_state.active_sport == "edge":
         Returns K logs + season K/9 + avg IP — everything needed for 6-signal model.
         """
         import requests as _req, datetime as _dtx
-        empty = {"ks": [], "k9": None, "avg_ip": None, "avg_pitches": None, "sample": 0}
+        empty = {
+            "ks": [], "k9": None, "avg_ip": None, "avg_pitches": None,
+            "sample": 0, "last_start_date": None,
+        }
         _norm   = lambda s: s.lower().strip().replace(".", "").replace("-", " ")
         _target = _norm(pitcher_name)
         _parts  = [p for p in _target.split() if len(p) > 2]
@@ -8791,7 +8794,7 @@ if st.session_state.active_sport == "edge":
 
             splits = r2.json().get("stats", [{}])[0].get("splits", [])
 
-            ks, ips, pitches = [], [], []
+            ks, ips, pitches, start_dates = [], [], [], []
             for s in splits:
                 st   = s.get("stat", {})
                 date = s.get("date", "")
@@ -8799,16 +8802,19 @@ if st.session_state.active_sport == "edge":
                 if np_v < 40:
                     continue  # skip bullpen appearances
                 try:
-                    if _dtx.date.fromisoformat(date[:10]).month < 4:
+                    start_dt = _dtx.date.fromisoformat(date[:10])
+                    if start_dt.month < 4:
                         continue  # skip spring training
                 except Exception:
-                    pass
+                    start_dt = None
                 ks.append(int(st.get("strikeOuts", 0) or 0))
                 # Parse IP (stored as float e.g. 5.1 = 5 innings + 1 out)
                 _ip_raw = float(st.get("inningsPitched", 0) or 0)
                 _ip_full = int(_ip_raw) + ((_ip_raw % 1) * 10 / 3)
                 ips.append(_ip_full)
                 pitches.append(np_v)
+                if start_dt:
+                    start_dates.append(start_dt)
 
             if not ks:
                 return empty
@@ -8826,6 +8832,7 @@ if st.session_state.active_sport == "edge":
                 "avg_ip":      _avg_ip,
                 "avg_pitches": _avg_pc,
                 "sample":      len(ks),
+                "last_start_date": max(start_dates).isoformat() if start_dates else None,
             }
 
         except Exception:
@@ -8835,13 +8842,13 @@ if st.session_state.active_sport == "edge":
     @st.cache_data(ttl=900, show_spinner=False)
     def _scanner_get_mlb_game_context(team_abbr: str) -> dict:
         """Fast team-based MLB game lookup for Edge Scanner matchup context."""
-        empty = {"opp": "", "home_team": "", "away_team": "", "venue": "", "side": ""}
+        empty = {"opp": "", "home_team": "", "away_team": "", "venue": "", "side": "", "game_date": ""}
         if not team_abbr:
             return empty
         try:
             import requests as _req, datetime as _dtx, pytz as _ptz
             et = _ptz.timezone("America/New_York")
-            for offset in (0, 1):
+            for offset in (0, 1, 2):
                 date_str = (
                     _dtx.datetime.now(et) + _dtx.timedelta(days=offset)
                 ).strftime("%Y-%m-%d")
@@ -8854,13 +8861,24 @@ if st.session_state.active_sport == "edge":
                     continue
                 for day in r.json().get("dates", []):
                     for game in day.get("games", []):
+                        status = game.get("status", {})
+                        abstract_state = str(status.get("abstractGameState", "")).lower()
+                        detailed_state = str(status.get("detailedState", "")).lower()
+                        if abstract_state in ("live", "final") or "postponed" in detailed_state:
+                            continue
                         home = game.get("teams", {}).get("home", {}).get("team", {}).get("abbreviation", "")
                         away = game.get("teams", {}).get("away", {}).get("team", {}).get("abbreviation", "")
                         venue = game.get("venue", {}).get("name", "")
                         if home.upper() == team_abbr.upper():
-                            return {"opp": away, "home_team": home, "away_team": away, "venue": venue, "side": "home"}
+                            return {
+                                "opp": away, "home_team": home, "away_team": away,
+                                "venue": venue, "side": "home", "game_date": date_str,
+                            }
                         if away.upper() == team_abbr.upper():
-                            return {"opp": home, "home_team": home, "away_team": away, "venue": venue, "side": "away"}
+                            return {
+                                "opp": home, "home_team": home, "away_team": away,
+                                "venue": venue, "side": "away", "game_date": date_str,
+                            }
         except Exception as e:
             record_debug_error("mlb.edge.game_context", e)
         return empty
@@ -8947,6 +8965,26 @@ if st.session_state.active_sport == "edge":
             _game_ctx = _scanner_get_mlb_game_context(team)
             _opp = _game_ctx.get("opp", "")
             _home = _game_ctx.get("home_team", "")
+            _game_date = _game_ctx.get("game_date", "")
+            _last_start = _data.get("last_start_date")
+
+            # Stale PrizePicks slates can keep pitchers who already started today.
+            # Starting pitchers also should not surface for tomorrow on short rest.
+            try:
+                import datetime as _dt_edge_mlb, pytz as _ptz_edge_mlb
+                _et = _ptz_edge_mlb.timezone("America/New_York")
+                _today_et = _dt_edge_mlb.datetime.now(_et).date()
+                _target_dt = _dt_edge_mlb.date.fromisoformat(_game_date) if _game_date else _today_et
+                _last_dt = _dt_edge_mlb.date.fromisoformat(_last_start) if _last_start else None
+                if _last_dt:
+                    if _last_dt >= _today_et:
+                        return None
+                    _days_to_target = (_target_dt - _last_dt).days
+                    if 0 <= _days_to_target < 4:
+                        return None
+            except Exception:
+                pass
+
             _opp_k = _scanner_get_mlb_opp_k_rate(_opp) if _opp else None
             _park_sig = _scanner_mlb_park_signal(_home) if _home else "Neutral"
 
@@ -9044,6 +9082,8 @@ if st.session_state.active_sport == "edge":
                 "park":     _park_sig,
                 "pc":       _avg_pc,
                 "pc_ceiling": _pc_ceiling,
+                "game_date": _game_date,
+                "last_start": _last_start,
             }
         except Exception:
             return None
@@ -9075,11 +9115,27 @@ if st.session_state.active_sport == "edge":
             label_visibility="collapsed"
         )
     with _ec2:
+        _EDGE_STAT_OPTIONS = {
+            "NBA": [
+                "All Stats", "Points", "Rebounds", "Assists", "3PM",
+                "PRA", "PR", "PA", "RA", "Steals", "Blocks",
+            ],
+            "MLB": [
+                "All Stats", "Strikeouts", "Hits", "Total Bases",
+                "Hits+Runs+RBIs", "Earned Runs Allowed",
+            ],
+            "Both": [
+                "All Stats", "Points", "Strikeouts", "Rebounds", "Assists",
+                "3PM", "PRA", "PR", "PA", "RA", "Steals", "Blocks",
+                "Hits", "Total Bases", "Hits+Runs+RBIs", "Earned Runs Allowed",
+            ],
+        }
+        _stat_options = _EDGE_STAT_OPTIONS.get(_edge_sport, _EDGE_STAT_OPTIONS["Both"])
+        if st.session_state.get("edge_stat_filter") not in _stat_options:
+            st.session_state.edge_stat_filter = _stat_options[0]
         _edge_stat = st.selectbox(
             "Stat filter",
-            ["All Stats", "Points", "Strikeouts", "Rebounds", "Assists",
-             "3PM", "PRA", "PR", "PA", "RA", "Steals", "Blocks",
-             "Hits", "Total Bases", "Hits+Runs+RBIs", "Earned Runs Allowed"],
+            _stat_options,
             key="edge_stat_filter",
             label_visibility="collapsed"
         )
@@ -9353,6 +9409,10 @@ if st.session_state.active_sport == "edge":
                     _mlb_ctx_html += (
                         f"<span>Opp: <strong style='color:#f0f4f8;'>{_r.get('opp', '?')}</strong></span>"
                     )
+                    if _r.get("game_date"):
+                        _mlb_ctx_html += (
+                            f"<span>Game: <strong style='color:#f0f4f8;'>{_r.get('game_date')}</strong></span>"
+                        )
                     if _r.get("opp_k") is not None:
                         _mlb_ctx_html += (
                             f"<span>Opp K%: <strong style='color:#f0f4f8;'>{_r.get('opp_k')}</strong></span>"
