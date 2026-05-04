@@ -1118,7 +1118,7 @@ for key, default in [
     ("defense_data", None), ("tracker", []), ("active_tab", "player"),
     ("recent_players", []), ("supabase_loaded", False), ("show_share", False),
     ("active_sport", "nba"), ("edge_results", []), ("edge_running", False), ("edge_manual_props", []), ("edge_manual_props", []), ("edge_jump_player", None), ("edge_jump_pitcher", None), ("edge_jump_line", None), ("edge_jump_side", "Over"), ("edge_jump_prop", "Strikeouts"),
-    ("runtime_debug_errors", []),
+    ("runtime_debug_errors", []), ("runtime_metrics", {}),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -1136,6 +1136,66 @@ def record_debug_error(area: str, err) -> None:
         st.session_state.runtime_debug_errors = st.session_state.runtime_debug_errors[-20:]
     except Exception:
         pass
+
+
+def set_runtime_metric(key: str, status: str, detail: str = "", **extra) -> None:
+    """Record lightweight app health/freshness metadata for diagnostics."""
+    try:
+        payload = {
+            "status": status,
+            "detail": str(detail)[:500],
+            "time": datetime.utcnow().isoformat() + "Z",
+        }
+        payload.update(extra)
+        st.session_state.runtime_metrics[key] = payload
+    except Exception:
+        pass
+
+
+def format_utc_age(iso_ts: str) -> str:
+    """Human-friendly age for UTC timestamps."""
+    try:
+        ts = pd.to_datetime(iso_ts, utc=True, errors="coerce")
+        if pd.isna(ts):
+            return "unknown"
+        mins = max(0, int((pd.Timestamp.utcnow() - ts).total_seconds() / 60))
+        if mins < 1:
+            return "just now"
+        if mins < 60:
+            return f"{mins} min ago"
+        hrs = mins // 60
+        rem = mins % 60
+        if hrs < 24:
+            return f"{hrs}h {rem}m ago"
+        return f"{hrs // 24}d ago"
+    except Exception:
+        return "unknown"
+
+
+def runtime_status_pill(label: str, status: str, detail: str = "") -> str:
+    colors = {
+        "ok": ("#00e896", "rgba(0,232,150,0.10)"),
+        "warn": ("#ffc107", "rgba(255,193,7,0.10)"),
+        "error": ("#ff3d5c", "rgba(255,61,92,0.10)"),
+        "info": ("#00c4cc", "rgba(0,196,204,0.10)"),
+        "stale": ("#f97316", "rgba(249,115,22,0.10)"),
+    }
+    col, bg = colors.get(str(status).lower(), colors["info"])
+    detail_html = f"<span style='color:#7d93ab;'>{detail}</span>" if detail else ""
+    return (
+        f"<span style='display:inline-flex;align-items:center;gap:6px;"
+        f"font-family:JetBrains Mono,monospace;font-size:0.6rem;color:{col};"
+        f"background:{bg};border:1px solid {col}44;border-radius:999px;"
+        f"padding:4px 10px;margin:0 6px 6px 0;'>"
+        f"<strong style='color:{col};'>{label}</strong>"
+        f"{detail_html}"
+        f"</span>"
+    )
+
+
+def masked_env_status(*names: str) -> str:
+    found = [n for n in names if os.environ.get(n)]
+    return ", ".join(found) if found else "missing"
 
 # Load tracker from Supabase on first load
 # ─────────────────────────────────────────────
@@ -2976,12 +3036,22 @@ def get_cached_pp_props_from_supabase(sport_filter: str, max_age_minutes: int = 
             return None
         age_minutes = (pd.Timestamp.utcnow() - fetched_at).total_seconds() / 60
         if age_minutes > max_age_minutes:
+            set_runtime_metric(
+                "pp_slate", "stale",
+                f"Supabase slate too old ({age_minutes:.0f} min)",
+                source="supabase", fetched_at=str(fetched_at),
+            )
             return None
         props = _json.loads(rows[0].get("props_json", "[]"))
         if isinstance(props, list) and props:
             st.session_state["edge_fetch_debug"] = [
                 f"Using Supabase cached PrizePicks slate ({age_minutes:.0f} min old)"
             ]
+            set_runtime_metric(
+                "pp_slate", "ok",
+                f"Supabase cache · {len(props)} props · {age_minutes:.0f} min old",
+                source="supabase", fetched_at=fetched_at.isoformat(),
+            )
             return props
     except Exception as e:
         record_debug_error("pp_cache.load", e)
@@ -3021,6 +3091,11 @@ def save_pp_props_to_supabase(sport_filter: str, props: list) -> bool:
             st.session_state["edge_cache_save_status"] = (
                 f"Supabase cache saved: edge_slate_{sport_filter.lower()} ({len(props)} props)."
             )
+            set_runtime_metric(
+                "supabase", "ok",
+                f"Saved pp_slate_cache ({len(props)} props)",
+                table="pp_slate_cache",
+            )
             return True
 
         # Some users accidentally create props_json as json/jsonb instead of text.
@@ -3036,6 +3111,11 @@ def save_pp_props_to_supabase(sport_filter: str, props: list) -> bool:
         if r2.ok:
             st.session_state["edge_cache_save_status"] = (
                 f"Supabase cache saved: edge_slate_{sport_filter.lower()} ({len(props)} props)."
+            )
+            set_runtime_metric(
+                "supabase", "ok",
+                f"Saved pp_slate_cache ({len(props)} props)",
+                table="pp_slate_cache",
             )
             return True
 
@@ -3064,6 +3144,11 @@ def get_cached_pp_props_from_local(sport_filter: str, max_age_minutes: int = 720
             return None
         age_minutes = (time.time() - os.path.getmtime(path)) / 60
         if age_minutes > max_age_minutes:
+            set_runtime_metric(
+                "pp_slate", "stale",
+                f"Local slate too old ({age_minutes:.0f} min)",
+                source="local",
+            )
             return None
         with open(path, "r", encoding="utf-8") as f:
             payload = _json.load(f)
@@ -3072,6 +3157,12 @@ def get_cached_pp_props_from_local(sport_filter: str, max_age_minutes: int = 720
             st.session_state["edge_fetch_debug"] = [
                 f"Using local cached PrizePicks slate ({age_minutes:.0f} min old)"
             ]
+            set_runtime_metric(
+                "pp_slate", "ok",
+                f"Local cache · {len(props)} props · {age_minutes:.0f} min old",
+                source="local",
+                fetched_at=datetime.utcfromtimestamp(os.path.getmtime(path)).isoformat() + "Z",
+            )
             return props
     except Exception as e:
         record_debug_error("pp_cache.local_load", e)
@@ -5190,6 +5281,88 @@ with _sp3:
         st.session_state.active_sport = "edge"
         st.rerun()
 
+
+with st.expander("Runtime Diagnostics", expanded=False):
+    _metrics = st.session_state.get("runtime_metrics", {})
+    _sb_url_status = masked_env_status(
+        "SUPABASE_URL", "SUPABASE_PROJECT_URL", "NEXT_PUBLIC_SUPABASE_URL"
+    )
+    _sb_key_status = masked_env_status(
+        "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_SERVICE_KEY", "SUPABASE_KEY",
+        "SUPABASE_ANON_KEY", "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+    )
+    _diag_pills = [
+        runtime_status_pill(
+            "Supabase URL",
+            "ok" if _sb_url_status != "missing" else "warn",
+            _sb_url_status,
+        ),
+        runtime_status_pill(
+            "Supabase Key",
+            "ok" if _sb_key_status != "missing" else "warn",
+            _sb_key_status,
+        ),
+    ]
+    for _name, _label in [
+        ("prizepicks", "PrizePicks"),
+        ("pp_slate", "Slate Cache"),
+        ("supabase", "Supabase Cache"),
+        ("nba_logs", "NBA Logs"),
+    ]:
+        _m = _metrics.get(_name, {})
+        _detail = _m.get("detail", "not checked")
+        if _m.get("fetched_at"):
+            _detail += f" · {format_utc_age(_m.get('fetched_at'))}"
+        _diag_pills.append(
+            runtime_status_pill(_label, _m.get("status", "info"), _detail)
+        )
+    st.markdown("".join(_diag_pills), unsafe_allow_html=True)
+
+    _dbg = st.session_state.get("edge_fetch_debug", [])
+    if _dbg:
+        st.markdown(
+            "<div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;"
+            "color:#7d93ab;line-height:1.7;margin-top:0.4rem;'>"
+            + "<br>".join(f"PrizePicks: {d}" for d in _dbg[-5:])
+            + "</div>",
+            unsafe_allow_html=True,
+        )
+    if st.button("Run Supabase Check", key="runtime_supabase_check"):
+        try:
+            _sb = get_supabase_client()
+            if not _sb:
+                set_runtime_metric("supabase", "error", "No Supabase client/config detected")
+                st.warning("No Supabase client/config detected.")
+            else:
+                import requests as _rq_diag
+                _rdiag = _rq_diag.get(
+                    f"{_sb.url}/rest/v1/pp_slate_cache?select=cache_key,fetched_at&limit=1",
+                    headers=_sb.hdrs,
+                    timeout=6,
+                )
+                if _rdiag.ok:
+                    set_runtime_metric("supabase", "ok", "Connection check passed")
+                    st.success("Supabase connection check passed.")
+                else:
+                    _detail = f"HTTP {_rdiag.status_code}: {_rdiag.text[:160]}"
+                    set_runtime_metric("supabase", "error", _detail)
+                    st.warning(_detail)
+        except Exception as _diag_err:
+            set_runtime_metric("supabase", "error", _diag_err)
+            st.warning(f"Supabase check failed: {_diag_err}")
+    _errs = st.session_state.get("runtime_debug_errors", [])
+    if _errs:
+        _err_html = "".join(
+            f"<div><span style='color:#ff3d5c;'>{e.get('area','')}</span> · "
+            f"<span style='color:#7d93ab;'>{e.get('message','')}</span></div>"
+            for e in _errs[-6:]
+        )
+        st.markdown(
+            "<div style='font-family:JetBrains Mono,monospace;font-size:0.58rem;"
+            "color:#7d93ab;line-height:1.7;margin-top:0.5rem;'>"
+            f"{_err_html}</div>",
+            unsafe_allow_html=True,
+        )
 
 st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
 
@@ -8474,10 +8647,21 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
             save_pp_props_to_supabase(sport_filter, cached_props)
             return cached_props
         detail = " | ".join(fetch_notes[-8:]) if fetch_notes else "No attempts completed"
+        set_runtime_metric("prizepicks", "error", detail)
         record_debug_error("prizepicks.fetch", detail)
         raise RuntimeError(f"PrizePicks returned no props. {detail}")
 
     st.session_state["edge_fetch_debug"] = fetch_notes[-12:]
+    set_runtime_metric(
+        "prizepicks", "ok",
+        f"Live fetch · {len(props)} props · {sport_filter}",
+        fetched_at=datetime.utcnow().isoformat() + "Z",
+    )
+    set_runtime_metric(
+        "pp_slate", "ok",
+        f"Live slate · {len(props)} props",
+        source="live", fetched_at=datetime.utcnow().isoformat() + "Z",
+    )
     save_pp_props_to_supabase(sport_filter, props)
     save_pp_props_to_local(sport_filter, props)
     return props
@@ -8610,6 +8794,48 @@ if st.session_state.active_sport == "edge":
         if "turnover" in s:
             return pd.to_numeric(logs["TO"], errors="coerce"), "Turnovers"
         return None, stat
+
+    def scanner_grade_and_reasons(result: dict) -> Tuple[str, str, List[str]]:
+        """Human-readable scanner grade and concise reason chips."""
+        adj = float(result.get("adj", 0) or 0)
+        edge = float(result.get("edge_raw", 0) or 0)
+        cons = float(result.get("cons", 0) or 0)
+        samples = int(result.get("samples", 0) or 0)
+        reasons = []
+
+        if adj >= 78 and edge >= 2 and cons >= 60:
+            grade, color = "A+ Edge", "#00e896"
+        elif adj >= 72 and edge >= 1:
+            grade, color = "A Edge", "#22c55e"
+        elif adj >= 65:
+            grade, color = "B Edge", "#ffc107"
+        elif samples < 5 or cons < 35:
+            grade, color = "Data Thin", "#f97316"
+        else:
+            grade, color = "Edge Play", "#9aaec4"
+
+        if result.get("sport") == "MLB":
+            if result.get("l3") is not None:
+                reasons.append(f"L3 avg {result['l3']}")
+            if result.get("opp_k") is not None:
+                reasons.append(f"Opponent K% {result['opp_k']}%")
+            if result.get("pc_ceiling") is not None:
+                reasons.append(f"Pitch-count ceiling {result['pc_ceiling']}")
+            if result.get("park") and result.get("park") != "Neutral":
+                reasons.append(f"Park {result['park'].lower()}")
+        else:
+            if result.get("l3") is not None:
+                reasons.append(f"L3 avg {result['l3']}")
+            if result.get("opp"):
+                reasons.append(f"Next vs {result['opp']}")
+            if result.get("matchup") and result.get("matchup") != "Neutral":
+                reasons.append(f"Defense matchup {result['matchup'].lower()}")
+
+        if edge:
+            reasons.append(f"Avg edge {edge:+.1f}")
+        if samples:
+            reasons.append(f"{samples} game sample")
+        return grade, color, reasons[:4]
 
 
     def run_nba_edge_check(player_name: str, line: float, stat: str,
@@ -9084,6 +9310,7 @@ if st.session_state.active_sport == "edge":
                 "pc_ceiling": _pc_ceiling,
                 "game_date": _game_date,
                 "last_start": _last_start,
+                "l3":       round(_l3, 1),
             }
         except Exception:
             return None
@@ -9193,6 +9420,15 @@ if st.session_state.active_sport == "edge":
                 st.warning(_cache_status)
             else:
                 st.caption(_cache_status)
+        _slate_metric = st.session_state.get("runtime_metrics", {}).get("pp_slate", {})
+        if _slate_metric:
+            _fresh_detail = _slate_metric.get("detail", "")
+            if _slate_metric.get("fetched_at"):
+                _fresh_detail += f" · {format_utc_age(_slate_metric.get('fetched_at'))}"
+            st.markdown(
+                runtime_status_pill("Slate Freshness", _slate_metric.get("status", "info"), _fresh_detail),
+                unsafe_allow_html=True,
+            )
 
         if not _all_props:
             fetch_all_pp_props.clear()
@@ -9370,6 +9606,18 @@ if st.session_state.active_sport == "edge":
 
             # Render each result as a card
             for _r in _with_edge:
+                _grade_lbl, _grade_col, _reason_list = scanner_grade_and_reasons(_r)
+                _reason_html = "".join(
+                    f"<span style='font-family:JetBrains Mono,monospace;font-size:0.58rem;"
+                    f"color:#9aaec4;background:rgba(255,255,255,0.04);"
+                    f"border:1px solid rgba(255,255,255,0.08);border-radius:999px;"
+                    f"padding:3px 9px;margin-right:5px;margin-bottom:5px;'>{_why}</span>"
+                    for _why in _reason_list
+                )
+                _reason_row_html = (
+                    f"<div style='display:flex;flex-wrap:wrap;margin-bottom:8px;'>{_reason_html}</div>"
+                    if _reason_html else ""
+                )
                 _sport_icon = "🏀" if _r["sport"] == "NBA" else "⚾"
                 _is_strong  = _r["adj"] >= 72
                 _is_lean    = 63 <= _r["adj"] < 72
@@ -9449,6 +9697,8 @@ if st.session_state.active_sport == "edge":
                     f"<div style='font-family:JetBrains Mono,monospace;"
                     f"font-size:0.6rem;color:#6b7f96;'>"
                     f"+{_r['edge_pct']}% vs 50% breakeven</div>"
+                    f"<div style='font-family:JetBrains Mono,monospace;font-size:0.58rem;"
+                    f"color:{_grade_col};margin-top:3px;font-weight:800;'>{_grade_lbl}</div>"
                     f"</div></div>"
 
                     # Row 2: stats
@@ -9465,6 +9715,7 @@ if st.session_state.active_sport == "edge":
                     f"{_mlb_ctx_html}"
                     f"<span style='color:#6b7f96;'>{_r['samples']} starts/games</span>"
                     f"</div>"
+                    f"{_reason_row_html}"
 
                     # Probability bar
                     f"<div style='background:rgba(255,255,255,0.05);border-radius:4px;"
@@ -10886,8 +11137,22 @@ if fetch:
             )
             # Merge playoff games OUTSIDE the cache so they always reflect latest
             _all_logs = _merge_playoff_logs(_all_logs, player_id, season_str_clean, 15)
+            if _all_logs is not None and not getattr(_all_logs, "empty", True):
+                try:
+                    _latest_log = pd.to_datetime(_all_logs.iloc[0]["GAME_DATE"], errors="coerce")
+                    _latest_txt = _latest_log.strftime("%b %d") if pd.notna(_latest_log) else "unknown"
+                except Exception:
+                    _latest_txt = "unknown"
+                set_runtime_metric(
+                    "nba_logs", "ok",
+                    f"{full_name} · latest game { _latest_txt } · {len(_all_logs)} rows",
+                    player=full_name,
+                    latest_game=_latest_txt,
+                    fetched_at=datetime.utcnow().isoformat() + "Z",
+                )
         except RuntimeError:
             _all_logs = None  # NBA API failed — don't cache, show retry
+            set_runtime_metric("nba_logs", "error", f"{full_name} game logs failed")
         st.session_state.logs = _all_logs.head(n_games) if _all_logs is not None and not getattr(_all_logs, "empty", True) else None
         _status_ph.markdown("""
         <div style='font-family:JetBrains Mono,monospace;font-size:0.7rem;
@@ -10979,6 +11244,16 @@ if st.session_state.logs is not None:
         ]
     except Exception:
         _game_log_display["Used in Formula"] = "Yes"
+
+    _nba_log_metric = st.session_state.get("runtime_metrics", {}).get("nba_logs", {})
+    if _nba_log_metric:
+        _nba_fresh_detail = _nba_log_metric.get("detail", "")
+        if _nba_log_metric.get("fetched_at"):
+            _nba_fresh_detail += f" · fetched {format_utc_age(_nba_log_metric.get('fetched_at'))}"
+        st.markdown(
+            runtime_status_pill("NBA Data Freshness", _nba_log_metric.get("status", "info"), _nba_fresh_detail),
+            unsafe_allow_html=True,
+        )
 
     # ── Core stats ────────────────────────────
     baseline       = hit_rate(logs, line, side)
