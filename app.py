@@ -1180,6 +1180,157 @@ button[key="mobile_quick_analyze"] {
     font-family: var(--font-mono) !important;
     font-size: 0.62rem; color: var(--text3); line-height: 1.6;
 }
+
+/* ══════════════════════════════════════════
+   PropIQ V5.5 — Scanner polish
+══════════════════════════════════════════ */
+.v55-hero {
+    background: linear-gradient(135deg, rgba(0,196,204,0.10), rgba(255,255,255,0.025));
+    border: 1px solid rgba(0,196,204,0.18);
+    border-radius: 14px;
+    padding: 1rem 1.15rem;
+    margin-bottom: 0.85rem;
+    box-shadow: 0 8px 28px rgba(0,0,0,0.25);
+}
+.v55-kicker {
+    font-family: var(--font-mono);
+    font-size: 0.58rem;
+    color: var(--accent);
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    font-weight: 800;
+    margin-bottom: 5px;
+}
+.v55-title {
+    font-family: var(--font-display);
+    font-size: 1.25rem;
+    font-weight: 900;
+    color: var(--text);
+    letter-spacing: -0.5px;
+    line-height: 1.15;
+}
+.v55-subcopy {
+    font-size: 0.78rem;
+    color: var(--text2);
+    line-height: 1.65;
+    margin-top: 8px;
+    max-width: 760px;
+}
+.v55-command-note {
+    font-family: var(--font-mono);
+    font-size: 0.58rem;
+    color: var(--text3);
+    margin: -0.25rem 0 0.8rem 0;
+    line-height: 1.6;
+}
+.edge-card-v55 {
+    background: linear-gradient(135deg, rgba(255,255,255,0.035), rgba(255,255,255,0.012));
+    border: 1px solid rgba(255,255,255,0.08);
+    border-left: 4px solid var(--accent);
+    border-radius: 0 12px 12px 0;
+    padding: 1rem 1.1rem;
+    margin-bottom: 0.75rem;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.28);
+    animation: fadeSlideUp 0.3s ease both;
+}
+.edge-card-v55.strong { border-left-color: var(--green); background: linear-gradient(135deg, rgba(0,232,150,0.07), rgba(255,255,255,0.015)); }
+.edge-card-v55.lean { border-left-color: var(--yellow); background: linear-gradient(135deg, rgba(255,193,7,0.055), rgba(255,255,255,0.015)); }
+.edge-top-v55 {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 1rem;
+    align-items: start;
+}
+.edge-player-v55 {
+    font-family: var(--font-display);
+    font-size: 1.05rem;
+    font-weight: 900;
+    color: var(--text);
+    letter-spacing: -0.25px;
+    line-height: 1.2;
+}
+.edge-meta-v55 {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-top: 6px;
+}
+.edge-pill-v55 {
+    font-family: var(--font-mono);
+    font-size: 0.55rem;
+    color: var(--text2);
+    background: rgba(255,255,255,0.045);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 999px;
+    padding: 3px 9px;
+    white-space: nowrap;
+}
+.edge-pill-v55.accent { color: var(--accent); background: rgba(0,196,204,0.08); border-color: rgba(0,196,204,0.22); }
+.edge-pill-v55.warn { color: var(--orange); background: rgba(255,112,67,0.08); border-color: rgba(255,112,67,0.22); }
+.edge-score-v55 {
+    display: grid;
+    grid-template-columns: repeat(3, auto);
+    gap: 0.75rem;
+    text-align: right;
+}
+.edge-score-item-v55 span {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 0.5rem;
+    color: var(--text3);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    margin-bottom: 2px;
+}
+.edge-score-item-v55 strong {
+    display: block;
+    font-family: var(--font-display);
+    font-size: 1.05rem;
+    font-weight: 900;
+    color: var(--text);
+    line-height: 1.1;
+}
+.edge-score-item-v55 strong.green { color: var(--green); }
+.edge-score-item-v55 strong.yellow { color: var(--yellow); }
+.edge-score-item-v55 strong.red { color: var(--red); }
+.edge-reasons-v55 {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 0.75rem;
+}
+.edge-bar-v55 {
+    height: 5px;
+    background: rgba(255,255,255,0.055);
+    border-radius: 999px;
+    overflow: hidden;
+    margin-top: 0.85rem;
+}
+.edge-bar-v55 > div {
+    height: 100%;
+    border-radius: 999px;
+}
+
+@media (max-width: 768px) {
+    .v55-hero { padding: 0.9rem; border-radius: 12px; }
+    .v55-title { font-size: 1.05rem; }
+    .v55-subcopy { font-size: 0.74rem; }
+    .edge-card-v55 { padding: 0.9rem; }
+    .edge-top-v55 { grid-template-columns: 1fr; gap: 0.75rem; }
+    .edge-score-v55 {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        text-align: left;
+        gap: 0.45rem;
+    }
+    .edge-score-item-v55 {
+        background: rgba(255,255,255,0.035);
+        border: 1px solid rgba(255,255,255,0.06);
+        border-radius: 8px;
+        padding: 0.5rem;
+    }
+    .edge-score-item-v55 strong { font-size: 0.95rem; }
+    .edge-pill-v55 { font-size: 0.5rem; padding: 3px 7px; }
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -9878,13 +10029,14 @@ if st.session_state.active_sport == "edge":
                 unsafe_allow_html=True)
 
     st.markdown("""
-    <div style='background:rgba(0,196,204,0.05);border:1px solid rgba(0,196,204,0.15);
-    border-radius:12px;padding:0.85rem 1.1rem;margin-bottom:1rem;
-    font-family:DM Sans,sans-serif;font-size:0.82rem;color:#9aaec4;line-height:1.7;'>
-        MLB-only scanner focused on pitcher props. It ranks by
-        <strong style='color:#f0f4f8;'>calibrated edge</strong>, which shrinks the fast model
-        toward 50% unless opponent, pitch-count, and sample context are strong.
-        Use this as a shortlist, then deep-dive the best few pitchers.
+    <div class='v55-hero'>
+        <div class='v55-kicker'>V5.5 Edge Board</div>
+        <div class='v55-title'>MLB pitcher props, filtered into a cleaner shortlist.</div>
+        <div class='v55-subcopy'>
+            Scan PrizePicks lines, separate Strikeouts from Pitcher Outs, and rank only calibrated
+            candidates. Cards now lead with model, edge, line context, and risk tags so you can
+            decide what deserves a deep dive.
+        </div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -9917,8 +10069,7 @@ if st.session_state.active_sport == "edge":
 
     # Breakeven thresholds by entry size
     st.markdown(
-        "<div style='font-family:JetBrains Mono,monospace;font-size:0.58rem;"
-        "color:#6b7f96;margin-bottom:0.75rem;'>"
+        "<div class='v55-command-note'>"
         "Scanner edge is measured vs a conservative 55% action threshold, not raw 50%. "
         "Deep-dive before adding any leg."
         "</div>",
@@ -10171,17 +10322,13 @@ if st.session_state.active_sport == "edge":
             for _r in _with_edge:
                 _grade_lbl, _grade_col, _reason_list = scanner_grade_and_reasons(_r)
                 _reason_html = "".join(
-                    f"<span style='font-family:JetBrains Mono,monospace;font-size:0.58rem;"
-                    f"color:#9aaec4;background:rgba(255,255,255,0.04);"
-                    f"border:1px solid rgba(255,255,255,0.08);border-radius:999px;"
-                    f"padding:3px 9px;margin-right:5px;margin-bottom:5px;'>{_why}</span>"
+                    f"<span class='edge-pill-v55'>{_why}</span>"
                     for _why in _reason_list
                 )
                 _reason_row_html = (
-                    f"<div style='display:flex;flex-wrap:wrap;margin-bottom:8px;'>{_reason_html}</div>"
+                    f"<div class='edge-reasons-v55'>{_reason_html}</div>"
                     if _reason_html else ""
                 )
-                _sport_icon = "🏀" if _r["sport"] == "NBA" else "⚾"
                 _is_strong  = _r["adj"] >= 67 and _r["edge_pct"] >= 7
                 _is_lean    = (60 <= _r["adj"] < 67) or (3 <= _r["edge_pct"] < 7)
                 _tier_lbl   = ("Strong Over" if _is_strong else
@@ -10193,110 +10340,61 @@ if st.session_state.active_sport == "edge":
                                "rgba(255,255,255,0.02)")
                 _border_col = (_tier_col + "33")
                 _goblin_tag = (
-                    "<span style='background:rgba(255,61,92,0.15);"
-                    "border:1px solid rgba(255,61,92,0.3);border-radius:4px;"
-                    "padding:1px 7px;font-size:0.55rem;color:#ff3d5c;"
-                    "font-weight:700;margin-left:6px;'>🔴 GOBLIN</span>"
+                    "<span class='edge-pill-v55 warn'>Goblin</span>"
                     if _r.get("is_goblin") else ""
                 )
                 _bar_w = min(100, int(_r["adj"]))
                 _edge_raw_col = "#00e896" if _r["edge_raw"] > 0 else "#ff3d5c"
-                _mlb_ctx_html = ""
-                _nba_ctx_html = ""
-                if _r["sport"] == "NBA":
-                    if _r.get("opp"):
-                        _nba_ctx_html += (
-                            f"<span>Opp: <strong style='color:#f0f4f8;'>{_r.get('opp')}</strong></span>"
-                        )
-                    if _r.get("venue"):
-                        _nba_ctx_html += (
-                            f"<span>Venue: <strong style='color:#f0f4f8;'>{_r.get('venue')}</strong></span>"
-                        )
-                    if _r.get("l3") is not None:
-                        _nba_ctx_html += (
-                            f"<span>L3: <strong style='color:#f0f4f8;'>{_r.get('l3')}</strong></span>"
-                        )
-                if _r["sport"] == "MLB":
-                    _mlb_ctx_html += (
-                        f"<span>Opp: <strong style='color:#f0f4f8;'>{_r.get('opp', '?')}</strong></span>"
-                    )
-                    if _r.get("game_date"):
-                        _mlb_ctx_html += (
-                            f"<span>Game: <strong style='color:#f0f4f8;'>{_r.get('game_date')}</strong></span>"
-                        )
-                    if _r.get("opp_k") is not None:
-                        _mlb_ctx_html += (
-                            f"<span>Opp K%: <strong style='color:#f0f4f8;'>{_r.get('opp_k')}</strong></span>"
-                        )
-                    if _r.get("market_snapshots"):
-                        _move = float(_r.get("market_open_move") or _r.get("market_move") or 0)
-                        _move_col = "#00e896" if _move > 0 else ("#ff3d5c" if _move < 0 else "#9aaec4")
-                        _open_line = _r.get("market_open_line")
-                        _market_text = f"{_open_line} → {_r['line']} ({_move:+.1f})" if _open_line is not None else f"{_move:+.1f}"
-                        _mlb_ctx_html += (
-                            f"<span>Market: <strong style='color:{_move_col};'>{_market_text}</strong></span>"
-                        )
-                    _mlb_ctx_html += (
-                        f"<span>Park: <strong style='color:#f0f4f8;'>{_r.get('park', 'Neutral')}</strong></span>"
-                    )
+                _card_class = "strong" if _is_strong else ("lean" if _is_lean else "")
+                _model_color_class = "green" if _r["adj"] >= 67 else ("yellow" if _r["adj"] >= 60 else "")
+                _edge_color_class = "green" if _r["edge_pct"] >= 7 else ("yellow" if _r["edge_pct"] >= 3 else "")
+                _risk_pills = ""
+                if _r.get("opp") == "TBD":
+                    _risk_pills += "<span class='edge-pill-v55 warn'>Opponent TBD</span>"
+                if float(_r.get("reliability", 0) or 0) < 68:
+                    _risk_pills += "<span class='edge-pill-v55 warn'>Low reliability</span>"
+                if _r.get("pc_ceiling") is not None and _r.get("pc_ceiling") <= _r["line"] + (0.5 if _r["stat"] == "Strikeouts" else 1.5):
+                    _risk_pills += "<span class='edge-pill-v55 warn'>Ceiling tight</span>"
+                _game_pill = f"<span class='edge-pill-v55'>Game {_r.get('game_date')}</span>" if _r.get("game_date") else ""
+                _opp_k_pill = f"<span class='edge-pill-v55'>Opp K% {_r.get('opp_k')}</span>" if _r.get("opp_k") is not None else ""
+                _ctx_pills = (
+                    f"<span class='edge-pill-v55 accent'>{_r['stat']}</span>"
+                    f"<span class='edge-pill-v55'>Over {_r['line']}</span>"
+                    f"<span class='edge-pill-v55'>vs {_r.get('opp', 'TBD')}</span>"
+                    f"{_game_pill}"
+                    f"{_opp_k_pill}"
+                    f"<span class='edge-pill-v55'>Park {_r.get('park', 'Neutral')}</span>"
+                    f"{_goblin_tag}{_risk_pills}"
+                )
+                if _r.get("market_snapshots"):
+                    _move = float(_r.get("market_open_move") or _r.get("market_move") or 0)
+                    _open_line = _r.get("market_open_line")
+                    _market_text = f"{_open_line} → {_r['line']} ({_move:+.1f})" if _open_line is not None else f"{_move:+.1f}"
+                    _ctx_pills += f"<span class='edge-pill-v55 accent'>Market {_market_text}</span>"
 
                 st.markdown(
-                    f"<div style='background:{_tier_bg};"
-                    f"border:1px solid {_border_col};"
-                    f"border-left:4px solid {_tier_col};"
-                    f"border-radius:0 12px 12px 0;"
-                    f"padding:0.9rem 1.1rem;margin-bottom:0.6rem;"
-                    f"animation:fadeSlideUp 0.3s ease both;'>"
-
-                    # Row 1: player + tier badge
-                    f"<div style='display:flex;justify-content:space-between;"
-                    f"align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:6px;'>"
-                    f"<div style='display:flex;align-items:center;gap:8px;'>"
-                    f"<span style='font-size:1.1rem;'>{_sport_icon}</span>"
+                    f"<div class='edge-card-v55 {_card_class}'>"
+                    f"<div class='edge-top-v55'>"
                     f"<div>"
-                    f"<span style='font-family:Plus Jakarta Sans,sans-serif;"
-                    f"font-size:0.95rem;font-weight:800;color:#f0f4f8;'>"
-                    f"{_r['player']}</span>{_goblin_tag}"
-                    f"<div style='font-family:JetBrains Mono,monospace;"
-                    f"font-size:0.6rem;color:#6b7f96;margin-top:2px;'>"
-                    f"{_r['sport']} · {_r['stat']} · Over {_r['line']}</div>"
-                    f"</div></div>"
-                    f"<div style='text-align:right;'>"
-                    f"<div style='font-family:Plus Jakarta Sans,sans-serif;"
-                    f"font-size:0.82rem;font-weight:800;color:{_tier_col};'>"
-                    f"{_tier_lbl}</div>"
-                    f"<div style='font-family:JetBrains Mono,monospace;"
-                    f"font-size:0.6rem;color:#6b7f96;'>"
-                    f"+{_r['edge_pct']}% calibrated edge vs 55%</div>"
-                    f"<div style='font-family:JetBrains Mono,monospace;font-size:0.58rem;"
-                    f"color:{_grade_col};margin-top:3px;font-weight:800;'>{_grade_lbl}</div>"
-                    f"</div></div>"
-
-                    # Row 2: stats
-                    f"<div style='display:flex;gap:16px;flex-wrap:wrap;"
-                    f"font-family:JetBrains Mono,monospace;font-size:0.62rem;"
-                    f"color:#9aaec4;margin-bottom:8px;'>"
-                    f"<span>Model: <strong style='color:{_tier_col};'>"
-                    f"{_r['adj']}%</strong></span>"
-                    f"<span>Raw: <strong style='color:#7d93ab;'>"
-                    f"{_r.get('raw_adj', _r['adj'])}%</strong></span>"
-                    f"<span>Reliability: <strong style='color:#f0f4f8;'>"
-                    f"{_r.get('reliability', '—')}%</strong></span>"
-                    f"<span>Avg: <strong style='color:#f0f4f8;'>{_r['avg']}</strong></span>"
-                    f"<span>Edge: <strong style='color:{_edge_raw_col};'>"
-                    f"{_r['edge_raw']:+.1f}</strong></span>"
-                    f"<span>Consistency: <strong style='color:#f0f4f8;'>{_r['cons']}%</strong></span>"
-                    f"{_nba_ctx_html}"
-                    f"{_mlb_ctx_html}"
-                    f"<span style='color:#6b7f96;'>{_r['samples']} starts/games</span>"
+                    f"<div class='edge-player-v55'>{_r['player']}</div>"
+                    f"<div class='edge-meta-v55'>{_ctx_pills}</div>"
+                    f"</div>"
+                    f"<div class='edge-score-v55'>"
+                    f"<div class='edge-score-item-v55'><span>Model</span><strong class='{_model_color_class}'>{_r['adj']}%</strong></div>"
+                    f"<div class='edge-score-item-v55'><span>Edge</span><strong class='{_edge_color_class}'>+{_r['edge_pct']}%</strong></div>"
+                    f"<div class='edge-score-item-v55'><span>Grade</span><strong style='color:{_grade_col};'>{_grade_lbl}</strong></div>"
+                    f"</div>"
                     f"</div>"
                     f"{_reason_row_html}"
-
-                    # Probability bar
-                    f"<div style='background:rgba(255,255,255,0.05);border-radius:4px;"
-                    f"height:4px;overflow:hidden;'>"
-                    f"<div style='width:{_bar_w}%;height:100%;background:{_tier_col};"
-                    f"border-radius:4px;'></div></div>"
+                    f"<div class='edge-meta-v55' style='margin-top:0.75rem;'>"
+                    f"<span class='edge-pill-v55'>Raw {_r.get('raw_adj', _r['adj'])}%</span>"
+                    f"<span class='edge-pill-v55'>Reliability {_r.get('reliability', '—')}%</span>"
+                    f"<span class='edge-pill-v55'>Avg {_r['avg']}</span>"
+                    f"<span class='edge-pill-v55'>Avg edge <strong style='color:{_edge_raw_col};'>{_r['edge_raw']:+.1f}</strong></span>"
+                    f"<span class='edge-pill-v55'>Consistency {_r['cons']}%</span>"
+                    f"<span class='edge-pill-v55'>{_r['samples']} starts</span>"
+                    f"</div>"
+                    f"<div class='edge-bar-v55'><div style='width:{_bar_w}%;background:{_tier_col};'></div></div>"
                     f"</div>",
                     unsafe_allow_html=True
                 )
