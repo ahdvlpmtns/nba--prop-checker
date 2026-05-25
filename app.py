@@ -5455,7 +5455,7 @@ st.markdown("""
         </div>
     </div>
     <div style="display:flex; align-items:center; gap:10px;">
-        <span class="pl-badge">V5.0</span>
+        <span class="pl-badge">V5.5</span>
     </div>
 </div>
 
