@@ -7308,6 +7308,26 @@ if st.session_state.active_sport == "mlb":
         adj += {"Boost":+0.04,"Neutral":0.0,"Penalty":-0.04}.get(park,0.0)*(1 if side=="Over" else -1)
         return max(0.05,min(0.95,adj))
 
+    def mlb_poisson_side_prob(expected: Optional[float], line: float, side: str) -> Optional[float]:
+        """
+        Convert expected strikeouts into a realistic hit probability.
+        Strikeouts are discrete, so Over 2.5 means P(K >= 3).
+        """
+        if expected is None or expected <= 0:
+            return None
+        try:
+            import math
+            lam = max(0.05, float(expected))
+            cutoff = int(math.floor(float(line)))  # Under 2.5 => K <= 2
+            cdf = 0.0
+            for k in range(cutoff + 1):
+                cdf += math.exp(-lam) * (lam ** k) / math.factorial(k)
+            if side == "Over":
+                return max(0.01, min(0.99, 1.0 - cdf))
+            return max(0.01, min(0.99, cdf))
+        except Exception:
+            return None
+
     def mlb_verdict(adj, edge, side, pc_ceiling=None, line=None):
         """
         Verdict based on adjusted hit rate (primary) + edge as secondary factor.
@@ -7941,8 +7961,33 @@ if st.session_state.active_sport == "mlb":
                       + _ump_adj + _wx_adj + _lineup_adj
                       + _platoon_adj + _contact_adj + _pc_adj))
 
+            # Projection anchor: recent hit rate can overstate low lines.
+            # Blend the signal stack with a Poisson-style probability from
+            # expected Ks so 90%+ only happens when projection realism agrees.
+            _adj_before_projection = adj
+            _proj_prob = None
+            _proj_blend_weight = 0.0
+            _projection_note = ""
+            if mlb_prop == "Strikeouts" and _pc_expected_k:
+                _proj_prob = mlb_poisson_side_prob(_pc_expected_k, mlb_line, mlb_side)
+                if _proj_prob is not None:
+                    _proj_blend_weight = 0.45
+                    adj = ((1.0 - _proj_blend_weight) * adj) + (_proj_blend_weight * _proj_prob)
+                    if mlb_side == "Over" and _proj_prob < 0.82:
+                        adj = min(adj, _proj_prob + 0.08)
+                    elif mlb_side == "Under" and _proj_prob < 0.82:
+                        adj = min(adj, _proj_prob + 0.08)
+                    _projection_note = (
+                        f"Projection anchor: exp {_pc_expected_k:.1f}K implies "
+                        f"{_proj_prob:.0%} {mlb_side} probability"
+                    )
+                    adj = max(0.05, min(0.95, adj))
+            _adj_after_projection = adj
+
             # Strong-pick guardrails for strikeouts. These do not hide data; they
             # prevent "Strong Over" when the realistic route to the line is thin.
+            _adj_before_guardrails = adj
+            _guardrail_note = ""
             if mlb_prop == "Strikeouts":
                 if mlb_side == "Over":
                     if _pc_expected_k and _pc_expected_k <= mlb_line - 0.25:
@@ -7956,6 +8001,8 @@ if st.session_state.active_sport == "mlb":
                         adj = min(adj, 0.68)
                     if not _lineup_confirmed and abs(edge) < 1.0:
                         adj = min(adj, 0.72)
+            if adj < _adj_before_guardrails - 0.001:
+                _guardrail_note = f"Guardrail capped projection-adjusted rate from {_adj_before_guardrails:.0%} to {adj:.0%}"
             tier = mlb_verdict(adj, edge, mlb_side,
                               pc_ceiling=_pc_k_ceiling,
                               line=mlb_line)
@@ -8527,7 +8574,7 @@ if st.session_state.active_sport == "mlb":
 
                 <div style='color:#f97316;font-size:0.65rem;letter-spacing:0.15em;text-transform:uppercase;
                             border-bottom:1px solid #1a2333;padding-bottom:4px;margin:14px 0 10px 0;'>
-                    SIGNAL TRACE — 14 SIGNALS
+                    SIGNAL TRACE — 15 SIGNALS
                 </div>
                 </div>
                 """, unsafe_allow_html=True)
@@ -8576,6 +8623,9 @@ if st.session_state.active_sport == "mlb":
                     ("Contact profile",           f"{okpct:.1%} K profile" if okpct else "N/A",
                                                   _contact_adj,
                                                   "Extra guardrail for contact-heavy or swing-and-miss confirmed/opponent profile"),
+                    ("Projection anchor",          f"{_proj_prob:.1%}" if _proj_prob is not None else "N/A",
+                                                  None,
+                                                  _projection_note if _projection_note else "Projection unavailable — pitch-count expected K missing"),
                 ]
 
                 # Build mlb_apply_adj step trace
@@ -8650,6 +8700,32 @@ if st.session_state.active_sport == "mlb":
                     <td style='color:#7d93ab;'>{_bef:.1%}</td>
                     <td style='color:#e2e8f0;'>{_aft:.1%}</td>
                     <td style='color:{_ic};'>{_aft-_bef:+.1%}</td>
+                </tr>"""
+
+                if _proj_prob is not None:
+                    _proj_before = max(0.05, min(0.95, _adj_before_projection))
+                    _proj_after = max(0.05, min(0.95, _adj_after_projection))
+                    _proj_impact = _proj_after - _proj_before
+                    _proj_col = "#22c55e" if _proj_impact > 0.001 else ("#ef4444" if _proj_impact < -0.001 else "#6b7f96")
+                    trace_rows += f"""
+                <tr style='border-bottom:1px solid #0d1520;'>
+                    <td style='padding:4px 0;color:#9aaec4;'>Projection anchor</td>
+                    <td style='color:#e2e8f0;font-weight:600;'>Exp {_pc_expected_k:.1f}K → {_proj_prob:.1%}</td>
+                    <td style='color:{_proj_col};'>blend {int(_proj_blend_weight * 100)}%</td>
+                    <td style='color:#7d93ab;'>{_proj_before:.1%}</td>
+                    <td style='color:#e2e8f0;'>{_proj_after:.1%}</td>
+                    <td style='color:{_proj_col};'>{_proj_impact:+.1%}</td>
+                </tr>"""
+
+                if _guardrail_note:
+                    trace_rows += f"""
+                <tr style='border-bottom:1px solid #0d1520;'>
+                    <td style='padding:4px 0;color:#9aaec4;'>Realism guardrail</td>
+                    <td style='color:#e2e8f0;font-weight:600;'>Ceiling/line check</td>
+                    <td style='color:#ef4444;'>cap</td>
+                    <td style='color:#7d93ab;'>{_adj_before_guardrails:.1%}</td>
+                    <td style='color:#e2e8f0;'>{adj:.1%}</td>
+                    <td style='color:#ef4444;'>{adj - _adj_before_guardrails:+.1%}</td>
                 </tr>"""
 
                 trace_rows += "</table></div>"
@@ -8730,6 +8806,10 @@ if st.session_state.active_sport == "mlb":
                             {"✅ Platoon" if (_platoon_vs_l and _platoon_vs_r) else "⚠️ N/A"} ·
                             {"✅ PitchCnt" if _pc_avg else "⚠️ N/A"}
                         </td>
+                    </tr>
+                    <tr>
+                        <td style='padding:3px 8px 3px 0;color:#6b7f96;'>Projection anchor</td>
+                        <td colspan='3' style='color:#9aaec4;'>{_projection_note or "N/A"}{f" · {_guardrail_note}" if _guardrail_note else ""}</td>
                     </tr>
                     <tr style='border-top:1px solid #1a2333;'>
                         <td style='padding:6px 8px 3px 0;color:#6b7f96;'>VERDICT</td>
