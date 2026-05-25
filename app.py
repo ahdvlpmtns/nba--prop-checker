@@ -9556,7 +9556,33 @@ if st.session_state.active_sport == "edge":
                     elif _pc_ceiling <= line + 0.5:
                         _adj = min(_adj, 0.71)
 
-            _adj = max(0.05, min(0.95, _adj))
+            _raw_adj = max(0.05, min(0.95, _adj))
+
+            # Scanner calibration:
+            # The fast scanner has less context than the full analyzer, so shrink
+            # probabilities toward 50% based on how much reliable context loaded.
+            # This prevents nearly every decent hit-rate sample from becoming a
+            # fake 10%+ "edge" and makes scanner results closer to deep-dive confidence.
+            _reliability = 0.52
+            _reliability += min(max(_n - 3, 0) * 0.018, 0.16)
+            if _opp_k is not None:
+                _reliability += 0.07
+            if _avg_pc:
+                _reliability += 0.07
+            if _avg_ip:
+                _reliability += 0.04
+            if _game_date:
+                _reliability += 0.04
+            if _pc_expected is not None and _pc_ceiling is not None:
+                _reliability += 0.04
+            _reliability = max(0.50, min(0.88, _reliability))
+
+            _adj = 0.50 + ((_raw_adj - 0.50) * _reliability)
+            if _raw_adj >= 0.72 and _cons >= 0.65 and abs(_edge) >= (1.5 if not _is_outs else 3.0):
+                _adj = min(_raw_adj, _adj + 0.025)
+            if _cons < 0.45 or _n < 5:
+                _adj = min(_adj, 0.66)
+            _adj = max(0.05, min(0.90, _adj))
 
             return {
                 "sport":    "MLB",
@@ -9565,6 +9591,8 @@ if st.session_state.active_sport == "edge":
                 "line":     line,
                 "side":     side,
                 "adj":      round(_adj * 100, 1),
+                "raw_adj":  round(_raw_adj * 100, 1),
+                "reliability": round(_reliability * 100, 1),
                 "avg":      _avg,
                 "edge_raw": round(_edge, 2),
                 "cons":     round(_cons * 100, 1),
@@ -9593,68 +9621,46 @@ if st.session_state.active_sport == "edge":
     <div style='background:rgba(0,196,204,0.05);border:1px solid rgba(0,196,204,0.15);
     border-radius:12px;padding:0.85rem 1.1rem;margin-bottom:1rem;
     font-family:DM Sans,sans-serif;font-size:0.82rem;color:#9aaec4;line-height:1.7;'>
-        Scans every available prop on PrizePicks — NBA + MLB — and ranks by
-        <strong style='color:#f0f4f8;'>edge</strong>: how much PropIQ's model probability
-        exceeds your breakeven. <br>
-        🔴 <strong>Goblin</strong> lines are highlighted — sometimes PrizePicks prices them
-        too low, making them the best value on the board.
+        MLB-only scanner focused on pitcher props. It ranks by
+        <strong style='color:#f0f4f8;'>calibrated edge</strong>, which shrinks the fast model
+        toward 50% unless opponent, pitch-count, and sample context are strong.
+        Use this as a shortlist, then deep-dive the best few pitchers.
     </div>
     """, unsafe_allow_html=True)
 
     # Controls
-    _ec1, _ec2, _ec3, _ec4 = st.columns([1.5, 1, 1, 1])
+    _edge_sport = "MLB"
+    _ec1, _ec2, _ec3 = st.columns([1.2, 1, 1])
     with _ec1:
-        _edge_sport = st.selectbox(
-            "Sport filter",
-            ["Both", "NBA", "MLB"],
-            key="edge_sport_filter",
-            label_visibility="collapsed"
-        )
-    with _ec2:
-        _EDGE_STAT_OPTIONS = {
-            "NBA": [
-                "All Stats", "Points", "Rebounds", "Assists", "3PM",
-                "PRA", "PR", "PA", "RA", "Steals", "Blocks",
-            ],
-            "MLB": [
-                "All Stats", "Strikeouts", "Pitcher Outs", "Hits", "Total Bases",
-                "Hits+Runs+RBIs", "Earned Runs Allowed",
-            ],
-            "Both": [
-                "All Stats", "Points", "Strikeouts", "Pitcher Outs", "Rebounds", "Assists",
-                "3PM", "PRA", "PR", "PA", "RA", "Steals", "Blocks",
-                "Hits", "Total Bases", "Hits+Runs+RBIs", "Earned Runs Allowed",
-            ],
-        }
-        _stat_options = _EDGE_STAT_OPTIONS.get(_edge_sport, _EDGE_STAT_OPTIONS["Both"])
+        _stat_options = ["All Pitcher Props", "Strikeouts", "Pitcher Outs"]
         if st.session_state.get("edge_stat_filter") not in _stat_options:
             st.session_state.edge_stat_filter = _stat_options[0]
         _edge_stat = st.selectbox(
-            "Stat filter",
+            "MLB pitcher prop",
             _stat_options,
             key="edge_stat_filter",
             label_visibility="collapsed"
         )
-    with _ec3:
+    with _ec2:
         _edge_min = st.selectbox(
-            "Min edge",
-            ["Any edge", "+10%", "+15%", "+20%", "+25%"],
+            "Min calibrated edge",
+            ["Any edge", "+3%", "+5%", "+7%", "+10%"],
             key="edge_min_filter",
             label_visibility="collapsed"
         )
-    with _ec4:
+    with _ec3:
         _include_goblin = st.checkbox("Include goblins", value=True, key="edge_goblins")
 
     _min_edge_val = {
-        "Any edge": 0, "+10%": 10, "+15%": 15, "+20%": 20, "+25%": 25
+        "Any edge": 0, "+3%": 3, "+5%": 5, "+7%": 7, "+10%": 10
     }.get(_edge_min, 0)
 
     # Breakeven thresholds by entry size
     st.markdown(
         "<div style='font-family:JetBrains Mono,monospace;font-size:0.58rem;"
         "color:#6b7f96;margin-bottom:0.75rem;'>"
-        "Breakeven: 2-pick = 50% &nbsp;·&nbsp; 3-pick = 59.4% &nbsp;·&nbsp; "
-        "4-pick = 63.3% &nbsp;·&nbsp; 5-pick = 65.9%"
+        "Scanner edge is measured vs a conservative 55% action threshold, not raw 50%. "
+        "Deep-dive before adding any leg."
         "</div>",
         unsafe_allow_html=True
     )
@@ -9712,9 +9718,8 @@ if st.session_state.active_sport == "edge":
         # ── Filter BEFORE analysis — only pass matching props to threads ──
         _filtered = _all_props
 
-        # Sport filter
-        if _edge_sport != "Both":
-            _filtered = [p for p in _filtered if p["sport"] == _edge_sport]
+        # MLB-only scanner
+        _filtered = [p for p in _filtered if p["sport"] == "MLB"]
 
         # Stat filter — applied BEFORE threading so we don't spin up
         # 484 threads for 20 actual props
@@ -9722,6 +9727,8 @@ if st.session_state.active_sport == "edge":
             "Points":               lambda s: "point" in s.lower() or s.lower() == "pts",
             "Strikeouts":           lambda s: "strikeout" in s.lower() or "strike out" in s.lower(),
             "Pitcher Outs":          lambda s: "out" in s.lower() or "inning" in s.lower(),
+            "All Pitcher Props":      lambda s: ("strikeout" in s.lower() or "strike out" in s.lower()
+                                                or "out" in s.lower() or "inning" in s.lower()),
             "Rebounds":             lambda s: "rebound" in s.lower() or s.lower() == "reb",
             "Assists":              lambda s: "assist" in s.lower() or s.lower() == "ast",
             "3PM":                  lambda s: "3" in s.lower() or "three" in s.lower(),
@@ -9759,13 +9766,13 @@ if st.session_state.active_sport == "edge":
             st.stop()
 
         # Build human-readable label
-        _sport_lbl = _edge_sport if _edge_sport != "Both" else "NBA + MLB"
-        _stat_lbl  = _edge_stat if _edge_stat != "All Stats" else "all stats"
+        _sport_lbl = "MLB"
+        _stat_lbl  = _edge_stat
         # Map display name to actual PP stat string for clarity
         _pp_stat_actual = {
+            "All Pitcher Props": "Pitcher Strikeouts + Pitcher Outs",
             "Strikeouts": "Pitcher Strikeouts",
             "Pitcher Outs": "Pitcher Outs",
-            "Points": "Points",
         }.get(_edge_stat, _edge_stat)
         st.info(f"Analyzing {len(_filtered)} props ({_pp_stat_actual}) — {_sport_lbl}...")
 
@@ -9778,12 +9785,7 @@ if st.session_state.active_sport == "edge":
         def _check_prop(prop):
             """Run the appropriate model. Filter already applied — every prop here is relevant."""
             try:
-                if prop["sport"] == "NBA":
-                    return run_nba_edge_check(
-                        prop["player"], prop["line"],
-                        prop["stat"], prop["team"], "Over"
-                    )
-                elif prop["sport"] == "MLB":
+                if prop["sport"] == "MLB":
                     # Normalize stat names — PrizePicks uses several pitcher labels
                     _pl_stat = prop["stat"].lower()
                     if "strikeout" in _pl_stat or "strike out" in _pl_stat:
@@ -9801,8 +9803,8 @@ if st.session_state.active_sport == "edge":
         _total = max(len(_filtered), 1)
         _done  = 0
 
-        # MLB uses cached single-call fetch — can handle more workers
-        _workers = 8 if _edge_sport == "MLB" else (5 if _edge_sport == "NBA" else 6)
+        # Keep workers modest so external APIs don't throttle the whole scan.
+        _workers = 6
 
         with _cfe.ThreadPoolExecutor(max_workers=_workers) as _ex:
             _fmap = {_ex.submit(_check_prop, p): p for p in _filtered}
@@ -9832,10 +9834,17 @@ if st.session_state.active_sport == "edge":
 
     # ── Display Results ───────────────────────────────────────────────────
     _results = st.session_state.get("edge_results", [])
+    _results = [
+        r for r in _results
+        if r.get("sport") == "MLB"
+        and ("strikeout" in str(r.get("stat", "")).lower()
+             or "out" in str(r.get("stat", "")).lower())
+    ]
 
     if _results:
-        # Filter by minimum edge (vs 50% breakeven for 2-pick)
-        _breakeven = 50.0
+        # Filter by calibrated scanner edge. We use 55% as the action threshold
+        # because PrizePicks payouts and model noise make raw 50% too loose.
+        _breakeven = 55.0
         _with_edge = []
         for r in _results:
             _edge_pct = r["adj"] - _breakeven
@@ -9843,10 +9852,10 @@ if st.session_state.active_sport == "edge":
                 r["edge_pct"] = round(_edge_pct, 1)
                 _with_edge.append(r)
 
-        # Sort: goblins first within same tier, then by adj desc
-        _with_edge.sort(key=lambda r: (
-            -r["adj"],
+            # Sort by calibrated edge, then model probability.
+            _with_edge.sort(key=lambda r: (
             -r["edge_pct"],
+            -r["adj"],
             0 if r.get("is_goblin") else 1
         ))
 
@@ -9859,8 +9868,8 @@ if st.session_state.active_sport == "edge":
             )
         else:
             # Summary strip
-            _strong  = [r for r in _with_edge if r["adj"] >= 72]
-            _lean    = [r for r in _with_edge if 63 <= r["adj"] < 72]
+            _strong  = [r for r in _with_edge if r["adj"] >= 67 and r["edge_pct"] >= 7]
+            _lean    = [r for r in _with_edge if 60 <= r["adj"] < 67 or 3 <= r["edge_pct"] < 7]
             _goblins = [r for r in _with_edge if r.get("is_goblin")]
             st.markdown(
                 f"<div style='display:flex;gap:12px;flex-wrap:wrap;"
@@ -9896,8 +9905,8 @@ if st.session_state.active_sport == "edge":
                     if _reason_html else ""
                 )
                 _sport_icon = "🏀" if _r["sport"] == "NBA" else "⚾"
-                _is_strong  = _r["adj"] >= 72
-                _is_lean    = 63 <= _r["adj"] < 72
+                _is_strong  = _r["adj"] >= 67 and _r["edge_pct"] >= 7
+                _is_lean    = (60 <= _r["adj"] < 67) or (3 <= _r["edge_pct"] < 7)
                 _tier_lbl   = ("Strong Over" if _is_strong else
                                "Lean Over"   if _is_lean  else "Edge Play")
                 _tier_col   = ("#00e896" if _is_strong else
@@ -9973,7 +9982,7 @@ if st.session_state.active_sport == "edge":
                     f"{_tier_lbl}</div>"
                     f"<div style='font-family:JetBrains Mono,monospace;"
                     f"font-size:0.6rem;color:#6b7f96;'>"
-                    f"+{_r['edge_pct']}% vs 50% breakeven</div>"
+                    f"+{_r['edge_pct']}% calibrated edge vs 55%</div>"
                     f"<div style='font-family:JetBrains Mono,monospace;font-size:0.58rem;"
                     f"color:{_grade_col};margin-top:3px;font-weight:800;'>{_grade_lbl}</div>"
                     f"</div></div>"
@@ -9984,6 +9993,10 @@ if st.session_state.active_sport == "edge":
                     f"color:#9aaec4;margin-bottom:8px;'>"
                     f"<span>Model: <strong style='color:{_tier_col};'>"
                     f"{_r['adj']}%</strong></span>"
+                    f"<span>Raw: <strong style='color:#7d93ab;'>"
+                    f"{_r.get('raw_adj', _r['adj'])}%</strong></span>"
+                    f"<span>Reliability: <strong style='color:#f0f4f8;'>"
+                    f"{_r.get('reliability', '—')}%</strong></span>"
                     f"<span>Avg: <strong style='color:#f0f4f8;'>{_r['avg']}</strong></span>"
                     f"<span>Edge: <strong style='color:{_edge_raw_col};'>"
                     f"{_r['edge_raw']:+.1f}</strong></span>"
@@ -10067,9 +10080,9 @@ if st.session_state.active_sport == "edge":
             "font-weight:700;color:#f0f4f8;margin-bottom:8px;'>Ready to scan</div>"
             "<div style='font-family:JetBrains Mono,monospace;font-size:0.65rem;"
             "color:#6b7f96;line-height:1.8;'>"
-            "Hit <strong style='color:#00c4cc;'>Scan for Edge Plays</strong> to pull tonight's "
-            "full PrizePicks slate and rank every prop by model edge.<br>"
-            "Best time to run: after 6pm ET when lines are finalized."
+            "Hit <strong style='color:#00c4cc;'>Scan for Edge Plays</strong> to pull MLB pitcher props "
+            "from PrizePicks and rank only calibrated shortlist candidates.<br>"
+            "Best time to run: after starting pitchers and lines are finalized."
             "</div></div>",
             unsafe_allow_html=True
         )
