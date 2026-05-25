@@ -6533,62 +6533,139 @@ if st.session_state.active_sport == "mlb":
             pass
         return empty
 
+    @st.cache_data(ttl=86400, show_spinner=False)
+    def mlb_get_batter_k_rate(player_id: Optional[int], player_name: str = "") -> Optional[float]:
+        """Return hitter strikeout rate from current/prior season, cached per batter."""
+        if not player_id:
+            return None
+        try:
+            import requests as _req, datetime as _dtx
+            season = _dtx.datetime.now().year
+            for _yr in [season, season - 1]:
+                r = _req.get(
+                    f"https://statsapi.mlb.com/api/v1/people/{player_id}/stats",
+                    params={"stats": "season", "group": "hitting",
+                            "season": _yr, "gameType": "R"},
+                    timeout=5,
+                )
+                if not r.ok:
+                    continue
+                splits = r.json().get("stats", [{}])[0].get("splits", [])
+                if not splits:
+                    continue
+                stt = splits[0].get("stat", {})
+                ab = int(stt.get("atBats", 0) or 0)
+                k = int(stt.get("strikeOuts", 0) or 0)
+                if ab >= 30:
+                    return round(k / ab, 3)
+        except Exception:
+            pass
+        return None
+
+
     @st.cache_data(ttl=900, show_spinner=False)
     def mlb_get_batting_order(opp_abbr: str, game_date: str = "") -> dict:
         """
-        Fetch tonight's confirmed batting order for the opposing lineup.
+        Fetch confirmed or projected batting order for the opposing lineup.
+        If today's lineup is not posted, falls back to the team's most recent
+        posted lineup and marks it as projected.
         Returns: {confirmed: bool, order: list of names, k_prone_count: int,
                   avg_k_rate: float, lineup_note: str}
         """
         empty = {"confirmed": False, "order": [], "k_prone_count": 0,
-                 "avg_k_rate": None, "lineup_note": "Lineup not yet posted"}
+                 "avg_k_rate": None, "lineup_note": "Lineup not yet posted",
+                 "projected": False, "source_date": "", "order_ids": []}
         try:
             import requests as _req, datetime, pytz
             et    = pytz.timezone("America/New_York")
-            today = datetime.datetime.now(et).strftime("%Y-%m-%d")
+            today_dt = datetime.datetime.now(et).date()
 
-            # Find today's game with this team
-            sched = _req.get(
-                "https://statsapi.mlb.com/api/v1/schedule",
-                params={"sportId":1,"date":today,
-                        "hydrate":"lineups,team","fields":
-                        "dates,games,teams,lineups,players,fullName,id,abbreviation"},
-                timeout=9
-            )
-            if not sched.ok: return empty
+            def _abbr_matches(a: str) -> bool:
+                return _norm_team_abbr(a or "") == _norm_team_abbr(opp_abbr)
 
-            for d in sched.json().get("dates",[]):
-                for game in d.get("games",[]):
-                    home = game["teams"]["home"]["team"].get("abbreviation","")
-                    away = game["teams"]["away"]["team"].get("abbreviation","")
-                    if opp_abbr.upper() not in (home.upper(), away.upper()):
-                        continue
-                    # Determine which side is the opponent
-                    opp_side = "away" if home.upper() != opp_abbr.upper() else "home"
-                    # Actually want the batting lineup of the OPPONENT team
-                    opp_side = "away" if away.upper() == opp_abbr.upper() else "home"
+            # Today first, then recent prior games as projected lineup fallback.
+            date_candidates = [today_dt] + [today_dt - datetime.timedelta(days=i) for i in range(1, 8)]
+            for _idx, check_dt in enumerate(date_candidates):
+                date_str = check_dt.strftime("%Y-%m-%d")
+                sched = _req.get(
+                    "https://statsapi.mlb.com/api/v1/schedule",
+                    params={"sportId":1,"date":date_str,
+                            "hydrate":"lineups,team","fields":
+                            "dates,games,teams,lineups,players,fullName,id,abbreviation,status,detailedState"},
+                    timeout=9
+                )
+                if not sched.ok:
+                    continue
 
-                    lineups = game.get("lineups",{})
-                    if not lineups: return empty
+                for d in sched.json().get("dates",[]):
+                    for game in d.get("games",[]):
+                        home = game["teams"]["home"]["team"].get("abbreviation","")
+                        away = game["teams"]["away"]["team"].get("abbreviation","")
+                        if not (_abbr_matches(home) or _abbr_matches(away)):
+                            continue
 
-                    side_key = "awayPlayers" if opp_side=="away" else "homePlayers"
-                    players  = lineups.get(side_key, [])
-                    if not players: return empty
+                        opp_side = "away" if _abbr_matches(away) else "home"
+                        lineups = game.get("lineups",{})
+                        if not lineups:
+                            continue
 
-                    order = [p.get("fullName","") for p in players[:9]]
-                    # Count of high-K prone players (simple heuristic by name lookup)
-                    # In a full build we'd fetch each player's K%, for now flag lineup size
-                    confirmed = len(order) >= 8
-                    note = (f"✅ Lineup confirmed — {len(order)} batters posted"
-                            if confirmed else
-                            f"⚠️ Partial lineup — {len(order)} of 9 posted")
-                    return {
-                        "confirmed":     confirmed,
-                        "order":         order,
-                        "k_prone_count": 0,  # enriched below if K% available
-                        "avg_k_rate":    None,
-                        "lineup_note":   note,
-                    }
+                        side_key = "awayPlayers" if opp_side=="away" else "homePlayers"
+                        players  = lineups.get(side_key, [])
+                        if not players:
+                            continue
+
+                        order_players = players[:9]
+                        order = [p.get("fullName","") for p in order_players if p.get("fullName")]
+                        order_ids = [p.get("id") for p in order_players if p.get("id")]
+                        if len(order) < 6:
+                            continue
+
+                        # Individual batter K-rate quality.
+                        k_rates = []
+                        try:
+                            import concurrent.futures as _cf_k
+                            with _cf_k.ThreadPoolExecutor(max_workers=6) as _kpool:
+                                _futs = [
+                                    _kpool.submit(mlb_get_batter_k_rate, pid, name)
+                                    for pid, name in zip(order_ids, order)
+                                    if pid
+                                ]
+                                for _f in _cf_k.as_completed(_futs, timeout=8):
+                                    try:
+                                        _kr = _f.result(timeout=0.1)
+                                        if _kr is not None:
+                                            k_rates.append(float(_kr))
+                                    except Exception:
+                                        pass
+                        except Exception:
+                            k_rates = []
+
+                        avg_k_rate = round(sum(k_rates) / len(k_rates), 3) if len(k_rates) >= 5 else None
+                        k_prone_count = sum(1 for kr in k_rates if kr >= 0.25)
+                        projected = _idx > 0
+                        confirmed = (not projected) and len(order) >= 8
+                        if projected:
+                            note = (
+                                f"🕒 Projected from last posted lineup ({date_str}) — "
+                                f"{len(order)} batters"
+                            )
+                        else:
+                            note = (f"✅ Lineup confirmed — {len(order)} batters posted"
+                                    if confirmed else
+                                    f"⚠️ Partial lineup — {len(order)} of 9 posted")
+                        if avg_k_rate is not None:
+                            note += f" · lineup K% {avg_k_rate:.0%}"
+
+                        return {
+                            "confirmed":     confirmed,
+                            "projected":     projected,
+                            "source_date":   date_str,
+                            "order":         order,
+                            "order_ids":     order_ids,
+                            "k_prone_count": k_prone_count,
+                            "avg_k_rate":    avg_k_rate,
+                            "lineup_note":   note,
+                        }
         except Exception:
             pass
         return empty
@@ -7498,19 +7575,23 @@ if st.session_state.active_sport == "mlb":
 
             # ── Signal 12: Batting order + platoon composition ─────────────
             _lineup_confirmed  = _lineup.get("confirmed", False) if _lineup else False
+            _lineup_projected  = _lineup.get("projected", False) if _lineup else False
             _lineup_order      = _lineup.get("order", []) if _lineup else []
             _lineup_note_txt   = _lineup.get("lineup_note","") if _lineup else ""
             _lhb_count         = _lineup.get("lhb_count", 0) if _lineup else 0
             _rhb_count         = _lineup.get("rhb_count", 0) if _lineup else 0
             _lhb_pct           = _lineup.get("lhb_pct", 0.5) if _lineup else 0.5
             _order_hands       = _lineup.get("order_with_hands", []) if _lineup else []
+            _lineup_avg_k      = _lineup.get("avg_k_rate") if _lineup else None
+            _lineup_k_prone    = _lineup.get("k_prone_count", 0) if _lineup else 0
             _lineup_adj        = 0.0
+            _lineup_conf_weight = 0.65 if _lineup_projected else 1.0
 
             # Platoon signal — use pitcher's actual vsL/vsR K rate vs tonight's mix
             _platoon_vs_l  = _platoon.get("vs_l") if _platoon else None
             _platoon_vs_r  = _platoon.get("vs_r") if _platoon else None
             _platoon_adj   = 0.0
-            if _lineup_confirmed and _order_hands and _platoon_vs_l and _platoon_vs_r:
+            if (_lineup_confirmed or _lineup_projected) and _order_hands and _platoon_vs_l and _platoon_vs_r:
                 # Weighted K rate for tonight's actual lineup
                 _lineup_kr = (_lhb_pct * _platoon_vs_l +
                               (1 - _lhb_pct) * _platoon_vs_r)
@@ -7521,12 +7602,12 @@ if st.session_state.active_sport == "mlb":
                 _opp_kr_overall = _splits.get("overall") or (okpct if okpct else 0.22)
                 if _opp_kr_overall > 0:
                     _platoon_div = (_lineup_kr / _opp_kr_overall) - 1.0
-                    _platoon_adj = max(-0.06, min(0.06, _platoon_div * 0.25))
+                    _platoon_adj = max(-0.06, min(0.06, _platoon_div * 0.25)) * _lineup_conf_weight
 
             # Confirmed-lineup opponent K% override.
             # Once the batting order is posted, the aggregate team split is less
             # valuable than the actual handedness mix the pitcher will face.
-            if mlb_prop == "Strikeouts" and _lineup_confirmed and _order_hands and _splits:
+            if mlb_prop == "Strikeouts" and (_lineup_confirmed or _lineup_projected) and _order_hands and _splits:
                 try:
                     _opp_vs_l = _splits.get("vs_l")
                     _opp_vs_r = _splits.get("vs_r")
@@ -7536,9 +7617,27 @@ if st.session_state.active_sport == "mlb":
                         _lineup_okpct = (_lhb_pct * float(_opp_vs_l) +
                                          (1.0 - _lhb_pct) * float(_opp_vs_r))
                         okpct = _lineup_okpct
-                        _okpct_source = f"confirmed lineup ({_lhb_count}L/{_rhb_count}R)"
+                        _okpct_source = (
+                            f"{'projected' if _lineup_projected else 'confirmed'} lineup "
+                            f"({_lhb_count}L/{_rhb_count}R)"
+                        )
                 except Exception:
                     pass
+
+            # Actual batter K-rate quality from the posted/projected order.
+            if mlb_prop == "Strikeouts" and _lineup_avg_k is not None:
+                if _lineup_avg_k >= 0.265:
+                    _lineup_adj += 0.04 * _lineup_conf_weight
+                elif _lineup_avg_k >= 0.245:
+                    _lineup_adj += 0.02 * _lineup_conf_weight
+                elif _lineup_avg_k <= 0.175:
+                    _lineup_adj -= 0.05 * _lineup_conf_weight
+                elif _lineup_avg_k <= 0.195:
+                    _lineup_adj -= 0.03 * _lineup_conf_weight
+                if _lineup_k_prone >= 5:
+                    _lineup_adj += 0.01 * _lineup_conf_weight
+                if mlb_side == "Under":
+                    _lineup_adj = -_lineup_adj
 
             # Contact-heavy / swing-and-miss lineup guardrail.
             # This is separate from mlb_apply_adj so it shows in the debugger.
@@ -7594,7 +7693,7 @@ if st.session_state.active_sport == "mlb":
 
             # Partial lineup penalty
             if _lineup_order and len(_lineup_order) < 7:
-                _lineup_adj = -0.02
+                _lineup_adj += (-0.02 if mlb_side == "Over" else 0.02)
 
             # ── Apply all 12 signals
             adj = mlb_apply_adj(whr, okpct, psig, mlb_side)
@@ -7708,10 +7807,19 @@ if st.session_state.active_sport == "mlb":
             # Platoon composition
             if _platoon_vs_l and _platoon_vs_r and _order_hands:
                 _pl_flag = "up" if _platoon_adj > 0.01 else ("down" if _platoon_adj < -0.01 else "flat")
-                _pl_txt  = f"🎯 {_lhb_count}L/{_rhb_count}R lineup · vsL:{_platoon_vs_l:.0%} vsR:{_platoon_vs_r:.0%}"
+                _lineup_src = "projected" if _lineup_projected else "confirmed"
+                _pl_txt  = f"🎯 {_lhb_count}L/{_rhb_count}R {_lineup_src} lineup · vsL:{_platoon_vs_l:.0%} vsR:{_platoon_vs_r:.0%}"
                 _pills.append(f"<span class='flag-pill {_pl_flag}'>{_pl_txt}</span>")
             elif _platoon_vs_l and _platoon_vs_r:
                 _pills.append(f"<span class='flag-pill flat'>↕️ vsL:{_platoon_vs_l:.0%} vsR:{_platoon_vs_r:.0%} · lineup TBD</span>")
+
+            if _lineup_avg_k is not None:
+                _lk_flag = "up" if _lineup_avg_k >= 0.245 else ("down" if _lineup_avg_k <= 0.195 else "flat")
+                _lk_src = "projected" if _lineup_projected else "confirmed"
+                _pills.append(
+                    f"<span class='flag-pill {_lk_flag}'>"
+                    f"🧾 {_lk_src} order K% {_lineup_avg_k:.0%} · {_lineup_k_prone} high-K bats</span>"
+                )
 
             # Pitch count estimate
             if _pc_avg:
@@ -7891,12 +7999,16 @@ if st.session_state.active_sport == "mlb":
                     _hand_fav   = "LHB" if _platoon_vs_l > _platoon_vs_r else "RHB"
                     _hand_c     = "green" if max(_platoon_vs_l, _platoon_vs_r) >= 0.28 else "yellow"
                     _phand_desc = f"vsL: {_platoon_vs_l:.0%} · vsR: {_platoon_vs_r:.0%}"
+                    _lineup_hand_note = (
+                        f" · {_lhb_count}L/{_rhb_count}R {'projected' if _lineup_projected else 'tonight'}"
+                        if _order_hands else " · lineup TBD"
+                    )
                     st.markdown(
                         f"<div class='stat-card'>"
                         f"<div class='stat-label'>Platoon K%</div>"
                         f"<div class='stat-value {_hand_c}' style='font-size:1.4rem;'>{_phand_desc}</div>"
                         f"<div class='stat-hint'>Favors {'lefties' if _hand_fav=='LHB' else 'righties'}"
-                        f"{f' · {_lhb_count}L/{_rhb_count}R tonight' if _order_hands else ' · lineup TBD'}</div>"
+                        f"{_lineup_hand_note}</div>"
                         f"</div>",
                         unsafe_allow_html=True
                     )
@@ -7957,18 +8069,20 @@ if st.session_state.active_sport == "mlb":
             with _gctx_cols[1]:
                 # Batting order card
                 if _lineup_order:
-                    _lo_c  = "#00e896" if _lineup_confirmed else "#ffc107"
-                    _lo_bg = "rgba(0,232,150,0.07)" if _lineup_confirmed else "rgba(255,193,7,0.07)"
+                    _lo_c  = "#00e896" if _lineup_confirmed else ("#60a5fa" if _lineup_projected else "#ffc107")
+                    _lo_bg = "rgba(0,232,150,0.07)" if _lineup_confirmed else ("rgba(96,165,250,0.07)" if _lineup_projected else "rgba(255,193,7,0.07)")
                     _order_str = " · ".join(_lineup_order[:5]) + ("..." if len(_lineup_order) > 5 else "")
+                    _lo_status = "✅ Confirmed" if _lineup_confirmed else ("🕒 Projected from last lineup" if _lineup_projected else "⏳ Partial lineup")
+                    _lo_k_note = f" · order K% {_lineup_avg_k:.0%} · {_lineup_k_prone} high-K bats" if _lineup_avg_k is not None else ""
                     st.markdown(
                         f"<div class='stat-card' style='border-color:{_lo_c}33;background:{_lo_bg};'>"
                         f"<div class='stat-label'>📋 Opposing Batting Order</div>"
                         f"<div style='font-family:Plus Jakarta Sans,sans-serif;font-size:0.92rem;"
                         f"font-weight:700;color:{_lo_c};'>"
-                        f"{'✅ Confirmed' if _lineup_confirmed else '⏳ Partial lineup'} — {len(_lineup_order)}/9</div>"
+                        f"{_lo_status} — {len(_lineup_order)}/9{_lo_k_note}</div>"
                         f"<div style='font-family:JetBrains Mono,monospace;font-size:0.6rem;"
                         f"color:#6b7f96;margin-top:5px;line-height:1.6;'>"
-                        f"{_order_str}</div>"
+                        f"{_order_str}<br><span style='font-size:0.56rem;color:#7d93ab;'>{_lineup_note_txt}</span></div>"
                         f"</div>", unsafe_allow_html=True
                     )
                 else:
@@ -8218,7 +8332,7 @@ if st.session_state.active_sport == "mlb":
                     ("Weather",                   _weather.get("condition","N/A") if _weather else "N/A",
                                                   _wx_adj,
                                                   _wx_note if _wx_note else ("Indoor — irrelevant" if _weather and _weather.get("condition")=="Dome/Retractable" else "No weather data")),
-                    ("Batting order",             f"{len(_lineup_order)}/9 posted" if _lineup_order else "Not posted",
+                    ("Batting order",             f"{len(_lineup_order)}/9 {'projected' if _lineup_projected else 'posted'}" if _lineup_order else "Not posted",
                                                   _lineup_adj,
                                                   _lineup_note_txt if _lineup_note_txt else "Lineup not yet posted"),
                     ("Contact profile",           f"{okpct:.1%} K profile" if okpct else "N/A",
@@ -8277,8 +8391,10 @@ if st.session_state.active_sport == "mlb":
                     "Avg IP/start":     f"{_avg_ip:.1f} IP ({_ip_source})" if _avg_ip > 0 else "N/A",
                     "Umpire zone":      f"{_ump_name.split()[-1]} ({_ump_tend})" if _ump_name else "TBD",
                     "Weather":          _weather.get("condition","N/A") if _weather else "N/A",
-                    "Batting order":    f"{len(_lineup_order)}/9 · {_lhb_count}L/{_rhb_count}R" if _order_hands else (f"{len(_lineup_order)}/9" if _lineup_order else "Not posted"),
-                    "Platoon matchup":  f"vsL:{_platoon_vs_l:.1%} vsR:{_platoon_vs_r:.1%} · {_lhb_count}L/{_rhb_count}R tonight" if (_platoon_vs_l and _platoon_vs_r) else "Lineup TBD",
+                    "Batting order":    (f"{len(_lineup_order)}/9 · {_lhb_count}L/{_rhb_count}R · "
+                                         f"{'projected' if _lineup_projected else 'confirmed'}"
+                                         f"{f' · K% {_lineup_avg_k:.1%}' if _lineup_avg_k is not None else ''}") if _order_hands else (f"{len(_lineup_order)}/9" if _lineup_order else "Not posted"),
+                    "Platoon matchup":  f"vsL:{_platoon_vs_l:.1%} vsR:{_platoon_vs_r:.1%} · {_lhb_count}L/{_rhb_count}R {'projected' if _lineup_projected else 'tonight'}" if (_platoon_vs_l and _platoon_vs_r) else "Lineup TBD",
                     "Contact profile":  f"{okpct:.1%} · {_okpct_source}" if okpct else "N/A",
                     "Pitch count est":  f"~{_pc_avg}p → exp {_pc_expected_k:.1f}K / ceil {_pc_k_ceiling:.1f}K · {'⚠️ On limit' if _pc_limit else 'No limit detected'}" if _pc_avg else "N/A",
                 }
