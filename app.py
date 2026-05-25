@@ -8990,6 +8990,8 @@ if st.session_state.active_sport == "edge":
             is_outs_prop = "out" in str(result.get("stat", "")).lower()
             if result.get("l3") is not None:
                 reasons.append(f"L3 avg {result['l3']}")
+            if result.get("opp") == "TBD":
+                reasons.append("Opponent pending")
             if result.get("opp_k") is not None and not is_outs_prop:
                 reasons.append(f"Opponent K% {result['opp_k']}%")
             if result.get("pc_ceiling") is not None:
@@ -9476,10 +9478,9 @@ if st.session_state.active_sport == "edge":
             _game_date = _game_ctx.get("game_date", "")
             _last_start = _data.get("last_start_date")
 
-            # If we cannot identify the opponent/game, skip the result instead
-            # of showing "?" and ranking it without matchup context.
-            if not _opp or not _game_date:
-                return None
+            # If matchup context is not available yet, keep the candidate but
+            # mark it as TBD and let calibration lower confidence naturally.
+            _opp_display = _opp or "TBD"
 
             # Stale PrizePicks slates can keep pitchers who already started today.
             # Starting pitchers also should not surface for tomorrow on short rest.
@@ -9492,9 +9493,10 @@ if st.session_state.active_sport == "edge":
                 if _last_dt:
                     if _last_dt >= _today_et:
                         return None
-                    _days_to_target = (_target_dt - _last_dt).days
-                    if 0 <= _days_to_target < 4:
-                        return None
+                    if _game_date:
+                        _days_to_target = (_target_dt - _last_dt).days
+                        if 0 <= _days_to_target < 4:
+                            return None
             except Exception:
                 pass
 
@@ -9663,7 +9665,7 @@ if st.session_state.active_sport == "edge":
                 "samples":  _n,
                 "k9":       _k9,
                 "avg_ip":   _avg_ip,
-                "opp":      _opp or "?",
+                "opp":      _opp_display,
                 "opp_k":    round(_opp_k * 100, 1) if _opp_k is not None else None,
                 "park":     _park_sig,
                 "pc":       _avg_pc,
@@ -9752,6 +9754,8 @@ if st.session_state.active_sport == "edge":
 
     if _run_edge:
         st.session_state.edge_results = []
+        st.session_state["edge_has_scanned"] = True
+        st.session_state["edge_scan_summary"] = ""
         st.session_state["_edge_last_stat_filter"] = _edge_stat
 
         with st.spinner(f"Fetching PrizePicks {_edge_sport} slate..."):
@@ -9903,6 +9907,9 @@ if st.session_state.active_sport == "edge":
         _prog.empty()
         _status.empty()
         st.session_state.edge_results = _results
+        st.session_state["edge_scan_summary"] = (
+            f"Analyzed {len(_filtered)} matching props · {len(_results)} model candidates returned"
+        )
 
     # ── Display Results ───────────────────────────────────────────────────
     _results = st.session_state.get("edge_results", [])
@@ -9912,7 +9919,7 @@ if st.session_state.active_sport == "edge":
         and ("strikeout" in str(r.get("stat", "")).lower()
              or "out" in str(r.get("stat", "")).lower())
         and r.get("opp")
-        and r.get("opp") != "?"
+        and r.get("opp") not in ("?", "")
     ]
     if _edge_stat == "Strikeouts":
         _results = [r for r in _results if "strikeout" in str(r.get("stat", "")).lower()]
@@ -10155,8 +10162,15 @@ if st.session_state.active_sport == "edge":
                             st.session_state.edge_jump_prop    = _r["stat"]
                         st.rerun()
 
-    elif st.session_state.get("edge_results") is not None and st.session_state.edge_results == []:
-        pass  # Just ran, nothing found — already handled above
+    elif st.session_state.get("edge_has_scanned") and st.session_state.get("edge_results") == []:
+        _scan_summary = st.session_state.get("edge_scan_summary", "No model candidates returned.")
+        st.markdown(
+            "<div style='text-align:center;color:#6b7f96;font-family:JetBrains Mono,"
+            "monospace;font-size:0.75rem;padding:2rem;'>"
+            f"No Edge Scanner candidates to display. {_scan_summary}. "
+            "Try All Pitcher Props, lower the minimum edge, or clear cache and scan again.</div>",
+            unsafe_allow_html=True
+        )
     else:
         # First open — show instructions
         st.markdown(
