@@ -6733,18 +6733,142 @@ if st.session_state.active_sport == "mlb":
             et    = pytz.timezone("America/New_York")
             today_dt = datetime.datetime.now(et).date()
 
-            def _abbr_matches(a: str) -> bool:
-                return _norm_team_abbr(a or "") == _norm_team_abbr(opp_abbr)
+            def _mlb_norm_abbr(a: str) -> str:
+                a = str(a or "").upper().strip()
+                return {
+                    "AZ": "ARI", "ARZ": "ARI",
+                    "CWS": "CHW", "CHW": "CHW",
+                    "WSH": "WSN", "WAS": "WSN",
+                    "SF": "SFG", "SFG": "SFG",
+                    "SD": "SDP", "SDP": "SDP",
+                    "TB": "TBR", "TBR": "TBR",
+                    "KC": "KCR", "KCR": "KCR",
+                    "OAK": "ATH", "ATH": "ATH",
+                    "LA": "LAD", "LAD": "LAD",
+                }.get(a, a)
 
+            def _abbr_matches(a: str) -> bool:
+                return _mlb_norm_abbr(a or "") == _mlb_norm_abbr(opp_abbr)
+
+            def _team_id_for_abbr() -> Optional[int]:
+                try:
+                    tr = _req.get(
+                        "https://statsapi.mlb.com/api/v1/teams",
+                        params={"sportId": 1, "season": today_dt.year},
+                        timeout=7,
+                    )
+                    if not tr.ok:
+                        return None
+                    target = _mlb_norm_abbr(opp_abbr)
+                    for t in tr.json().get("teams", []):
+                        if _mlb_norm_abbr(t.get("abbreviation", "")) == target:
+                            return int(t.get("id"))
+                except Exception:
+                    pass
+                return None
+
+            def _finish_order(order_players: list, date_str: str, projected: bool, source: str) -> Optional[dict]:
+                order = [p.get("fullName", "") for p in order_players if p.get("fullName")]
+                order_ids = [p.get("id") for p in order_players if p.get("id")]
+                if len(order) < 6:
+                    return None
+
+                # Individual batter K-rate quality.
+                k_rates = []
+                try:
+                    import concurrent.futures as _cf_k
+                    with _cf_k.ThreadPoolExecutor(max_workers=6) as _kpool:
+                        _futs = [
+                            _kpool.submit(mlb_get_batter_k_rate, pid, name)
+                            for pid, name in zip(order_ids, order)
+                            if pid
+                        ]
+                        for _f in _cf_k.as_completed(_futs, timeout=8):
+                            try:
+                                _kr = _f.result(timeout=0.1)
+                                if _kr is not None:
+                                    k_rates.append(float(_kr))
+                            except Exception:
+                                pass
+                except Exception:
+                    k_rates = []
+
+                avg_k_rate = round(sum(k_rates) / len(k_rates), 3) if len(k_rates) >= 5 else None
+                k_prone_count = sum(1 for kr in k_rates if kr >= 0.25)
+                confirmed = (not projected) and len(order) >= 8
+                if projected:
+                    note = (
+                        f"🕒 Projected from last game's batting order ({date_str}) — "
+                        f"{len(order)} batters"
+                    )
+                else:
+                    note = (f"✅ Lineup confirmed — {len(order)} batters posted"
+                            if confirmed else
+                            f"⚠️ Partial lineup — {len(order)} of 9 posted")
+                if source:
+                    note += f" · {source}"
+                if avg_k_rate is not None:
+                    note += f" · lineup K% {avg_k_rate:.0%}"
+
+                return {
+                    "confirmed":     confirmed,
+                    "projected":     projected,
+                    "source_date":   date_str,
+                    "order":         order,
+                    "order_ids":     order_ids,
+                    "k_prone_count": k_prone_count,
+                    "avg_k_rate":    avg_k_rate,
+                    "lineup_note":   note,
+                }
+
+            def _order_from_boxscore(game_pk: int, side: str) -> list:
+                try:
+                    bx = _req.get(
+                        f"https://statsapi.mlb.com/api/v1/game/{game_pk}/boxscore",
+                        timeout=8,
+                    )
+                    if not bx.ok:
+                        return []
+                    players = bx.json().get("teams", {}).get(side, {}).get("players", {})
+                    rows = []
+                    for pdata in players.values():
+                        b_order = pdata.get("battingOrder")
+                        person = pdata.get("person", {})
+                        if not b_order or not person.get("fullName"):
+                            continue
+                        try:
+                            sort_key = int(str(b_order)[:1])
+                        except Exception:
+                            continue
+                        if 1 <= sort_key <= 9:
+                            rows.append({
+                                "sort": sort_key,
+                                "fullName": person.get("fullName", ""),
+                                "id": person.get("id"),
+                            })
+                    rows = sorted(rows, key=lambda x: x["sort"])
+                    deduped = []
+                    seen_slots = set()
+                    for r in rows:
+                        if r["sort"] in seen_slots:
+                            continue
+                        seen_slots.add(r["sort"])
+                        deduped.append(r)
+                    return deduped[:9]
+                except Exception:
+                    return []
+
+            team_id = _team_id_for_abbr()
             # Today first, then recent prior games as projected lineup fallback.
-            date_candidates = [today_dt] + [today_dt - datetime.timedelta(days=i) for i in range(1, 8)]
+            date_candidates = [today_dt] + [today_dt - datetime.timedelta(days=i) for i in range(1, 15)]
             for _idx, check_dt in enumerate(date_candidates):
                 date_str = check_dt.strftime("%Y-%m-%d")
+                params = {"sportId": 1, "date": date_str, "hydrate": "lineups,team"}
+                if team_id:
+                    params["teamId"] = team_id
                 sched = _req.get(
                     "https://statsapi.mlb.com/api/v1/schedule",
-                    params={"sportId":1,"date":date_str,
-                            "hydrate":"lineups,team","fields":
-                            "dates,games,teams,lineups,players,fullName,id,abbreviation,status,detailedState"},
+                    params=params,
                     timeout=9
                 )
                 if not sched.ok:
@@ -6758,67 +6882,28 @@ if st.session_state.active_sport == "mlb":
                             continue
 
                         opp_side = "away" if _abbr_matches(away) else "home"
+                        status = game.get("status", {})
+                        detailed_state = str(status.get("detailedState", "")).lower()
+                        abstract_state = str(status.get("abstractGameState", "")).lower()
                         lineups = game.get("lineups",{})
-                        if not lineups:
-                            continue
 
-                        side_key = "awayPlayers" if opp_side=="away" else "homePlayers"
-                        players  = lineups.get(side_key, [])
-                        if not players:
-                            continue
-
-                        order_players = players[:9]
-                        order = [p.get("fullName","") for p in order_players if p.get("fullName")]
-                        order_ids = [p.get("id") for p in order_players if p.get("id")]
-                        if len(order) < 6:
-                            continue
-
-                        # Individual batter K-rate quality.
-                        k_rates = []
-                        try:
-                            import concurrent.futures as _cf_k
-                            with _cf_k.ThreadPoolExecutor(max_workers=6) as _kpool:
-                                _futs = [
-                                    _kpool.submit(mlb_get_batter_k_rate, pid, name)
-                                    for pid, name in zip(order_ids, order)
-                                    if pid
-                                ]
-                                for _f in _cf_k.as_completed(_futs, timeout=8):
-                                    try:
-                                        _kr = _f.result(timeout=0.1)
-                                        if _kr is not None:
-                                            k_rates.append(float(_kr))
-                                    except Exception:
-                                        pass
-                        except Exception:
-                            k_rates = []
-
-                        avg_k_rate = round(sum(k_rates) / len(k_rates), 3) if len(k_rates) >= 5 else None
-                        k_prone_count = sum(1 for kr in k_rates if kr >= 0.25)
                         projected = _idx > 0
-                        confirmed = (not projected) and len(order) >= 8
-                        if projected:
-                            note = (
-                                f"🕒 Projected from last posted lineup ({date_str}) — "
-                                f"{len(order)} batters"
-                            )
-                        else:
-                            note = (f"✅ Lineup confirmed — {len(order)} batters posted"
-                                    if confirmed else
-                                    f"⚠️ Partial lineup — {len(order)} of 9 posted")
-                        if avg_k_rate is not None:
-                            note += f" · lineup K% {avg_k_rate:.0%}"
 
-                        return {
-                            "confirmed":     confirmed,
-                            "projected":     projected,
-                            "source_date":   date_str,
-                            "order":         order,
-                            "order_ids":     order_ids,
-                            "k_prone_count": k_prone_count,
-                            "avg_k_rate":    avg_k_rate,
-                            "lineup_note":   note,
-                        }
+                        if lineups:
+                            side_key = "awayPlayers" if opp_side=="away" else "homePlayers"
+                            players  = lineups.get(side_key, [])
+                            result = _finish_order(players[:9], date_str, projected, "posted lineup")
+                            if result:
+                                return result
+
+                        # Fallback source: official boxscore batting order.
+                        # For previous completed games this is much more reliable
+                        # than the schedule lineup hydrate.
+                        if _idx > 0 or abstract_state == "final" or "final" in detailed_state:
+                            order_players = _order_from_boxscore(game.get("gamePk"), opp_side)
+                            result = _finish_order(order_players, date_str, True, "boxscore fallback")
+                            if result:
+                                return result
         except Exception:
             pass
         return empty
