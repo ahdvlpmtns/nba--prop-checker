@@ -3090,6 +3090,31 @@ def delete_from_supabase(row_id: str) -> bool:
 
 # ── PrizePicks slate cache ───────────────────────────────────
 
+def normalize_mlb_pitcher_prop_stat(stat: str) -> str:
+    """Normalize MLB pitcher prop names without confusing Strikeouts with Outs."""
+    s = re.sub(r"[^a-z0-9]+", " ", str(stat or "").lower()).strip()
+    if any(token in s for token in (
+        "pitcher strikeout", "pitcher strikeouts", "strikeout", "strikeouts", "strike out", "strike outs"
+    )):
+        return "Strikeouts"
+    if any(token in s for token in (
+        "pitcher out", "pitcher outs", "outs recorded", "out recorded", "recorded outs"
+    )):
+        return "Outs Recorded"
+    # Some feeds label outs as innings pitched. Do this only after strikeout checks.
+    if "inning" in s and "strike" not in s:
+        return "Outs Recorded"
+    return str(stat or "")
+
+
+def is_mlb_strikeout_prop(stat: str) -> bool:
+    return normalize_mlb_pitcher_prop_stat(stat) == "Strikeouts"
+
+
+def is_mlb_pitcher_outs_prop(stat: str) -> bool:
+    return normalize_mlb_pitcher_prop_stat(stat) == "Outs Recorded"
+
+
 def get_cached_pp_props_from_supabase(sport_filter: str, max_age_minutes: int = 720) -> Optional[list]:
     """
     Load the last successful PrizePicks slate from Supabase.
@@ -3241,9 +3266,9 @@ def save_pp_line_history_to_supabase(props: list, source: str = "live") -> bool:
             if sport != "MLB":
                 continue
             stat_l = stat.lower()
-            if "strikeout" not in stat_l and "strike out" not in stat_l and "out" not in stat_l and "inning" not in stat_l:
+            stat_norm = normalize_mlb_pitcher_prop_stat(stat)
+            if stat_norm not in ("Strikeouts", "Outs Recorded"):
                 continue
-            stat_norm = "Strikeouts" if ("strikeout" in stat_l or "strike out" in stat_l) else "Outs Recorded"
             rows.append({
                 "sport":       sport,
                 "player":      p.get("player", ""),
@@ -9615,13 +9640,10 @@ if st.session_state.active_sport == "edge":
             _data = _scanner_get_pitcher_data(pitcher_name)
             _ks   = _data.get("ks", [])
             _outs = _data.get("outs", [])
-            _stat_norm = str(stat).lower()
-            _is_outs = (
-                "out" in _stat_norm
-                or "inning" in _stat_norm
-                or "pitching outs" in _stat_norm
-            )
-            _stat_label = "Outs Recorded" if _is_outs else "Strikeouts"
+            _stat_label = normalize_mlb_pitcher_prop_stat(stat)
+            if _stat_label not in ("Strikeouts", "Outs Recorded"):
+                return None
+            _is_outs = _stat_label == "Outs Recorded"
             _line_history = summarize_pp_line_history(
                 line,
                 get_pp_line_history_from_supabase(pitcher_name, _stat_label)
@@ -9963,15 +9985,16 @@ if st.session_state.active_sport == "edge":
 
         # MLB-only scanner
         _filtered = [p for p in _filtered if p["sport"] == "MLB"]
+        _mlb_k_count = sum(1 for p in _filtered if is_mlb_strikeout_prop(p.get("stat", "")))
+        _mlb_out_count = sum(1 for p in _filtered if is_mlb_pitcher_outs_prop(p.get("stat", "")))
 
         # Stat filter — applied BEFORE threading so we don't spin up
         # 484 threads for 20 actual props
         _STAT_MAP = {
             "Points":               lambda s: "point" in s.lower() or s.lower() == "pts",
-            "Strikeouts":           lambda s: "strikeout" in s.lower() or "strike out" in s.lower(),
-            "Pitcher Outs":          lambda s: "out" in s.lower() or "inning" in s.lower(),
-            "All Pitcher Props":      lambda s: ("strikeout" in s.lower() or "strike out" in s.lower()
-                                                or "out" in s.lower() or "inning" in s.lower()),
+            "Strikeouts":           is_mlb_strikeout_prop,
+            "Pitcher Outs":          is_mlb_pitcher_outs_prop,
+            "All Pitcher Props":      lambda s: normalize_mlb_pitcher_prop_stat(s) in ("Strikeouts", "Outs Recorded"),
             "Rebounds":             lambda s: "rebound" in s.lower() or s.lower() == "reb",
             "Assists":              lambda s: "assist" in s.lower() or s.lower() == "ast",
             "3PM":                  lambda s: "3" in s.lower() or "three" in s.lower(),
@@ -10030,13 +10053,9 @@ if st.session_state.active_sport == "edge":
             try:
                 if prop["sport"] == "MLB":
                     # Normalize stat names — PrizePicks uses several pitcher labels
-                    _pl_stat = prop["stat"].lower()
-                    if "strikeout" in _pl_stat or "strike out" in _pl_stat:
-                        _norm_stat = "Strikeouts"
-                    elif "out" in _pl_stat or "inning" in _pl_stat:
-                        _norm_stat = "Outs Recorded"
-                    else:
-                        _norm_stat = prop["stat"]
+                    _norm_stat = normalize_mlb_pitcher_prop_stat(prop["stat"])
+                    if _norm_stat not in ("Strikeouts", "Outs Recorded"):
+                        return None
                     return run_mlb_edge_check(
                         prop["player"], prop["line"], _norm_stat, "Over", prop.get("team", "")
                     )
@@ -10075,7 +10094,8 @@ if st.session_state.active_sport == "edge":
         _status.empty()
         st.session_state.edge_results = _results
         st.session_state["edge_scan_summary"] = (
-            f"Analyzed {len(_filtered)} matching props · {len(_results)} model candidates returned"
+            f"Analyzed {len(_filtered)} matching props · {len(_results)} model candidates returned "
+            f"(slate parsed: {_mlb_k_count} K props, {_mlb_out_count} Outs props)"
         )
 
     # ── Display Results ───────────────────────────────────────────────────
@@ -10084,15 +10104,14 @@ if st.session_state.active_sport == "edge":
     _results = [
         r for r in _results
         if r.get("sport") == "MLB"
-        and ("strikeout" in str(r.get("stat", "")).lower()
-             or "out" in str(r.get("stat", "")).lower())
+        and normalize_mlb_pitcher_prop_stat(r.get("stat", "")) in ("Strikeouts", "Outs Recorded")
         and r.get("opp")
         and r.get("opp") not in ("?", "")
     ]
     if _edge_stat == "Strikeouts":
-        _results = [r for r in _results if "strikeout" in str(r.get("stat", "")).lower()]
+        _results = [r for r in _results if is_mlb_strikeout_prop(r.get("stat", ""))]
     elif _edge_stat == "Pitcher Outs":
-        _results = [r for r in _results if "out" in str(r.get("stat", "")).lower()]
+        _results = [r for r in _results if is_mlb_pitcher_outs_prop(r.get("stat", ""))]
 
     if _results:
         if st.session_state.get("edge_has_scanned"):
