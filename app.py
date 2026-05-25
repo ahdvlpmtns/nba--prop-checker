@@ -3220,6 +3220,159 @@ def save_pp_props_to_supabase(sport_filter: str, props: list) -> bool:
         return False
 
 
+def save_pp_line_history_to_supabase(props: list, source: str = "live") -> bool:
+    """
+    Save compact PrizePicks line snapshots for market-history comparison.
+    Optional table: pp_line_history(sport, player, team, stat, line, odds_type,
+    is_goblin, is_demon, source, snapshot_at).
+    """
+    if not props:
+        return False
+    try:
+        sb = get_supabase_client()
+        if not sb:
+            return False
+        import requests as _req
+        snapshot_at = datetime.utcnow().isoformat() + "Z"
+        rows = []
+        for p in props:
+            sport = str(p.get("sport", "")).upper()
+            stat = str(p.get("stat", ""))
+            if sport != "MLB":
+                continue
+            stat_l = stat.lower()
+            if "strikeout" not in stat_l and "strike out" not in stat_l and "out" not in stat_l and "inning" not in stat_l:
+                continue
+            stat_norm = "Strikeouts" if ("strikeout" in stat_l or "strike out" in stat_l) else "Outs Recorded"
+            rows.append({
+                "sport":       sport,
+                "player":      p.get("player", ""),
+                "team":        p.get("team", ""),
+                "stat":        stat_norm,
+                "line":        float(p.get("line", 0)),
+                "odds_type":   p.get("odds_type", "standard"),
+                "is_goblin":   bool(p.get("is_goblin", False)),
+                "is_demon":    bool(p.get("is_demon", False)),
+                "source":      source,
+                "snapshot_at": snapshot_at,
+            })
+        if not rows:
+            return False
+        hdrs = {
+            "apikey": sb.key,
+            "Authorization": f"Bearer {sb.key}",
+            "Content-Type": "application/json",
+            "Prefer": "return=minimal",
+        }
+        r = _req.post(
+            f"{sb.url}/rest/v1/pp_line_history",
+            headers=hdrs,
+            json=rows[:500],
+            timeout=10,
+        )
+        if r.ok:
+            set_runtime_metric(
+                "pp_line_history", "ok",
+                f"Saved {len(rows[:500])} MLB line snapshots",
+                table="pp_line_history", source=source,
+            )
+            return True
+        record_debug_error("pp_line_history.save", f"HTTP {r.status_code}: {r.text[:200]}")
+        return False
+    except Exception as e:
+        record_debug_error("pp_line_history.save", e)
+        return False
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def get_pp_line_history_from_supabase(player: str, stat: str, limit: int = 25) -> list:
+    """Return recent historical PrizePicks lines for one player/stat."""
+    try:
+        sb = get_supabase_client()
+        if not sb or not player or not stat:
+            return []
+        import requests as _req
+        from urllib.parse import quote as _quote
+        hdrs = {
+            "apikey": sb.key,
+            "Authorization": f"Bearer {sb.key}",
+            "Content-Type": "application/json",
+        }
+        url = (
+            f"{sb.url}/rest/v1/pp_line_history"
+            f"?sport=eq.MLB"
+            f"&player=eq.{_quote(str(player), safe='')}"
+            f"&stat=eq.{_quote(str(stat), safe='')}"
+            f"&select=line,team,odds_type,is_goblin,is_demon,snapshot_at"
+            f"&order=snapshot_at.desc"
+            f"&limit={int(limit)}"
+        )
+        r = _req.get(url, headers=hdrs, timeout=6)
+        if not r.ok:
+            record_debug_error("pp_line_history.load", f"HTTP {r.status_code}: {r.text[:200]}")
+            return []
+        rows = r.json()
+        return rows if isinstance(rows, list) else []
+    except Exception as e:
+        record_debug_error("pp_line_history.load", e)
+        return []
+
+
+def summarize_pp_line_history(current_line: float, rows: list) -> dict:
+    """Summarize current line vs recent stored PrizePicks snapshots."""
+    summary = {
+        "prev_line": None,
+        "open_line": None,
+        "move": 0.0,
+        "open_move": 0.0,
+        "snapshots": 0,
+        "last_seen": None,
+        "market_note": "",
+        "market_signal": "Neutral",
+    }
+    try:
+        if not rows:
+            return summary
+        parsed = []
+        for r in rows:
+            try:
+                line = float(r.get("line"))
+            except Exception:
+                continue
+            ts = pd.to_datetime(r.get("snapshot_at"), utc=True, errors="coerce")
+            parsed.append({"line": line, "snapshot_at": ts})
+        if not parsed:
+            return summary
+        parsed = sorted(parsed, key=lambda x: x["snapshot_at"] or pd.Timestamp.min.tz_localize("UTC"), reverse=True)
+        current = float(current_line)
+        # Previous snapshot with a different line is the most useful movement signal.
+        prev_diff = next((p for p in parsed if abs(p["line"] - current) >= 0.01), None)
+        oldest = parsed[-1]
+        prev_line = prev_diff["line"] if prev_diff else parsed[0]["line"]
+        open_line = oldest["line"]
+        move = round(current - prev_line, 2)
+        open_move = round(current - open_line, 2)
+        summary.update({
+            "prev_line": prev_line,
+            "open_line": open_line,
+            "move": move,
+            "open_move": open_move,
+            "snapshots": len(parsed),
+            "last_seen": parsed[0]["snapshot_at"].isoformat() if pd.notna(parsed[0]["snapshot_at"]) else None,
+        })
+        if abs(open_move) >= 1.0:
+            summary["market_signal"] = "Moved Up" if open_move > 0 else "Moved Down"
+            summary["market_note"] = f"PP line moved {open_move:+.1f} from first seen"
+        elif abs(move) >= 0.5:
+            summary["market_signal"] = "Moved Up" if move > 0 else "Moved Down"
+            summary["market_note"] = f"PP line moved {move:+.1f} from prior snapshot"
+        elif len(parsed) >= 3:
+            summary["market_note"] = "Line stable across recent snapshots"
+        return summary
+    except Exception:
+        return summary
+
+
 def _pp_local_cache_path(sport_filter: str) -> str:
     safe = re.sub(r"[^a-z0-9_-]+", "_", str(sport_filter).strip().lower())
     return os.path.join("/tmp", "propiq_cache", f"pp_slate_{safe}.json")
@@ -8682,6 +8835,7 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
     )
     save_pp_props_to_supabase(sport_filter, props)
     save_pp_props_to_local(sport_filter, props)
+    save_pp_line_history_to_supabase(props, source="live")
     return props
 
 
@@ -8842,6 +8996,8 @@ if st.session_state.active_sport == "edge":
                 reasons.append(f"Pitch-count ceiling {result['pc_ceiling']}")
             if is_outs_prop and result.get("avg_ip"):
                 reasons.append(f"Avg {result['avg_ip']} IP/start")
+            if result.get("market_note"):
+                reasons.append(result["market_note"])
             if result.get("park") and result.get("park") != "Neutral":
                 reasons.append(f"Park {result['park'].lower()}")
         else:
@@ -8858,7 +9014,7 @@ if st.session_state.active_sport == "edge":
             reasons.append(f"Avg edge {edge:+.1f}")
         if samples:
             reasons.append(f"{samples} game sample")
-        return grade, color, reasons[:4]
+        return grade, color, reasons[:5]
 
 
     def run_nba_edge_check(player_name: str, line: float, stat: str,
@@ -9299,6 +9455,10 @@ if st.session_state.active_sport == "edge":
                 or "pitching outs" in _stat_norm
             )
             _stat_label = "Outs Recorded" if _is_outs else "Strikeouts"
+            _line_history = summarize_pp_line_history(
+                line,
+                get_pp_line_history_from_supabase(pitcher_name, _stat_label)
+            )
             _raw_vals = _outs if _is_outs else _ks
             if not _raw_vals or len(_raw_vals) < 3:
                 return None
@@ -9428,6 +9588,15 @@ if st.session_state.active_sport == "edge":
             elif _park_sig == "Penalty":
                 _adj -= 0.02
 
+            # ── Signal 8: PrizePicks market movement ─────────────────
+            # This is intentionally small. A line moving up can confirm Over
+            # interest, while a line moving down is a warning for Over-only scans.
+            _market_move = float(_line_history.get("open_move") or _line_history.get("move") or 0)
+            if _market_move >= 0.5 and _edge > 0:
+                _adj += 0.015
+            elif _market_move <= -0.5:
+                _adj -= 0.025
+
             # If pitch-count math puts the realistic ceiling below the line,
             # prevent the scanner from labeling it a strong play.
             _pc_expected = None
@@ -9468,6 +9637,8 @@ if st.session_state.active_sport == "edge":
                 _reliability += 0.04
             if _pc_expected is not None and _pc_ceiling is not None:
                 _reliability += 0.04
+            if int(_line_history.get("snapshots", 0) or 0) >= 3:
+                _reliability += 0.02
             _reliability = max(0.50, min(0.88, _reliability))
 
             _adj = 0.50 + ((_raw_adj - 0.50) * _reliability)
@@ -9501,6 +9672,13 @@ if st.session_state.active_sport == "edge":
                 "game_date": _game_date,
                 "last_start": _last_start,
                 "l3":       round(_l3, 1),
+                "market_prev_line": _line_history.get("prev_line"),
+                "market_open_line": _line_history.get("open_line"),
+                "market_move": _line_history.get("move", 0.0),
+                "market_open_move": _line_history.get("open_move", 0.0),
+                "market_snapshots": _line_history.get("snapshots", 0),
+                "market_signal": _line_history.get("market_signal", "Neutral"),
+                "market_note": _line_history.get("market_note", ""),
             }
         except Exception:
             return None
@@ -9733,6 +9911,8 @@ if st.session_state.active_sport == "edge":
         if r.get("sport") == "MLB"
         and ("strikeout" in str(r.get("stat", "")).lower()
              or "out" in str(r.get("stat", "")).lower())
+        and r.get("opp")
+        and r.get("opp") != "?"
     ]
     if _edge_stat == "Strikeouts":
         _results = [r for r in _results if "strikeout" in str(r.get("stat", "")).lower()]
@@ -9750,8 +9930,8 @@ if st.session_state.active_sport == "edge":
                 r["edge_pct"] = round(_edge_pct, 1)
                 _with_edge.append(r)
 
-            # Sort by calibrated edge, then model probability.
-            _with_edge.sort(key=lambda r: (
+        # Sort by calibrated edge, then model probability.
+        _with_edge.sort(key=lambda r: (
             -r["edge_pct"],
             -r["adj"],
             0 if r.get("is_goblin") else 1
@@ -9848,6 +10028,14 @@ if st.session_state.active_sport == "edge":
                     if _r.get("opp_k") is not None:
                         _mlb_ctx_html += (
                             f"<span>Opp K%: <strong style='color:#f0f4f8;'>{_r.get('opp_k')}</strong></span>"
+                        )
+                    if _r.get("market_snapshots"):
+                        _move = float(_r.get("market_open_move") or _r.get("market_move") or 0)
+                        _move_col = "#00e896" if _move > 0 else ("#ff3d5c" if _move < 0 else "#9aaec4")
+                        _open_line = _r.get("market_open_line")
+                        _market_text = f"{_open_line} → {_r['line']} ({_move:+.1f})" if _open_line is not None else f"{_move:+.1f}"
+                        _mlb_ctx_html += (
+                            f"<span>Market: <strong style='color:{_move_col};'>{_market_text}</strong></span>"
                         )
                     _mlb_ctx_html += (
                         f"<span>Park: <strong style='color:#f0f4f8;'>{_r.get('park', 'Neutral')}</strong></span>"
