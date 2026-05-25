@@ -9834,6 +9834,8 @@ if st.session_state.active_sport == "edge":
             except Exception:
                 st.cache_data.clear()
             st.session_state.edge_results = []
+            st.session_state["edge_has_scanned"] = False
+            st.session_state["edge_scan_summary"] = ""
             st.toast("Cache cleared", icon="✅")
             st.rerun()
 
@@ -9997,7 +9999,8 @@ if st.session_state.active_sport == "edge":
         )
 
     # ── Display Results ───────────────────────────────────────────────────
-    _results = st.session_state.get("edge_results", [])
+    _raw_edge_results = st.session_state.get("edge_results", []) or []
+    _results = _raw_edge_results
     _results = [
         r for r in _results
         if r.get("sport") == "MLB"
@@ -10012,6 +10015,11 @@ if st.session_state.active_sport == "edge":
         _results = [r for r in _results if "out" in str(r.get("stat", "")).lower()]
 
     if _results:
+        if st.session_state.get("edge_has_scanned"):
+            st.caption(
+                f"Scanner returned {len(_raw_edge_results)} candidates · "
+                f"{len(_results)} match the current view filters"
+            )
         # Filter by calibrated scanner edge. We use 55% as the action threshold
         # because PrizePicks payouts and model noise make raw 50% too loose.
         _breakeven = 55.0
@@ -10247,13 +10255,18 @@ if st.session_state.active_sport == "edge":
                             st.session_state.edge_jump_prop    = _r["stat"]
                         st.rerun()
 
-    elif st.session_state.get("edge_has_scanned") and st.session_state.get("edge_results") == []:
+    elif st.session_state.get("edge_has_scanned"):
         _scan_summary = st.session_state.get("edge_scan_summary", "No model candidates returned.")
+        _raw_count = len(st.session_state.get("edge_results", []) or [])
+        _filter_note = (
+            f" {_raw_count} candidates were returned before the current dropdown/min-edge filters."
+            if _raw_count else ""
+        )
         st.markdown(
             "<div style='text-align:center;color:#6b7f96;font-family:JetBrains Mono,"
             "monospace;font-size:0.75rem;padding:2rem;'>"
-            f"No Edge Scanner candidates to display. {_scan_summary}. "
-            "Try All Pitcher Props, lower the minimum edge, or clear cache and scan again.</div>",
+            f"No Edge Scanner candidates to display. {_scan_summary}.{_filter_note} "
+            "Try All Pitcher Props, set minimum edge to Any edge, or clear cache and scan again.</div>",
             unsafe_allow_html=True
         )
     else:
