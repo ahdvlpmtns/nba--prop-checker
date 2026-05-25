@@ -9139,22 +9139,43 @@ if st.session_state.active_sport == "edge":
             return empty
 
 
+    def _scanner_norm_mlb_team(abbr: str) -> str:
+        """Normalize PrizePicks/MLB team abbreviation variants."""
+        a = str(abbr or "").upper().strip()
+        return {
+            "AZ": "ARI", "ARZ": "ARI",
+            "CWS": "CHW", "CHW": "CHW",
+            "WSH": "WSN", "WAS": "WSN",
+            "SF": "SFG", "SFG": "SFG",
+            "SD": "SDP", "SDP": "SDP",
+            "TB": "TBR", "TBR": "TBR",
+            "KC": "KCR", "KCR": "KCR",
+            "ATH": "ATH", "OAK": "ATH",
+            "LA": "LAD", "LAD": "LAD",
+            "NYY": "NYY", "NYM": "NYM",
+        }.get(a, a)
+
+
     @st.cache_data(ttl=900, show_spinner=False)
-    def _scanner_get_mlb_game_context(team_abbr: str) -> dict:
+    def _scanner_get_mlb_game_context(team_abbr: str, pitcher_name: str = "") -> dict:
         """Fast team-based MLB game lookup for Edge Scanner matchup context."""
         empty = {"opp": "", "home_team": "", "away_team": "", "venue": "", "side": "", "game_date": ""}
-        if not team_abbr:
+        if not team_abbr and not pitcher_name:
             return empty
         try:
             import requests as _req, datetime as _dtx, pytz as _ptz
             et = _ptz.timezone("America/New_York")
+            target_team = _scanner_norm_mlb_team(team_abbr)
+            _norm_name = lambda s: str(s or "").lower().replace("-", " ").replace(".", "").strip()
+            target_last = _norm_name(pitcher_name).split()[-1] if pitcher_name else ""
+            target_first = _norm_name(pitcher_name).split()[0] if pitcher_name else ""
             for offset in (0, 1, 2):
                 date_str = (
                     _dtx.datetime.now(et) + _dtx.timedelta(days=offset)
                 ).strftime("%Y-%m-%d")
                 r = _req.get(
                     "https://statsapi.mlb.com/api/v1/schedule",
-                    params={"sportId": 1, "date": date_str, "hydrate": "team,venue"},
+                    params={"sportId": 1, "date": date_str, "hydrate": "team,venue,probablePitcher"},
                     timeout=6,
                 )
                 if not r.ok:
@@ -9169,16 +9190,34 @@ if st.session_state.active_sport == "edge":
                         home = game.get("teams", {}).get("home", {}).get("team", {}).get("abbreviation", "")
                         away = game.get("teams", {}).get("away", {}).get("team", {}).get("abbreviation", "")
                         venue = game.get("venue", {}).get("name", "")
-                        if home.upper() == team_abbr.upper():
+
+                        if target_team and _scanner_norm_mlb_team(home) == target_team:
                             return {
                                 "opp": away, "home_team": home, "away_team": away,
                                 "venue": venue, "side": "home", "game_date": date_str,
                             }
-                        if away.upper() == team_abbr.upper():
+                        if target_team and _scanner_norm_mlb_team(away) == target_team:
                             return {
                                 "opp": home, "home_team": home, "away_team": away,
                                 "venue": venue, "side": "away", "game_date": date_str,
                             }
+
+                        # Fallback: match by probable pitcher when PrizePicks team is missing/wrong.
+                        if target_last:
+                            for side in ("home", "away"):
+                                prob = game.get("teams", {}).get(side, {}).get("probablePitcher", {})
+                                pname = _norm_name(prob.get("fullName", "") or prob.get("lastName", ""))
+                                if not pname:
+                                    continue
+                                if target_last in pname and (not target_first or target_first[0] in pname):
+                                    return {
+                                        "opp": away if side == "home" else home,
+                                        "home_team": home,
+                                        "away_team": away,
+                                        "venue": venue,
+                                        "side": side,
+                                        "game_date": date_str,
+                                    }
         except Exception as e:
             record_debug_error("mlb.edge.game_context", e)
         return empty
@@ -9201,7 +9240,7 @@ if st.session_state.active_sport == "edge":
                 return None
             team = next(
                 (t for t in tr.json().get("teams", [])
-                 if t.get("abbreviation", "").upper() == opp_abbr.upper()),
+                 if _scanner_norm_mlb_team(t.get("abbreviation", "")) == _scanner_norm_mlb_team(opp_abbr)),
                 None,
             )
             if not team:
@@ -9271,11 +9310,16 @@ if st.session_state.active_sport == "edge":
             _k9   = _data.get("k9")
             _avg_ip  = _data.get("avg_ip")
             _avg_pc  = _data.get("avg_pitches")
-            _game_ctx = _scanner_get_mlb_game_context(team)
+            _game_ctx = _scanner_get_mlb_game_context(team, pitcher_name)
             _opp = _game_ctx.get("opp", "")
             _home = _game_ctx.get("home_team", "")
             _game_date = _game_ctx.get("game_date", "")
             _last_start = _data.get("last_start_date")
+
+            # If we cannot identify the opponent/game, skip the result instead
+            # of showing "?" and ranking it without matchup context.
+            if not _opp or not _game_date:
+                return None
 
             # Stale PrizePicks slates can keep pitchers who already started today.
             # Starting pitchers also should not surface for tomorrow on short rest.
@@ -9530,6 +9574,7 @@ if st.session_state.active_sport == "edge":
 
     if _run_edge:
         st.session_state.edge_results = []
+        st.session_state["_edge_last_stat_filter"] = _edge_stat
 
         with st.spinner(f"Fetching PrizePicks {_edge_sport} slate..."):
             try:
@@ -9689,6 +9734,10 @@ if st.session_state.active_sport == "edge":
         and ("strikeout" in str(r.get("stat", "")).lower()
              or "out" in str(r.get("stat", "")).lower())
     ]
+    if _edge_stat == "Strikeouts":
+        _results = [r for r in _results if "strikeout" in str(r.get("stat", "")).lower()]
+    elif _edge_stat == "Pitcher Outs":
+        _results = [r for r in _results if "out" in str(r.get("stat", "")).lower()]
 
     if _results:
         # Filter by calibrated scanner edge. We use 55% as the action threshold
