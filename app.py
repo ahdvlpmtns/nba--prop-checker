@@ -7801,6 +7801,24 @@ if st.session_state.active_sport == "mlb":
         hits=sum(w for v,w in zip(vals,weights) if (v>=line if side=="Over" else v<=line))
         return hits/tw
 
+    def mlb_calibrated_hit_base(weighted: float, sample_n: int, consistency: float) -> float:
+        """
+        Shrink raw L10 hit rate toward neutral before context is applied.
+        A 10/10 hit streak is strong evidence, but it should not become 95%
+        before pitch-count projection, lineup, and variance have a chance to work.
+        """
+        try:
+            w = max(0.0, min(1.0, float(weighted)))
+            n = max(0, int(sample_n or 0))
+            cons = max(0.0, min(1.0, float(consistency or 0.5)))
+            sample_strength = min(n / 10.0, 1.0)
+            trust = 0.56 + (0.22 * sample_strength) + (0.10 * max(0.0, cons - 0.50) / 0.50)
+            trust = max(0.50, min(0.88, trust))
+            base = 0.50 + ((w - 0.50) * trust)
+            return max(0.08, min(0.92, base))
+        except Exception:
+            return max(0.05, min(0.95, weighted))
+
     def mlb_park_signal(home_team):
         pf = _MLB_PARK_FACTORS.get(home_team,1.00)
         if pf<=0.95: return "Boost"
@@ -8097,6 +8115,8 @@ if st.session_state.active_sport == "mlb":
             avg_val = vals.mean()
             edge    = avg_val - mlb_line
             _n_starts = len(vals)
+            cv   = vals.std() / avg_val if avg_val > 0 else 1.0
+            cons = max(0.1, min(0.95, 1.0 - cv * 0.8))
 
             # Small sample warning — show banner but still run the model
             if _n_starts < 4:
@@ -8116,6 +8136,18 @@ if st.session_state.active_sport == "mlb":
 
             # ── Signal 1: Weighted hit rate (L10 starts, recency-weighted)
             whr = mlb_weighted_hr(mlb_logs, mlb_line, _stat, mlb_side)
+            _calibrated_whr = mlb_calibrated_hit_base(whr, _n_starts, cons)
+            _variance_adj = 0.0
+            _variance_note = "Stable"
+            if cons >= 0.78 and abs(edge) >= 1.0:
+                _variance_adj = +0.015
+                _variance_note = "Low variance — recent hit rate more trustworthy"
+            elif cons < 0.45:
+                _variance_adj = -0.045
+                _variance_note = "High variance — confidence penalty"
+            elif cons < 0.58:
+                _variance_adj = -0.020
+                _variance_note = "Moderate variance — small penalty"
 
             # ── Signal 2: Opponent K% by handedness (most accurate version)
             _opp_kpct_vs_hand = None
@@ -8464,13 +8496,16 @@ if st.session_state.active_sport == "mlb":
             if _lineup_order and len(_lineup_order) < 7:
                 _lineup_adj += (-0.02 if mlb_side == "Over" else 0.02)
 
-            # ── Apply all 12 signals
-            adj = mlb_apply_adj(whr, okpct, psig, mlb_side)
+            # ── Apply all signals
+            # Start from a calibrated hit-rate base instead of raw L10. This
+            # keeps perfect recent streaks from maxing the model before the
+            # projection and matchup checks can matter.
+            adj = mlb_apply_adj(_calibrated_whr, okpct, psig, mlb_side)
             adj = max(0.05, min(0.95, adj
                       + _ha_adj + _form_adj + _rest_adj
                       + _k9_adj + _swstr_adj + _velo_adj + _vtrend_adj + _ip_adj
                       + _ump_adj + _wx_adj + _lineup_adj
-                      + _platoon_adj + _contact_adj + _pc_adj))
+                      + _platoon_adj + _contact_adj + _pc_adj + _variance_adj))
 
             # Projection anchor: recent hit rate can overstate low lines.
             # Blend the signal stack with a Poisson-style probability from
@@ -8482,7 +8517,7 @@ if st.session_state.active_sport == "mlb":
             if mlb_prop == "Strikeouts" and _pc_expected_k:
                 _proj_prob = mlb_poisson_side_prob(_pc_expected_k, mlb_line, mlb_side)
                 if _proj_prob is not None:
-                    _proj_blend_weight = 0.45
+                    _proj_blend_weight = 0.38
                     adj = ((1.0 - _proj_blend_weight) * adj) + (_proj_blend_weight * _proj_prob)
                     if mlb_side == "Over" and _proj_prob < 0.82:
                         adj = min(adj, _proj_prob + 0.08)
@@ -8514,13 +8549,21 @@ if st.session_state.active_sport == "mlb":
                         adj = min(adj, 0.72)
             if adj < _adj_before_guardrails - 0.001:
                 _guardrail_note = f"Guardrail capped projection-adjusted rate from {_adj_before_guardrails:.0%} to {adj:.0%}"
+
+            # Volatility guardrail. For noisy pitchers, don't let a hot L10
+            # alone create a high-confidence strong pick.
+            _adj_before_volatility = adj
+            _volatility_note = ""
+            if cons < 0.45 and abs(edge) < 2.0:
+                adj = min(adj, 0.72)
+            elif cons < 0.58 and abs(edge) < 1.0:
+                adj = min(adj, 0.78)
+            if adj < _adj_before_volatility - 0.001:
+                _volatility_note = f"Volatility capped rate from {_adj_before_volatility:.0%} to {adj:.0%}"
+
             tier = mlb_verdict(adj, edge, mlb_side,
                               pc_ceiling=_pc_k_ceiling,
                               line=mlb_line)
-
-            # Consistency
-            cv   = vals.std() / avg_val if avg_val > 0 else 1.0
-            cons = max(0.1, min(0.95, 1.0 - cv * 0.8))
 
             # Confidence score — weighted by signal count and strength
             _data_bonus = sum([
@@ -9085,7 +9128,7 @@ if st.session_state.active_sport == "mlb":
 
                 <div style='color:#f97316;font-size:0.65rem;letter-spacing:0.15em;text-transform:uppercase;
                             border-bottom:1px solid #1a2333;padding-bottom:4px;margin:14px 0 10px 0;'>
-                    SIGNAL TRACE — 15 SIGNALS
+                    SIGNAL TRACE — 16 SIGNALS
                 </div>
                 </div>
                 """, unsafe_allow_html=True)
@@ -9095,6 +9138,7 @@ if st.session_state.active_sport == "mlb":
                 _mlb_signals = [
                     # (label, value, adj_applied, description)
                     ("Weighted hit rate (base)",  f"{whr:.1%}",           None,        "Starting point — recency-weighted L10 starts"),
+                    ("Hit-rate calibration",      f"{_calibrated_whr:.1%}", None,      "Raw L10 shrunk toward neutral before context to avoid overconfidence"),
                     ("Opp K% " + _okpct_source,
                                                   f"{okpct:.1%}" if okpct else "N/A",
                                                   None,
@@ -9134,22 +9178,26 @@ if st.session_state.active_sport == "mlb":
                     ("Contact profile",           f"{okpct:.1%} K profile" if okpct else "N/A",
                                                   _contact_adj,
                                                   "Extra guardrail for contact-heavy or swing-and-miss confirmed/opponent profile"),
+                    ("Pitcher variance",           f"{cons:.1%} consistency",
+                                                  _variance_adj,
+                                                  _variance_note),
                     ("Projection anchor",          f"{_proj_prob:.1%}" if _proj_prob is not None else "N/A",
                                                   None,
                                                   _projection_note if _projection_note else "Projection unavailable — pitch-count expected K missing"),
                 ]
 
                 # Build mlb_apply_adj step trace
-                # Base = whr → then apply: opp_k, park, then individual adjs
-                _mlb_base_adj = mlb_apply_adj(whr, okpct, psig, mlb_side)
+                # Base = calibrated hit rate → then apply: opp_k, park, then individual adjs
+                _mlb_base_adj = mlb_apply_adj(_calibrated_whr, okpct, psig, mlb_side)
                 _mlb_adjs = [_ha_adj, _form_adj, _rest_adj, _k9_adj,
                              _swstr_adj, _velo_adj, _ip_adj, _ump_adj, _wx_adj,
-                             _lineup_adj, _platoon_adj, _contact_adj, _pc_adj]
+                             _lineup_adj, _platoon_adj, _contact_adj, _pc_adj,
+                             _variance_adj]
                 _mlb_adj_labels = [
                     "Home/Away split", "Recent form", "Rest days", "K/9 rate",
                     "SwStr%/K%", "Velocity", "Avg IP/start", "Umpire zone",
                     "Weather", "Batting order", "Platoon matchup", "Contact profile",
-                    "Pitch count est"
+                    "Pitch count est", "Pitcher variance"
                 ]
                 _mlb_running = _mlb_base_adj
                 _mlb_steps = []
@@ -9172,11 +9220,11 @@ if st.session_state.active_sport == "mlb":
                 </tr>
                 <tr style='border-bottom:1px solid #0d1520;'>
                     <td style='padding:4px 0;color:#9aaec4;'>Weighted hit rate (base)</td>
-                    <td style='color:#e2e8f0;font-weight:600;'>{whr:.1%}</td>
-                    <td style='color:#6b7f96;'>starting point</td>
+                    <td style='color:#e2e8f0;font-weight:600;'>{whr:.1%} → {_calibrated_whr:.1%}</td>
+                    <td style='color:#6b7f96;'>calibrated</td>
                     <td style='color:#7d93ab;'>—</td>
                     <td style='color:#e2e8f0;'>{_mlb_base_adj:.1%}</td>
-                    <td style='color:#6b7f96;'>opp K% + park applied</td>
+                    <td style='color:#6b7f96;'>shrunk base + opp K% + park applied</td>
                 </tr>"""
 
                 # Map signal names to their actual values for the trace
@@ -9196,6 +9244,7 @@ if st.session_state.active_sport == "mlb":
                     "Platoon matchup":  f"vsL:{_platoon_vs_l:.1%} vsR:{_platoon_vs_r:.1%} · {_lhb_count}L/{_rhb_count}R {'projected' if _lineup_projected else 'tonight'}" if (_platoon_vs_l and _platoon_vs_r) else "Lineup TBD",
                     "Contact profile":  f"{okpct:.1%} · {_okpct_source}" if okpct else "N/A",
                     "Pitch count est":  f"~{_pc_avg}p → exp {_pc_expected_k:.1f}K / ceil {_pc_k_ceiling:.1f}K · {'⚠️ On limit' if _pc_limit else 'No limit detected'}" if _pc_avg else "N/A",
+                    "Pitcher variance": f"{cons:.1%} consistency · {_variance_note}",
                 }
 
                 for _lbl2, _a, _bef, _aft in _mlb_steps:
@@ -9237,6 +9286,17 @@ if st.session_state.active_sport == "mlb":
                     <td style='color:#7d93ab;'>{_adj_before_guardrails:.1%}</td>
                     <td style='color:#e2e8f0;'>{adj:.1%}</td>
                     <td style='color:#ef4444;'>{adj - _adj_before_guardrails:+.1%}</td>
+                </tr>"""
+
+                if _volatility_note:
+                    trace_rows += f"""
+                <tr style='border-bottom:1px solid #0d1520;'>
+                    <td style='padding:4px 0;color:#9aaec4;'>Volatility guardrail</td>
+                    <td style='color:#e2e8f0;font-weight:600;'>{cons:.1%} consistency</td>
+                    <td style='color:#ef4444;'>cap</td>
+                    <td style='color:#7d93ab;'>{_adj_before_volatility:.1%}</td>
+                    <td style='color:#e2e8f0;'>{adj:.1%}</td>
+                    <td style='color:#ef4444;'>{adj - _adj_before_volatility:+.1%}</td>
                 </tr>"""
 
                 trace_rows += "</table></div>"
@@ -9320,7 +9380,11 @@ if st.session_state.active_sport == "mlb":
                     </tr>
                     <tr>
                         <td style='padding:3px 8px 3px 0;color:#6b7f96;'>Projection anchor</td>
-                        <td colspan='3' style='color:#9aaec4;'>{_projection_note or "N/A"}{f" · {_guardrail_note}" if _guardrail_note else ""}</td>
+                        <td colspan='3' style='color:#9aaec4;'>{_projection_note or "N/A"}{f" · {_guardrail_note}" if _guardrail_note else ""}{f" · {_volatility_note}" if _volatility_note else ""}</td>
+                    </tr>
+                    <tr>
+                        <td style='padding:3px 8px 3px 0;color:#6b7f96;'>Calibration</td>
+                        <td colspan='3' style='color:#9aaec4;'>Raw L10 {whr:.1%} → calibrated base {_calibrated_whr:.1%} · consistency {cons:.1%}</td>
                     </tr>
                     <tr style='border-top:1px solid #1a2333;'>
                         <td style='padding:6px 8px 3px 0;color:#6b7f96;'>VERDICT</td>
