@@ -1507,6 +1507,30 @@ div[data-testid="stTextInput"] input {
     border-color: rgba(255,255,255,0.13) !important;
     border-radius: 12px !important;
 }
+div[data-testid="stNumberInput"] > div,
+div[data-testid="stNumberInput"] > div > div,
+div[data-testid="stNumberInput"] section,
+div[data-testid="stNumberInput"] div[data-baseweb="input"] {
+    background: #0d1219 !important;
+    border-color: rgba(255,255,255,0.14) !important;
+    border-radius: 12px !important;
+}
+div[data-testid="stNumberInput"] input,
+div[data-testid="stNumberInput"] input[type="number"] {
+    background: #0d1219 !important;
+    color: #f6f9fc !important;
+    -webkit-text-fill-color: #f6f9fc !important;
+    caret-color: var(--accent) !important;
+}
+div[data-testid="stNumberInput"] button {
+    background: #111923 !important;
+    color: var(--text2) !important;
+    border-color: rgba(255,255,255,0.10) !important;
+}
+div[data-testid="stNumberInput"] button:hover {
+    background: #162233 !important;
+    color: var(--accent3) !important;
+}
 div[data-baseweb="popover"],
 div[data-baseweb="menu"],
 ul[data-testid="stSelectboxVirtualDropdown"] {
