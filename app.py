@@ -9658,7 +9658,11 @@ if st.session_state.active_sport == "edge":
     @st.cache_data(ttl=900, show_spinner=False)
     def _scanner_get_mlb_game_context(team_abbr: str, pitcher_name: str = "") -> dict:
         """Fast team-based MLB game lookup for Edge Scanner matchup context."""
-        empty = {"opp": "", "home_team": "", "away_team": "", "venue": "", "side": "", "game_date": ""}
+        empty = {
+            "opp": "", "home_team": "", "away_team": "", "venue": "",
+            "side": "", "game_date": "", "pitcher_matched": False,
+            "probable_name": "",
+        }
         if not team_abbr and not pitcher_name:
             return empty
         try:
@@ -9668,7 +9672,23 @@ if st.session_state.active_sport == "edge":
             _norm_name = lambda s: str(s or "").lower().replace("-", " ").replace(".", "").strip()
             target_last = _norm_name(pitcher_name).split()[-1] if pitcher_name else ""
             target_first = _norm_name(pitcher_name).split()[0] if pitcher_name else ""
-            for offset in (0, 1, 2):
+
+            def _probable_matches(prob: dict) -> bool:
+                pname = _norm_name(prob.get("fullName", "") or prob.get("lastName", ""))
+                if not pname or not target_last:
+                    return False
+                pparts = pname.split()
+                plast = pparts[-1] if pparts else pname
+                pfirst = pparts[0] if pparts else ""
+                last_ok = target_last == plast or target_last in pname
+                first_ok = (
+                    not target_first
+                    or target_first == pfirst
+                    or (len(target_first) >= 3 and pfirst.startswith(target_first[:3]))
+                )
+                return last_ok and first_ok
+
+            for offset in (0, 1):
                 date_str = (
                     _dtx.datetime.now(et) + _dtx.timedelta(days=offset)
                 ).strftime("%Y-%m-%d")
@@ -9689,34 +9709,45 @@ if st.session_state.active_sport == "edge":
                         home = game.get("teams", {}).get("home", {}).get("team", {}).get("abbreviation", "")
                         away = game.get("teams", {}).get("away", {}).get("team", {}).get("abbreviation", "")
                         venue = game.get("venue", {}).get("name", "")
+                        teams = game.get("teams", {})
 
-                        if target_team and _scanner_norm_mlb_team(home) == target_team:
+                        # Pitcher props must match the listed probable starter.
+                        # Team-only matching lets non-starting pitchers through.
+                        for side in ("home", "away"):
+                            team_abbr_side = home if side == "home" else away
+                            if target_team and _scanner_norm_mlb_team(team_abbr_side) != target_team:
+                                continue
+                            prob = teams.get(side, {}).get("probablePitcher", {})
+                            if not _probable_matches(prob):
+                                continue
                             return {
-                                "opp": away, "home_team": home, "away_team": away,
-                                "venue": venue, "side": "home", "game_date": date_str,
-                            }
-                        if target_team and _scanner_norm_mlb_team(away) == target_team:
-                            return {
-                                "opp": home, "home_team": home, "away_team": away,
-                                "venue": venue, "side": "away", "game_date": date_str,
+                                "opp": away if side == "home" else home,
+                                "home_team": home,
+                                "away_team": away,
+                                "venue": venue,
+                                "side": side,
+                                "game_date": date_str,
+                                "pitcher_matched": True,
+                                "probable_name": prob.get("fullName", "") or prob.get("lastName", ""),
                             }
 
-                        # Fallback: match by probable pitcher when PrizePicks team is missing/wrong.
+                        # Fallback: if PrizePicks team is missing/wrong, search
+                        # all probable pitchers by name.
                         if target_last:
                             for side in ("home", "away"):
-                                prob = game.get("teams", {}).get(side, {}).get("probablePitcher", {})
-                                pname = _norm_name(prob.get("fullName", "") or prob.get("lastName", ""))
-                                if not pname:
+                                prob = teams.get(side, {}).get("probablePitcher", {})
+                                if not _probable_matches(prob):
                                     continue
-                                if target_last in pname and (not target_first or target_first[0] in pname):
-                                    return {
-                                        "opp": away if side == "home" else home,
-                                        "home_team": home,
-                                        "away_team": away,
-                                        "venue": venue,
-                                        "side": side,
-                                        "game_date": date_str,
-                                    }
+                                return {
+                                    "opp": away if side == "home" else home,
+                                    "home_team": home,
+                                    "away_team": away,
+                                    "venue": venue,
+                                    "side": side,
+                                    "game_date": date_str,
+                                    "pitcher_matched": True,
+                                    "probable_name": prob.get("fullName", "") or prob.get("lastName", ""),
+                                }
         except Exception as e:
             record_debug_error("mlb.edge.game_context", e)
         return empty
@@ -9816,8 +9847,11 @@ if st.session_state.active_sport == "edge":
             _game_date = _game_ctx.get("game_date", "")
             _last_start = _data.get("last_start_date")
 
-            # If matchup context is not available yet, keep the candidate but
-            # mark it as TBD and let calibration lower confidence naturally.
+            # Pitcher markets are starter-dependent. Do not rank stale props
+            # unless MLB confirms this pitcher as the probable starter.
+            if not _game_ctx.get("pitcher_matched"):
+                return None
+
             _opp_display = _opp or "TBD"
 
             # Stale PrizePicks slates can keep pitchers who already started today.
