@@ -1703,6 +1703,111 @@ def record_debug_error(area: str, err) -> None:
         pass
 
 
+def add_to_pick_list(leg: dict) -> None:
+    """Add/update a visible PrizePicks shortlist leg in session state."""
+    if "parlay_legs" not in st.session_state:
+        st.session_state.parlay_legs = []
+    legs = st.session_state.parlay_legs
+    player = str(leg.get("player", ""))
+    sport = str(leg.get("sport", ""))
+    prop = str(leg.get("prop", ""))
+    side = str(leg.get("side", ""))
+    try:
+        line = float(leg.get("line", 0))
+    except Exception:
+        line = leg.get("line")
+
+    for i, existing in enumerate(legs):
+        try:
+            same_line = abs(float(existing.get("line", 0)) - float(line)) < 0.1
+        except Exception:
+            same_line = str(existing.get("line", "")) == str(line)
+        same_pick = (
+            str(existing.get("player", "")) == player
+            and str(existing.get("sport", "")) == sport
+            and str(existing.get("prop", "")) == prop
+            and str(existing.get("side", "")) == side
+            and same_line
+        )
+        if same_pick:
+            legs[i] = {**existing, **leg}
+            st.session_state.parlay_notice = f"Updated {player} in your pick list."
+            return
+
+    if len(legs) >= 6:
+        st.session_state.parlay_notice = "Pick list full. Remove one before adding another."
+        return
+
+    legs.append(leg)
+    st.session_state.parlay_notice = f"Added {player} to your pick list."
+
+
+def render_pick_list() -> None:
+    """Visible main-page shortlist for props the user is considering."""
+    legs = st.session_state.get("parlay_legs", [])
+    notice = st.session_state.pop("parlay_notice", None)
+    if notice:
+        if "full" in notice.lower():
+            st.warning(notice)
+        else:
+            st.success(notice)
+
+    with st.expander(f"🎯 PrizePicks Pick List ({len(legs)}/6)", expanded=bool(legs)):
+        if not legs:
+            st.markdown(
+                "<div style='font-family:JetBrains Mono,monospace;font-size:0.68rem;"
+                "color:#73869a;line-height:1.7;'>"
+                "Add picks from the Edge Scanner or player analyzers. This is your shortlist "
+                "for props you are thinking about entering in PrizePicks.</div>",
+                unsafe_allow_html=True,
+            )
+            return
+
+        remove_idx = None
+        for i, leg in enumerate(legs):
+            verdict = str(leg.get("verdict", ""))
+            color = {
+                "Strong Over": "#18f3a2", "Lean Over": "#ffd166",
+                "Strong Under": "#ff4768", "Lean Under": "#ff8a4c",
+            }.get(verdict, "#a8b9ca")
+            icon = {
+                "Strong Over": "🟢", "Lean Over": "🟡",
+                "Strong Under": "🔴", "Lean Under": "🟠",
+            }.get(verdict, "⚪")
+            c1, c2 = st.columns([10, 1])
+            with c1:
+                st.markdown(
+                    f"<div class='parlay-leg' style='border:1px solid rgba(255,255,255,0.08);"
+                    f"border-radius:12px;margin-bottom:0.4rem;background:rgba(255,255,255,0.035);'>"
+                    f"<div style='min-width:0;'>"
+                    f"<div class='parlay-leg-name'>{leg.get('player','')}</div>"
+                    f"<div style='display:flex;gap:6px;flex-wrap:wrap;margin-top:5px;'>"
+                    f"<span class='parlay-leg-pick'>{icon} {leg.get('side','')} {leg.get('line','')}</span>"
+                    f"<span class='edge-pill-v55 accent'>{leg.get('prop','')}</span>"
+                    f"<span class='edge-pill-v55'>{leg.get('sport','')}</span>"
+                    f"<span class='parlay-leg-conf' style='color:{color};'>"
+                    f"Conf {leg.get('confidence', leg.get('adj', '—'))}</span>"
+                    f"</div></div></div>",
+                    unsafe_allow_html=True,
+                )
+            with c2:
+                if st.button("✕", key=f"pick_list_remove_{i}", help="Remove"):
+                    remove_idx = i
+
+        if remove_idx is not None:
+            st.session_state.parlay_legs.pop(remove_idx)
+            st.rerun()
+
+        share_lines = ["PropIQ Pick List"] + [
+            f"{leg.get('player','')} - {leg.get('prop','')} {leg.get('side','')} {leg.get('line','')} ({leg.get('sport','')})"
+            for leg in legs
+        ]
+        st.code("\n".join(share_lines), language=None)
+        if st.button("Clear Pick List", key="main_clear_pick_list", use_container_width=True):
+            st.session_state.parlay_legs = []
+            st.rerun()
+
+
 def set_runtime_metric(key: str, status: str, detail: str = "", **extra) -> None:
     """Record lightweight app health/freshness metadata for diagnostics."""
     try:
@@ -6039,6 +6144,8 @@ with _sp3:
         st.session_state.active_sport = "edge"
         st.rerun()
 
+render_pick_list()
+
 
 with st.expander("Runtime Diagnostics", expanded=False):
     _metrics = st.session_state.get("runtime_metrics", {})
@@ -9064,17 +9171,8 @@ if st.session_state.active_sport == "mlb":
                             "sport":      "MLB",
                             "added":      __import__("datetime").datetime.now().strftime("%I:%M %p"),
                         }
-                        _exists = any(
-                            l["player"] == mlb_pitcher and l["line"] == mlb_line
-                            for l in st.session_state.parlay_legs
-                        )
-                        if not _exists and len(st.session_state.parlay_legs) < 6:
-                            st.session_state.parlay_legs.append(_new_mlb_leg)
-                            st.toast(f"✅ {mlb_pitcher} added to parlay!", icon="🎯")
-                        elif _exists:
-                            st.toast("Already in parlay", icon="⚠️")
-                        else:
-                            st.toast("Parlay full (6 legs max)", icon="🚫")
+                        add_to_pick_list(_new_mlb_leg)
+                        st.rerun()
 
             # Share button
             with st.expander("📤 Share this pick", expanded=False):
@@ -11110,18 +11208,8 @@ if st.session_state.active_sport == "edge":
                             "sport":      _r["sport"],
                             "added":      _dt_edge.datetime.now().strftime("%I:%M %p"),
                         }
-                        _dup = any(
-                            l["player"] == _r["player"] and
-                            abs(l["line"] - _r["line"]) < 0.1
-                            for l in st.session_state.parlay_legs
-                        )
-                        if not _dup and len(st.session_state.parlay_legs) < 6:
-                            st.session_state.parlay_legs.append(_new_leg)
-                            st.toast(f"✅ {_r['player']} added!", icon="🎯")
-                        elif _dup:
-                            st.toast("Already in parlay", icon="⚠️")
-                        else:
-                            st.toast("Parlay full (6 max)", icon="🚫")
+                        add_to_pick_list(_new_leg)
+                        st.rerun()
 
                 with _act_c3:
                     # ── Deep Dive — jump to full individual analyzer ──────
@@ -14145,17 +14233,8 @@ if st.session_state.logs is not None:
                     "sport":      "NBA",
                     "added":      _dtnow.datetime.now().strftime("%I:%M %p"),
                 }
-                _exists = any(
-                    l["player"] == full_name and abs(l["line"] - float(line)) < 0.1
-                    for l in st.session_state.parlay_legs
-                )
-                if not _exists and len(st.session_state.parlay_legs) < 6:
-                    st.session_state.parlay_legs.append(_new_leg)
-                    st.toast(f"✅ {full_name} added to parlay!", icon="🎯")
-                elif _exists:
-                    st.toast("Already in parlay", icon="⚠️")
-                else:
-                    st.toast("Parlay full (6 legs max)", icon="🚫")
+                add_to_pick_list(_new_leg)
+                st.rerun()
 
     # ── Share + Add to Tracker ───────────────
     _share_col, _tracker_col = st.columns(2)
