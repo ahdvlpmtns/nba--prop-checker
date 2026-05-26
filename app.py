@@ -9328,17 +9328,25 @@ if st.session_state.active_sport == "edge":
             grade, color = "Edge Play", "#9aaec4"
 
         if result.get("sport") == "MLB":
-            is_outs_prop = "out" in str(result.get("stat", "")).lower()
+            is_outs_prop = is_mlb_pitcher_outs_prop(result.get("stat", ""))
             if result.get("l3") is not None:
                 reasons.append(f"L3 avg {result['l3']}")
             if result.get("opp") == "TBD":
                 reasons.append("Opponent pending")
             if result.get("opp_k") is not None and not is_outs_prop:
                 reasons.append(f"Opponent K% {result['opp_k']}%")
+            if result.get("opp_bb") is not None and is_outs_prop:
+                reasons.append(f"Opponent BB% {result['opp_bb']}%")
             if result.get("pc_ceiling") is not None:
                 reasons.append(f"Pitch-count ceiling {result['pc_ceiling']}")
+            if result.get("projection_gap") is not None:
+                reasons.append(f"Projection gap {result['projection_gap']:+.1f}")
             if is_outs_prop and result.get("avg_ip"):
                 reasons.append(f"Avg {result['avg_ip']} IP/start")
+            if result.get("bullpen") and result.get("bullpen") != "Neutral":
+                reasons.append(f"Bullpen {str(result['bullpen']).lower()}")
+            if result.get("opp_profile") and result.get("opp_profile") != "Neutral":
+                reasons.append(result["opp_profile"])
             if result.get("market_note"):
                 reasons.append(result["market_note"])
             if result.get("park") and result.get("park") != "Neutral":
@@ -9791,6 +9799,162 @@ if st.session_state.active_sport == "edge":
             return None
 
 
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def _scanner_get_mlb_opp_plate_profile(opp_abbr: str) -> dict:
+        """
+        Opponent plate-discipline profile.
+        K% drives strikeout props; BB% and contact profile matter for pitcher outs
+        because long innings shorten leash.
+        """
+        empty = {"k_rate": None, "bb_rate": None, "pa": None, "profile": "Neutral"}
+        if not opp_abbr:
+            return empty
+        try:
+            import requests as _req, datetime as _dtx
+            season = _dtx.datetime.now().year
+            tr = _req.get(
+                "https://statsapi.mlb.com/api/v1/teams",
+                params={"sportId": 1, "season": season},
+                timeout=6,
+            )
+            if not tr.ok:
+                return empty
+            team = next(
+                (t for t in tr.json().get("teams", [])
+                 if _scanner_norm_mlb_team(t.get("abbreviation", "")) == _scanner_norm_mlb_team(opp_abbr)),
+                None,
+            )
+            if not team:
+                return empty
+            sr = _req.get(
+                f"https://statsapi.mlb.com/api/v1/teams/{team['id']}/stats",
+                params={"stats": "season", "group": "hitting", "season": season},
+                timeout=6,
+            )
+            if not sr.ok:
+                return empty
+            stat = sr.json().get("stats", [{}])[0].get("splits", [{}])[0].get("stat", {})
+            pa = int(stat.get("plateAppearances", 0) or 0)
+            ab = int(stat.get("atBats", 0) or 0)
+            k = int(stat.get("strikeOuts", 0) or 0)
+            bb = int(stat.get("baseOnBalls", 0) or 0)
+            denom = pa if pa > 0 else ab
+            if denom <= 0:
+                return empty
+            k_rate = k / denom
+            bb_rate = bb / denom
+            if k_rate >= 0.255 and bb_rate <= 0.085:
+                profile = "Aggressive K"
+            elif k_rate <= 0.195 and bb_rate >= 0.095:
+                profile = "Grinder"
+            elif k_rate <= 0.205:
+                profile = "Contact"
+            elif bb_rate >= 0.100:
+                profile = "Patient"
+            else:
+                profile = "Neutral"
+            return {
+                "k_rate": round(k_rate, 3),
+                "bb_rate": round(bb_rate, 3),
+                "pa": denom,
+                "profile": profile,
+            }
+        except Exception as e:
+            record_debug_error("mlb.edge.plate_profile", e)
+            return empty
+
+
+    def _scanner_ip_to_outs(ip_raw) -> int:
+        """Convert MLB innings format, e.g. 5.2, to outs."""
+        try:
+            s = str(ip_raw or "0")
+            if "." in s:
+                whole, frac = s.split(".", 1)
+                return int(whole or 0) * 3 + int((frac or "0")[0])
+            return int(float(s) * 3)
+        except Exception:
+            return 0
+
+
+    @st.cache_data(ttl=1800, show_spinner=False)
+    def _scanner_get_bullpen_fatigue(team_abbr: str) -> dict:
+        """
+        Estimate bullpen fatigue from the team's most recent completed games.
+        Taxed bullpens can extend a starter's leash, especially for Outs Recorded.
+        """
+        empty = {"signal": "Neutral", "relief_outs_l2": None, "games": 0}
+        if not team_abbr:
+            return empty
+        try:
+            import requests as _req, datetime as _dtx, pytz as _ptz
+            et = _ptz.timezone("America/New_York")
+            today = _dtx.datetime.now(et).date()
+            target = _scanner_norm_mlb_team(team_abbr)
+            relief_outs = []
+
+            for offset in range(1, 5):
+                if len(relief_outs) >= 2:
+                    break
+                date_str = (today - _dtx.timedelta(days=offset)).strftime("%Y-%m-%d")
+                r = _req.get(
+                    "https://statsapi.mlb.com/api/v1/schedule",
+                    params={"sportId": 1, "date": date_str, "hydrate": "team"},
+                    timeout=6,
+                )
+                if not r.ok:
+                    continue
+                for day in r.json().get("dates", []):
+                    for game in day.get("games", []):
+                        status = str(game.get("status", {}).get("abstractGameState", "")).lower()
+                        if status != "final":
+                            continue
+                        teams = game.get("teams", {})
+                        home = teams.get("home", {}).get("team", {}).get("abbreviation", "")
+                        away = teams.get("away", {}).get("team", {}).get("abbreviation", "")
+                        side = None
+                        if _scanner_norm_mlb_team(home) == target:
+                            side = "home"
+                        elif _scanner_norm_mlb_team(away) == target:
+                            side = "away"
+                        if not side:
+                            continue
+
+                        gid = game.get("gamePk")
+                        if not gid:
+                            continue
+                        br = _req.get(f"https://statsapi.mlb.com/api/v1/game/{gid}/boxscore", timeout=6)
+                        if not br.ok:
+                            continue
+                        box_team = br.json().get("teams", {}).get(side, {})
+                        pitchers = box_team.get("pitchers", [])
+                        players = box_team.get("players", {})
+                        if not pitchers:
+                            continue
+                        total_outs = 0
+                        starter_outs = 0
+                        for idx, pid in enumerate(pitchers):
+                            p = players.get(f"ID{pid}", {})
+                            ip = p.get("stats", {}).get("pitching", {}).get("inningsPitched", "0")
+                            outs = _scanner_ip_to_outs(ip)
+                            total_outs += outs
+                            if idx == 0:
+                                starter_outs = outs
+                        relief_outs.append(max(0, total_outs - starter_outs))
+            if not relief_outs:
+                return empty
+            total_relief = sum(relief_outs[:2])
+            if total_relief >= 24:
+                signal = "Taxed"
+            elif total_relief <= 9 and len(relief_outs) >= 2:
+                signal = "Fresh"
+            else:
+                signal = "Neutral"
+            return {"signal": signal, "relief_outs_l2": total_relief, "games": len(relief_outs)}
+        except Exception as e:
+            record_debug_error("mlb.edge.bullpen", e)
+            return empty
+
+
     def _scanner_mlb_park_signal(home_team: str) -> str:
         """Simple K-friendly park signal. Run-friendly parks slightly hurt Ks."""
         park_factors = {
@@ -9872,7 +10036,14 @@ if st.session_state.active_sport == "edge":
             except Exception:
                 pass
 
-            _opp_k = _scanner_get_mlb_opp_k_rate(_opp) if _opp else None
+            _opp_profile = _scanner_get_mlb_opp_plate_profile(_opp) if _opp else {}
+            _opp_k = _opp_profile.get("k_rate")
+            if _opp_k is None:
+                _opp_k = _scanner_get_mlb_opp_k_rate(_opp) if _opp else None
+            _opp_bb = _opp_profile.get("bb_rate")
+            _opp_profile_label = _opp_profile.get("profile", "Neutral")
+            _bullpen = _scanner_get_bullpen_fatigue(team) if team else {}
+            _bullpen_signal = _bullpen.get("signal", "Neutral")
             _park_sig = _scanner_mlb_park_signal(_home) if _home else "Neutral"
 
             # ── Signal 1: Weighted hit rate (base) ───────────────────
@@ -9957,10 +10128,25 @@ if st.session_state.active_sport == "edge":
                     elif _opp_k <= 0.175: _adj -= 0.07
                     elif _opp_k <= 0.195: _adj -= 0.045
                     elif _opp_k <= 0.210: _adj -= 0.02
+            if _opp_bb is not None:
+                if _is_outs:
+                    if _opp_bb >= 0.105:   _adj -= 0.035
+                    elif _opp_bb >= 0.095: _adj -= 0.02
+                    elif _opp_bb <= 0.070: _adj += 0.02
+                else:
+                    if _opp_bb >= 0.105:   _adj -= 0.015
+                    elif _opp_bb <= 0.070 and _opp_k and _opp_k >= 0.245:
+                        _adj += 0.015
             if _park_sig == "Boost":
                 _adj += 0.02
             elif _park_sig == "Penalty":
                 _adj -= 0.02
+
+            # ── Signal 7b: bullpen leash context ─────────────────────
+            if _bullpen_signal == "Taxed":
+                _adj += 0.035 if _is_outs else 0.01
+            elif _bullpen_signal == "Fresh":
+                _adj -= 0.025 if _is_outs else 0.005
 
             # ── Signal 8: PrizePicks market movement ─────────────────
             # This is intentionally small. A line moving up can confirm Over
@@ -9986,11 +10172,35 @@ if st.session_state.active_sport == "edge":
                     _pc_ceiling = round((_ceil_ip * (_k9 / 9.0)) + 0.4, 1)
                 if _pc_expected is not None and _pc_expected <= line - (1.0 if _is_outs else 0.25):
                     _adj = min(_adj, 0.68)
+                if _pc_expected is not None:
+                    _proj_gap = _pc_expected - line
+                    if _is_outs:
+                        if _proj_gap >= 3.0:
+                            _adj += 0.05
+                        elif _proj_gap >= 1.5:
+                            _adj += 0.025
+                        elif _proj_gap <= -3.0:
+                            _adj -= 0.07
+                        elif _proj_gap <= -1.5:
+                            _adj -= 0.035
+                    else:
+                        if _proj_gap >= 1.25:
+                            _adj += 0.045
+                        elif _proj_gap >= 0.60:
+                            _adj += 0.02
+                        elif _proj_gap <= -1.25:
+                            _adj -= 0.065
+                        elif _proj_gap <= -0.60:
+                            _adj -= 0.03
+                else:
+                    _proj_gap = None
                 if _pc_ceiling is not None:
                     if _pc_ceiling <= line:
                         _adj = min(_adj, 0.62)
                     elif _pc_ceiling <= line + 0.5:
                         _adj = min(_adj, 0.71)
+            else:
+                _proj_gap = None
 
             _raw_adj = max(0.05, min(0.95, _adj))
 
@@ -10011,6 +10221,10 @@ if st.session_state.active_sport == "edge":
                 _reliability += 0.04
             if _pc_expected is not None and _pc_ceiling is not None:
                 _reliability += 0.04
+            if _opp_bb is not None:
+                _reliability += 0.03
+            if _bullpen_signal != "Neutral":
+                _reliability += 0.02
             if int(_line_history.get("snapshots", 0) or 0) >= 3:
                 _reliability += 0.02
             _reliability = max(0.50, min(0.88, _reliability))
@@ -10039,10 +10253,15 @@ if st.session_state.active_sport == "edge":
                 "avg_ip":   _avg_ip,
                 "opp":      _opp_display,
                 "opp_k":    round(_opp_k * 100, 1) if _opp_k is not None else None,
+                "opp_bb":   round(_opp_bb * 100, 1) if _opp_bb is not None else None,
+                "opp_profile": _opp_profile_label,
                 "park":     _park_sig,
+                "bullpen":  _bullpen_signal,
+                "bullpen_relief_outs": _bullpen.get("relief_outs_l2"),
                 "pc":       _avg_pc,
                 "pc_expected": _pc_expected,
                 "pc_ceiling": _pc_ceiling,
+                "projection_gap": round(_proj_gap, 1) if _proj_gap is not None else None,
                 "game_date": _game_date,
                 "last_start": _last_start,
                 "l3":       round(_l3, 1),
@@ -10067,9 +10286,9 @@ if st.session_state.active_sport == "edge":
         <div class='v55-kicker'>V5.5 Edge Board</div>
         <div class='v55-title'>MLB pitcher props, filtered into a cleaner shortlist.</div>
         <div class='v55-subcopy'>
-            Scan PrizePicks lines, separate Strikeouts from Pitcher Outs, and rank only calibrated
-            candidates. Cards now lead with model, edge, line context, and risk tags so you can
-            decide what deserves a deep dive.
+            Scan PrizePicks pitcher lines, separate Strikeouts from Pitcher Outs, and rank only
+            probable starters. Cards now blend pitch-count projection, opponent plate discipline,
+            bullpen leash context, market movement, and risk tags before anything reaches your board.
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -10391,13 +10610,31 @@ if st.session_state.active_sport == "edge":
                     _risk_pills += "<span class='edge-pill-v55 warn'>Ceiling tight</span>"
                 _game_pill = f"<span class='edge-pill-v55'>Game {_r.get('game_date')}</span>" if _r.get("game_date") else ""
                 _opp_k_pill = f"<span class='edge-pill-v55'>Opp K% {_r.get('opp_k')}</span>" if _r.get("opp_k") is not None else ""
+                _opp_bb_pill = f"<span class='edge-pill-v55'>Opp BB% {_r.get('opp_bb')}</span>" if _r.get("opp_bb") is not None else ""
+                _opp_profile_pill = (
+                    f"<span class='edge-pill-v55'>{_r.get('opp_profile')} lineup</span>"
+                    if _r.get("opp_profile") and _r.get("opp_profile") != "Neutral" else ""
+                )
+                _bullpen_pill = (
+                    f"<span class='edge-pill-v55 {'accent' if _r.get('bullpen') == 'Taxed' else 'warn'}'>"
+                    f"Bullpen {_r.get('bullpen')}</span>"
+                    if _r.get("bullpen") and _r.get("bullpen") != "Neutral" else ""
+                )
+                _projection_pill = (
+                    f"<span class='edge-pill-v55'>Proj gap {_r.get('projection_gap'):+.1f}</span>"
+                    if _r.get("projection_gap") is not None else ""
+                )
                 _ctx_pills = (
                     f"<span class='edge-pill-v55 accent'>{_r['stat']}</span>"
                     f"<span class='edge-pill-v55'>Over {_r['line']}</span>"
                     f"<span class='edge-pill-v55'>vs {_r.get('opp', 'TBD')}</span>"
                     f"{_game_pill}"
                     f"{_opp_k_pill}"
+                    f"{_opp_bb_pill}"
+                    f"{_opp_profile_pill}"
                     f"<span class='edge-pill-v55'>Park {_r.get('park', 'Neutral')}</span>"
+                    f"{_bullpen_pill}"
+                    f"{_projection_pill}"
                     f"{_goblin_tag}{_risk_pills}"
                 )
                 if _r.get("market_snapshots"):
