@@ -1269,7 +1269,7 @@ button[key="mobile_quick_analyze"] {
 .edge-pill-v55.warn { color: var(--orange); background: rgba(255,112,67,0.08); border-color: rgba(255,112,67,0.22); }
 .edge-score-v55 {
     display: grid;
-    grid-template-columns: repeat(3, auto);
+    grid-template-columns: repeat(4, auto);
     gap: 0.75rem;
     text-align: right;
 }
@@ -1318,7 +1318,7 @@ button[key="mobile_quick_analyze"] {
     .edge-card-v55 { padding: 0.9rem; }
     .edge-top-v55 { grid-template-columns: 1fr; gap: 0.75rem; }
     .edge-score-v55 {
-        grid-template-columns: repeat(3, minmax(0, 1fr));
+        grid-template-columns: repeat(4, minmax(0, 1fr));
         text-align: left;
         gap: 0.45rem;
     }
@@ -1659,7 +1659,7 @@ div[data-baseweb="popover"] > div {
         border-radius: 14px;
     }
     .edge-score-v55 {
-        grid-template-columns: repeat(3, minmax(0, 1fr));
+        grid-template-columns: repeat(4, minmax(0, 1fr));
     }
     .edge-score-item-v55 {
         min-width: 0;
@@ -10571,6 +10571,23 @@ if st.session_state.active_sport == "edge":
                 _adj = min(_adj, 0.66)
             _adj = max(0.05, min(0.90, _adj))
 
+            _data_bonus = sum([
+                5 if _opp_k is not None else 0,
+                4 if _k9 else 0,
+                3 if _avg_ip else 0,
+                3 if _avg_pc else 0,
+                2 if _game_date else 0,
+                2 if _opp_bb is not None else 0,
+                2 if _bullpen_signal != "Neutral" else 0,
+                2 if int(_line_history.get("snapshots", 0) or 0) >= 3 else 0,
+            ])
+            _scanner_conf = min(99, int(
+                max(0, min((_adj - 0.50) / 0.45, 1.0) * 65) +
+                min(abs(_edge) / 8.0, 1.0) * 12 +
+                _cons * 8 +
+                _data_bonus
+            ))
+
             return {
                 "sport":    "MLB",
                 "player":   pitcher_name,
@@ -10578,6 +10595,7 @@ if st.session_state.active_sport == "edge":
                 "line":     line,
                 "side":     side,
                 "adj":      round(_adj * 100, 1),
+                "confidence": _scanner_conf,
                 "raw_adj":  round(_raw_adj * 100, 1),
                 "reliability": round(_reliability * 100, 1),
                 "avg":      _avg,
@@ -10936,6 +10954,8 @@ if st.session_state.active_sport == "edge":
                 _card_class = "strong" if _is_strong else ("lean" if _is_lean else "")
                 _model_color_class = "green" if _r["adj"] >= 67 else ("yellow" if _r["adj"] >= 60 else "")
                 _edge_color_class = "green" if _r["edge_pct"] >= 7 else ("yellow" if _r["edge_pct"] >= 3 else "")
+                _conf_val = int(_r.get("confidence", _r["adj"]) or 0)
+                _conf_color_class = "green" if _conf_val >= 80 else ("yellow" if _conf_val >= 65 else "")
                 _risk_pills = ""
                 if _r.get("opp") == "TBD":
                     _risk_pills += "<span class='edge-pill-v55 warn'>Opponent TBD</span>"
@@ -10987,6 +11007,7 @@ if st.session_state.active_sport == "edge":
                     f"</div>"
                     f"<div class='edge-score-v55'>"
                     f"<div class='edge-score-item-v55'><span>Model</span><strong class='{_model_color_class}'>{_r['adj']}%</strong></div>"
+                    f"<div class='edge-score-item-v55'><span>Conf</span><strong class='{_conf_color_class}'>{_conf_val}</strong></div>"
                     f"<div class='edge-score-item-v55'><span>Edge</span><strong class='{_edge_color_class}'>+{_r['edge_pct']}%</strong></div>"
                     f"<div class='edge-score-item-v55'><span>Grade</span><strong style='color:{_grade_col};'>{_grade_lbl}</strong></div>"
                     f"</div>"
@@ -11020,7 +11041,7 @@ if st.session_state.active_sport == "edge":
                             "line":       _r["line"],
                             "side":       "Over",
                             "verdict":    _tier_lbl,
-                            "confidence": int(_r["adj"]),
+                            "confidence": _conf_val,
                             "adj":        _r["adj"],
                             "sport":      _r["sport"],
                             "added":      _dt_edge.datetime.now().strftime("%I:%M %p"),
