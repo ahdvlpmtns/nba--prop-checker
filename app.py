@@ -1433,6 +1433,23 @@ button[data-testid="baseButton-secondary"][key="sport_edge"] {
     color: var(--text2) !important;
 }
 
+/* Undo older column-button positioning that can make mobile taps hit the wrong action. */
+div[data-testid="column"],
+div[data-testid="column"]:first-child {
+    position: static !important;
+}
+div[data-testid="column"] .stButton,
+div[data-testid="column"]:first-child .stButton {
+    position: static !important;
+    top: auto !important;
+    right: auto !important;
+    z-index: auto !important;
+    width: 100% !important;
+}
+div[data-testid="column"]:first-child .stButton > button {
+    width: 100% !important;
+}
+
 .section-header {
     color: var(--text2);
     border-bottom: 1px solid rgba(255,255,255,0.08);
@@ -9171,6 +9188,7 @@ if st.session_state.active_sport == "mlb":
                             "sport":      "MLB",
                             "added":      __import__("datetime").datetime.now().strftime("%I:%M %p"),
                         }
+                        st.session_state.active_sport = "mlb"
                         add_to_pick_list(_new_mlb_leg)
                         st.rerun()
 
@@ -11189,12 +11207,12 @@ if st.session_state.active_sport == "edge":
                 )
 
                 # Action buttons row
-                _btn_key_safe = _re_edge.sub(r'[^a-zA-Z0-9]', '_', f"{_r['player']}_{_r['line']}_{_r['sport']}")
-                _act_c1, _act_c2, _act_c3 = st.columns([3, 1, 1])
+                _btn_key_safe = _re_edge.sub(r'[^a-zA-Z0-9]', '_', f"{_r['player']}_{_r['stat']}_{_r['line']}_{_r['sport']}")
+                _act_c2, _act_c3 = st.columns(2)
 
                 with _act_c2:
                     # ── Add to Parlay ─────────────────────────────────────
-                    if st.button("➕ Parlay", key=f"ep_{_btn_key_safe}",
+                    if st.button("➕ Add to Pick List", key=f"ep_{_btn_key_safe}",
                                  use_container_width=True):
                         import datetime as _dt_edge
                         _new_leg = {
@@ -11208,6 +11226,7 @@ if st.session_state.active_sport == "edge":
                             "sport":      _r["sport"],
                             "added":      _dt_edge.datetime.now().strftime("%I:%M %p"),
                         }
+                        st.session_state.active_sport = "edge"
                         add_to_pick_list(_new_leg)
                         st.rerun()
 
@@ -14233,6 +14252,7 @@ if st.session_state.logs is not None:
                     "sport":      "NBA",
                     "added":      _dtnow.datetime.now().strftime("%I:%M %p"),
                 }
+                st.session_state.active_sport = "nba"
                 add_to_pick_list(_new_leg)
                 st.rerun()
 
