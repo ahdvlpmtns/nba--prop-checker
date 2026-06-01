@@ -8288,6 +8288,147 @@ if st.session_state.active_sport == "mlb":
         except Exception:
             return empty
 
+    def mlb_trap_detector(
+        prop: str,
+        side: str,
+        line: float,
+        tier: str,
+        adj: float,
+        edge: float,
+        consistency: float,
+        lineup_confirmed: bool,
+        lineup_projected: bool,
+        pc_avg: Optional[float],
+        pc_k_ceiling: Optional[float],
+        pc_outs_ceiling: Optional[float],
+        bf_expected_k: Optional[float],
+        outs_expected: Optional[float],
+        opp_bb_rate: Optional[float],
+        bullpen_signal: str,
+        weather_impact: str,
+        pitcher_confirmed: bool,
+    ) -> dict:
+        """Identify strong-looking MLB props that still carry hidden risk."""
+        risks = []
+        cautions = []
+        positives = []
+        is_outs = prop != "Strikeouts"
+
+        def add_risk(label, severity=1):
+            risks.append({"label": label, "severity": severity})
+
+        def add_caution(label):
+            cautions.append(label)
+
+        try:
+            if not pitcher_confirmed:
+                add_risk("Pitcher not confirmed as probable starter", 3)
+
+            if lineup_projected and not lineup_confirmed:
+                add_caution("Lineup is projected from prior game")
+            elif lineup_confirmed:
+                positives.append("Lineup confirmed")
+
+            if consistency < 0.45:
+                add_risk(f"Volatile logs ({consistency:.0%} consistency)", 2)
+            elif consistency < 0.58:
+                add_caution(f"Moderate volatility ({consistency:.0%})")
+
+            if pc_avg is None:
+                add_caution("Pitch count unavailable")
+            elif pc_avg < 82:
+                add_risk(f"Low pitch-count path (~{pc_avg}p)", 2)
+
+            if weather_impact == "Hurts Over" and side == "Over":
+                add_risk("Weather can shorten outing", 1)
+            elif weather_impact == "Hurts Over" and side == "Under":
+                positives.append("Weather supports Under")
+
+            if is_outs:
+                if side == "Over":
+                    if outs_expected is not None:
+                        if outs_expected <= line + 0.5:
+                            add_risk(f"Expected outs barely clear line ({outs_expected:.1f})", 3)
+                        elif outs_expected <= line + 1.5:
+                            add_risk(f"Thin outs cushion ({outs_expected:.1f})", 2)
+                        elif outs_expected >= line + 2.5:
+                            positives.append("Workload projection has cushion")
+                    if pc_outs_ceiling is not None and pc_outs_ceiling <= line + 0.5:
+                        add_risk(f"Pitch-count ceiling tight ({pc_outs_ceiling:.1f} outs)", 3)
+                    if opp_bb_rate is not None and opp_bb_rate >= 0.105:
+                        add_risk(f"Patient opponent ({opp_bb_rate:.1%} BB%)", 2)
+                    elif opp_bb_rate is not None and opp_bb_rate <= 0.070:
+                        positives.append("Opponent rarely walks")
+                    if bullpen_signal == "Fresh":
+                        add_risk("Fresh bullpen may shorten leash", 1)
+                    elif bullpen_signal == "Taxed":
+                        positives.append("Taxed bullpen may extend leash")
+                else:
+                    if outs_expected is not None:
+                        if outs_expected >= line - 0.5:
+                            add_risk(f"Expected outs too close for Under ({outs_expected:.1f})", 3)
+                        elif outs_expected >= line - 1.5:
+                            add_risk(f"Thin Under cushion ({outs_expected:.1f})", 2)
+                    if bullpen_signal == "Taxed":
+                        add_risk("Taxed bullpen can extend starter", 2)
+                    if opp_bb_rate is not None and opp_bb_rate <= 0.070:
+                        add_caution("Low-walk opponent can speed innings")
+            else:
+                if side == "Over":
+                    if bf_expected_k is not None:
+                        if bf_expected_k <= line + 0.25:
+                            add_risk(f"Expected Ks barely clear line ({bf_expected_k:.1f})", 3)
+                        elif bf_expected_k <= line + 0.75:
+                            add_risk(f"Thin K cushion ({bf_expected_k:.1f})", 2)
+                        elif bf_expected_k >= line + 1.5:
+                            positives.append("K projection has cushion")
+                    if pc_k_ceiling is not None and pc_k_ceiling <= line + 0.25:
+                        add_risk(f"K ceiling tight ({pc_k_ceiling:.1f})", 3)
+                else:
+                    if bf_expected_k is not None:
+                        if bf_expected_k >= line - 0.25:
+                            add_risk(f"Expected Ks too close for Under ({bf_expected_k:.1f})", 3)
+                        elif bf_expected_k >= line - 0.75:
+                            add_risk(f"Thin Under cushion ({bf_expected_k:.1f})", 2)
+
+            if "Strong" in str(tier) and adj < 0.76:
+                add_caution("Strong tier is near threshold")
+            if abs(edge) < 0.75:
+                add_caution("Small historical edge")
+
+            severity = sum(r["severity"] for r in risks)
+            if severity >= 5:
+                label, css, icon = "Do Not Force", "red", "🚫"
+            elif severity >= 3:
+                label, css, icon = "Trap Risk", "orange", "⚠️"
+            elif severity >= 1 or len(cautions) >= 2:
+                label, css, icon = "Watchlist", "yellow", "👀"
+            else:
+                label, css, icon = "Clean", "green", "✅"
+
+            summary_items = [r["label"] for r in sorted(risks, key=lambda x: -x["severity"])]
+            summary_items += cautions[: max(0, 4 - len(summary_items))]
+            if not summary_items:
+                summary_items = positives[:3] or ["No major hidden risk detected"]
+
+            return {
+                "label": label,
+                "css": css,
+                "icon": icon,
+                "risks": risks,
+                "cautions": cautions,
+                "positives": positives,
+                "summary": summary_items[:5],
+                "severity": severity,
+            }
+        except Exception:
+            return {
+                "label": "Watchlist", "css": "yellow", "icon": "👀",
+                "risks": [], "cautions": ["Trap detector unavailable"],
+                "positives": [], "summary": ["Trap detector unavailable"],
+                "severity": 1,
+            }
+
     def mlb_lineup_bf_projection(
         line: float,
         side: str,
@@ -9244,6 +9385,16 @@ if st.session_state.active_sport == "mlb":
             css  = {"Strong Over":"green","Lean Over":"yellow","Strong Under":"red",
                     "Lean Under":"orange","Pass":"gray"}.get(tier,"gray")
 
+            _trap = mlb_trap_detector(
+                mlb_prop, mlb_side, mlb_line, tier, adj, edge, cons,
+                _lineup_confirmed, _lineup_projected, _pc_avg,
+                _pc_k_ceiling, _pc_outs_ceiling, _bf_expected_k,
+                _outs_expected, _opp_plate.get("bb_rate"),
+                _bullpen.get("signal", "Neutral") if _bullpen else "Neutral",
+                _wx_impact,
+                bool(_tonight and _tonight.get("pitcher_team")),
+            )
+
             _mlb_ph.empty()
 
             # ── Signal summary pills
@@ -9722,6 +9873,7 @@ if st.session_state.active_sport == "mlb":
                 _share_lines.append(f"Exp outs: {_outs_expected:.1f} · Avg IP: {_avg_ip:.1f} · Pitch count: {_pc_avg or 'N/A'}")
             elif _velo and _swstr:
                 _share_lines.append(f"K/9: {_k9:.1f} · SwStr: {_swstr:.0%} · Velo: {_velo:.1f}mph")
+            _share_lines.append(f"Trap check: {_trap['label']} — {', '.join(_trap['summary'][:2])}")
             _share_lines.append("#PropIQ #MLB #PrizePicks")
             _share_txt = chr(10).join(_share_lines)
 
@@ -9756,6 +9908,33 @@ if st.session_state.active_sport == "mlb":
                 f"{_sc}</div></div></div>",
                 unsafe_allow_html=True
             )
+            st.markdown("<div class='section-header'>Trap Check</div>", unsafe_allow_html=True)
+            _trap_colors = {
+                "green":  ("#00e896", "rgba(0,232,150,0.08)", "rgba(0,232,150,0.28)"),
+                "yellow": ("#ffc107", "rgba(255,193,7,0.08)", "rgba(255,193,7,0.28)"),
+                "orange": ("#ff7043", "rgba(255,112,67,0.08)", "rgba(255,112,67,0.28)"),
+                "red":    ("#ff3d5c", "rgba(255,61,92,0.10)", "rgba(255,61,92,0.32)"),
+            }
+            _tc, _tbg, _tbdr = _trap_colors.get(_trap["css"], _trap_colors["yellow"])
+            _trap_items = "".join(
+                f"<span style='font-family:JetBrains Mono,monospace;font-size:0.62rem;"
+                f"color:#9aaec4;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.07);"
+                f"padding:4px 9px;border-radius:999px;'>{item}</span>"
+                for item in _trap["summary"]
+            )
+            st.markdown(
+                f"<div style='background:{_tbg};border:1px solid {_tbdr};border-left:4px solid {_tc};"
+                f"border-radius:0 12px 12px 0;padding:0.85rem 1.1rem;margin-bottom:0.75rem;'>"
+                f"<div style='display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;'>"
+                f"<div style='font-family:Plus Jakarta Sans,sans-serif;font-size:1rem;font-weight:900;color:{_tc};'>"
+                f"{_trap['icon']} {_trap['label']}</div>"
+                f"<div style='font-family:JetBrains Mono,monospace;font-size:0.58rem;color:#6b7f96;'>"
+                f"Hidden-risk audit · severity {_trap['severity']}</div></div>"
+                f"<div style='display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;'>{_trap_items}</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
             st.markdown("<div class='section-header'>Verdict</div>",unsafe_allow_html=True)
             st.markdown(
                 f"<div class='verdict-banner {css}'>"
@@ -10152,6 +10331,10 @@ if st.session_state.active_sport == "mlb":
                     if _is_outs_prop else
                     f"{_projection_note or 'N/A'}{f' · {_guardrail_note}' if _guardrail_note else ''}{f' · {_volatility_note}' if _volatility_note else ''}"
                 )
+                _trap_debug = (
+                    f"{_trap['label']} · "
+                    f"{' | '.join(_trap['summary'])}"
+                )
 
                 st.markdown(f"""
                 <div style='color:#f97316;font-size:0.65rem;letter-spacing:0.15em;text-transform:uppercase;
@@ -10177,6 +10360,10 @@ if st.session_state.active_sport == "mlb":
                         <td style='color:{_cc};font-weight:700;'>{_sc}/100</td>
                         <td style='padding:3px 8px;color:#6b7f96;'>Data signals loaded</td>
                         <td style='color:#9aaec4;'>{_loaded_signals_html}</td>
+                    </tr>
+                    <tr>
+                        <td style='padding:3px 8px 3px 0;color:#6b7f96;'>Trap detector</td>
+                        <td colspan='3' style='color:#9aaec4;'>{_trap_debug}</td>
                     </tr>
                     <tr>
                         <td style='padding:3px 8px 3px 0;color:#6b7f96;'>{_projection_anchor_label}</td>
