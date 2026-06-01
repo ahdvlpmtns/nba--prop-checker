@@ -3701,8 +3701,11 @@ def delete_from_supabase(row_id: str) -> bool:
 def normalize_mlb_pitcher_prop_stat(stat: str) -> str:
     """Normalize MLB pitcher prop names without confusing Strikeouts with Outs."""
     s = re.sub(r"[^a-z0-9]+", " ", str(stat or "").lower()).strip()
+    if re.search(r"\b(k|ks)\b", s) and "pitch" not in s:
+        return "Strikeouts"
     if any(token in s for token in (
-        "pitcher strikeout", "pitcher strikeouts", "strikeout", "strikeouts", "strike out", "strike outs"
+        "pitcher strikeout", "pitcher strikeouts", "strikeout", "strikeouts",
+        "strike out", "strike outs", "pitcher k", "pitcher ks"
     )):
         return "Strikeouts"
     if any(token in s for token in (
@@ -3721,6 +3724,23 @@ def is_mlb_strikeout_prop(stat: str) -> bool:
 
 def is_mlb_pitcher_outs_prop(stat: str) -> bool:
     return normalize_mlb_pitcher_prop_stat(stat) == "Outs Recorded"
+
+
+def is_sane_mlb_pitcher_prop_line(stat: str, line) -> bool:
+    """
+    Guard against stale/mis-mapped PrizePicks rows where a strikeout line is
+    attached to Pitcher Outs, or vice versa.
+    """
+    try:
+        stat_label = normalize_mlb_pitcher_prop_stat(stat)
+        line_val = float(line)
+    except Exception:
+        return False
+    if stat_label == "Strikeouts":
+        return 0.5 <= line_val <= 12.5
+    if stat_label == "Outs Recorded":
+        return 9.0 <= line_val <= 24.5
+    return False
 
 
 def get_cached_pp_props_from_supabase(sport_filter: str, max_age_minutes: int = 720) -> Optional[list]:
@@ -10588,9 +10608,9 @@ if st.session_state.active_sport == "edge":
         if total_weight <= 0:
             return 0.0
         if side == "Over":
-            hits = sum(w for v, w in zip(vals, weights) if v > line)
+            hits = sum(w for v, w in zip(vals, weights) if v >= line)
         else:
-            hits = sum(w for v, w in zip(vals, weights) if v < line)
+            hits = sum(w for v, w in zip(vals, weights) if v <= line)
         return float(hits / total_weight)
 
     def _edge_consistency_from_values(vals: pd.Series, line: float) -> float:
@@ -10733,6 +10753,8 @@ if st.session_state.active_sport == "edge":
                 reasons.append(f"Pitch-count ceiling {result['pc_ceiling']}")
             if result.get("projection_gap") is not None:
                 reasons.append(f"Projection gap {result['projection_gap']:+.1f}")
+            if result.get("trap_label") and result.get("trap_label") != "Clean":
+                reasons.append(f"Trap: {result['trap_label']}")
             if is_outs_prop and result.get("avg_ip"):
                 reasons.append(f"Avg {result['avg_ip']} IP/start")
             if result.get("bullpen") and result.get("bullpen") != "Neutral":
@@ -10991,7 +11013,7 @@ if st.session_state.active_sport == "edge":
 
             splits = r2.json().get("stats", [{}])[0].get("splits", [])
 
-            ks, outs_list, ips, pitches, start_dates = [], [], [], [], []
+            starts = []
             for s in splits:
                 st   = s.get("stat", {})
                 date = s.get("date", "")
@@ -11004,18 +11026,30 @@ if st.session_state.active_sport == "edge":
                         continue  # skip spring training
                 except Exception:
                     start_dt = None
-                ks.append(int(st.get("strikeOuts", 0) or 0))
-                # Parse IP (stored as float e.g. 5.1 = 5 innings + 1 out)
-                _ip_raw = float(st.get("inningsPitched", 0) or 0)
-                _ip_full = int(_ip_raw) + ((_ip_raw % 1) * 10 / 3)
-                ips.append(_ip_full)
-                outs_list.append(int(round(_ip_full * 3)))
-                pitches.append(np_v)
-                if start_dt:
-                    start_dates.append(start_dt)
+                outs = _scanner_ip_to_outs(st.get("inningsPitched", "0"))
+                if outs <= 0:
+                    continue
+                starts.append({
+                    "date": start_dt,
+                    "ks": int(st.get("strikeOuts", 0) or 0),
+                    "outs": outs,
+                    "ip": outs / 3.0,
+                    "pitches": np_v,
+                })
 
-            if not ks:
+            if not starts:
                 return empty
+            starts = sorted(
+                starts,
+                key=lambda x: x["date"] or _dtx.date.min,
+                reverse=True,
+            )[:12]
+
+            ks = [s["ks"] for s in starts]
+            outs_list = [s["outs"] for s in starts]
+            ips = [s["ip"] for s in starts]
+            pitches = [s["pitches"] for s in starts]
+            start_dates = [s["date"] for s in starts if s["date"]]
 
             # Season K/9 from totals (more reliable than per-game avg)
             _ip_tot = sum(ips) if ips else 0
@@ -11183,9 +11217,11 @@ if st.session_state.active_sport == "edge":
             if not sr.ok:
                 return None
             stat = sr.json().get("stats", [{}])[0].get("splits", [{}])[0].get("stat", {})
+            pa = int(stat.get("plateAppearances", 0) or 0)
             ab = int(stat.get("atBats", 0) or 0)
             k = int(stat.get("strikeOuts", 0) or 0)
-            return round(k / ab, 3) if ab > 0 else None
+            denom = pa if pa > 0 else ab
+            return round(k / denom, 3) if denom > 0 else None
         except Exception as e:
             record_debug_error("mlb.edge.opp_k", e)
             return None
@@ -11367,6 +11403,36 @@ if st.session_state.active_sport == "edge":
         return "Neutral"
 
 
+    def _scanner_poisson_prob(expected: Optional[float], line: float, side: str) -> Optional[float]:
+        """Poisson probability for scanner Strikeouts."""
+        if expected is None or expected <= 0:
+            return None
+        try:
+            import math
+            lam = max(0.05, float(expected))
+            cutoff = int(math.floor(float(line)))
+            cdf = 0.0
+            for k in range(cutoff + 1):
+                cdf += math.exp(-lam) * (lam ** k) / math.factorial(k)
+            return max(0.01, min(0.99, 1.0 - cdf if side == "Over" else cdf))
+        except Exception:
+            return None
+
+
+    def _scanner_normal_prob(expected: Optional[float], line: float, side: str,
+                             sigma: float = 3.0) -> Optional[float]:
+        """Normal probability for scanner Pitcher Outs."""
+        if expected is None:
+            return None
+        try:
+            import math
+            z = (float(line) - float(expected)) / max(1.5, float(sigma or 3.0))
+            cdf = 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
+            return max(0.01, min(0.99, 1.0 - cdf if side == "Over" else cdf))
+        except Exception:
+            return None
+
+
     def run_mlb_edge_check(pitcher_name: str, line: float,
                            stat: str, side: str = "Over",
                            team: str = "") -> dict | None:
@@ -11380,6 +11446,8 @@ if st.session_state.active_sport == "edge":
             _outs = _data.get("outs", [])
             _stat_label = normalize_mlb_pitcher_prop_stat(stat)
             if _stat_label not in ("Strikeouts", "Outs Recorded"):
+                return None
+            if not is_sane_mlb_pitcher_prop_line(_stat_label, line):
                 return None
             _is_outs = _stat_label == "Outs Recorded"
             _line_history = summarize_pp_line_history(
@@ -11440,7 +11508,7 @@ if st.session_state.active_sport == "edge":
 
             # ── Signal 1: Weighted hit rate (base) ───────────────────
             _wts  = _np.array([1.5 if i < 3 else 1.0 for i in range(_n)])
-            _hits = (_vals > line) if side == "Over" else (_vals < line)
+            _hits = (_vals >= line) if side == "Over" else (_vals <= line)
             _whr  = round(float((_hits * _wts).sum() / _wts.sum()), 3)
             _cons = round(float(_hits.mean()), 3)
             _adj  = _whr
@@ -11587,12 +11655,33 @@ if st.session_state.active_sport == "edge":
                 else:
                     _proj_gap = None
                 if _pc_ceiling is not None:
-                    if _pc_ceiling <= line:
-                        _adj = min(_adj, 0.62)
-                    elif _pc_ceiling <= line + 0.5:
-                        _adj = min(_adj, 0.71)
+                    if _is_outs:
+                        if _pc_ceiling <= line + 0.5:
+                            _adj = min(_adj, 0.64)
+                        elif _pc_ceiling <= line + 1.5:
+                            _adj = min(_adj, 0.72)
+                    else:
+                        if _pc_ceiling <= line + 0.25:
+                            _adj = min(_adj, 0.62)
+                        elif _pc_ceiling <= line + 0.75:
+                            _adj = min(_adj, 0.71)
             else:
                 _proj_gap = None
+
+            # Projection anchor: bring the fast scanner closer to the deep-dive
+            # analyzer so low lines don't create fake edges from hit rate alone.
+            _proj_prob = None
+            if _pc_expected is not None:
+                _proj_prob = (
+                    _scanner_normal_prob(_pc_expected, line, side, sigma=3.1)
+                    if _is_outs else
+                    _scanner_poisson_prob(_pc_expected, line, side)
+                )
+                if _proj_prob is not None:
+                    _blend = 0.42 if not _is_outs else 0.48
+                    _adj = ((1.0 - _blend) * _adj) + (_blend * _proj_prob)
+                    if _proj_prob < 0.78:
+                        _adj = min(_adj, _proj_prob + 0.06)
 
             _raw_adj = max(0.05, min(0.95, _adj))
 
@@ -11627,6 +11716,49 @@ if st.session_state.active_sport == "edge":
             if _cons < 0.45 or _n < 5:
                 _adj = min(_adj, 0.66)
             _adj = max(0.05, min(0.90, _adj))
+
+            _trap_label = "Clean"
+            _trap_severity = 0
+            _trap_reasons = []
+            def _edge_trap(reason, sev=1):
+                nonlocal _trap_severity
+                _trap_reasons.append(reason)
+                _trap_severity += sev
+
+            if _proj_gap is not None:
+                if _is_outs:
+                    if _proj_gap < 0.5:
+                        _edge_trap(f"thin outs projection ({_pc_expected:.1f})", 3)
+                    elif _proj_gap < 1.5:
+                        _edge_trap(f"small outs cushion ({_pc_expected:.1f})", 2)
+                else:
+                    if _proj_gap < 0.25:
+                        _edge_trap(f"thin K projection ({_pc_expected:.1f})", 3)
+                    elif _proj_gap < 0.75:
+                        _edge_trap(f"small K cushion ({_pc_expected:.1f})", 2)
+            if _pc_ceiling is not None:
+                if (_is_outs and _pc_ceiling <= line + 0.5) or ((not _is_outs) and _pc_ceiling <= line + 0.25):
+                    _edge_trap(f"tight pitch-count ceiling ({_pc_ceiling:.1f})", 3)
+            if _opp_bb is not None and _opp_bb >= 0.105:
+                _edge_trap(f"patient opponent BB% {_opp_bb:.1%}", 1 if not _is_outs else 2)
+            if _cons < 0.45:
+                _edge_trap("volatile recent logs", 2)
+            if _bullpen_signal == "Fresh" and _is_outs:
+                _edge_trap("fresh bullpen leash risk", 1)
+            if _trap_severity >= 5:
+                _trap_label = "Do Not Force"
+            elif _trap_severity >= 3:
+                _trap_label = "Trap Risk"
+            elif _trap_severity >= 1:
+                _trap_label = "Watchlist"
+
+            # Do not let trap candidates float to the top of the board.
+            if _trap_label == "Do Not Force":
+                _adj = min(_adj, 0.60)
+            elif _trap_label == "Trap Risk":
+                _adj = min(_adj, 0.66)
+            elif _trap_label == "Watchlist":
+                _adj = min(_adj, 0.74)
 
             _data_bonus = sum([
                 5 if _opp_k is not None else 0,
@@ -11672,6 +11804,9 @@ if st.session_state.active_sport == "edge":
                 "pc_expected": _pc_expected,
                 "pc_ceiling": _pc_ceiling,
                 "projection_gap": round(_proj_gap, 1) if _proj_gap is not None else None,
+                "projection_prob": round(_proj_prob * 100, 1) if _proj_prob is not None else None,
+                "trap_label": _trap_label,
+                "trap_reasons": _trap_reasons[:3],
                 "game_date": _game_date,
                 "last_start": _last_start,
                 "l3":       round(_l3, 1),
@@ -11826,6 +11961,10 @@ if st.session_state.active_sport == "edge":
         }
         _stat_fn = _STAT_MAP.get(_edge_stat, lambda s: True)
         _filtered = [p for p in _filtered if _stat_fn(p["stat"])]
+        _filtered = [
+            p for p in _filtered
+            if is_sane_mlb_pitcher_prop_line(p.get("stat", ""), p.get("line"))
+        ]
 
         # Goblin filter
         if not _include_goblin:
@@ -11834,7 +11973,9 @@ if st.session_state.active_sport == "edge":
         # Deduplicate: keep best line per player+stat+sport
         _deduped = {}
         for p in _filtered:
-            _k = f"{p['sport']}|{p['player']}|{p['stat']}"
+            _norm_stat = normalize_mlb_pitcher_prop_stat(p.get("stat", ""))
+            p["stat"] = _norm_stat
+            _k = f"{p['sport']}|{p['player']}|{_norm_stat}"
             if _k not in _deduped:
                 _deduped[_k] = p
             elif p["is_goblin"] and not _deduped[_k]["is_goblin"]:
@@ -11919,6 +12060,7 @@ if st.session_state.active_sport == "edge":
         r for r in _results
         if r.get("sport") == "MLB"
         and normalize_mlb_pitcher_prop_stat(r.get("stat", "")) in ("Strikeouts", "Outs Recorded")
+        and is_sane_mlb_pitcher_prop_line(r.get("stat", ""), r.get("line"))
         and r.get("opp")
         and r.get("opp") not in ("?", "")
     ]
@@ -12018,6 +12160,8 @@ if st.session_state.active_sport == "edge":
                     _risk_pills += "<span class='edge-pill-v55 warn'>Opponent TBD</span>"
                 if float(_r.get("reliability", 0) or 0) < 68:
                     _risk_pills += "<span class='edge-pill-v55 warn'>Low reliability</span>"
+                if _r.get("trap_label") and _r.get("trap_label") != "Clean":
+                    _risk_pills += f"<span class='edge-pill-v55 warn'>Trap {_r.get('trap_label')}</span>"
                 if _r.get("pc_ceiling") is not None and _r.get("pc_ceiling") <= _r["line"] + (0.5 if _r["stat"] == "Strikeouts" else 1.5):
                     _risk_pills += "<span class='edge-pill-v55 warn'>Ceiling tight</span>"
                 _game_pill = f"<span class='edge-pill-v55'>Game {_r.get('game_date')}</span>" if _r.get("game_date") else ""
@@ -12036,6 +12180,10 @@ if st.session_state.active_sport == "edge":
                     f"<span class='edge-pill-v55'>Proj gap {_r.get('projection_gap'):+.1f}</span>"
                     if _r.get("projection_gap") is not None else ""
                 )
+                _projection_prob_pill = (
+                    f"<span class='edge-pill-v55'>Proj prob {_r.get('projection_prob')}%</span>"
+                    if _r.get("projection_prob") is not None else ""
+                )
                 _ctx_pills = (
                     f"<span class='edge-pill-v55 accent'>{_r['stat']}</span>"
                     f"<span class='edge-pill-v55'>Over {_r['line']}</span>"
@@ -12047,6 +12195,7 @@ if st.session_state.active_sport == "edge":
                     f"<span class='edge-pill-v55'>Park {_r.get('park', 'Neutral')}</span>"
                     f"{_bullpen_pill}"
                     f"{_projection_pill}"
+                    f"{_projection_prob_pill}"
                     f"{_goblin_tag}{_risk_pills}"
                 )
                 if _r.get("market_snapshots"):
