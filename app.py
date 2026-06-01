@@ -6898,7 +6898,7 @@ if st.session_state.active_sport == "mlb":
                           params={"sportId":1,"season":season}, timeout=7)
             if not tr.ok: return empty
             team = next((t for t in tr.json().get("teams",[])
-                        if t.get("abbreviation","").upper() == opp_abbr.upper()), None)
+                        if mlb_norm_abbr(t.get("abbreviation","")) == mlb_norm_abbr(opp_abbr)), None)
             if not team: return empty
             tid = team["id"]
 
@@ -6937,6 +6937,142 @@ if st.session_state.active_sport == "mlb":
                 pass
 
             return result
+        except Exception:
+            return empty
+
+
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def mlb_get_opp_plate_profile(opp_abbr: str) -> dict:
+        """
+        Opponent plate-discipline profile for pitcher outs.
+        BB% is a major outs killer because long innings shorten leash.
+        """
+        empty = {"k_rate": None, "bb_rate": None, "pa": None, "profile": "Neutral"}
+        if not opp_abbr:
+            return empty
+        try:
+            import requests as _req
+            season = datetime.datetime.now().year
+            tr = _req.get(
+                "https://statsapi.mlb.com/api/v1/teams",
+                params={"sportId": 1, "season": season},
+                timeout=7,
+            )
+            if not tr.ok:
+                return empty
+            target = mlb_norm_abbr(opp_abbr)
+            team = next((t for t in tr.json().get("teams", [])
+                         if mlb_norm_abbr(t.get("abbreviation", "")) == target), None)
+            if not team:
+                return empty
+            sr = _req.get(
+                f"https://statsapi.mlb.com/api/v1/teams/{team['id']}/stats",
+                params={"stats": "season", "group": "hitting", "season": season},
+                timeout=7,
+            )
+            if not sr.ok:
+                return empty
+            stat = sr.json().get("stats", [{}])[0].get("splits", [{}])[0].get("stat", {})
+            pa = int(stat.get("plateAppearances", 0) or 0)
+            ab = int(stat.get("atBats", 0) or 0)
+            denom = pa if pa > 0 else ab
+            if denom <= 0:
+                return empty
+            k_rate = int(stat.get("strikeOuts", 0) or 0) / denom
+            bb_rate = int(stat.get("baseOnBalls", 0) or 0) / denom
+            if k_rate >= 0.255 and bb_rate <= 0.085:
+                profile = "Aggressive K"
+            elif k_rate <= 0.195 and bb_rate >= 0.095:
+                profile = "Grinder"
+            elif k_rate <= 0.205:
+                profile = "Contact"
+            elif bb_rate >= 0.100:
+                profile = "Patient"
+            else:
+                profile = "Neutral"
+            return {"k_rate": round(k_rate, 3), "bb_rate": round(bb_rate, 3),
+                    "pa": denom, "profile": profile}
+        except Exception:
+            return empty
+
+
+    def mlb_ip_to_outs(ip_raw) -> int:
+        try:
+            s = str(ip_raw or "0")
+            if "." in s:
+                whole, frac = s.split(".", 1)
+                return int(whole or 0) * 3 + int((frac or "0")[0])
+            return int(float(s) * 3)
+        except Exception:
+            return 0
+
+
+    @st.cache_data(ttl=1800, show_spinner=False)
+    def mlb_get_bullpen_fatigue(team_abbr: str) -> dict:
+        """
+        Bullpen context for pitcher outs.
+        Taxed pens can buy the starter extra leash; fresh pens shorten leash.
+        """
+        empty = {"signal": "Neutral", "relief_outs_l2": None, "games": 0}
+        if not team_abbr:
+            return empty
+        try:
+            import requests as _req, datetime as _dtx, pytz as _ptz
+            et = _ptz.timezone("America/New_York")
+            today = _dtx.datetime.now(et).date()
+            target = mlb_norm_abbr(team_abbr)
+            relief_outs = []
+            for offset in range(1, 5):
+                if len(relief_outs) >= 2:
+                    break
+                date_str = (today - _dtx.timedelta(days=offset)).strftime("%Y-%m-%d")
+                r = _req.get(
+                    "https://statsapi.mlb.com/api/v1/schedule",
+                    params={"sportId": 1, "date": date_str, "hydrate": "team"},
+                    timeout=7,
+                )
+                if not r.ok:
+                    continue
+                for day in r.json().get("dates", []):
+                    for game in day.get("games", []):
+                        status = str(game.get("status", {}).get("abstractGameState", "")).lower()
+                        if status != "final":
+                            continue
+                        teams = game.get("teams", {})
+                        home = teams.get("home", {}).get("team", {}).get("abbreviation", "")
+                        away = teams.get("away", {}).get("team", {}).get("abbreviation", "")
+                        side = None
+                        if mlb_norm_abbr(home) == target:
+                            side = "home"
+                        elif mlb_norm_abbr(away) == target:
+                            side = "away"
+                        if not side or not game.get("gamePk"):
+                            continue
+                        br = _req.get(f"https://statsapi.mlb.com/api/v1/game/{game['gamePk']}/boxscore", timeout=7)
+                        if not br.ok:
+                            continue
+                        box_team = br.json().get("teams", {}).get(side, {})
+                        pitchers = box_team.get("pitchers", [])
+                        players = box_team.get("players", {})
+                        total_outs = starter_outs = 0
+                        for idx, pid in enumerate(pitchers):
+                            pdata = players.get(f"ID{pid}", {})
+                            outs = mlb_ip_to_outs(pdata.get("stats", {}).get("pitching", {}).get("inningsPitched", "0"))
+                            total_outs += outs
+                            if idx == 0:
+                                starter_outs = outs
+                        if total_outs:
+                            relief_outs.append(max(0, total_outs - starter_outs))
+            if not relief_outs:
+                return empty
+            total_relief = sum(relief_outs[:2])
+            if total_relief >= 24:
+                signal = "Taxed"
+            elif total_relief <= 9 and len(relief_outs) >= 2:
+                signal = "Fresh"
+            else:
+                signal = "Neutral"
+            return {"signal": signal, "relief_outs_l2": total_relief, "games": len(relief_outs)}
         except Exception:
             return empty
 
@@ -8009,6 +8145,149 @@ if st.session_state.active_sport == "mlb":
         except Exception:
             return None
 
+    def mlb_normal_side_prob(expected: Optional[float], line: float, side: str,
+                             sigma: float = 3.0) -> Optional[float]:
+        """Convert continuous-ish pitcher outs projection into hit probability."""
+        if expected is None:
+            return None
+        try:
+            import math
+            mu = float(expected)
+            sd = max(1.5, float(sigma or 3.0))
+            # Over 15.5 outs means 16+; normal continuity correction centers at line.
+            z = (float(line) - mu) / sd
+            cdf = 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
+            prob = 1.0 - cdf if side == "Over" else cdf
+            return max(0.01, min(0.99, prob))
+        except Exception:
+            return None
+
+    def mlb_project_outs(
+        avg_ip: Optional[float],
+        pitch_count: Optional[float],
+        pstats: dict,
+        opp_profile: dict,
+        bullpen_signal: str,
+        weather_impact: str,
+        park_signal: str,
+        side: str,
+        line: float,
+    ) -> dict:
+        """
+        Outs Recorded projection.
+        This is deliberately separate from strikeout skill: outs are about
+        workload, leash, efficiency, walks, run prevention, and bullpen context.
+        """
+        empty = {"expected_outs": None, "prob": None, "adj": 0.0,
+                 "sigma": 3.0, "note": "Outs projection unavailable",
+                 "guardrail": ""}
+        try:
+            avg_ip = float(avg_ip or 0)
+            pitch_count = float(pitch_count or 0)
+            if avg_ip <= 0 and pitch_count <= 0:
+                return empty
+
+            ip_from_history = avg_ip if avg_ip > 0 else None
+            ip_from_pitch_count = pitch_count / 15.7 if pitch_count > 0 else None
+
+            if ip_from_history and ip_from_pitch_count:
+                # Use the conservative midpoint. Pitch count guards ceiling,
+                # recent IP guards manager trust.
+                exp_ip = (0.55 * ip_from_history) + (0.45 * ip_from_pitch_count)
+            else:
+                exp_ip = ip_from_history or ip_from_pitch_count or 0
+
+            bb9 = float((pstats or {}).get("bb9", 0) or 0)
+            era = float((pstats or {}).get("era", 0) or 0)
+            whip = float((pstats or {}).get("whip", 0) or 0)
+            opp_bb = (opp_profile or {}).get("bb_rate")
+            opp_profile_label = (opp_profile or {}).get("profile", "Neutral")
+
+            adj_ip = 0.0
+            notes = []
+            if bb9 >= 4.0:
+                adj_ip -= 0.25; notes.append(f"BB/9 {bb9:.1f}")
+            elif bb9 >= 3.2:
+                adj_ip -= 0.12; notes.append(f"BB/9 {bb9:.1f}")
+            elif 0 < bb9 <= 2.0:
+                adj_ip += 0.10; notes.append(f"low BB/9 {bb9:.1f}")
+
+            if whip >= 1.35:
+                adj_ip -= 0.22; notes.append(f"WHIP {whip:.2f}")
+            elif 0 < whip <= 1.10:
+                adj_ip += 0.12; notes.append(f"WHIP {whip:.2f}")
+
+            if era >= 5.00:
+                adj_ip -= 0.20; notes.append(f"ERA {era:.2f}")
+            elif 0 < era <= 3.30:
+                adj_ip += 0.10; notes.append(f"ERA {era:.2f}")
+
+            if opp_bb is not None:
+                opp_bb = float(opp_bb)
+                if opp_bb >= 0.105:
+                    adj_ip -= 0.22; notes.append(f"patient opp BB% {opp_bb:.1%}")
+                elif opp_bb >= 0.095:
+                    adj_ip -= 0.12; notes.append(f"opp BB% {opp_bb:.1%}")
+                elif opp_bb <= 0.070:
+                    adj_ip += 0.10; notes.append(f"low opp BB% {opp_bb:.1%}")
+
+            if opp_profile_label in ("Patient", "Grinder"):
+                adj_ip -= 0.10
+            elif opp_profile_label == "Aggressive K":
+                adj_ip += 0.08
+
+            if bullpen_signal == "Taxed":
+                adj_ip += 0.18; notes.append("taxed bullpen")
+            elif bullpen_signal == "Fresh":
+                adj_ip -= 0.10; notes.append("fresh bullpen")
+
+            if park_signal == "Boost":
+                adj_ip += 0.06
+            elif park_signal == "Penalty":
+                adj_ip -= 0.10
+
+            if weather_impact == "Hurts Over":
+                adj_ip -= 0.10
+            elif weather_impact == "Helps Over":
+                adj_ip += 0.04
+
+            expected_outs = max(3.0, min(24.0, (exp_ip + adj_ip) * 3.0))
+
+            # More volatile pitchers should have wider uncertainty.
+            sigma = 2.6
+            if bb9 >= 3.5 or whip >= 1.30 or era >= 4.75:
+                sigma += 0.7
+            if pitch_count and pitch_count < 82:
+                sigma += 0.3
+            if bullpen_signal == "Fresh":
+                sigma += 0.2
+
+            prob = mlb_normal_side_prob(expected_outs, line, side, sigma=sigma)
+            gap = expected_outs - float(line)
+            guardrail = ""
+            if side == "Over":
+                if gap < 0.5:
+                    guardrail = "Expected outs are too close to the line for a Strong Over"
+                elif gap < 1.5:
+                    guardrail = "Expected outs have a thin cushion over the line"
+            else:
+                if gap > -0.5:
+                    guardrail = "Expected outs are too close to the line for a Strong Under"
+                elif gap > -1.5:
+                    guardrail = "Expected outs have a thin cushion under the line"
+
+            note = (
+                f"Avg IP {avg_ip:.1f}"
+                + (f" · pitch-count IP {ip_from_pitch_count:.1f}" if ip_from_pitch_count else "")
+                + f" · exp {expected_outs:.1f} outs"
+                + (f" · {'; '.join(notes[:4])}" if notes else "")
+            )
+            return {"expected_outs": round(expected_outs, 1),
+                    "prob": prob, "adj": 0.0, "sigma": round(sigma, 1),
+                    "note": note, "guardrail": guardrail}
+        except Exception:
+            return empty
+
     def mlb_lineup_bf_projection(
         line: float,
         side: str,
@@ -8305,6 +8584,8 @@ if st.session_state.active_sport == "mlb":
             _f_pitches  = _mex.submit(mlb_estimate_pitch_count, mlb_pitcher)
             _f_injury   = _mex.submit(mlb_get_injury_status, mlb_pitcher)
             _f_vtrender = _mex.submit(mlb_get_velocity_trend, mlb_pitcher)
+            _f_plate    = _mex.submit(mlb_get_opp_plate_profile, mlb_opp) if mlb_opp else None
+            _f_bullpen  = _mex.submit(mlb_get_bullpen_fatigue, _tonight.get("pitcher_team", "")) if _tonight else None
 
         try:    _pstats  = _f_pstats.result(timeout=12)
         except: _pstats  = {}
@@ -8330,6 +8611,10 @@ if st.session_state.active_sport == "mlb":
         except: _injury   = {"status": "Active", "description": "", "is_available": True}
         try:    _vtrender = _f_vtrender.result(timeout=12)
         except: _vtrender = {}
+        try:    _opp_plate = _f_plate.result(timeout=8) if _f_plate else {}
+        except: _opp_plate = {}
+        try:    _bullpen = _f_bullpen.result(timeout=8) if _f_bullpen else {}
+        except: _bullpen = {}
 
         # Initialize all derived signal variables with safe defaults
         _vtrend_mph = 0.0
@@ -8760,6 +9045,37 @@ if st.session_state.active_sport == "mlb":
             if _lineup_order and len(_lineup_order) < 7:
                 _lineup_adj += (-0.02 if mlb_side == "Over" else 0.02)
 
+            # Outs Recorded is a workload/leash market, not a strikeout-skill
+            # market. Do not let K/9, whiff, ump K zone, or lineup K% drive it.
+            _is_outs_prop = mlb_prop != "Strikeouts"
+            _outs_expected = None
+            _outs_prob = None
+            _outs_note = ""
+            _outs_guardrail = ""
+            _outs_blend_weight = 0.0
+            _adj_before_outs_projection = None
+            _adj_after_outs_projection = None
+            _pc_expected_outs = round((_pc_avg / 16.0) * 3.0, 1) if _pc_avg else None
+            _pc_outs_ceiling = round((_pc_avg / 14.5) * 3.0, 1) if _pc_avg else None
+
+            if _is_outs_prop:
+                _k9_adj = 0.0
+                _swstr_adj = 0.0
+                _velo_adj = 0.0
+                _ump_adj = 0.0
+                _lineup_adj = 0.0
+                _platoon_adj = 0.0
+                _contact_adj = 0.0
+                _outs_proj = mlb_project_outs(
+                    _avg_ip, _pc_avg, _pstats, _opp_plate,
+                    _bullpen.get("signal", "Neutral") if _bullpen else "Neutral",
+                    _wx_impact, psig, mlb_side, mlb_line,
+                )
+                _outs_expected = _outs_proj.get("expected_outs")
+                _outs_prob = _outs_proj.get("prob")
+                _outs_note = _outs_proj.get("note", "")
+                _outs_guardrail = _outs_proj.get("guardrail", "")
+
             # Lineup/BF projection anchor. This is the sharpest MLB K input:
             # actual or projected order K quality + expected batters faced.
             _bf_proj = mlb_lineup_bf_projection(
@@ -8779,7 +9095,8 @@ if st.session_state.active_sport == "mlb":
             # Start from a calibrated hit-rate base instead of raw L10. This
             # keeps perfect recent streaks from maxing the model before the
             # projection and matchup checks can matter.
-            adj = mlb_apply_adj(_calibrated_whr, okpct, psig, mlb_side)
+            _base_opp_k_for_model = None if _is_outs_prop else okpct
+            adj = mlb_apply_adj(_calibrated_whr, _base_opp_k_for_model, psig, mlb_side)
             adj = max(0.05, min(0.95, adj
                       + _ha_adj + _form_adj + _rest_adj
                       + _k9_adj + _swstr_adj + _velo_adj + _vtrend_adj + _ip_adj
@@ -8824,6 +9141,18 @@ if st.session_state.active_sport == "mlb":
                 adj = max(0.05, min(0.95, adj))
                 _adj_after_bf_projection = adj
 
+            # Pitcher Outs V2 anchor: blend the stack with expected outs.
+            if _is_outs_prop and _outs_prob is not None:
+                _adj_before_outs_projection = adj
+                _outs_blend_weight = 0.48
+                adj = ((1.0 - _outs_blend_weight) * adj) + (_outs_blend_weight * _outs_prob)
+                if mlb_side == "Over" and _outs_prob < 0.78:
+                    adj = min(adj, _outs_prob + 0.06)
+                elif mlb_side == "Under" and _outs_prob < 0.78:
+                    adj = min(adj, _outs_prob + 0.06)
+                adj = max(0.05, min(0.95, adj))
+                _adj_after_outs_projection = adj
+
             # Strong-pick guardrails for strikeouts. These do not hide data; they
             # prevent "Strong Over" when the realistic route to the line is thin.
             _adj_before_guardrails = adj
@@ -8849,8 +9178,23 @@ if st.session_state.active_sport == "mlb":
                         adj = min(adj, 0.68)
                     if not _lineup_confirmed and abs(edge) < 1.0:
                         adj = min(adj, 0.72)
+            elif _is_outs_prop:
+                if mlb_side == "Over":
+                    if _outs_expected and _outs_expected <= mlb_line + 0.5:
+                        adj = min(adj, 0.66)
+                    elif _outs_expected and _outs_expected <= mlb_line + 1.5:
+                        adj = min(adj, 0.74)
+                    if _pc_outs_ceiling and _pc_outs_ceiling <= mlb_line + 0.5:
+                        adj = min(adj, 0.64)
+                    if _opp_plate.get("bb_rate") and _opp_plate.get("bb_rate") >= 0.105:
+                        adj = min(adj, 0.78)
+                else:
+                    if _outs_expected and _outs_expected >= mlb_line - 0.5:
+                        adj = min(adj, 0.66)
+                    elif _outs_expected and _outs_expected >= mlb_line - 1.5:
+                        adj = min(adj, 0.74)
             if adj < _adj_before_guardrails - 0.001:
-                _guardrail_reason = _bf_guardrail or "Ceiling/line check"
+                _guardrail_reason = _outs_guardrail if _is_outs_prop else (_bf_guardrail or "Ceiling/line check")
                 _guardrail_note = f"{_guardrail_reason} · capped from {_adj_before_guardrails:.0%} to {adj:.0%}"
 
             # Volatility guardrail. For noisy pitchers, don't let a hot L10
@@ -8865,20 +9209,31 @@ if st.session_state.active_sport == "mlb":
                 _volatility_note = f"Volatility capped rate from {_adj_before_volatility:.0%} to {adj:.0%}"
 
             tier = mlb_verdict(adj, edge, mlb_side,
-                              pc_ceiling=_pc_k_ceiling,
+                              pc_ceiling=_pc_outs_ceiling if _is_outs_prop else _pc_k_ceiling,
                               line=mlb_line)
 
             # Confidence score — weighted by signal count and strength
-            _data_bonus = sum([
-                5 if okpct is not None else 0,
-                4 if _k9 > 0 else 0,
-                5 if _swstr_real else (3 if _swstr else 0),
-                3 if _ump_name else 0,
-                3 if _avg_ip > 0 else 0,
-                3 if _velo and _velo > 0 else 0,
-                2 if _weather else 0,
-                2 if _lineup_confirmed else 0,
-            ])
+            if _is_outs_prop:
+                _data_bonus = sum([
+                    5 if _outs_expected is not None else 0,
+                    4 if _pc_avg else 0,
+                    4 if _avg_ip > 0 else 0,
+                    3 if _opp_plate.get("bb_rate") is not None else 0,
+                    2 if _bullpen.get("signal") and _bullpen.get("signal") != "Neutral" else 0,
+                    2 if _weather else 0,
+                    2 if _lineup_confirmed or _lineup_projected else 0,
+                ])
+            else:
+                _data_bonus = sum([
+                    5 if okpct is not None else 0,
+                    4 if _k9 > 0 else 0,
+                    5 if _swstr_real else (3 if _swstr else 0),
+                    3 if _ump_name else 0,
+                    3 if _avg_ip > 0 else 0,
+                    3 if _velo and _velo > 0 else 0,
+                    2 if _weather else 0,
+                    2 if _lineup_confirmed else 0,
+                ])
             _sc = min(99, int(
                 max(0, min((adj - 0.50) / 0.45, 1.0) * 65) +
                 min(abs(edge) / 8.0, 1.0) * 12 +
@@ -8908,12 +9263,12 @@ if st.session_state.active_sport == "mlb":
                     _pills.append(f"<span class='flag-pill {_contact_flag}'>🎯 {_contact_txt}</span>")
 
             # K/9
-            if _k9 > 0:
+            if (not _is_outs_prop) and _k9 > 0:
                 _k9_flag = "up" if _k9>=9.0 else ("down" if _k9<7.0 else "flat")
                 _pills.append(f"<span class='flag-pill {_k9_flag}'>K/9: {_k9:.1f}</span>")
 
             # K% (SwStr proxy)
-            if _swstr is not None:
+            if (not _is_outs_prop) and _swstr is not None:
                 _sw_flag = "up" if _swstr>=0.23 else ("down" if _swstr<0.18 else "flat")
                 _pills.append(f"<span class='flag-pill {_sw_flag}'>K%: {_swstr:.0%}</span>")
 
@@ -8923,10 +9278,10 @@ if st.session_state.active_sport == "mlb":
                 _pills.append(f"<span class='flag-pill {_ip_flag}'>Avg {_avg_ip:.1f} IP/start</span>")
 
             # Umpire
-            if _ump_name:
+            if (not _is_outs_prop) and _ump_name:
                 _u_flag = "up" if _ump_tend=="High" else ("down" if _ump_tend=="Low" else "flat")
                 _pills.append(f"<span class='flag-pill {_u_flag}'>🧑‍⚖️ {_ump_name.split()[-1]} ({_ump_tend} K zone)</span>")
-            elif mlb_home:
+            elif (not _is_outs_prop) and mlb_home:
                 _pills.append("<span class='flag-pill flat'>🧑‍⚖️ Umpire TBD</span>")
 
             # Park
@@ -8947,15 +9302,15 @@ if st.session_state.active_sport == "mlb":
                 _pills.append(f"<span class='flag-pill flat'>{'🏠 Home' if _side_txt=='home' else '✈️ Away'} start · {_phand}HP</span>")
 
             # Platoon composition
-            if _platoon_vs_l and _platoon_vs_r and _order_hands:
+            if (not _is_outs_prop) and _platoon_vs_l and _platoon_vs_r and _order_hands:
                 _pl_flag = "up" if _platoon_adj > 0.01 else ("down" if _platoon_adj < -0.01 else "flat")
                 _lineup_src = "projected" if _lineup_projected else "confirmed"
                 _pl_txt  = f"🎯 {_lhb_count}L/{_rhb_count}R {_lineup_src} lineup · vsL:{_platoon_vs_l:.0%} vsR:{_platoon_vs_r:.0%}"
                 _pills.append(f"<span class='flag-pill {_pl_flag}'>{_pl_txt}</span>")
-            elif _platoon_vs_l and _platoon_vs_r:
+            elif (not _is_outs_prop) and _platoon_vs_l and _platoon_vs_r:
                 _pills.append(f"<span class='flag-pill flat'>↕️ vsL:{_platoon_vs_l:.0%} vsR:{_platoon_vs_r:.0%} · lineup TBD</span>")
 
-            if _lineup_avg_k is not None:
+            if (not _is_outs_prop) and _lineup_avg_k is not None:
                 _lk_flag = "up" if _lineup_avg_k >= 0.245 else ("down" if _lineup_avg_k <= 0.195 else "flat")
                 _lk_src = "projected" if _lineup_projected else "confirmed"
                 _pills.append(
@@ -8966,7 +9321,15 @@ if st.session_state.active_sport == "mlb":
             # Pitch count estimate
             if _pc_avg:
                 _pc_flag = "down" if (_pc_limit or (_pc_k_ceiling and _pc_k_ceiling <= mlb_line)) else ("up" if _pc_avg >= 100 else "flat")
-                if _pc_k_ceiling and _pc_k_ceiling <= mlb_line:
+                if _is_outs_prop:
+                    _pc_flag = "down" if (_pc_limit or (_pc_outs_ceiling and _pc_outs_ceiling <= mlb_line + 0.5)) else ("up" if _pc_avg >= 100 else "flat")
+                    if _pc_outs_ceiling and _pc_outs_ceiling <= mlb_line + 0.5:
+                        _pc_warn = f"🚫 ~{_pc_avg}p → exp {_pc_expected_outs:.1f} outs / ceil {_pc_outs_ceiling:.1f}"
+                    elif _pc_limit:
+                        _pc_warn = f"⚠️ ~{_pc_avg}p limit → exp {_pc_expected_outs:.1f} outs"
+                    else:
+                        _pc_warn = f"📊 ~{_pc_avg}p avg → exp {_pc_expected_outs:.1f} outs / ceil {_pc_outs_ceiling:.1f}"
+                elif _pc_k_ceiling and _pc_k_ceiling <= mlb_line:
                     _pc_warn = f"🚫 ~{_pc_avg}p → exp {_pc_expected_k:.1f}K / ceil {_pc_k_ceiling:.1f}K ≤ line"
                 elif _pc_limit:
                     _pc_warn = f"⚠️ ~{_pc_avg}p limit → exp {_pc_expected_k:.1f}K"
@@ -8975,15 +9338,27 @@ if st.session_state.active_sport == "mlb":
                 _pills.append(f"<span class='flag-pill {_pc_flag}'>{_pc_warn}</span>")
 
             # Velocity
-            if _velo and _velo > 0:
+            if (not _is_outs_prop) and _velo and _velo > 0:
                 _velo_flag = "up" if _velo>=96 else ("down" if _velo<91 else "flat")
                 _velo_lbl  = "Elite" if _velo>=97 else ("Hard" if _velo>=94 else ("Avg" if _velo>=91 else "Soft"))
                 _pills.append(f"<span class='flag-pill {_velo_flag}'>🔥 {_velo:.1f}mph ({_velo_lbl})</span>")
 
             # SwStr source label
-            if _swstr_real:
+            if (not _is_outs_prop) and _swstr_real:
                 _sw_flag2 = "up" if _swstr_real>=0.13 else ("down" if _swstr_real<0.09 else "flat")
                 _pills.append(f"<span class='flag-pill {_sw_flag2}'>SwStr% {_swstr_real:.1%} (Savant)</span>")
+
+            if _is_outs_prop:
+                if _outs_expected is not None:
+                    _out_flag = "up" if _outs_expected >= mlb_line + 1.5 else ("down" if _outs_expected <= mlb_line + 0.5 else "flat")
+                    _pills.append(f"<span class='flag-pill {_out_flag}'>Workload proj {_outs_expected:.1f} outs</span>")
+                if _opp_plate.get("bb_rate") is not None:
+                    _bb = _opp_plate.get("bb_rate")
+                    _bb_flag = "down" if _bb >= 0.095 else ("up" if _bb <= 0.070 else "flat")
+                    _pills.append(f"<span class='flag-pill {_bb_flag}'>Opp BB% {_bb:.1%} · {_opp_plate.get('profile','Neutral')}</span>")
+                if _bullpen.get("signal") and _bullpen.get("signal") != "Neutral":
+                    _bp_flag = "up" if _bullpen.get("signal") == "Taxed" else "down"
+                    _pills.append(f"<span class='flag-pill {_bp_flag}'>Bullpen {_bullpen.get('signal')} · L2 relief outs {_bullpen.get('relief_outs_l2')}</span>")
 
             # Weather
             if _weather and _weather.get("temp_f"):
@@ -9040,14 +9415,21 @@ if st.session_state.active_sport == "mlb":
                             f"<div class='stat-value {hc}'>{whr:.0%}</div>"
                             f"<div class='stat-hint'>Weighted L10 starts</div></div>",unsafe_allow_html=True)
             with _c3:
-                _k9c = "green" if _k9>=9.0 else ("yellow" if _k9>=7.5 else "red")
-                _k9_display = f"{_k9:.1f}" if _k9>0 else "—"
-                _k9_tier = ("Elite" if _k9>=10.5 else "Above avg" if _k9>=9.0 else
-                            "Average" if _k9>=7.5 else "Below avg" if _k9>=6.0 else
-                            "Contact pitcher" if _k9>0 else "No data yet")
-                st.markdown(f"<div class='stat-card'><div class='stat-label'>K/9 Rate</div>"
-                            f"<div class='stat-value {_k9c}'>{_k9_display}</div>"
-                            f"<div class='stat-hint'>League avg 8.3 · {_k9_tier}</div></div>",unsafe_allow_html=True)
+                if _is_outs_prop:
+                    _outc = "green" if (_outs_expected or 0) >= mlb_line + 1.5 else ("yellow" if (_outs_expected or 0) >= mlb_line else "red")
+                    _outd = f"{_outs_expected:.1f}" if _outs_expected is not None else "—"
+                    st.markdown(f"<div class='stat-card'><div class='stat-label'>Projected Outs</div>"
+                                f"<div class='stat-value {_outc}'>{_outd}</div>"
+                                f"<div class='stat-hint'>Workload/leash anchor</div></div>",unsafe_allow_html=True)
+                else:
+                    _k9c = "green" if _k9>=9.0 else ("yellow" if _k9>=7.5 else "red")
+                    _k9_display = f"{_k9:.1f}" if _k9>0 else "—"
+                    _k9_tier = ("Elite" if _k9>=10.5 else "Above avg" if _k9>=9.0 else
+                                "Average" if _k9>=7.5 else "Below avg" if _k9>=6.0 else
+                                "Contact pitcher" if _k9>0 else "No data yet")
+                    st.markdown(f"<div class='stat-card'><div class='stat-label'>K/9 Rate</div>"
+                                f"<div class='stat-value {_k9c}'>{_k9_display}</div>"
+                                f"<div class='stat-hint'>League avg 8.3 · {_k9_tier}</div></div>",unsafe_allow_html=True)
             with _c4:
                 st.markdown(f"<div class='stat-card'><div class='stat-label'>Confidence</div>"
                             f"<div class='stat-value' style='color:{_cc};'>{_sc}</div>"
@@ -9056,11 +9438,19 @@ if st.session_state.active_sport == "mlb":
             # Row 2 — new signals
             _c5,_c6,_c7,_c8 = st.columns(4)
             with _c5:
-                _sw_c = "green" if (_swstr or 0)>=0.23 else ("yellow" if (_swstr or 0)>=0.18 else "red")
-                _sw_d = f"{_swstr:.0%}" if _swstr else "—"
-                st.markdown(f"<div class='stat-card'><div class='stat-label'>K% (SwStr proxy)</div>"
-                            f"<div class='stat-value {_sw_c}'>{_sw_d}</div>"
-                            f"<div class='stat-hint'>Ks per batter faced · avg 21%</div></div>",unsafe_allow_html=True)
+                if _is_outs_prop:
+                    _bb = _opp_plate.get("bb_rate")
+                    _bb_c = "red" if (_bb or 0) >= 0.10 else ("green" if _bb is not None and _bb <= 0.07 else "yellow")
+                    _bb_d = f"{_bb:.0%}" if _bb is not None else "—"
+                    st.markdown(f"<div class='stat-card'><div class='stat-label'>Opponent BB%</div>"
+                                f"<div class='stat-value {_bb_c}'>{_bb_d}</div>"
+                                f"<div class='stat-hint'>{_opp_plate.get('profile','Neutral')} plate profile</div></div>",unsafe_allow_html=True)
+                else:
+                    _sw_c = "green" if (_swstr or 0)>=0.23 else ("yellow" if (_swstr or 0)>=0.18 else "red")
+                    _sw_d = f"{_swstr:.0%}" if _swstr else "—"
+                    st.markdown(f"<div class='stat-card'><div class='stat-label'>K% (SwStr proxy)</div>"
+                                f"<div class='stat-value {_sw_c}'>{_sw_d}</div>"
+                                f"<div class='stat-hint'>Ks per batter faced · avg 21%</div></div>",unsafe_allow_html=True)
             with _c6:
                 _ip_c = "green" if _avg_ip>=6.5 else ("yellow" if _avg_ip>=5.0 else "red")
                 _ip_d = f"{_avg_ip:.1f}" if _avg_ip>0 else "—"
@@ -9068,19 +9458,33 @@ if st.session_state.active_sport == "mlb":
                             f"<div class='stat-value {_ip_c}'>{_ip_d}</div>"
                             f"<div class='stat-hint'>{'Deep' if _avg_ip>=6.5 else 'Average' if _avg_ip>=5.0 else '⚠️ Short leash'} · {_ip_source if '_ip_source' in dir() else 'season stats'}</div></div>",unsafe_allow_html=True)
             with _c7:
-                _opp_kd = f"{okpct:.0%}" if okpct else "—"
-                _opp_kc = "green" if (okpct or 0)>=0.26 else ("red" if (okpct or 0)<=0.18 else "yellow")
-                _hand_lbl = f"vs {'R' if _phand=='R' else 'L'}HP"
-                st.markdown(f"<div class='stat-card'><div class='stat-label'>Opp K% {_hand_lbl}</div>"
-                            f"<div class='stat-value {_opp_kc}'>{_opp_kd}</div>"
-                            f"<div class='stat-hint'>{'High K lineup' if (okpct or 0)>=0.26 else 'Low K lineup' if (okpct or 0)<=0.18 else 'Average'} · {mlb_opp or 'TBD'}</div></div>",unsafe_allow_html=True)
+                if _is_outs_prop:
+                    _bp_sig = _bullpen.get("signal", "Neutral")
+                    _bp_c = "green" if _bp_sig == "Taxed" else ("red" if _bp_sig == "Fresh" else "yellow")
+                    st.markdown(f"<div class='stat-card'><div class='stat-label'>Bullpen Leash</div>"
+                                f"<div class='stat-value {_bp_c}' style='font-size:1.3rem;'>{_bp_sig}</div>"
+                                f"<div class='stat-hint'>L2 relief outs: {_bullpen.get('relief_outs_l2','—')}</div></div>",unsafe_allow_html=True)
+                else:
+                    _opp_kd = f"{okpct:.0%}" if okpct else "—"
+                    _opp_kc = "green" if (okpct or 0)>=0.26 else ("red" if (okpct or 0)<=0.18 else "yellow")
+                    _hand_lbl = f"vs {'R' if _phand=='R' else 'L'}HP"
+                    st.markdown(f"<div class='stat-card'><div class='stat-label'>Opp K% {_hand_lbl}</div>"
+                                f"<div class='stat-value {_opp_kc}'>{_opp_kd}</div>"
+                                f"<div class='stat-hint'>{'High K lineup' if (okpct or 0)>=0.26 else 'Low K lineup' if (okpct or 0)<=0.18 else 'Average'} · {mlb_opp or 'TBD'}</div></div>",unsafe_allow_html=True)
             with _c8:
-                _ump_d = _ump_name.split()[-1] if _ump_name else "TBD"
-                _ump_c = "green" if _ump_tend=="High" else ("red" if _ump_tend=="Low" else "yellow")
-                _ump_kpg = _ump.get("k_per_game",15.5) if _ump else 15.5
-                st.markdown(f"<div class='stat-card'><div class='stat-label'>Umpire Zone</div>"
-                            f"<div class='stat-value {_ump_c}' style='font-size:1.4rem;'>{_ump_d}</div>"
-                            f"<div class='stat-hint'>{_ump_tend} K zone · {_ump_kpg:.1f} K/g avg</div></div>",unsafe_allow_html=True)
+                if _is_outs_prop:
+                    _pcd = f"{_pc_expected_outs:.1f}" if _pc_expected_outs is not None else "—"
+                    _pcc = "green" if (_pc_expected_outs or 0) >= mlb_line + 1.5 else ("yellow" if _pc_expected_outs else "red")
+                    st.markdown(f"<div class='stat-card'><div class='stat-label'>Pitch Count Path</div>"
+                                f"<div class='stat-value {_pcc}' style='font-size:1.4rem;'>{_pcd}</div>"
+                                f"<div class='stat-hint'>Expected outs from pitch count</div></div>",unsafe_allow_html=True)
+                else:
+                    _ump_d = _ump_name.split()[-1] if _ump_name else "TBD"
+                    _ump_c = "green" if _ump_tend=="High" else ("red" if _ump_tend=="Low" else "yellow")
+                    _ump_kpg = _ump.get("k_per_game",15.5) if _ump else 15.5
+                    st.markdown(f"<div class='stat-card'><div class='stat-label'>Umpire Zone</div>"
+                                f"<div class='stat-value {_ump_c}' style='font-size:1.4rem;'>{_ump_d}</div>"
+                                f"<div class='stat-hint'>{_ump_tend} K zone · {_ump_kpg:.1f} K/g avg</div></div>",unsafe_allow_html=True)
 
             # Row 3 — Velocity trend + Injury status
             _c11, _c12 = st.columns(2)
@@ -9120,13 +9524,19 @@ if st.session_state.active_sport == "mlb":
             _c9, _c10 = st.columns([1, 1])
             with _c9:
                 if _pc_avg:
-                    _pc_c  = "red" if (_pc_k_ceiling and _pc_k_ceiling <= mlb_line) else ("yellow" if _pc_limit else ("green" if _pc_avg >= 100 else "yellow"))
-                    _pc_lbl = "🚫 Hard Cap" if (_pc_k_ceiling and _pc_k_ceiling <= mlb_line) else ("⚠️ On Limit" if _pc_limit else "Normal Depth")
+                    if _is_outs_prop:
+                        _pc_c  = "red" if (_pc_outs_ceiling and _pc_outs_ceiling <= mlb_line + 0.5) else ("yellow" if _pc_limit else ("green" if _pc_avg >= 100 else "yellow"))
+                        _pc_lbl = "🚫 Tight ceiling" if (_pc_outs_ceiling and _pc_outs_ceiling <= mlb_line + 0.5) else ("⚠️ On Limit" if _pc_limit else "Normal Depth")
+                        _pc_hint = f"Exp {_pc_expected_outs:.1f} outs · ceil {_pc_outs_ceiling:.1f} outs · {_pc_lbl}"
+                    else:
+                        _pc_c  = "red" if (_pc_k_ceiling and _pc_k_ceiling <= mlb_line) else ("yellow" if _pc_limit else ("green" if _pc_avg >= 100 else "yellow"))
+                        _pc_lbl = "🚫 Hard Cap" if (_pc_k_ceiling and _pc_k_ceiling <= mlb_line) else ("⚠️ On Limit" if _pc_limit else "Normal Depth")
+                        _pc_hint = f"Exp {_pc_expected_k:.1f}K · ceil {_pc_k_ceiling:.1f}K · {_pc_lbl}"
                     st.markdown(
                         f"<div class='stat-card'>"
                         f"<div class='stat-label'>Pitch Count Est.</div>"
                         f"<div class='stat-value {_pc_c}' style='font-size:1.6rem;'>~{_pc_avg}p</div>"
-                        f"<div class='stat-hint'>Exp {_pc_expected_k:.1f}K · ceil {_pc_k_ceiling:.1f}K · {_pc_lbl}</div>"
+                        f"<div class='stat-hint'>{_pc_hint}</div>"
                         f"</div>",
                         unsafe_allow_html=True
                     )
@@ -9137,7 +9547,17 @@ if st.session_state.active_sport == "mlb":
                         unsafe_allow_html=True
                     )
             with _c10:
-                if _platoon_vs_l and _platoon_vs_r:
+                if _is_outs_prop:
+                    _outs_c = "green" if (_outs_expected or 0) >= mlb_line + 1.5 else ("yellow" if (_outs_expected or 0) >= mlb_line else "red")
+                    st.markdown(
+                        f"<div class='stat-card'>"
+                        f"<div class='stat-label'>Outs Projection</div>"
+                        f"<div class='stat-value {_outs_c}' style='font-size:1.4rem;'>{_outs_expected if _outs_expected is not None else '—'}</div>"
+                        f"<div class='stat-hint'>{_outs_note or 'Workload, walks, bullpen, park'}</div>"
+                        f"</div>",
+                        unsafe_allow_html=True
+                    )
+                elif _platoon_vs_l and _platoon_vs_r:
                     _hand_fav   = "LHB" if _platoon_vs_l > _platoon_vs_r else "RHB"
                     _hand_c     = "green" if max(_platoon_vs_l, _platoon_vs_r) >= 0.28 else "yellow"
                     _phand_desc = f"vsL: {_platoon_vs_l:.0%} · vsR: {_platoon_vs_r:.0%}"
@@ -9298,7 +9718,9 @@ if st.session_state.active_sport == "mlb":
                 f"{_share_emoji} {mlb_pitcher} {mlb_side.upper()} {mlb_line} {_lbl.upper()}S",
                 f"PropIQ {_sc}/100 · {tier} · {adj:.0%} adj hit rate",
             ]
-            if _velo and _swstr:
+            if _is_outs_prop and _outs_expected is not None:
+                _share_lines.append(f"Exp outs: {_outs_expected:.1f} · Avg IP: {_avg_ip:.1f} · Pitch count: {_pc_avg or 'N/A'}")
+            elif _velo and _swstr:
                 _share_lines.append(f"K/9: {_k9:.1f} · SwStr: {_swstr:.0%} · Velo: {_velo:.1f}mph")
             _share_lines.append("#PropIQ #MLB #PrizePicks")
             _share_txt = chr(10).join(_share_lines)
@@ -9379,11 +9801,12 @@ if st.session_state.active_sport == "mlb":
 
             # ── MLB Signal Debugger ──────────────────────────────────
             with st.expander("🔬  Show signal breakdown (debug)"):
-                st.markdown("""
+                _debug_prop_kind = "Outs Recorded" if _is_outs_prop else "K"
+                st.markdown(f"""
                 <div style='font-family:JetBrains Mono,monospace;font-size:0.65rem;color:#6b7f96;
                             background:#0d1520;border:1px solid rgba(255,255,255,0.06);border-radius:8px;
                             padding:0.65rem 1rem;margin-bottom:0.75rem;line-height:1.8;'>
-                    This table shows exactly how PropIQ arrived at the final probability for this K prop.
+                    This table shows exactly how PropIQ arrived at the final probability for this {_debug_prop_kind} prop.
                     Each row is a signal that pushed the adjusted hit rate up or down.
                     <span style='color:#00c4cc;'>Positive</span> = favors the Over.
                     <span style='color:#ef4444;'>Negative</span> = favors the Under.
@@ -9492,20 +9915,43 @@ if st.session_state.active_sport == "mlb":
                                                   None,
                                                   _bf_note if _bf_prob is not None else "Expected batters faced + lineup K projection unavailable"),
                 ]
+                if _is_outs_prop:
+                    _mlb_signals = [
+                        ("Weighted hit rate (base)", f"{whr:.1%}", None, "Starting point — recency-weighted L10 starts"),
+                        ("Hit-rate calibration", f"{_calibrated_whr:.1%}", None, "Raw L10 shrunk toward neutral before outs context"),
+                        ("Park factor", psig, None, f"{mlb_home or 'N/A'} · {'pitcher-friendly' if psig=='Boost' else 'run-friendly' if psig=='Penalty' else 'neutral'} park"),
+                        ("Home/Away split", f"{_ha_adj:+.0%}" if _ha_adj != 0 else "Neutral", _ha_adj, "Based on pitcher's home/away outs splits"),
+                        ("Recent form (L3 vs avg)", f"L3 avg {_l3_avg:.1f}" if not pd.isna(_l3_avg) else "N/A", _form_adj, f"L3 vs season avg {avg_val:.1f}"),
+                        ("Rest days", f"{_rest_days}d" if _rest_days else "Unknown", _rest_adj, "Short rest can shorten leash; extra rest can help workload"),
+                        ("Avg IP/start", f"{_avg_ip:.1f}" if _avg_ip>0 else "N/A", _ip_adj, "Core outs workload signal"),
+                        ("Pitch count", f"~{_pc_avg}p" if _pc_avg else "N/A", _pc_adj, f"Expected {_pc_expected_outs:.1f} outs / ceiling {_pc_outs_ceiling:.1f}" if _pc_avg else "No pitch count estimate"),
+                        ("Opponent BB%", f"{_opp_plate.get('bb_rate'):.1%}" if _opp_plate.get("bb_rate") is not None else "N/A", None, f"{_opp_plate.get('profile','Neutral')} plate profile"),
+                        ("Bullpen leash", _bullpen.get("signal", "Neutral"), None, f"L2 relief outs {_bullpen.get('relief_outs_l2','N/A')}"),
+                        ("Weather", _weather_condition_label, _wx_adj, _wx_note if _wx_note else "No weather data"),
+                        ("Pitcher variance", f"{cons:.1%} consistency", _variance_adj, _variance_note),
+                        ("Outs projection", f"{_outs_prob:.1%}" if _outs_prob is not None else "N/A", None, _outs_note if _outs_note else "Workload projection unavailable"),
+                    ]
 
                 # Build mlb_apply_adj step trace
                 # Base = calibrated hit rate → then apply: opp_k, park, then individual adjs
-                _mlb_base_adj = mlb_apply_adj(_calibrated_whr, okpct, psig, mlb_side)
-                _mlb_adjs = [_ha_adj, _form_adj, _rest_adj, _k9_adj,
-                             _swstr_adj, _velo_adj, _ip_adj, _ump_adj, _wx_adj,
-                             _lineup_adj, _platoon_adj, _contact_adj, _pc_adj,
-                             _variance_adj]
-                _mlb_adj_labels = [
-                    "Home/Away split", "Recent form", "Rest days", "K/9 rate",
-                    "SwStr%/K%", "Velocity", "Avg IP/start", "Umpire zone",
-                    "Weather", "Batting order", "Platoon matchup", "Contact profile",
-                    "Pitch count est", "Pitcher variance"
-                ]
+                _mlb_base_adj = mlb_apply_adj(_calibrated_whr, _base_opp_k_for_model, psig, mlb_side)
+                if _is_outs_prop:
+                    _mlb_adjs = [_ha_adj, _form_adj, _rest_adj, _ip_adj, _wx_adj, _pc_adj, _variance_adj]
+                    _mlb_adj_labels = [
+                        "Home/Away split", "Recent form", "Rest days",
+                        "Avg IP/start", "Weather", "Pitch count est", "Pitcher variance"
+                    ]
+                else:
+                    _mlb_adjs = [_ha_adj, _form_adj, _rest_adj, _k9_adj,
+                                 _swstr_adj, _velo_adj, _ip_adj, _ump_adj, _wx_adj,
+                                 _lineup_adj, _platoon_adj, _contact_adj, _pc_adj,
+                                 _variance_adj]
+                    _mlb_adj_labels = [
+                        "Home/Away split", "Recent form", "Rest days", "K/9 rate",
+                        "SwStr%/K%", "Velocity", "Avg IP/start", "Umpire zone",
+                        "Weather", "Batting order", "Platoon matchup", "Contact profile",
+                        "Pitch count est", "Pitcher variance"
+                    ]
                 _mlb_running = _mlb_base_adj
                 _mlb_steps = []
                 for _lbl2, _a in zip(_mlb_adj_labels, _mlb_adjs):
@@ -9531,7 +9977,7 @@ if st.session_state.active_sport == "mlb":
                     <td style='color:#6b7f96;'>calibrated</td>
                     <td style='color:#7d93ab;'>—</td>
                     <td style='color:#e2e8f0;'>{_mlb_base_adj:.1%}</td>
-                    <td style='color:#6b7f96;'>shrunk base + opp K% + park applied</td>
+                    <td style='color:#6b7f96;'>{"shrunk base + park applied" if _is_outs_prop else "shrunk base + opp K% + park applied"}</td>
                 </tr>"""
 
                 # Map signal names to their actual values for the trace
@@ -9550,7 +9996,9 @@ if st.session_state.active_sport == "mlb":
                                          f"{f' · K% {_lineup_avg_k:.1%}' if _lineup_avg_k is not None else ''}") if _order_hands else (f"{len(_lineup_order)}/9" if _lineup_order else "Not posted"),
                     "Platoon matchup":  f"vsL:{_platoon_vs_l:.1%} vsR:{_platoon_vs_r:.1%} · {_lhb_count}L/{_rhb_count}R {'projected' if _lineup_projected else 'tonight'}" if (_platoon_vs_l and _platoon_vs_r) else "Lineup TBD",
                     "Contact profile":  f"{okpct:.1%} · {_okpct_source}" if okpct else "N/A",
-                    "Pitch count est":  f"~{_pc_avg}p → exp {_pc_expected_k:.1f}K / ceil {_pc_k_ceiling:.1f}K · {'⚠️ On limit' if _pc_limit else 'No limit detected'}" if _pc_avg else "N/A",
+                    "Pitch count est":  (f"~{_pc_avg}p → exp {_pc_expected_outs:.1f} outs / ceil {_pc_outs_ceiling:.1f} outs · {'⚠️ On limit' if _pc_limit else 'No limit detected'}"
+                                         if (_is_outs_prop and _pc_avg) else
+                                         f"~{_pc_avg}p → exp {_pc_expected_k:.1f}K / ceil {_pc_k_ceiling:.1f}K · {'⚠️ On limit' if _pc_limit else 'No limit detected'}" if _pc_avg else "N/A"),
                     "Pitcher variance": f"{cons:.1%} consistency · {_variance_note}",
                 }
 
@@ -9597,6 +10045,21 @@ if st.session_state.active_sport == "mlb":
                     <td style='color:#7d93ab;'>{_bf_before:.1%}</td>
                     <td style='color:#e2e8f0;'>{_bf_after:.1%}</td>
                     <td style='color:{_bf_col};'>{_bf_impact:+.1%}</td>
+                </tr>"""
+
+                if _outs_prob is not None and _adj_before_outs_projection is not None:
+                    _outs_before = max(0.05, min(0.95, _adj_before_outs_projection))
+                    _outs_after = max(0.05, min(0.95, _adj_after_outs_projection))
+                    _outs_impact = _outs_after - _outs_before
+                    _outs_col = "#22c55e" if _outs_impact > 0.001 else ("#ef4444" if _outs_impact < -0.001 else "#6b7f96")
+                    trace_rows += f"""
+                <tr style='border-bottom:1px solid #0d1520;'>
+                    <td style='padding:4px 0;color:#9aaec4;'>Outs projection</td>
+                    <td style='color:#e2e8f0;font-weight:600;'>{_outs_note}</td>
+                    <td style='color:{_outs_col};'>blend {int(_outs_blend_weight * 100)}%</td>
+                    <td style='color:#7d93ab;'>{_outs_before:.1%}</td>
+                    <td style='color:#e2e8f0;'>{_outs_after:.1%}</td>
+                    <td style='color:{_outs_col};'>{_outs_impact:+.1%}</td>
                 </tr>"""
 
                 if _guardrail_note:
@@ -9665,6 +10128,30 @@ if st.session_state.active_sport == "mlb":
                 _mlb_strong_thresh = "≥ 72% (any edge) OR ≥ 63% (edge ≥ -1.5)" if mlb_side=="Over" else "≥ 72% (any edge) OR ≥ 63% (edge ≤ 1.5)"
                 _mlb_lean_thresh   = "≥ 52% AND edge > 0" if mlb_side=="Over" else "≥ 52% AND edge < 0"
                 _edge_ok_mlb       = (edge >= -1.5 if mlb_side=="Over" else edge <= 1.5)
+                _loaded_signals_html = (
+                    f"{'✅ OutsProj' if _outs_expected is not None else '❌ OutsProj'} · "
+                    f"{'✅ PitchCnt' if _pc_avg else '⚠️ PitchCnt'} · "
+                    f"{'✅ AvgIP' if _avg_ip > 0 else '❌ AvgIP'} · "
+                    f"{'✅ Opp BB%' if _opp_plate.get('bb_rate') is not None else '⚠️ Opp BB%'} · "
+                    f"{'✅ Bullpen' if _bullpen.get('signal') and _bullpen.get('signal') != 'Neutral' else '⚪ Bullpen'} · "
+                    f"{'✅ Weather' if _weather and _weather.get('temp_f') else '⚠️ Weather'} · "
+                    f"{_lineup_loaded_label}"
+                    if _is_outs_prop else
+                    f"{'✅ K/9' if _k9>0 else '❌ K/9'} · "
+                    f"{'✅ SwStr%' if _swstr_real else '⚠️ K% proxy'} · "
+                    f"{'✅ Velo' if _velo else '❌ Velo'} · "
+                    f"{'✅ Umpire' if _ump_name else '⚠️ TBD'} · "
+                    f"{'✅ Weather' if _weather and _weather.get('temp_f') else '⚠️ N/A'} · "
+                    f"{_lineup_loaded_label} · "
+                    f"{'✅ Platoon' if (_platoon_vs_l and _platoon_vs_r) else '⚠️ N/A'} · "
+                    f"{'✅ PitchCnt' if _pc_avg else '⚠️ N/A'}"
+                )
+                _projection_anchor_label = "Outs projection" if _is_outs_prop else "Projection anchor"
+                _projection_anchor_text = (
+                    f"{_outs_note if _outs_prob is not None else 'N/A'}{f' · {_guardrail_note}' if _guardrail_note else ''}{f' · {_volatility_note}' if _volatility_note else ''}"
+                    if _is_outs_prop else
+                    f"{_projection_note or 'N/A'}{f' · {_guardrail_note}' if _guardrail_note else ''}{f' · {_volatility_note}' if _volatility_note else ''}"
+                )
 
                 st.markdown(f"""
                 <div style='color:#f97316;font-size:0.65rem;letter-spacing:0.15em;text-transform:uppercase;
@@ -9689,25 +10176,18 @@ if st.session_state.active_sport == "mlb":
                         <td style='padding:3px 8px 3px 0;color:#6b7f96;'>Confidence score</td>
                         <td style='color:{_cc};font-weight:700;'>{_sc}/100</td>
                         <td style='padding:3px 8px;color:#6b7f96;'>Data signals loaded</td>
-                        <td style='color:#9aaec4;'>
-                            {"✅ K/9" if _k9>0 else "❌ K/9"} ·
-                            {"✅ SwStr%" if _swstr_real else "⚠️ K% proxy"} ·
-                            {"✅ Velo" if _velo else "❌ Velo"} ·
-                            {"✅ Umpire" if _ump_name else "⚠️ TBD"} ·
-                            {"✅ Weather" if _weather and _weather.get("temp_f") else "⚠️ N/A"} ·
-                            {_lineup_loaded_label} ·
-                            {"✅ Platoon" if (_platoon_vs_l and _platoon_vs_r) else "⚠️ N/A"} ·
-                            {"✅ PitchCnt" if _pc_avg else "⚠️ N/A"}
-                        </td>
+                        <td style='color:#9aaec4;'>{_loaded_signals_html}</td>
                     </tr>
                     <tr>
-                        <td style='padding:3px 8px 3px 0;color:#6b7f96;'>Projection anchor</td>
-                        <td colspan='3' style='color:#9aaec4;'>{_projection_note or "N/A"}{f" · {_guardrail_note}" if _guardrail_note else ""}{f" · {_volatility_note}" if _volatility_note else ""}</td>
+                        <td style='padding:3px 8px 3px 0;color:#6b7f96;'>{_projection_anchor_label}</td>
+                        <td colspan='3' style='color:#9aaec4;'>{_projection_anchor_text}</td>
                     </tr>
+                    {"" if _is_outs_prop else f'''
                     <tr>
                         <td style='padding:3px 8px 3px 0;color:#6b7f96;'>Lineup/BF anchor</td>
                         <td colspan='3' style='color:#9aaec4;'>{_bf_note if _bf_prob is not None else "N/A"}{f" · {_bf_guardrail}" if _bf_guardrail else ""}</td>
                     </tr>
+                    '''}
                     <tr>
                         <td style='padding:3px 8px 3px 0;color:#6b7f96;'>Calibration</td>
                         <td colspan='3' style='color:#9aaec4;'>Raw L10 {whr:.1%} → calibrated base {_calibrated_whr:.1%} · consistency {cons:.1%}</td>
