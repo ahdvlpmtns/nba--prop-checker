@@ -6345,7 +6345,7 @@ with st.sidebar:
             "border-radius:10px;padding:0.85rem;text-align:center;"
             "font-family:JetBrains Mono,monospace;font-size:0.6rem;color:#6b7f96;'>"
             "No picks added yet<br>"
-            "<span style='font-size:0.54rem;'>Hit ➕ Add to Parlay after any verdict</span>"
+            "<span style='font-size:0.54rem;'>Hit ➕ Add to Pick List after any verdict</span>"
             "</div>",
             unsafe_allow_html=True
         )
@@ -7410,19 +7410,24 @@ if st.session_state.active_sport == "mlb":
 
                 # Individual batter K-rate quality.
                 k_rates = []
+                k_rates_by_id = {}
                 try:
                     import concurrent.futures as _cf_k
                     with _cf_k.ThreadPoolExecutor(max_workers=6) as _kpool:
-                        _futs = [
-                            _kpool.submit(mlb_get_batter_k_rate, pid, name)
+                        _futs = {
+                            _kpool.submit(mlb_get_batter_k_rate, pid, name): pid
                             for pid, name in zip(order_ids, order)
                             if pid
-                        ]
+                        }
                         for _f in _cf_k.as_completed(_futs, timeout=8):
                             try:
                                 _kr = _f.result(timeout=0.1)
                                 if _kr is not None:
-                                    k_rates.append(float(_kr))
+                                    _pid = _futs.get(_f)
+                                    _krf = float(_kr)
+                                    k_rates.append(_krf)
+                                    if _pid:
+                                        k_rates_by_id[_pid] = _krf
                             except Exception:
                                 pass
                 except Exception:
@@ -7430,6 +7435,10 @@ if st.session_state.active_sport == "mlb":
 
                 avg_k_rate = round(sum(k_rates) / len(k_rates), 3) if len(k_rates) >= 5 else None
                 k_prone_count = sum(1 for kr in k_rates if kr >= 0.25)
+                ordered_k_rates = [
+                    k_rates_by_id.get(pid)
+                    for pid in order_ids[:9]
+                ]
                 confirmed = (not projected) and len(order) >= 8
                 if projected:
                     note = (
@@ -7451,6 +7460,7 @@ if st.session_state.active_sport == "mlb":
                     "source_date":   date_str,
                     "order":         order,
                     "order_ids":     order_ids,
+                    "order_k_rates":  ordered_k_rates,
                     "k_prone_count": k_prone_count,
                     "avg_k_rate":    avg_k_rate,
                     "lineup_note":   note,
@@ -7981,6 +7991,116 @@ if st.session_state.active_sport == "mlb":
         except Exception:
             return None
 
+    def mlb_lineup_bf_projection(
+        line: float,
+        side: str,
+        pitcher_k9: Optional[float],
+        avg_ip: Optional[float],
+        pitch_count: Optional[float],
+        lineup_avg_k: Optional[float],
+        order_k_rates: Optional[list],
+        opp_k_rate: Optional[float],
+        lineup_confirmed: bool,
+        lineup_projected: bool,
+    ) -> dict:
+        """
+        Batter-facing projection for MLB K props.
+        This anchors the prop to expected batters faced and the actual batting
+        order K profile, instead of letting a hot L10 hit rate drive everything.
+        """
+        empty = {
+            "expected_k": None, "prob": None, "weighted_lineup_k": None,
+            "expected_bf": None, "pitcher_k_rate": None, "confidence": "low",
+            "note": "Lineup/BF projection unavailable",
+            "guardrail": "",
+        }
+        try:
+            side = str(side or "Over")
+            valid_order_rates = [
+                float(x) for x in (order_k_rates or [])
+                if x is not None and 0.05 <= float(x) <= 0.45
+            ]
+            weighted_lineup_k = None
+            if len(valid_order_rates) >= 6:
+                # Top of the lineup gets more plate appearances, so weight it
+                # more heavily than the 8/9 spots.
+                weights = [1.16, 1.11, 1.06, 1.01, 0.97, 0.93, 0.89, 0.85, 0.81]
+                pairs = list(zip(valid_order_rates[:9], weights[:len(valid_order_rates)]))
+                weighted_lineup_k = sum(v * w for v, w in pairs) / sum(w for _, w in pairs)
+            elif lineup_avg_k is not None and 0.05 <= float(lineup_avg_k) <= 0.45:
+                weighted_lineup_k = float(lineup_avg_k)
+            elif opp_k_rate is not None and 0.05 <= float(opp_k_rate) <= 0.45:
+                weighted_lineup_k = float(opp_k_rate)
+
+            if pitcher_k9 and pitcher_k9 > 0:
+                # Rough K/BF conversion. League batters faced per 9 is usually
+                # high-30s; this keeps K/9 from overstating low-workload arms.
+                pitcher_k_rate = max(0.08, min(0.38, float(pitcher_k9) / 38.5))
+            elif opp_k_rate:
+                pitcher_k_rate = max(0.08, min(0.38, float(opp_k_rate)))
+            else:
+                pitcher_k_rate = None
+
+            if pitch_count and pitch_count > 0:
+                # MLB starters usually live around 3.8-4.1 pitches per BF.
+                expected_bf = float(pitch_count) / 3.95
+            elif avg_ip and avg_ip > 0:
+                expected_bf = float(avg_ip) * 4.25
+            else:
+                expected_bf = None
+
+            if expected_bf is None or pitcher_k_rate is None:
+                return empty
+
+            expected_bf = max(12.0, min(30.0, expected_bf))
+            if weighted_lineup_k is None:
+                matchup_k_rate = pitcher_k_rate
+            else:
+                # Pitcher skill matters most, but the actual order is the
+                # strongest opponent input once it exists.
+                matchup_k_rate = (0.52 * pitcher_k_rate) + (0.36 * weighted_lineup_k)
+                if opp_k_rate is not None:
+                    matchup_k_rate += 0.12 * float(opp_k_rate)
+                else:
+                    matchup_k_rate += 0.12 * weighted_lineup_k
+
+            matchup_k_rate = max(0.07, min(0.40, matchup_k_rate))
+            expected_k = expected_bf * matchup_k_rate
+            prob = mlb_poisson_side_prob(expected_k, line, side)
+            confidence = "high" if lineup_confirmed and len(valid_order_rates) >= 7 else (
+                "medium" if (lineup_projected or len(valid_order_rates) >= 5 or weighted_lineup_k is not None) else "low"
+            )
+
+            gap = expected_k - float(line)
+            guardrail = ""
+            if side == "Over":
+                if gap < 0.25:
+                    guardrail = "Projection is too close to the line for a Strong Over"
+                elif gap < 0.75:
+                    guardrail = "Projection has a thin cushion over the line"
+            else:
+                if gap > -0.25:
+                    guardrail = "Projection is too close to the line for a Strong Under"
+                elif gap > -0.75:
+                    guardrail = "Projection has a thin cushion under the line"
+
+            return {
+                "expected_k": round(expected_k, 2),
+                "prob": prob,
+                "weighted_lineup_k": round(weighted_lineup_k, 3) if weighted_lineup_k is not None else None,
+                "expected_bf": round(expected_bf, 1),
+                "pitcher_k_rate": round(pitcher_k_rate, 3),
+                "confidence": confidence,
+                "note": (
+                    f"Expected BF {expected_bf:.1f} · pitcher K/BF {pitcher_k_rate:.1%}"
+                    + (f" · lineup K% {weighted_lineup_k:.1%}" if weighted_lineup_k is not None else "")
+                    + f" → exp {expected_k:.1f}K"
+                ),
+                "guardrail": guardrail,
+            }
+        except Exception:
+            return empty
+
     def mlb_verdict(adj, edge, side, pc_ceiling=None, line=None):
         """
         Verdict based on adjusted hit rate (primary) + edge as secondary factor.
@@ -8507,6 +8627,7 @@ if st.session_state.active_sport == "mlb":
             _rhb_count         = _lineup.get("rhb_count", 0) if _lineup else 0
             _lhb_pct           = _lineup.get("lhb_pct", 0.5) if _lineup else 0.5
             _order_hands       = _lineup.get("order_with_hands", []) if _lineup else []
+            _order_k_rates     = _lineup.get("order_k_rates", []) if _lineup else []
             _lineup_avg_k      = _lineup.get("avg_k_rate") if _lineup else None
             _lineup_k_prone    = _lineup.get("k_prone_count", 0) if _lineup else 0
             _lineup_adj        = 0.0
@@ -8620,6 +8741,21 @@ if st.session_state.active_sport == "mlb":
             if _lineup_order and len(_lineup_order) < 7:
                 _lineup_adj += (-0.02 if mlb_side == "Over" else 0.02)
 
+            # Lineup/BF projection anchor. This is the sharpest MLB K input:
+            # actual or projected order K quality + expected batters faced.
+            _bf_proj = mlb_lineup_bf_projection(
+                mlb_line, mlb_side, _k9, _avg_ip, _pc_avg,
+                _lineup_avg_k, _order_k_rates, okpct,
+                _lineup_confirmed, _lineup_projected,
+            )
+            _bf_expected_k = _bf_proj.get("expected_k")
+            _bf_prob = _bf_proj.get("prob")
+            _bf_blend_weight = 0.0
+            _bf_note = _bf_proj.get("note", "")
+            _bf_guardrail = _bf_proj.get("guardrail", "")
+            _adj_before_bf_projection = None
+            _adj_after_bf_projection = None
+
             # ── Apply all signals
             # Start from a calibrated hit-rate base instead of raw L10. This
             # keeps perfect recent streaks from maxing the model before the
@@ -8654,12 +8790,31 @@ if st.session_state.active_sport == "mlb":
                     adj = max(0.05, min(0.95, adj))
             _adj_after_projection = adj
 
+            # Stronger anchor: expected batters faced + actual lineup K%.
+            # This gets more weight than the simpler pitch-count-only projection.
+            if mlb_prop == "Strikeouts" and _bf_prob is not None:
+                _adj_before_bf_projection = adj
+                _bf_blend_weight = 0.32 if _bf_proj.get("confidence") == "high" else (
+                    0.26 if _bf_proj.get("confidence") == "medium" else 0.18
+                )
+                adj = ((1.0 - _bf_blend_weight) * adj) + (_bf_blend_weight * _bf_prob)
+                if mlb_side == "Over" and _bf_prob < 0.80:
+                    adj = min(adj, _bf_prob + 0.07)
+                elif mlb_side == "Under" and _bf_prob < 0.80:
+                    adj = min(adj, _bf_prob + 0.07)
+                adj = max(0.05, min(0.95, adj))
+                _adj_after_bf_projection = adj
+
             # Strong-pick guardrails for strikeouts. These do not hide data; they
             # prevent "Strong Over" when the realistic route to the line is thin.
             _adj_before_guardrails = adj
             _guardrail_note = ""
             if mlb_prop == "Strikeouts":
                 if mlb_side == "Over":
+                    if _bf_expected_k and _bf_expected_k <= mlb_line + 0.25:
+                        adj = min(adj, 0.66)
+                    elif _bf_expected_k and _bf_expected_k <= mlb_line + 0.75:
+                        adj = min(adj, 0.74)
                     if _pc_expected_k and _pc_expected_k <= mlb_line - 0.25:
                         adj = min(adj, 0.68)
                     if _pc_k_ceiling and _pc_k_ceiling <= mlb_line + 0.25:
@@ -8667,12 +8822,17 @@ if st.session_state.active_sport == "mlb":
                     if not _lineup_confirmed and abs(edge) < 1.0:
                         adj = min(adj, 0.72)
                 else:
+                    if _bf_expected_k and _bf_expected_k >= mlb_line - 0.25:
+                        adj = min(adj, 0.66)
+                    elif _bf_expected_k and _bf_expected_k >= mlb_line - 0.75:
+                        adj = min(adj, 0.74)
                     if _pc_expected_k and _pc_expected_k >= mlb_line + 1.0:
                         adj = min(adj, 0.68)
                     if not _lineup_confirmed and abs(edge) < 1.0:
                         adj = min(adj, 0.72)
             if adj < _adj_before_guardrails - 0.001:
-                _guardrail_note = f"Guardrail capped projection-adjusted rate from {_adj_before_guardrails:.0%} to {adj:.0%}"
+                _guardrail_reason = _bf_guardrail or "Ceiling/line check"
+                _guardrail_note = f"{_guardrail_reason} · capped from {_adj_before_guardrails:.0%} to {adj:.0%}"
 
             # Volatility guardrail. For noisy pitchers, don't let a hot L10
             # alone create a high-confidence strong pick.
@@ -9174,23 +9334,24 @@ if st.session_state.active_sport == "mlb":
             if tier not in ("Pass",):
                 _mpc1, _mpc2 = st.columns([3,1])
                 with _mpc2:
-                    if st.button("➕ Add to Parlay",
-                                 key=f"mlb_parlay_{mlb_pitcher}_{mlb_line}",
-                                 use_container_width=True):
-                        _new_mlb_leg = {
-                            "player":     mlb_pitcher,
-                            "prop":       f"{mlb_prop} {mlb_side}",
-                            "line":       mlb_line,
-                            "side":       mlb_side,
-                            "verdict":    tier,
-                            "confidence": _sc,
-                            "adj":        round(adj * 100, 1),
-                            "sport":      "MLB",
-                            "added":      __import__("datetime").datetime.now().strftime("%I:%M %p"),
-                        }
-                        st.session_state.active_sport = "mlb"
-                        add_to_pick_list(_new_mlb_leg)
-                        st.rerun()
+                    _new_mlb_leg = {
+                        "player":     mlb_pitcher,
+                        "prop":       f"{mlb_prop} {mlb_side}",
+                        "line":       mlb_line,
+                        "side":       mlb_side,
+                        "verdict":    tier,
+                        "confidence": _sc,
+                        "adj":        round(adj * 100, 1),
+                        "sport":      "MLB",
+                        "added":      __import__("datetime").datetime.now().strftime("%I:%M %p"),
+                    }
+                    st.button(
+                        "➕ Add to Pick List",
+                        key=f"mlb_parlay_{mlb_pitcher}_{mlb_prop}_{mlb_line}_{mlb_side}",
+                        use_container_width=True,
+                        on_click=add_to_pick_list,
+                        args=(_new_mlb_leg,),
+                    )
 
             # Share button
             with st.expander("📤 Share this pick", expanded=False):
@@ -9244,7 +9405,7 @@ if st.session_state.active_sport == "mlb":
 
                 <div style='color:#f97316;font-size:0.65rem;letter-spacing:0.15em;text-transform:uppercase;
                             border-bottom:1px solid #1a2333;padding-bottom:4px;margin:14px 0 10px 0;'>
-                    SIGNAL TRACE — 16 SIGNALS
+                    SIGNAL TRACE — 17 SIGNALS
                 </div>
                 </div>
                 """, unsafe_allow_html=True)
@@ -9300,6 +9461,9 @@ if st.session_state.active_sport == "mlb":
                     ("Projection anchor",          f"{_proj_prob:.1%}" if _proj_prob is not None else "N/A",
                                                   None,
                                                   _projection_note if _projection_note else "Projection unavailable — pitch-count expected K missing"),
+                    ("Lineup/BF projection",       f"{_bf_prob:.1%}" if _bf_prob is not None else "N/A",
+                                                  None,
+                                                  _bf_note if _bf_prob is not None else "Expected batters faced + lineup K projection unavailable"),
                 ]
 
                 # Build mlb_apply_adj step trace
@@ -9391,6 +9555,21 @@ if st.session_state.active_sport == "mlb":
                     <td style='color:#7d93ab;'>{_proj_before:.1%}</td>
                     <td style='color:#e2e8f0;'>{_proj_after:.1%}</td>
                     <td style='color:{_proj_col};'>{_proj_impact:+.1%}</td>
+                </tr>"""
+
+                if _bf_prob is not None and _adj_before_bf_projection is not None:
+                    _bf_before = max(0.05, min(0.95, _adj_before_bf_projection))
+                    _bf_after = max(0.05, min(0.95, _adj_after_bf_projection))
+                    _bf_impact = _bf_after - _bf_before
+                    _bf_col = "#22c55e" if _bf_impact > 0.001 else ("#ef4444" if _bf_impact < -0.001 else "#6b7f96")
+                    trace_rows += f"""
+                <tr style='border-bottom:1px solid #0d1520;'>
+                    <td style='padding:4px 0;color:#9aaec4;'>Lineup/BF projection</td>
+                    <td style='color:#e2e8f0;font-weight:600;'>{_bf_note}</td>
+                    <td style='color:{_bf_col};'>blend {int(_bf_blend_weight * 100)}%</td>
+                    <td style='color:#7d93ab;'>{_bf_before:.1%}</td>
+                    <td style='color:#e2e8f0;'>{_bf_after:.1%}</td>
+                    <td style='color:{_bf_col};'>{_bf_impact:+.1%}</td>
                 </tr>"""
 
                 if _guardrail_note:
@@ -9497,6 +9676,10 @@ if st.session_state.active_sport == "mlb":
                     <tr>
                         <td style='padding:3px 8px 3px 0;color:#6b7f96;'>Projection anchor</td>
                         <td colspan='3' style='color:#9aaec4;'>{_projection_note or "N/A"}{f" · {_guardrail_note}" if _guardrail_note else ""}{f" · {_volatility_note}" if _volatility_note else ""}</td>
+                    </tr>
+                    <tr>
+                        <td style='padding:3px 8px 3px 0;color:#6b7f96;'>Lineup/BF anchor</td>
+                        <td colspan='3' style='color:#9aaec4;'>{_bf_note if _bf_prob is not None else "N/A"}{f" · {_bf_guardrail}" if _bf_guardrail else ""}</td>
                     </tr>
                     <tr>
                         <td style='padding:3px 8px 3px 0;color:#6b7f96;'>Calibration</td>
@@ -11212,23 +11395,25 @@ if st.session_state.active_sport == "edge":
 
                 with _act_c2:
                     # ── Add to Parlay ─────────────────────────────────────
-                    if st.button("➕ Add to Pick List", key=f"ep_{_btn_key_safe}",
-                                 use_container_width=True):
-                        import datetime as _dt_edge
-                        _new_leg = {
-                            "player":     _r["player"],
-                            "prop":       f"{_r['stat']} Over",
-                            "line":       _r["line"],
-                            "side":       "Over",
-                            "verdict":    _tier_lbl,
-                            "confidence": _conf_val,
-                            "adj":        _r["adj"],
-                            "sport":      _r["sport"],
-                            "added":      _dt_edge.datetime.now().strftime("%I:%M %p"),
-                        }
-                        st.session_state.active_sport = "edge"
-                        add_to_pick_list(_new_leg)
-                        st.rerun()
+                    import datetime as _dt_edge
+                    _new_leg = {
+                        "player":     _r["player"],
+                        "prop":       f"{_r['stat']} Over",
+                        "line":       _r["line"],
+                        "side":       "Over",
+                        "verdict":    _tier_lbl,
+                        "confidence": _conf_val,
+                        "adj":        _r["adj"],
+                        "sport":      _r["sport"],
+                        "added":      _dt_edge.datetime.now().strftime("%I:%M %p"),
+                    }
+                    st.button(
+                        "➕ Add to Pick List",
+                        key=f"ep_{_btn_key_safe}",
+                        use_container_width=True,
+                        on_click=add_to_pick_list,
+                        args=(_new_leg,),
+                    )
 
                 with _act_c3:
                     # ── Deep Dive — jump to full individual analyzer ──────
@@ -14237,24 +14422,25 @@ if st.session_state.logs is not None:
     if _display_tier not in ("Pass",):
         _atp_col1, _atp_col2 = st.columns([3,1])
         with _atp_col2:
-            if st.button("➕ Add to Parlay",
-                         key=f"nba_parlay_{full_name}_{line}_{side}",
-                         use_container_width=True):
-                import datetime as _dtnow
-                _new_leg = {
-                    "player":     full_name,
-                    "prop":       f"Points {side}",
-                    "line":       float(line),
-                    "side":       side,
-                    "verdict":    _display_tier,
-                    "confidence": _conf_score,
-                    "adj":        round(_display_adj * 100, 1),
-                    "sport":      "NBA",
-                    "added":      _dtnow.datetime.now().strftime("%I:%M %p"),
-                }
-                st.session_state.active_sport = "nba"
-                add_to_pick_list(_new_leg)
-                st.rerun()
+            import datetime as _dtnow
+            _new_leg = {
+                "player":     full_name,
+                "prop":       f"Points {side}",
+                "line":       float(line),
+                "side":       side,
+                "verdict":    _display_tier,
+                "confidence": _conf_score,
+                "adj":        round(_display_adj * 100, 1),
+                "sport":      "NBA",
+                "added":      _dtnow.datetime.now().strftime("%I:%M %p"),
+            }
+            st.button(
+                "➕ Add to Pick List",
+                key=f"nba_parlay_{full_name}_{line}_{side}",
+                use_container_width=True,
+                on_click=add_to_pick_list,
+                args=(_new_leg,),
+            )
 
     # ── Share + Add to Tracker ───────────────
     _share_col, _tracker_col = st.columns(2)
