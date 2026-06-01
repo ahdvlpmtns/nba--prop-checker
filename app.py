@@ -1904,16 +1904,16 @@ div[data-testid="stCodeBlock"] {
     div[data-testid="stTextInput"] input,
     div[data-testid="stNumberInput"] input {
         min-height: 52px !important;
-        font-size: 16px !important;
+        font-size: 0.96rem !important;
     }
-    input,
-    textarea,
-    select,
-    div[data-baseweb="input"] input,
-    div[data-baseweb="select"] input,
-    input[aria-autocomplete="list"],
-    input[type="text"],
-    input[type="number"] {
+    input:focus,
+    textarea:focus,
+    select:focus,
+    div[data-baseweb="input"] input:focus,
+    div[data-baseweb="select"] input:focus,
+    input[aria-autocomplete="list"]:focus,
+    input[type="text"]:focus,
+    input[type="number"]:focus {
         font-size: 16px !important;
         -webkit-text-size-adjust: 100% !important;
     }
