@@ -9813,8 +9813,8 @@ if st.session_state.active_sport == "mlb":
 
             # Outs Recorded is a workload/leash market, not a strikeout-skill
             # market. Do not let K/9, whiff, ump K zone, or lineup K% drive it.
-                _is_outs_prop = mlb_prop != "Strikeouts"
-                _outs_expected = None
+            _is_outs_prop = mlb_prop != "Strikeouts"
+            _outs_expected = None
             _outs_prob = None
             _outs_note = ""
             _outs_guardrail = ""
