@@ -9374,6 +9374,18 @@ if st.session_state.active_sport == "mlb":
         _vtrend_mph = 0.0
         _vtrend_dir = "Stable"
         _vtrend_adj = 0.0
+        try:
+            if _vtrender and _vtrender.get("avg_velo"):
+                _vtrend_mph = float(_vtrender.get("trend_mph") or 0.0)
+                _vtrend_dir = _vtrender.get("trend", "Stable") or "Stable"
+                if _vtrend_dir == "Up":
+                    _vtrend_adj = 0.02 if mlb_side == "Over" else -0.02
+                elif _vtrend_dir == "Down":
+                    _vtrend_adj = -0.04 if mlb_side == "Over" else 0.04
+        except Exception:
+            _vtrend_mph = 0.0
+            _vtrend_dir = "Stable"
+            _vtrend_adj = 0.0
         _is_avail   = _injury.get("is_available", True)
         _inj_status = _injury.get("status", "Active")
         _inj_desc   = _injury.get("description", "")
@@ -9801,8 +9813,8 @@ if st.session_state.active_sport == "mlb":
 
             # Outs Recorded is a workload/leash market, not a strikeout-skill
             # market. Do not let K/9, whiff, ump K zone, or lineup K% drive it.
-            _is_outs_prop = mlb_prop != "Strikeouts"
-            _outs_expected = None
+                _is_outs_prop = mlb_prop != "Strikeouts"
+                _outs_expected = None
             _outs_prob = None
             _outs_note = ""
             _outs_guardrail = ""
@@ -9816,6 +9828,7 @@ if st.session_state.active_sport == "mlb":
                 _k9_adj = 0.0
                 _swstr_adj = 0.0
                 _velo_adj = 0.0
+                _vtrend_adj = 0.0
                 _ump_adj = 0.0
                 _lineup_adj = 0.0
                 _platoon_adj = 0.0
@@ -10639,7 +10652,7 @@ if st.session_state.active_sport == "mlb":
 
                 <div style='color:#f97316;font-size:0.65rem;letter-spacing:0.15em;text-transform:uppercase;
                             border-bottom:1px solid #1a2333;padding-bottom:4px;margin:14px 0 10px 0;'>
-                    SIGNAL TRACE — 17 SIGNALS
+                    SIGNAL TRACE — MODEL SIGNALS
                 </div>
                 </div>
                 """, unsafe_allow_html=True)
@@ -10662,7 +10675,7 @@ if st.session_state.active_sport == "mlb":
                                                   f"{okpct:.1%}" if okpct else "N/A",
                                                   None,
                                                   f"{'High K lineup' if (okpct or 0)>=0.26 else 'Low K lineup' if (okpct or 0)<=0.18 else 'Average K lineup'}" if okpct else "No opponent data"),
-                    ("Park factor",               psig,                    None,        f"{mlb_home or 'N/A'} · {'run-friendly park' if psig=='Boost' else 'pitcher-friendly park' if psig=='Penalty' else 'neutral park'}"),
+                    ("Park factor",               psig,                    None,        f"{mlb_home or 'N/A'} · {'pitcher-friendly park' if psig=='Boost' else 'run-friendly park' if psig=='Penalty' else 'neutral park'}"),
                     ("Home/Away split",            f"{_ha_adj:+.0%}" if _ha_adj != 0 else "Neutral",
                                                   _ha_adj,
                                                   "Based on pitcher's H/A K splits from logs"),
@@ -10682,6 +10695,9 @@ if st.session_state.active_sport == "mlb":
                                                   _velo_adj,
                                                   f"{'Elite velo (97+)' if (_velo or 0)>=97 else 'Hard (94+)' if (_velo or 0)>=94 else 'Avg' if (_velo or 0)>=91 else 'Soft (<91)' if _velo else 'N/A — pitchMix & Savant CSV both unavailable'}"
                                                   + (f" · pstats velo: {_pstats.get('velo','none')}" if not _velo else "")),
+                    ("Velocity trend",            f"{_vtrend_mph:+.1f}mph · {_vtrend_dir}" if _vtrender.get("avg_velo") else "N/A",
+                                                  _vtrend_adj,
+                                                  f"{_vtrender.get('source','')}" if _vtrender.get("avg_velo") else "Trend unavailable"),
                     ("Avg IP/start",              f"{_avg_ip:.1f}" if _avg_ip>0 else "N/A",
                                                   _ip_adj,
                                                   f"{'Deep — more K opportunities' if _avg_ip>=6.5 else 'Average depth' if _avg_ip>=5.0 else '⚠️ Short leash — limits K ceiling'}" + (f" · {_ip_note}" if _ip_note else "")),
@@ -10727,6 +10743,29 @@ if st.session_state.active_sport == "mlb":
                 # Build mlb_apply_adj step trace
                 # Base = calibrated hit rate → then apply: opp_k, park, then individual adjs
                 _mlb_base_adj = mlb_apply_adj(_calibrated_whr, _base_opp_k_for_model, psig, mlb_side)
+                _base_context_notes = []
+                if _base_opp_k_for_model is not None:
+                    if _base_opp_k_for_model >= 0.285:
+                        _base_context_notes.append("elite opponent K%")
+                    elif _base_opp_k_for_model >= 0.260:
+                        _base_context_notes.append("high opponent K%")
+                    elif _base_opp_k_for_model >= 0.245:
+                        _base_context_notes.append("slight opponent K% boost")
+                    elif _base_opp_k_for_model <= 0.175:
+                        _base_context_notes.append("very low opponent K%")
+                    elif _base_opp_k_for_model <= 0.195:
+                        _base_context_notes.append("low opponent K%")
+                    elif _base_opp_k_for_model <= 0.210:
+                        _base_context_notes.append("slight opponent K% penalty")
+                if psig == "Boost":
+                    _base_context_notes.append("pitcher-friendly park")
+                elif psig == "Penalty":
+                    _base_context_notes.append("run-friendly park")
+                _base_context_note = (
+                    "calibrated base + " + " + ".join(_base_context_notes)
+                    if _base_context_notes else
+                    "calibrated base only"
+                )
                 if _is_outs_prop:
                     _mlb_adjs = [_ha_adj, _form_adj, _rest_adj, _ip_adj, _wx_adj, _pc_adj, _variance_adj]
                     _mlb_adj_labels = [
@@ -10735,12 +10774,12 @@ if st.session_state.active_sport == "mlb":
                     ]
                 else:
                     _mlb_adjs = [_ha_adj, _form_adj, _rest_adj, _k9_adj,
-                                 _swstr_adj, _velo_adj, _ip_adj, _ump_adj, _wx_adj,
+                                 _swstr_adj, _velo_adj, _vtrend_adj, _ip_adj, _ump_adj, _wx_adj,
                                  _lineup_adj, _platoon_adj, _contact_adj, _pc_adj,
                                  _variance_adj]
                     _mlb_adj_labels = [
                         "Home/Away split", "Recent form", "Rest days", "K/9 rate",
-                        "SwStr%/K%", "Velocity", "Avg IP/start", "Umpire zone",
+                        "SwStr%/K%", "Velocity", "Velocity trend", "Avg IP/start", "Umpire zone",
                         "Weather", "Batting order", "Platoon matchup", "Contact profile",
                         "Pitch count est", "Pitcher variance"
                     ]
@@ -10769,7 +10808,7 @@ if st.session_state.active_sport == "mlb":
                     <td style='color:#6b7f96;'>calibrated</td>
                     <td style='color:#7d93ab;'>—</td>
                     <td style='color:#e2e8f0;'>{_mlb_base_adj:.1%}</td>
-                    <td style='color:#6b7f96;'>{"shrunk base + park applied" if _is_outs_prop else "shrunk base + opp K% + park applied"}</td>
+                    <td style='color:#6b7f96;'>{_base_context_note}</td>
                 </tr>"""
 
                 # Map signal names to their actual values for the trace
@@ -10780,6 +10819,7 @@ if st.session_state.active_sport == "mlb":
                     "K/9 rate":         f"{_k9:.1f} ({_k9_source})" if _k9 > 0 else "N/A",
                     "SwStr%/K%":        f"{_swstr:.1%}" if _swstr else "N/A",
                     "Velocity":         f"{_velo:.1f}mph" if _velo else "N/A",
+                    "Velocity trend":   f"{_vtrend_mph:+.1f}mph · {_vtrend_dir}" if _vtrender.get("avg_velo") else "N/A",
                     "Avg IP/start":     f"{_avg_ip:.1f} IP ({_ip_source})" if _avg_ip > 0 else "N/A",
                     "Umpire zone":      f"{_ump_name.split()[-1]} ({_ump_tend})" if _ump_name else "TBD",
                     "Weather":          _weather_condition_label,
@@ -10940,13 +10980,42 @@ if st.session_state.active_sport == "mlb":
                 )
                 _projection_anchor_label = "Outs projection" if _is_outs_prop else "Projection anchor"
                 _projection_anchor_text = (
-                    f"{_outs_note if _outs_prob is not None else 'N/A'}{f' · {_guardrail_note}' if _guardrail_note else ''}{f' · {_volatility_note}' if _volatility_note else ''}"
+                    (_outs_note if _outs_prob is not None else "N/A")
                     if _is_outs_prop else
-                    f"{_projection_note or 'N/A'}{f' · {_guardrail_note}' if _guardrail_note else ''}{f' · {_volatility_note}' if _volatility_note else ''}"
+                    (_projection_note or "N/A")
                 )
+                if _guardrail_note:
+                    _projection_anchor_text += f" · {_guardrail_note}"
+                if _volatility_note:
+                    _projection_anchor_text += f" · {_volatility_note}"
                 _trap_debug = (
                     f"{_trap['label']} · "
                     f"{' | '.join(_trap['summary'])}"
+                )
+                _lineup_bf_final_row = ""
+                if not _is_outs_prop:
+                    _lineup_bf_text = _bf_note if _bf_prob is not None else "N/A"
+                    if _bf_guardrail:
+                        _lineup_bf_text += f" · {_bf_guardrail}"
+                    _lineup_bf_final_row = (
+                        "<tr>"
+                        "<td style='padding:3px 8px 3px 0;color:#6b7f96;'>Lineup/BF anchor</td>"
+                        f"<td colspan='3' style='color:#9aaec4;'>{_lineup_bf_text}</td>"
+                        "</tr>"
+                    )
+                _calibration_final_row = (
+                    "<tr>"
+                    "<td style='padding:3px 8px 3px 0;color:#6b7f96;'>Calibration</td>"
+                    f"<td colspan='3' style='color:#9aaec4;'>Raw L10 {whr:.1%} → "
+                    f"calibrated base {_calibrated_whr:.1%} · consistency {cons:.1%}</td>"
+                    "</tr>"
+                )
+                _verdict_final_row = (
+                    "<tr style='border-top:1px solid #1a2333;'>"
+                    "<td style='padding:6px 8px 3px 0;color:#6b7f96;'>VERDICT</td>"
+                    f"<td colspan='3' style='color:{_mlb_tier_color};font-weight:900;"
+                    f"font-size:1.1rem;letter-spacing:-0.5px;'>{tier}</td>"
+                    "</tr>"
                 )
 
                 st.markdown(f"""
@@ -10982,21 +11051,9 @@ if st.session_state.active_sport == "mlb":
                         <td style='padding:3px 8px 3px 0;color:#6b7f96;'>{_projection_anchor_label}</td>
                         <td colspan='3' style='color:#9aaec4;'>{_projection_anchor_text}</td>
                     </tr>
-                    {"" if _is_outs_prop else f'''
-                    <tr>
-                        <td style='padding:3px 8px 3px 0;color:#6b7f96;'>Lineup/BF anchor</td>
-                        <td colspan='3' style='color:#9aaec4;'>{_bf_note if _bf_prob is not None else "N/A"}{f" · {_bf_guardrail}" if _bf_guardrail else ""}</td>
-                    </tr>
-                    '''}
-                    <tr>
-                        <td style='padding:3px 8px 3px 0;color:#6b7f96;'>Calibration</td>
-                        <td colspan='3' style='color:#9aaec4;'>Raw L10 {whr:.1%} → calibrated base {_calibrated_whr:.1%} · consistency {cons:.1%}</td>
-                    </tr>
-                    <tr style='border-top:1px solid #1a2333;'>
-                        <td style='padding:6px 8px 3px 0;color:#6b7f96;'>VERDICT</td>
-                        <td colspan='3' style='color:{_mlb_tier_color};font-weight:900;
-                            font-size:1.1rem;letter-spacing:-0.5px;'>{tier}</td>
-                    </tr>
+                    {_lineup_bf_final_row}
+                    {_calibration_final_row}
+                    {_verdict_final_row}
                 </table>
                 </div>
                 """, unsafe_allow_html=True)
