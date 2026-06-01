@@ -1683,6 +1683,588 @@ div[data-baseweb="popover"] > div {
         padding: 0.48rem;
     }
 }
+
+/* ══════════════════════════════════════════
+   PropIQ V6.1 — Mobile-first experience pass
+   Visual only: clearer hierarchy, safer taps, cleaner result scanning
+══════════════════════════════════════════ */
+html {
+    scroll-behavior: smooth;
+}
+body {
+    overscroll-behavior-y: contain;
+}
+[data-testid="stAppViewContainer"] {
+    background:
+        linear-gradient(180deg, rgba(0,213,223,0.09) 0%, rgba(7,10,15,0) 280px),
+        linear-gradient(145deg, #06090d 0%, #0d131b 44%, #080b10 100%) !important;
+}
+.main .block-container,
+.block-container {
+    padding-top: 0.25rem !important;
+}
+.pl-header {
+    isolation: isolate;
+}
+.pl-header::before {
+    content: '';
+    position: absolute;
+    inset: 1px;
+    border-radius: inherit;
+    background: linear-gradient(180deg, rgba(255,255,255,0.07), transparent 42%);
+    pointer-events: none;
+    z-index: -1;
+}
+.pl-logo-wrap {
+    min-width: 0;
+}
+.pl-logo {
+    white-space: nowrap;
+}
+.pl-badge {
+    min-width: 42px;
+    text-align: center;
+}
+
+/* Controls feel app-native on phones. */
+.stButton > button,
+button[data-testid="baseButton-secondary"],
+button[data-testid="baseButton-primary"] {
+    min-height: 48px !important;
+    touch-action: manipulation !important;
+}
+div[data-testid="stSelectbox"] > div > div,
+div[data-testid="stNumberInput"] input,
+div[data-testid="stTextInput"] input {
+    min-height: 48px !important;
+    box-shadow: 0 1px 0 rgba(255,255,255,0.04) inset !important;
+}
+div[data-testid="stSelectbox"]:focus-within > div > div,
+div[data-testid="stTextInput"]:focus-within input,
+div[data-testid="stNumberInput"]:focus-within input {
+    border-color: rgba(0,213,223,0.55) !important;
+    box-shadow: 0 0 0 3px rgba(0,213,223,0.13) !important;
+}
+div[data-baseweb="popover"] {
+    max-width: calc(100vw - 18px) !important;
+}
+ul[data-testid="stSelectboxVirtualDropdown"] {
+    max-height: 46vh !important;
+    overscroll-behavior: contain !important;
+}
+ul[data-testid="stSelectboxVirtualDropdown"] li,
+div[data-baseweb="menu"] li {
+    min-height: 44px !important;
+    display: flex !important;
+    align-items: center !important;
+}
+
+/* Dense data gets a more readable dashboard rhythm. */
+.stat-card,
+.defense-card,
+.verdict-banner,
+.edge-card-v55,
+div[data-testid="stExpander"] {
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+}
+.stat-card {
+    min-height: 124px;
+}
+.stat-value {
+    text-wrap: balance;
+}
+.ai-box,
+.explainer,
+.model-note {
+    border-radius: 12px !important;
+}
+
+/* Edge scanner cards: clearer hierarchy and better thumb scanning. */
+.edge-card-v55 {
+    position: relative;
+    overflow: hidden;
+}
+.edge-card-v55::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(119,244,255,0.5), transparent);
+}
+.edge-player-v55 {
+    font-size: clamp(1.08rem, 2vw, 1.28rem);
+}
+.edge-score-v55 {
+    align-items: stretch;
+}
+.edge-score-item-v55 {
+    text-align: left;
+}
+.edge-score-item-v55 span {
+    margin-bottom: 4px;
+}
+.edge-pill-v55 {
+    line-height: 1.35;
+}
+.edge-reasons-v55 .edge-pill-v55 {
+    background: rgba(0,213,223,0.07);
+    border-color: rgba(0,213,223,0.16);
+}
+
+/* Tables/debug panels should scroll instead of crushing mobile layouts. */
+div[data-testid="stDataFrame"],
+div[data-testid="stTable"],
+div[data-testid="stJson"],
+div[data-testid="stCodeBlock"] {
+    max-width: 100% !important;
+    overflow-x: auto !important;
+}
+
+@media (max-width: 900px) {
+    .main .block-container,
+    .block-container {
+        max-width: 100% !important;
+        padding-left: 0.8rem !important;
+        padding-right: 0.8rem !important;
+    }
+    .pl-header {
+        max-width: calc(100vw - 1.2rem);
+    }
+    .edge-top-v55 {
+        grid-template-columns: 1fr;
+    }
+    .edge-score-v55 {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        width: 100%;
+    }
+}
+
+@media (max-width: 768px) {
+    [data-testid="stAppViewContainer"] {
+        background:
+            linear-gradient(180deg, rgba(0,213,223,0.10) 0%, transparent 230px),
+            #070a0f !important;
+    }
+    [data-testid="stAppViewBlockContainer"] {
+        padding-left: 0.55rem !important;
+        padding-right: 0.55rem !important;
+    }
+    .main .block-container,
+    .block-container {
+        padding-left: 0.55rem !important;
+        padding-right: 0.55rem !important;
+        padding-bottom: calc(7rem + env(safe-area-inset-bottom)) !important;
+    }
+    .pl-header {
+        max-width: 100%;
+        margin: 0.35rem 0 0.5rem 0 !important;
+        padding: 0.62rem 0.68rem !important;
+        border-radius: 14px !important;
+        top: 0.25rem !important;
+    }
+    .pl-icon {
+        width: 38px !important;
+        height: 32px !important;
+    }
+    .pl-icon svg {
+        width: 38px !important;
+        height: 32px !important;
+    }
+    .pl-logo-wrap {
+        gap: 9px !important;
+    }
+    .pl-logo {
+        font-size: 1.22rem !important;
+        letter-spacing: -0.4px !important;
+    }
+    .pl-badge {
+        min-width: 36px;
+        font-size: 0.46rem !important;
+        padding: 4px 7px !important;
+    }
+    .score-strip {
+        margin-left: -0.2rem;
+        margin-right: -0.2rem;
+        padding-left: 0.2rem;
+    }
+    .section-header {
+        margin-top: 1.25rem !important;
+        padding-bottom: 0.5rem !important;
+    }
+    .stButton > button,
+    button[data-testid="baseButton-secondary"],
+    button[data-testid="baseButton-primary"] {
+        min-height: 52px !important;
+        font-size: 0.8rem !important;
+    }
+    div[data-testid="stSelectbox"] > div > div,
+    div[data-testid="stTextInput"] input,
+    div[data-testid="stNumberInput"] input {
+        min-height: 52px !important;
+        font-size: 0.96rem !important;
+    }
+    .v55-hero {
+        padding: 1rem 0.95rem !important;
+        border-radius: 14px !important;
+        margin-bottom: 0.7rem !important;
+    }
+    .v55-kicker {
+        font-size: 0.52rem !important;
+    }
+    .v55-title {
+        font-size: 1.08rem !important;
+        line-height: 1.2 !important;
+    }
+    .v55-subcopy {
+        font-size: 0.72rem !important;
+        line-height: 1.55 !important;
+    }
+    .v55-command-note {
+        font-size: 0.55rem !important;
+        padding: 0.55rem 0.7rem !important;
+    }
+    .stat-card {
+        min-height: auto;
+        padding: 0.78rem 0.82rem !important;
+    }
+    .stat-value {
+        font-size: 1.45rem !important;
+    }
+    .verdict-banner {
+        padding: 0.95rem !important;
+    }
+    .verdict-tier {
+        font-size: 1.7rem !important;
+        line-height: 1.05 !important;
+    }
+    .edge-card-v55 {
+        padding: 0.9rem !important;
+        border-radius: 14px !important;
+        margin-bottom: 0.7rem !important;
+    }
+    .edge-player-v55 {
+        font-size: 1.08rem !important;
+        line-height: 1.18 !important;
+    }
+    .edge-meta-v55 {
+        flex-wrap: nowrap !important;
+        overflow-x: auto !important;
+        scrollbar-width: none !important;
+        padding-bottom: 4px !important;
+        margin-right: -0.25rem;
+    }
+    .edge-meta-v55::-webkit-scrollbar {
+        display: none;
+    }
+    .edge-pill-v55 {
+        flex: 0 0 auto;
+        font-size: 0.5rem !important;
+        padding: 4px 8px !important;
+    }
+    .edge-reasons-v55 {
+        flex-wrap: nowrap !important;
+        overflow-x: auto !important;
+        scrollbar-width: none !important;
+        padding-bottom: 4px;
+    }
+    .edge-reasons-v55::-webkit-scrollbar {
+        display: none;
+    }
+    .edge-score-v55 {
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+        gap: 0.5rem !important;
+    }
+    .edge-score-item-v55 {
+        padding: 0.55rem 0.6rem !important;
+        border-radius: 10px !important;
+    }
+    .edge-score-item-v55 span {
+        font-size: 0.46rem !important;
+    }
+    .edge-score-item-v55 strong {
+        font-size: 1rem !important;
+    }
+    .edge-bar-v55 {
+        height: 8px !important;
+    }
+    div[data-testid="stExpander"] summary {
+        min-height: 48px;
+        align-items: center;
+    }
+}
+
+@media (max-width: 420px) {
+    .pl-logo {
+        font-size: 1.12rem !important;
+    }
+    .pl-icon {
+        display: none !important;
+    }
+    .pl-badge {
+        font-size: 0.43rem !important;
+    }
+    .stat-label {
+        font-size: 0.48rem !important;
+        letter-spacing: 0.12em !important;
+    }
+    .edge-score-v55 {
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    }
+    .edge-card-v55 .stButton > button {
+        min-height: 50px !important;
+    }
+}
+
+/* ══════════════════════════════════════════
+   PropIQ V6.2 — Dynamic command-center layer
+   Motion polish only: slicker, livelier, still lightweight
+══════════════════════════════════════════ */
+@keyframes propiqAmbientSweep {
+    0% { background-position: 0% 0%, 0% 50%; }
+    50% { background-position: 0% 0%, 100% 50%; }
+    100% { background-position: 0% 0%, 0% 50%; }
+}
+@keyframes propiqGlowDrift {
+    0%, 100% { opacity: 0.42; transform: translate3d(-3%, -1%, 0) scale(1); }
+    50% { opacity: 0.7; transform: translate3d(3%, 1%, 0) scale(1.04); }
+}
+@keyframes propiqEdgeSweep {
+    0% { transform: translateX(-120%); opacity: 0; }
+    18% { opacity: 0.65; }
+    72% { opacity: 0.45; }
+    100% { transform: translateX(120%); opacity: 0; }
+}
+@keyframes propiqMeterPulse {
+    0%, 100% { filter: brightness(1); }
+    50% { filter: brightness(1.35); }
+}
+@keyframes propiqSoftPop {
+    from { opacity: 0; transform: translateY(12px) scale(0.985); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+[data-testid="stAppViewContainer"] {
+    background:
+        radial-gradient(circle at 12% 0%, rgba(0,213,223,0.13), transparent 30%),
+        linear-gradient(125deg, #05080c 0%, #0b131c 34%, #071015 62%, #10131e 100%) !important;
+    background-size: 100% 100%, 180% 180% !important;
+    animation: propiqAmbientSweep 18s ease-in-out infinite;
+}
+[data-testid="stAppViewContainer"]::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    background:
+        linear-gradient(rgba(255,255,255,0.018) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.014) 1px, transparent 1px);
+    background-size: 42px 42px;
+    mask-image: linear-gradient(180deg, rgba(0,0,0,0.65), transparent 72%);
+}
+[data-testid="stAppViewContainer"]::after {
+    content: '';
+    position: fixed;
+    width: 64vw;
+    height: 36vh;
+    left: 18vw;
+    top: -18vh;
+    pointer-events: none;
+    z-index: 0;
+    background: radial-gradient(ellipse, rgba(0,213,223,0.14), transparent 64%);
+    animation: propiqGlowDrift 12s ease-in-out infinite;
+}
+
+.pl-header,
+.v55-hero,
+.edge-card-v55,
+.stat-card,
+.verdict-banner {
+    transform: translateZ(0);
+}
+.pl-header {
+    border-color: rgba(119,244,255,0.22);
+}
+.pl-header::after {
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--accent3), var(--green), var(--accent), transparent);
+    background-size: 220% 100%;
+    animation: shimmer 4.6s linear infinite;
+}
+.pl-badge {
+    position: relative;
+    overflow: hidden;
+}
+.pl-badge::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.26), transparent);
+    transform: translateX(-120%);
+    animation: propiqEdgeSweep 3.8s ease-in-out infinite;
+}
+
+.v55-hero {
+    border-color: rgba(119,244,255,0.30);
+}
+.v55-hero::before {
+    content: '';
+    position: absolute;
+    inset: -1px;
+    pointer-events: none;
+    border-radius: inherit;
+    background:
+        linear-gradient(120deg, transparent 0%, rgba(119,244,255,0.16) 36%, transparent 72%);
+    transform: translateX(-110%);
+    animation: propiqEdgeSweep 6.5s ease-in-out infinite;
+}
+.v55-title {
+    text-shadow: 0 0 28px rgba(0,213,223,0.18);
+}
+
+.stat-card,
+.defense-card,
+div[data-testid="stExpander"],
+.edge-card-v55 {
+    animation: propiqSoftPop 0.38s ease both;
+}
+.stat-card:hover,
+.edge-card-v55:hover,
+.verdict-banner:hover {
+    border-color: rgba(119,244,255,0.34) !important;
+    box-shadow:
+        0 18px 54px rgba(0,0,0,0.44),
+        0 0 0 1px rgba(119,244,255,0.10) inset,
+        0 0 34px rgba(0,213,223,0.10) !important;
+}
+
+.edge-card-v55::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -35%;
+    width: 28%;
+    pointer-events: none;
+    background: linear-gradient(90deg, transparent, rgba(119,244,255,0.10), transparent);
+    transform: skewX(-14deg);
+    opacity: 0;
+}
+.edge-card-v55:hover::after {
+    animation: propiqEdgeSweep 1.2s ease;
+}
+.edge-card-v55.strong {
+    box-shadow:
+        0 16px 46px rgba(0,0,0,0.42),
+        0 0 0 1px rgba(24,243,162,0.10) inset,
+        0 0 30px rgba(24,243,162,0.08);
+}
+.edge-card-v55.lean {
+    box-shadow:
+        0 16px 46px rgba(0,0,0,0.42),
+        0 0 0 1px rgba(255,209,102,0.10) inset,
+        0 0 30px rgba(255,209,102,0.06);
+}
+.edge-score-item-v55 {
+    position: relative;
+    overflow: hidden;
+}
+.edge-score-item-v55::after {
+    content: '';
+    position: absolute;
+    left: 10%;
+    right: 10%;
+    bottom: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(119,244,255,0.52), transparent);
+}
+.edge-score-item-v55 strong.green,
+.stat-value.green,
+.verdict-tier.green {
+    text-shadow: 0 0 18px rgba(24,243,162,0.22);
+}
+.edge-score-item-v55 strong.yellow,
+.stat-value.yellow,
+.verdict-tier.yellow {
+    text-shadow: 0 0 18px rgba(255,209,102,0.18);
+}
+.edge-score-item-v55 strong.red,
+.stat-value.red,
+.verdict-tier.red {
+    text-shadow: 0 0 18px rgba(255,71,104,0.22);
+}
+.edge-bar-v55 > div,
+.prob-bar-fill,
+.conf-meter-fill {
+    animation: propiqMeterPulse 3.2s ease-in-out infinite;
+}
+
+.edge-pill-v55,
+.flag-pill,
+.defense-badge,
+.parlay-risk-badge {
+    transition: transform 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+}
+.edge-pill-v55:hover,
+.flag-pill:hover {
+    transform: translateY(-1px);
+    border-color: rgba(119,244,255,0.32);
+}
+
+.stButton > button {
+    background-size: 180% 180% !important;
+}
+.stButton > button:hover {
+    background-position: 100% 50% !important;
+}
+.stButton > button:focus-visible,
+button[data-testid="baseButton-secondary"]:focus-visible,
+button[data-testid="baseButton-primary"]:focus-visible {
+    outline: 2px solid rgba(119,244,255,0.82) !important;
+    outline-offset: 2px !important;
+}
+
+@media (max-width: 768px) {
+    [data-testid="stAppViewContainer"] {
+        animation-duration: 26s;
+    }
+    [data-testid="stAppViewContainer"]::before {
+        background-size: 34px 34px;
+        opacity: 0.58;
+    }
+    [data-testid="stAppViewContainer"]::after {
+        width: 90vw;
+        left: 5vw;
+        top: -20vh;
+    }
+    .edge-card-v55:hover,
+    .stat-card:hover,
+    .verdict-banner:hover {
+        transform: none !important;
+    }
+    .edge-card-v55::after,
+    .v55-hero::before {
+        display: none;
+    }
+    .edge-score-item-v55 {
+        background:
+            linear-gradient(135deg, rgba(255,255,255,0.075), rgba(255,255,255,0.025)) !important;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.001ms !important;
+        animation-iteration-count: 1 !important;
+        scroll-behavior: auto !important;
+        transition-duration: 0.001ms !important;
+    }
+}
 </style>
 """, unsafe_allow_html=True)
 
