@@ -6667,9 +6667,24 @@ if st.session_state.active_sport == "mlb":
         "NYM": 0.99, "TOR": 0.98, "DET": 0.98, "MIN": 0.97,
         "CLE": 0.97, "ARI": 0.97, "BAL": 0.97, "KCR": 0.96,
         "PIT": 0.96, "TBR": 0.96, "CHW": 0.95, "SEA": 0.95,
-        "SFG": 0.94, "MIA": 0.94, "LAA": 0.94, "WSN": 0.93,
+        "SFG": 0.94, "MIA": 0.94, "LAA": 0.94, "WSN": 0.93, "WSH": 0.93,
         "OAK": 0.93, "SDP": 0.92,
     }
+
+    def mlb_norm_abbr(abbr: str) -> str:
+        """Normalize common MLB abbreviation variants across APIs."""
+        a = str(abbr or "").upper().strip()
+        return {
+            "AZ": "ARI", "ARZ": "ARI",
+            "CWS": "CHW", "CHW": "CHW",
+            "WSH": "WSN", "WAS": "WSN",
+            "SF": "SFG", "SFG": "SFG",
+            "SD": "SDP", "SDP": "SDP",
+            "TB": "TBR", "TBR": "TBR",
+            "KC": "KCR", "KCR": "KCR", "KCA": "KCR",
+            "OAK": "ATH", "ATH": "ATH",
+            "LA": "LAD", "LAD": "LAD",
+        }.get(a, a)
 
     @st.cache_data(ttl=3600, show_spinner=False)
     def mlb_get_opp_k_rate(opp_abbr: str) -> Optional[float]:
@@ -7040,10 +7055,13 @@ if st.session_state.active_sport == "mlb":
         """Fetch game-time weather from Open-Meteo. Guaranteed to return data or explain why not."""
         empty = {"temp_f": None, "wind_mph": None, "wind_dir": "",
                  "condition": "", "k_impact": "Neutral", "note": ""}
-        _DOME_PARKS = {"ARI","HOU","MIA","MIL","MIN","SEA","TBR","TOR","WSN","LAA"}
+        home_team = mlb_norm_abbr(home_team)
+        # Retractable/dome venues where open-air weather is usually not a
+        # reliable K input. Outdoor parks intentionally stay out of this list.
+        _DOME_PARKS = {"ARI", "HOU", "MIA", "MIL", "SEA", "TBR", "TEX", "TOR"}
         if not home_team:
             return empty
-        if home_team.upper() in _DOME_PARKS:
+        if home_team in _DOME_PARKS:
             return {**empty, "condition": "Dome/Retractable",
                     "k_impact": "Neutral", "note": "Indoor — weather irrelevant"}
         _MLB_COORDS = {
@@ -7063,7 +7081,7 @@ if st.session_state.active_sport == "mlb":
             "TBR": (27.7683,-82.6534),  "TEX": (32.7513,-97.0822),
             "TOR": (43.6414,-79.3894),  "WSN": (38.8730,-77.0074),
         }
-        coords = _MLB_COORDS.get(home_team.upper())
+        coords = _MLB_COORDS.get(home_team)
         if not coords:
             return {**empty, "note": f"No coords for {home_team}"}
         lat, lon = coords
@@ -7093,8 +7111,12 @@ if st.session_state.active_sport == "mlb":
             wcodes= hrs.get("weathercode", [])
             if not times or not temps:
                 return {**empty, "note": "Empty API response"}
-            today = _dtx.date.today().strftime("%Y-%m-%d")
-            tmrw  = (_dtx.date.today()+_dtx.timedelta(days=1)).strftime("%Y-%m-%d")
+            try:
+                target_date = _dtx.datetime.strptime(str(game_date)[:10], "%Y-%m-%d").date() if game_date else _dtx.date.today()
+            except Exception:
+                target_date = _dtx.date.today()
+            today = target_date.strftime("%Y-%m-%d")
+            tmrw  = (target_date + _dtx.timedelta(days=1)).strftime("%Y-%m-%d")
             idx   = None
             for _d in [today, tmrw]:
                 for _h in [19,20,18,21,13,14,15,16,17,22]:
@@ -7366,21 +7388,16 @@ if st.session_state.active_sport == "mlb":
         try:
             import requests as _req, datetime, pytz
             et    = pytz.timezone("America/New_York")
-            today_dt = datetime.datetime.now(et).date()
+            try:
+                target_dt = (
+                    datetime.datetime.strptime(str(game_date)[:10], "%Y-%m-%d").date()
+                    if game_date else datetime.datetime.now(et).date()
+                )
+            except Exception:
+                target_dt = datetime.datetime.now(et).date()
 
             def _mlb_norm_abbr(a: str) -> str:
-                a = str(a or "").upper().strip()
-                return {
-                    "AZ": "ARI", "ARZ": "ARI",
-                    "CWS": "CHW", "CHW": "CHW",
-                    "WSH": "WSN", "WAS": "WSN",
-                    "SF": "SFG", "SFG": "SFG",
-                    "SD": "SDP", "SDP": "SDP",
-                    "TB": "TBR", "TBR": "TBR",
-                    "KC": "KCR", "KCR": "KCR",
-                    "OAK": "ATH", "ATH": "ATH",
-                    "LA": "LAD", "LAD": "LAD",
-                }.get(a, a)
+                return mlb_norm_abbr(a)
 
             def _abbr_matches(a: str) -> bool:
                 return _mlb_norm_abbr(a or "") == _mlb_norm_abbr(opp_abbr)
@@ -7389,7 +7406,7 @@ if st.session_state.active_sport == "mlb":
                 try:
                     tr = _req.get(
                         "https://statsapi.mlb.com/api/v1/teams",
-                        params={"sportId": 1, "season": today_dt.year},
+                        params={"sportId": 1, "season": target_dt.year},
                         timeout=7,
                     )
                     if not tr.ok:
@@ -7504,8 +7521,8 @@ if st.session_state.active_sport == "mlb":
                     return []
 
             team_id = _team_id_for_abbr()
-            # Today first, then recent prior games as projected lineup fallback.
-            date_candidates = [today_dt] + [today_dt - datetime.timedelta(days=i) for i in range(1, 15)]
+            # Target game first, then recent prior games as projected lineup fallback.
+            date_candidates = [target_dt] + [target_dt - datetime.timedelta(days=i) for i in range(1, 15)]
             for _idx, check_dt in enumerate(date_candidates):
                 date_str = check_dt.strftime("%Y-%m-%d")
                 params = {"sportId": 1, "date": date_str, "hydrate": "lineups,team"}
@@ -7621,12 +7638,12 @@ if st.session_state.active_sport == "mlb":
 
 
     @st.cache_data(ttl=900, show_spinner=False)
-    def mlb_get_batting_order_with_hands(opp_abbr: str) -> dict:
+    def mlb_get_batting_order_with_hands(opp_abbr: str, game_date: str = "") -> dict:
         """
         Fetch tonight's batting order AND each batter's handedness.
         Returns lineup with L/R count for platoon weighting.
         """
-        base = mlb_get_batting_order(opp_abbr)
+        base = mlb_get_batting_order(opp_abbr, game_date)
         if not base.get("order"):
             return {**base, "lhb_count": 0, "rhb_count": 0,
                     "lhb_pct": 0.5, "order_with_hands": []}
@@ -7954,7 +7971,8 @@ if st.session_state.active_sport == "mlb":
             return max(0.05, min(0.95, weighted))
 
     def mlb_park_signal(home_team):
-        pf = _MLB_PARK_FACTORS.get(home_team,1.00)
+        key = str(home_team or "").upper().strip()
+        pf = _MLB_PARK_FACTORS.get(key, _MLB_PARK_FACTORS.get(mlb_norm_abbr(key), 1.00))
         if pf<=0.95: return "Boost"
         elif pf>=1.06: return "Penalty"
         return "Neutral"
@@ -8280,8 +8298,9 @@ if st.session_state.active_sport == "mlb":
             # Weather needs the actual game venue (home team's park)
             # If pitcher is away, mlb_home is still the home team = correct venue
             _wx_team    = mlb_home or (_tonight.get("home_team","") if _tonight else "")
-            _f_weather  = _mex.submit(mlb_get_weather, _wx_team) if _wx_team else None
-            _f_lineup   = _mex.submit(mlb_get_batting_order_with_hands, mlb_opp) if mlb_opp else None
+            _game_date_ctx = _tonight.get("game_date", "") if _tonight else ""
+            _f_weather  = _mex.submit(mlb_get_weather, _wx_team, _game_date_ctx) if _wx_team else None
+            _f_lineup   = _mex.submit(mlb_get_batting_order_with_hands, mlb_opp, _game_date_ctx) if mlb_opp else None
             _f_platoon  = _mex.submit(mlb_get_platoon_splits, mlb_pitcher)
             _f_pitches  = _mex.submit(mlb_estimate_pitch_count, mlb_pitcher)
             _f_injury   = _mex.submit(mlb_get_injury_status, mlb_pitcher)
@@ -9412,6 +9431,14 @@ if st.session_state.active_sport == "mlb":
 
                 # ── SIGNAL TRACE TABLE ───────────────────────────────────
                 # Build steps list matching exact formula order
+                _weather_condition_label = (
+                    _weather.get("condition") if _weather and _weather.get("condition") else "Unavailable"
+                )
+                _lineup_loaded_label = (
+                    "✅ Lineup" if _lineup_confirmed else
+                    "🕒 Projected Lineup" if _lineup_projected else
+                    "⚠️ Lineup TBD"
+                )
                 _mlb_signals = [
                     # (label, value, adj_applied, description)
                     ("Weighted hit rate (base)",  f"{whr:.1%}",           None,        "Starting point — recency-weighted L10 starts"),
@@ -9446,7 +9473,7 @@ if st.session_state.active_sport == "mlb":
                     ("Umpire K zone",             f"{_ump_name} ({_ump_tend})" if _ump_name else "TBD",
                                                   _ump_adj,
                                                   f"{'Tight zone — more Ks' if _ump_tend=='High' else 'Wide zone — more contact' if _ump_tend=='Low' else 'Average strike zone'}" + (f" · {_ump.get('k_per_game',15.5):.1f} K/g avg" if _ump_name else "")),
-                    ("Weather",                   _weather.get("condition","N/A") if _weather else "N/A",
+                    ("Weather",                   _weather_condition_label,
                                                   _wx_adj,
                                                   _wx_note if _wx_note else ("Indoor — irrelevant" if _weather and _weather.get("condition")=="Dome/Retractable" else "No weather data")),
                     ("Batting order",             f"{len(_lineup_order)}/9 {'projected' if _lineup_projected else 'posted'}" if _lineup_order else "Not posted",
@@ -9517,7 +9544,7 @@ if st.session_state.active_sport == "mlb":
                     "Velocity":         f"{_velo:.1f}mph" if _velo else "N/A",
                     "Avg IP/start":     f"{_avg_ip:.1f} IP ({_ip_source})" if _avg_ip > 0 else "N/A",
                     "Umpire zone":      f"{_ump_name.split()[-1]} ({_ump_tend})" if _ump_name else "TBD",
-                    "Weather":          _weather.get("condition","N/A") if _weather else "N/A",
+                    "Weather":          _weather_condition_label,
                     "Batting order":    (f"{len(_lineup_order)}/9 · {_lhb_count}L/{_rhb_count}R · "
                                          f"{'projected' if _lineup_projected else 'confirmed'}"
                                          f"{f' · K% {_lineup_avg_k:.1%}' if _lineup_avg_k is not None else ''}") if _order_hands else (f"{len(_lineup_order)}/9" if _lineup_order else "Not posted"),
@@ -9668,7 +9695,7 @@ if st.session_state.active_sport == "mlb":
                             {"✅ Velo" if _velo else "❌ Velo"} ·
                             {"✅ Umpire" if _ump_name else "⚠️ TBD"} ·
                             {"✅ Weather" if _weather and _weather.get("temp_f") else "⚠️ N/A"} ·
-                            {"✅ Lineup" if _lineup_confirmed else "⚠️ TBD"} ·
+                            {_lineup_loaded_label} ·
                             {"✅ Platoon" if (_platoon_vs_l and _platoon_vs_r) else "⚠️ N/A"} ·
                             {"✅ PitchCnt" if _pc_avg else "⚠️ N/A"}
                         </td>
