@@ -1904,7 +1904,18 @@ div[data-testid="stCodeBlock"] {
     div[data-testid="stTextInput"] input,
     div[data-testid="stNumberInput"] input {
         min-height: 52px !important;
-        font-size: 0.96rem !important;
+        font-size: 16px !important;
+    }
+    input,
+    textarea,
+    select,
+    div[data-baseweb="input"] input,
+    div[data-baseweb="select"] input,
+    input[aria-autocomplete="list"],
+    input[type="text"],
+    input[type="number"] {
+        font-size: 16px !important;
+        -webkit-text-size-adjust: 100% !important;
     }
     .v55-hero {
         padding: 1rem 0.95rem !important;
