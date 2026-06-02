@@ -7620,6 +7620,72 @@ if st.session_state.active_sport == "mlb":
             return empty
 
 
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def mlb_l10_opponent_difficulty(
+        opps: tuple,
+        pitcher_hand: str,
+        tonight_opp: str,
+        tonight_k_rate: Optional[float],
+        side: str,
+    ) -> dict:
+        """
+        Compare tonight's opponent K profile to the pitcher's recent opponent mix.
+        Team record is intentionally ignored; K/contact profile is the useful input.
+        """
+        empty = {
+            "adj": 0.0, "avg_recent_k": None, "tonight_k": tonight_k_rate,
+            "delta": None, "games": 0, "label": "Neutral",
+            "note": "No recent opponent context",
+        }
+        if not opps or tonight_k_rate is None:
+            return empty
+        try:
+            hand_key = "vs_r" if str(pitcher_hand or "R").upper().startswith("R") else "vs_l"
+            rates = []
+            for raw_opp in list(opps)[:10]:
+                opp = mlb_norm_abbr(str(raw_opp or "").replace("@", "").replace("vs", "").strip())
+                if not opp or opp in ("—", "-", "N/A"):
+                    continue
+                splits = mlb_get_opp_k_rate_splits(opp, pitcher_hand)
+                rate = splits.get(hand_key) or splits.get("overall")
+                if rate is not None and 0.10 <= float(rate) <= 0.40:
+                    rates.append(float(rate))
+            if len(rates) < 3:
+                return {**empty, "note": "Not enough recent opponent K profiles"}
+
+            recent_avg = sum(rates) / len(rates)
+            delta = float(tonight_k_rate) - recent_avg
+            adj = 0.0
+            if delta >= 0.035:
+                adj, label = 0.035, "Easier than L10"
+            elif delta >= 0.020:
+                adj, label = 0.020, "Slightly easier"
+            elif delta <= -0.035:
+                adj, label = -0.035, "Harder than L10"
+            elif delta <= -0.020:
+                adj, label = -0.020, "Slightly harder"
+            else:
+                label = "Similar to L10"
+
+            if side == "Under":
+                adj = -adj
+            note = (
+                f"Tonight {mlb_norm_abbr(tonight_opp) or 'opp'} K% {float(tonight_k_rate):.1%} "
+                f"vs L10 opponent avg {recent_avg:.1%}"
+            )
+            return {
+                "adj": adj,
+                "avg_recent_k": round(recent_avg, 3),
+                "tonight_k": round(float(tonight_k_rate), 3),
+                "delta": round(delta, 3),
+                "games": len(rates),
+                "label": label,
+                "note": note,
+            }
+        except Exception:
+            return empty
+
+
     def mlb_ip_to_outs(ip_raw) -> int:
         try:
             s = str(ip_raw or "0")
@@ -10122,6 +10188,17 @@ if st.session_state.active_sport == "mlb":
                 if mlb_side == "Under":
                     _contact_adj = -_contact_adj
 
+            # Recent-opponent difficulty: did this L10 streak come against
+            # easier or harder K opponents than tonight's lineup/team profile?
+            _opp_context = mlb_l10_opponent_difficulty(
+                tuple(mlb_logs["OPP"].head(10).astype(str).tolist()) if "OPP" in mlb_logs.columns else tuple(),
+                _phand,
+                mlb_opp,
+                okpct,
+                mlb_side,
+            ) if mlb_prop == "Strikeouts" else {"adj": 0.0, "label": "Neutral", "note": "N/A"}
+            _opp_context_adj = float(_opp_context.get("adj", 0.0) or 0.0)
+
             # Pitch count estimate
             _pc_avg    = _pitchcnt.get("avg_pitches") if _pitchcnt else None
             _pc_limit  = _pitchcnt.get("on_limit", False) if _pitchcnt else False
@@ -10237,7 +10314,8 @@ if st.session_state.active_sport == "mlb":
                       + _ha_adj + _form_adj + _rest_adj
                       + _k9_adj + _swstr_adj + _velo_adj + _vtrend_adj + _ip_adj
                       + _ump_adj + _wx_adj + _lineup_adj
-                      + _platoon_adj + _contact_adj + _pc_adj + _variance_adj))
+                      + _platoon_adj + _contact_adj + _opp_context_adj
+                      + _pc_adj + _variance_adj))
 
             # Projection anchor: recent hit rate can overstate low lines.
             # Blend the signal stack with a Poisson-style probability from
@@ -10369,6 +10447,7 @@ if st.session_state.active_sport == "mlb":
                     3 if _velo and _velo > 0 else 0,
                     2 if _weather else 0,
                     2 if _lineup_confirmed else 0,
+                    1 if _opp_context.get("avg_recent_k") is not None else 0,
                 ])
             _sc = min(99, int(
                 max(0, min((adj - 0.50) / 0.45, 1.0) * 65) +
@@ -10378,22 +10457,41 @@ if st.session_state.active_sport == "mlb":
             ))
             _quality_notes = []
             _conf_penalty = 0
+            _bf_cushion_for_quality = None
+            if _bf_expected_k is not None:
+                _bf_cushion_for_quality = (
+                    _bf_expected_k - mlb_line
+                    if mlb_side == "Over" else
+                    mlb_line - _bf_expected_k
+                )
+            _pc_cushion_for_quality = None
+            if _pc_expected_k is not None:
+                _pc_cushion_for_quality = (
+                    _pc_expected_k - mlb_line
+                    if mlb_side == "Over" else
+                    mlb_line - _pc_expected_k
+                )
             if not _is_outs_prop:
                 if _lineup_projected:
-                    _conf_penalty += 2
-                    _quality_notes.append("projected lineup")
+                    _lineup_penalty = 1 if (_bf_cushion_for_quality is not None and _bf_cushion_for_quality >= 1.25) else 3
+                    _conf_penalty += _lineup_penalty
+                    _quality_notes.append(
+                        "projected lineup"
+                        if _lineup_penalty <= 1 else
+                        "projected lineup with thin K cushion"
+                    )
                 elif not _lineup_confirmed:
                     _conf_penalty += 5
                     _quality_notes.append("lineup TBD")
                 if not _ump_name:
-                    _conf_penalty += 2
+                    _conf_penalty += 1
                     _quality_notes.append("umpire TBD")
                 if not (_weather and (_weather.get("temp_f") or _weather.get("condition") == "Dome/Retractable")):
                     _conf_penalty += 1
                     _quality_notes.append("weather limited")
-                if psig == "Penalty":
+                if psig == "Penalty" and (_pc_cushion_for_quality is None or _pc_cushion_for_quality < 1.0):
                     _conf_penalty += 1
-                    _quality_notes.append("run-friendly park")
+                    _quality_notes.append("run-friendly park with thin pitch-count cushion")
                 if _bf_proj.get("confidence") not in ("high", "medium"):
                     _conf_penalty += 2
                     _quality_notes.append("low BF projection confidence")
@@ -10407,28 +10505,18 @@ if st.session_state.active_sport == "mlb":
                     _downgrade = True
                     _dq.append(f"confidence {_sc}/100")
                 if not _is_outs_prop:
-                    _bf_cushion = None
-                    if _bf_expected_k is not None:
-                        _bf_cushion = (
-                            _bf_expected_k - mlb_line
-                            if mlb_side == "Over" else
-                            mlb_line - _bf_expected_k
-                        )
+                    _bf_cushion = _bf_cushion_for_quality
                     if _lineup_projected and (_bf_cushion is None or _bf_cushion < 1.25):
                         _downgrade = True
                         _dq.append("projected lineup without enough K cushion")
                     if (not _lineup_confirmed and not _lineup_projected):
                         _downgrade = True
                         _dq.append("lineup unavailable")
-                    if not _ump_name and _sc < 86:
+                    if not _ump_name and (_sc < 80 or (_lineup_projected and (_bf_cushion is None or _bf_cushion < 1.25))):
                         _downgrade = True
                         _dq.append("umpire TBD")
                     if psig == "Penalty" and _pc_expected_k is not None:
-                        _pc_cushion = (
-                            _pc_expected_k - mlb_line
-                            if mlb_side == "Over" else
-                            mlb_line - _pc_expected_k
-                        )
+                        _pc_cushion = _pc_cushion_for_quality
                         if _pc_cushion < 1.0:
                             _downgrade = True
                             _dq.append("run-friendly park with thin pitch-count cushion")
@@ -10460,6 +10548,13 @@ if st.session_state.active_sport == "mlb":
                 _opp_lbl  = f"High-K opp {_hand_lbl}" if okpct>=0.26 else (f"Low-K opp {_hand_lbl}" if okpct<=0.195 else f"Avg-K opp {_hand_lbl}")
                 _opp_flag = "up" if okpct>=0.26 else ("down" if okpct<=0.195 else "flat")
                 _pills.append(f"<span class='flag-pill {_opp_flag}'>{_opp_lbl} {okpct:.0%}</span>")
+                if _opp_context.get("avg_recent_k") is not None:
+                    _ctx_flag = "up" if _opp_context_adj > 0.001 else ("down" if _opp_context_adj < -0.001 else "flat")
+                    _pills.append(
+                        f"<span class='flag-pill {_ctx_flag}'>"
+                        f"Tonight vs L10: {_opp_context.get('label')} "
+                        f"({_opp_context.get('tonight_k'):.0%} vs {_opp_context.get('avg_recent_k'):.0%})</span>"
+                    )
                 if abs(_contact_adj) > 0.001:
                     _contact_flag = "up" if _contact_adj > 0 else "down"
                     _contact_txt = "swing-and-miss lineup" if _contact_adj > 0 else "contact-heavy lineup"
@@ -11141,6 +11236,10 @@ if st.session_state.active_sport == "mlb":
                     ("Contact profile",           f"{okpct:.1%} K profile" if okpct else "N/A",
                                                   _contact_adj,
                                                   "Extra guardrail for contact-heavy or swing-and-miss confirmed/opponent profile"),
+                    ("Recent opponent difficulty",
+                                                  _opp_context.get("label", "Neutral"),
+                                                  _opp_context_adj,
+                                                  _opp_context.get("note", "Compares tonight opponent K% to pitcher's L10 opponent mix")),
                     ("Pitcher variance",           f"{cons:.1%} consistency",
                                                   _variance_adj,
                                                   _variance_note),
@@ -11204,12 +11303,12 @@ if st.session_state.active_sport == "mlb":
                     _mlb_adjs = [_ha_adj, _form_adj, _rest_adj, _k9_adj,
                                  _swstr_adj, _velo_adj, _vtrend_adj, _ip_adj, _ump_adj, _wx_adj,
                                  _lineup_adj, _platoon_adj, _contact_adj, _pc_adj,
-                                 _variance_adj]
+                                 _opp_context_adj, _variance_adj]
                     _mlb_adj_labels = [
                         "Home/Away split", "Recent form", "Rest days", "K/9 rate",
                         "SwStr%/K%", "Velocity", "Velocity trend", "Avg IP/start", "Umpire zone",
                         "Weather", "Batting order", "Platoon matchup", "Contact profile",
-                        "Pitch count est", "Pitcher variance"
+                        "Pitch count est", "Recent opponent difficulty", "Pitcher variance"
                     ]
                 _mlb_running = _mlb_base_adj
                 _mlb_steps = []
@@ -11259,6 +11358,12 @@ if st.session_state.active_sport == "mlb":
                     "Pitch count est":  (f"~{_pc_avg}p → exp {_pc_expected_outs:.1f} outs / ceil {_pc_outs_ceiling:.1f} outs · {'⚠️ On limit' if _pc_limit else 'No limit detected'}"
                                          if (_is_outs_prop and _pc_avg) else
                                          f"~{_pc_avg}p → exp {_pc_expected_k:.1f}K / ceil {_pc_k_ceiling:.1f}K · {'⚠️ On limit' if _pc_limit else 'No limit detected'}{f' · park leash {_park_leash_adj:+.1%}' if abs(_park_leash_adj) > 0.001 else ''}" if _pc_avg else "N/A"),
+                    "Recent opponent difficulty": (
+                        f"{_opp_context.get('label', 'Neutral')} · "
+                        f"{_opp_context.get('tonight_k'):.1%} tonight vs "
+                        f"{_opp_context.get('avg_recent_k'):.1%} L10 avg"
+                        if _opp_context.get("avg_recent_k") is not None else "N/A"
+                    ),
                     "Pitcher variance": f"{cons:.1%} consistency · {_variance_note}",
                 }
 
