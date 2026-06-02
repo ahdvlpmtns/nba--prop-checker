@@ -7242,6 +7242,52 @@ if st.session_state.active_sport == "mlb":
                 return empty
 
             # ── Step 3: Parse splits into DataFrame ──
+            _TEAM_ID_TO_ABBR = {
+                108:"LAA", 109:"ARI", 110:"BAL", 111:"BOS", 112:"CHC",
+                113:"CIN", 114:"CLE", 115:"COL", 116:"DET", 117:"HOU",
+                118:"KCR", 119:"LAD", 120:"WSN", 121:"NYM", 133:"ATH",
+                134:"PIT", 135:"SDP", 136:"SEA", 137:"SFG", 138:"STL",
+                139:"TBR", 140:"TEX", 141:"TOR", 142:"MIN", 143:"PHI",
+                144:"ATL", 145:"CHW", 146:"MIA", 147:"NYY", 158:"MIL",
+            }
+            _TEAM_NAME_TO_ABBR = {
+                "ANGELS":"LAA", "DIAMONDBACKS":"ARI", "DBACKS":"ARI",
+                "ORIOLES":"BAL", "REDSOX":"BOS", "CUBS":"CHC",
+                "WHITESOX":"CHW", "REDS":"CIN", "GUARDIANS":"CLE",
+                "ROCKIES":"COL", "TIGERS":"DET", "ASTROS":"HOU",
+                "ROYALS":"KCR", "DODGERS":"LAD", "NATIONALS":"WSN",
+                "METS":"NYM", "ATHLETICS":"ATH", "PIRATES":"PIT",
+                "PADRES":"SDP", "MARINERS":"SEA", "GIANTS":"SFG",
+                "CARDINALS":"STL", "RAYS":"TBR", "RANGERS":"TEX",
+                "BLUEJAYS":"TOR", "TWINS":"MIN", "PHILLIES":"PHI",
+                "BRAVES":"ATL", "MARLINS":"MIA", "YANKEES":"NYY",
+                "BREWERS":"MIL",
+            }
+            def _opp_abbr_from_split(split_obj: dict) -> str:
+                opp = split_obj.get("opponent") or {}
+                for key in ("abbreviation", "fileCode", "teamCode", "triCode"):
+                    val = opp.get(key)
+                    if val:
+                        return str(val).upper()
+                oid = opp.get("id")
+                try:
+                    if oid is not None and int(oid) in _TEAM_ID_TO_ABBR:
+                        return _TEAM_ID_TO_ABBR[int(oid)]
+                except Exception:
+                    pass
+                for key in ("name", "teamName", "clubName", "locationName", "shortName"):
+                    val = opp.get(key)
+                    if val:
+                        cleaned = re.sub(r"[^A-Z]", "", str(val).upper())
+                        if cleaned in _TEAM_NAME_TO_ABBR:
+                            return _TEAM_NAME_TO_ABBR[cleaned]
+                        for name_key, abbr in _TEAM_NAME_TO_ABBR.items():
+                            if name_key in cleaned:
+                                return abbr
+                        if 2 <= len(cleaned) <= 4:
+                            return cleaned
+                return "—"
+
             rows = []
             seen_dates = set()
             for s in splits:
@@ -7262,7 +7308,7 @@ if st.session_state.active_sport == "mlb":
 
                 rows.append({
                     "DATE":   date,
-                    "OPP":    s.get("opponent", {}).get("abbreviation", "—"),
+                    "OPP":    _opp_abbr_from_split(s),
                     "IP":     ip_str,
                     "OUTS":   outs,
                     "K":      int(stat.get("strikeOuts", 0) or 0),
@@ -7299,6 +7345,55 @@ if st.session_state.active_sport == "mlb":
         """Normalize common MLB abbreviation variants across APIs."""
         a = str(abbr or "").upper().strip()
         a = re.sub(r"[^A-Z]", "", a)
+        _name_map = {
+            "ARIZONADIAMONDBACKS": "ARI", "DIAMONDBACKS": "ARI", "DBACKS": "ARI",
+            "ATLANTABRAVES": "ATL", "BRAVES": "ATL",
+            "BALTIMOREORIOLES": "BAL", "ORIOLES": "BAL",
+            "BOSTONREDSOX": "BOS", "REDSOX": "BOS",
+            "CHICAGOCUBS": "CHC", "CUBS": "CHC",
+            "CHICAGOWHITESOX": "CHW", "WHITESOX": "CHW",
+            "CINCINNATIREDS": "CIN", "REDS": "CIN",
+            "CLEVELANDGUARDIANS": "CLE", "GUARDIANS": "CLE",
+            "COLORADOROCKIES": "COL", "ROCKIES": "COL",
+            "DETROITTIGERS": "DET", "TIGERS": "DET",
+            "HOUSTONASTROS": "HOU", "ASTROS": "HOU",
+            "KANSASCITYROYALS": "KCR", "ROYALS": "KCR",
+            "LOSANGELESANGELS": "LAA", "ANGELS": "LAA",
+            "LOSANGELESDODGERS": "LAD", "DODGERS": "LAD",
+            "MIAMIMARLINS": "MIA", "MARLINS": "MIA",
+            "MILWAUKEEBREWERS": "MIL", "BREWERS": "MIL",
+            "MINNESOTATWINS": "MIN", "TWINS": "MIN",
+            "NEWYORKMETS": "NYM", "METS": "NYM",
+            "NEWYORKYANKEES": "NYY", "YANKEES": "NYY",
+            "ATHLETICS": "ATH", "OAKLANDATHLETICS": "ATH",
+            "PHILADELPHIAPHILLIES": "PHI", "PHILLIES": "PHI",
+            "PITTSBURGHPIRATES": "PIT", "PIRATES": "PIT",
+            "SANDIEGOPADRES": "SDP", "PADRES": "SDP",
+            "SANFRANCISCOGIANTS": "SFG", "GIANTS": "SFG",
+            "SEATTLEMARINERS": "SEA", "MARINERS": "SEA",
+            "STLOUISCARDINALS": "STL", "CARDINALS": "STL",
+            "TAMPABAYRAYS": "TBR", "RAYS": "TBR",
+            "TEXASRANGERS": "TEX", "RANGERS": "TEX",
+            "TORONTOBLUEJAYS": "TOR", "BLUEJAYS": "TOR",
+            "WASHINGTONNATIONALS": "WSN", "NATIONALS": "WSN",
+        }
+        if a in _name_map:
+            return _name_map[a]
+        _prefix_aliases = {
+            "ARI": "ARI", "ATL": "ATL", "BAL": "BAL", "BOS": "BOS",
+            "CHC": "CHC", "CHW": "CHW", "CWS": "CHW", "CIN": "CIN",
+            "CLE": "CLE", "COL": "COL", "DET": "DET", "HOU": "HOU",
+            "KCR": "KCR", "KCA": "KCR", "KC": "KCR", "LAA": "LAA",
+            "LAD": "LAD", "MIA": "MIA", "MIL": "MIL", "MIN": "MIN",
+            "NYM": "NYM", "NYY": "NYY", "OAK": "ATH", "ATH": "ATH",
+            "PHI": "PHI", "PIT": "PIT", "SDP": "SDP", "SD": "SDP",
+            "SFG": "SFG", "SF": "SFG", "SEA": "SEA", "STL": "STL",
+            "TBR": "TBR", "TB": "TBR", "TEX": "TEX", "TOR": "TOR",
+            "WSN": "WSN", "WSH": "WSN", "WAS": "WSN",
+        }
+        for _prefix, _canon in sorted(_prefix_aliases.items(), key=lambda x: len(x[0]), reverse=True):
+            if len(a) > len(_prefix) and a.startswith(_prefix):
+                return _canon
         return {
             "AZ": "ARI", "ARZ": "ARI",
             "CWS": "CHW", "CHW": "CHW",
@@ -9468,7 +9563,12 @@ if st.session_state.active_sport == "mlb":
                     fs = mlb_hitter_fantasy_points_from_stat(stt)
                     all_rows.append({
                         "DATE": dt.isoformat(),
-                        "OPP": (s.get("opponent") or {}).get("abbreviation", ""),
+                        "OPP": mlb_norm_abbr(
+                            (s.get("opponent") or {}).get("abbreviation")
+                            or (s.get("opponent") or {}).get("name")
+                            or (s.get("opponent") or {}).get("teamName")
+                            or ""
+                        ),
                         "PA": pa,
                         "H": int(stt.get("hits", 0) or 0),
                         "TB": int(stt.get("totalBases", 0) or 0),
