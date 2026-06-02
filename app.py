@@ -7298,6 +7298,7 @@ if st.session_state.active_sport == "mlb":
     def mlb_norm_abbr(abbr: str) -> str:
         """Normalize common MLB abbreviation variants across APIs."""
         a = str(abbr or "").upper().strip()
+        a = re.sub(r"[^A-Z]", "", a)
         return {
             "AZ": "ARI", "ARZ": "ARI",
             "CWS": "CHW", "CHW": "CHW",
@@ -7315,11 +7316,12 @@ if st.session_state.active_sport == "mlb":
         try:
             import requests as _req, datetime
             season = datetime.datetime.now().year
+            target = mlb_norm_abbr(opp_abbr)
             teams_r = _req.get("https://statsapi.mlb.com/api/v1/teams",
                 params={"sportId":1,"season":season}, timeout=8)
             if not teams_r.ok: return None
             teams = teams_r.json().get("teams",[])
-            team  = next((t for t in teams if t.get("abbreviation","").upper()==opp_abbr.upper()),None)
+            team  = next((t for t in teams if mlb_norm_abbr(t.get("abbreviation",""))==target),None)
             if not team: return None
             stats_r = _req.get(f"https://statsapi.mlb.com/api/v1/teams/{team['id']}/stats",
                 params={"stats":"season","group":"hitting","season":season}, timeout=8)
@@ -7643,14 +7645,16 @@ if st.session_state.active_sport == "mlb":
             hand_key = "vs_r" if str(pitcher_hand or "R").upper().startswith("R") else "vs_l"
             rates = []
             for raw_opp in list(opps)[:10]:
-                opp = mlb_norm_abbr(str(raw_opp or "").replace("@", "").replace("vs", "").strip())
+                opp_raw = str(raw_opp or "").upper()
+                opp_raw = opp_raw.replace("VS.", "").replace("VS", "").replace("@", "")
+                opp = mlb_norm_abbr(opp_raw)
                 if not opp or opp in ("—", "-", "N/A"):
                     continue
                 splits = mlb_get_opp_k_rate_splits(opp, pitcher_hand)
-                rate = splits.get(hand_key) or splits.get("overall")
+                rate = splits.get(hand_key) or splits.get("overall") or mlb_get_opp_k_rate(opp)
                 if rate is not None and 0.10 <= float(rate) <= 0.40:
                     rates.append(float(rate))
-            if len(rates) < 3:
+            if len(rates) < 2:
                 return {**empty, "note": "Not enough recent opponent K profiles"}
 
             recent_avg = sum(rates) / len(rates)
@@ -7671,7 +7675,7 @@ if st.session_state.active_sport == "mlb":
                 adj = -adj
             note = (
                 f"Tonight {mlb_norm_abbr(tonight_opp) or 'opp'} K% {float(tonight_k_rate):.1%} "
-                f"vs L10 opponent avg {recent_avg:.1%}"
+                f"vs L10 opponent avg {recent_avg:.1%} ({len(rates)} profiles)"
             )
             return {
                 "adj": adj,
