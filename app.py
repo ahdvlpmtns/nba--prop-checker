@@ -8747,7 +8747,9 @@ if st.session_state.active_sport == "mlb":
             elif opp_k <= 0.195: adj += -0.05 if side=="Over" else 0.05
             elif opp_k <= 0.210: adj += -0.02 if side=="Over" else 0.02
         adj += {"Boost":+0.04,"Neutral":0.0,"Penalty":-0.04}.get(park,0.0)*(1 if side=="Over" else -1)
-        return max(0.05,min(0.95,adj))
+        # Pre-anchor cap: projection anchors can still finish higher, but the
+        # raw signal stack should not pin at 95% before realism checks run.
+        return max(0.05,min(0.92,adj))
 
     def mlb_poisson_side_prob(expected: Optional[float], line: float, side: str) -> Optional[float]:
         """
@@ -9174,16 +9176,16 @@ if st.session_state.active_sport == "mlb":
 
         if side == "Over":
             if not _ceiling_capped:
-                if adj >= 0.72:               return "Strong Over"
-                if adj >= 0.64 and edge >= 0: return "Strong Over"
+                if adj >= 0.72 and edge >= 0.75: return "Strong Over"
+                if adj >= 0.64 and edge >= 1.75: return "Strong Over"
             # Ceiling capped or borderline — max Lean Over
             if adj >= 0.63 and edge >= -1.5:  return "Lean Over"  # 63% not 64%
             if adj >= 0.52 and edge > 0:      return "Lean Over"
             if adj >= 0.56 and edge >= -0.5:  return "Lean Over"  # close line + decent signal
         else:
             if not _ceiling_capped:
-                if adj >= 0.72:                return "Strong Under"
-                if adj >= 0.64 and edge <= 0:  return "Strong Under"
+                if adj >= 0.72 and edge <= -0.75: return "Strong Under"
+                if adj >= 0.64 and edge <= -1.75: return "Strong Under"
             if adj >= 0.63 and edge <= 1.5:    return "Lean Under"
             if adj >= 0.52 and edge < 0:       return "Lean Under"
             if adj >= 0.56 and edge <= 0.5:    return "Lean Under"
@@ -10127,6 +10129,7 @@ if st.session_state.active_sport == "mlb":
             _pc_adj    = 0.0
             _pc_expected_k = None
             _pc_k_ceiling = None  # optimistic upper band from pitch count
+            _park_leash_adj = 0.0
 
             if _pc_avg:
                 # Estimate expected Ks and an optimistic ceiling from pitch count.
@@ -10161,6 +10164,16 @@ if st.session_state.active_sport == "mlb":
                             _pc_adj = min(_pc_adj, -0.16)
                         elif _ceiling_gap <= 0.5:    # very tight ceiling
                             _pc_adj = min(_pc_adj, -0.11)
+
+                    # Run-friendly parks create more baserunner/pitch-stress
+                    # risk. Keep it small, but let it hit the leash side too.
+                    if psig == "Penalty":
+                        _park_leash_adj = -0.015 if mlb_side == "Over" else 0.015
+                        if _pc_expected_k and (_pc_expected_k - mlb_line) < 1.0:
+                            _park_leash_adj *= 1.5
+                    elif psig == "Boost" and _pc_expected_k and (_pc_expected_k - mlb_line) >= 1.0:
+                        _park_leash_adj = 0.010 if mlb_side == "Over" else -0.010
+                    _pc_adj += _park_leash_adj
 
             # Partial lineup penalty
             if _lineup_order and len(_lineup_order) < 7:
@@ -10217,9 +10230,10 @@ if st.session_state.active_sport == "mlb":
             # Start from a calibrated hit-rate base instead of raw L10. This
             # keeps perfect recent streaks from maxing the model before the
             # projection and matchup checks can matter.
+            _pre_anchor_cap = 0.92 if mlb_prop == "Strikeouts" else 0.95
             _base_opp_k_for_model = None if _is_outs_prop else okpct
             adj = mlb_apply_adj(_calibrated_whr, _base_opp_k_for_model, psig, mlb_side)
-            adj = max(0.05, min(0.95, adj
+            adj = max(0.05, min(_pre_anchor_cap, adj
                       + _ha_adj + _form_adj + _rest_adj
                       + _k9_adj + _swstr_adj + _velo_adj + _vtrend_adj + _ip_adj
                       + _ump_adj + _wx_adj + _lineup_adj
@@ -10362,6 +10376,65 @@ if st.session_state.active_sport == "mlb":
                 cons * 8 +
                 _data_bonus
             ))
+            _quality_notes = []
+            _conf_penalty = 0
+            if not _is_outs_prop:
+                if _lineup_projected:
+                    _conf_penalty += 2
+                    _quality_notes.append("projected lineup")
+                elif not _lineup_confirmed:
+                    _conf_penalty += 5
+                    _quality_notes.append("lineup TBD")
+                if not _ump_name:
+                    _conf_penalty += 2
+                    _quality_notes.append("umpire TBD")
+                if not (_weather and (_weather.get("temp_f") or _weather.get("condition") == "Dome/Retractable")):
+                    _conf_penalty += 1
+                    _quality_notes.append("weather limited")
+                if psig == "Penalty":
+                    _conf_penalty += 1
+                    _quality_notes.append("run-friendly park")
+                if _bf_proj.get("confidence") not in ("high", "medium"):
+                    _conf_penalty += 2
+                    _quality_notes.append("low BF projection confidence")
+            _sc = max(0, _sc - _conf_penalty)
+
+            _tier_quality_note = ""
+            if tier in ("Strong Over", "Strong Under"):
+                _downgrade = False
+                _dq = []
+                if _sc < 80:
+                    _downgrade = True
+                    _dq.append(f"confidence {_sc}/100")
+                if not _is_outs_prop:
+                    _bf_cushion = None
+                    if _bf_expected_k is not None:
+                        _bf_cushion = (
+                            _bf_expected_k - mlb_line
+                            if mlb_side == "Over" else
+                            mlb_line - _bf_expected_k
+                        )
+                    if _lineup_projected and (_bf_cushion is None or _bf_cushion < 1.25):
+                        _downgrade = True
+                        _dq.append("projected lineup without enough K cushion")
+                    if (not _lineup_confirmed and not _lineup_projected):
+                        _downgrade = True
+                        _dq.append("lineup unavailable")
+                    if not _ump_name and _sc < 86:
+                        _downgrade = True
+                        _dq.append("umpire TBD")
+                    if psig == "Penalty" and _pc_expected_k is not None:
+                        _pc_cushion = (
+                            _pc_expected_k - mlb_line
+                            if mlb_side == "Over" else
+                            mlb_line - _pc_expected_k
+                        )
+                        if _pc_cushion < 1.0:
+                            _downgrade = True
+                            _dq.append("run-friendly park with thin pitch-count cushion")
+                if _downgrade:
+                    tier = "Lean Over" if tier == "Strong Over" else "Lean Under"
+                    _tier_quality_note = "Strong label downgraded: " + ", ".join(_dq[:3])
             _cc  = "#00c4cc" if _sc >= 80 else ("#ffc107" if _sc >= 65 else "#f97316")
             css  = {"Strong Over":"green","Lean Over":"yellow","Strong Under":"red",
                     "Lean Under":"orange","Pass":"gray"}.get(tier,"gray")
@@ -11143,8 +11216,8 @@ if st.session_state.active_sport == "mlb":
                 for _lbl2, _a in zip(_mlb_adj_labels, _mlb_adjs):
                     _before = _mlb_running
                     _mlb_running += _a
-                    _after_clamped = max(0.05, min(0.95, _mlb_running))
-                    _mlb_steps.append((_lbl2, _a, max(0.05,min(0.95,_before)), _after_clamped))
+                    _after_clamped = max(0.05, min(_pre_anchor_cap, _mlb_running))
+                    _mlb_steps.append((_lbl2, _a, max(0.05,min(_pre_anchor_cap,_before)), _after_clamped))
 
                 trace_rows = f"""
                 <div style='font-family:JetBrains Mono,monospace;font-size:0.7rem;color:#9aaec4;'>
@@ -11185,7 +11258,7 @@ if st.session_state.active_sport == "mlb":
                     "Contact profile":  f"{okpct:.1%} · {_okpct_source}" if okpct else "N/A",
                     "Pitch count est":  (f"~{_pc_avg}p → exp {_pc_expected_outs:.1f} outs / ceil {_pc_outs_ceiling:.1f} outs · {'⚠️ On limit' if _pc_limit else 'No limit detected'}"
                                          if (_is_outs_prop and _pc_avg) else
-                                         f"~{_pc_avg}p → exp {_pc_expected_k:.1f}K / ceil {_pc_k_ceiling:.1f}K · {'⚠️ On limit' if _pc_limit else 'No limit detected'}" if _pc_avg else "N/A"),
+                                         f"~{_pc_avg}p → exp {_pc_expected_k:.1f}K / ceil {_pc_k_ceiling:.1f}K · {'⚠️ On limit' if _pc_limit else 'No limit detected'}{f' · park leash {_park_leash_adj:+.1%}' if abs(_park_leash_adj) > 0.001 else ''}" if _pc_avg else "N/A"),
                     "Pitcher variance": f"{cons:.1%} consistency · {_variance_note}",
                 }
 
@@ -11312,7 +11385,7 @@ if st.session_state.active_sport == "mlb":
                     "#f97316" if "Lean Under" in tier else
                     "#ef4444" if "Strong Under" in tier else "#6b7f96"
                 )
-                _mlb_strong_thresh = "≥ 72% (any edge) OR ≥ 63% (edge ≥ -1.5)" if mlb_side=="Over" else "≥ 72% (any edge) OR ≥ 63% (edge ≤ 1.5)"
+                _mlb_strong_thresh = "≥ 72% + quality gate" if mlb_side=="Over" else "≥ 72% + quality gate"
                 _mlb_lean_thresh   = "≥ 52% AND edge > 0" if mlb_side=="Over" else "≥ 52% AND edge < 0"
                 _edge_ok_mlb       = (edge >= -1.5 if mlb_side=="Over" else edge <= 1.5)
                 _loaded_signals_html = (
@@ -11365,6 +11438,17 @@ if st.session_state.active_sport == "mlb":
                     f"calibrated base {_calibrated_whr:.1%} · consistency {cons:.1%}</td>"
                     "</tr>"
                 )
+                _quality_final_row = ""
+                if _quality_notes or _tier_quality_note:
+                    _quality_text = _tier_quality_note or (
+                        "Confidence quality haircut: " + ", ".join(_quality_notes[:4])
+                    )
+                    _quality_final_row = (
+                        "<tr>"
+                        "<td style='padding:3px 8px 3px 0;color:#6b7f96;'>Quality gate</td>"
+                        f"<td colspan='3' style='color:#9aaec4;'>{_quality_text}</td>"
+                        "</tr>"
+                    )
                 _verdict_final_row = (
                     "<tr style='border-top:1px solid #1a2333;'>"
                     "<td style='padding:6px 8px 3px 0;color:#6b7f96;'>VERDICT</td>"
@@ -11408,6 +11492,7 @@ if st.session_state.active_sport == "mlb":
                     </tr>
                     {_lineup_bf_final_row}
                     {_calibration_final_row}
+                    {_quality_final_row}
                     {_verdict_final_row}
                 </table>
                 </div>
