@@ -4292,8 +4292,13 @@ def delete_from_supabase(row_id: str) -> bool:
 # ── PrizePicks slate cache ───────────────────────────────────
 
 def normalize_mlb_pitcher_prop_stat(stat: str) -> str:
-    """Normalize MLB pitcher prop names without confusing Strikeouts with Outs."""
+    """Normalize MLB prop names used by PropIQ's MLB models."""
     s = re.sub(r"[^a-z0-9]+", " ", str(stat or "").lower()).strip()
+    if any(token in s for token in (
+        "hitter fantasy score", "batter fantasy score", "fantasy score",
+        "fantasy points", "fantasy pts", "hitter fantasy", "batter fantasy"
+    )):
+        return "Hitter Fantasy Score"
     if re.search(r"\b(k|ks)\b", s) and "pitch" not in s:
         return "Strikeouts"
     if any(token in s for token in (
@@ -4319,6 +4324,10 @@ def is_mlb_pitcher_outs_prop(stat: str) -> bool:
     return normalize_mlb_pitcher_prop_stat(stat) == "Outs Recorded"
 
 
+def is_mlb_hitter_fantasy_prop(stat: str) -> bool:
+    return normalize_mlb_pitcher_prop_stat(stat) == "Hitter Fantasy Score"
+
+
 def is_sane_mlb_pitcher_prop_line(stat: str, line) -> bool:
     """
     Guard against stale/mis-mapped PrizePicks rows where a strikeout line is
@@ -4331,6 +4340,8 @@ def is_sane_mlb_pitcher_prop_line(stat: str, line) -> bool:
         return False
     if stat_label == "Strikeouts":
         return 0.5 <= line_val <= 12.5
+    if stat_label == "Hitter Fantasy Score":
+        return 1.5 <= line_val <= 18.5
     if stat_label == "Outs Recorded":
         return 9.0 <= line_val <= 24.5
     return False
@@ -4488,7 +4499,7 @@ def save_pp_line_history_to_supabase(props: list, source: str = "live") -> bool:
                 continue
             stat_l = stat.lower()
             stat_norm = normalize_mlb_pitcher_prop_stat(stat)
-            if stat_norm not in ("Strikeouts", "Outs Recorded"):
+            if stat_norm not in ("Strikeouts", "Hitter Fantasy Score"):
                 continue
             rows.append({
                 "sport":       sport,
@@ -9237,27 +9248,355 @@ if st.session_state.active_sport == "mlb":
 
     _mlb_pitchers = _mlb_fetch_pitcher_list()
 
+    @st.cache_data(ttl=86400, show_spinner=False)
+    def _mlb_fetch_hitter_list() -> list:
+        """Fetch active MLB hitters for Hitter Fantasy Score analysis."""
+        import requests as _req, datetime as _dtx
+        season = _dtx.datetime.now().year
+        hitters = set()
+        try:
+            for _gt in ["R", "S"]:
+                r = _req.get(
+                    "https://statsapi.mlb.com/api/v1/sports/1/players",
+                    params={"season": season, "gameType": _gt},
+                    timeout=12,
+                )
+                if r.ok:
+                    for p in r.json().get("people", []):
+                        pos = p.get("primaryPosition", {}).get("code", "")
+                        name = p.get("fullName", "").strip()
+                        if name and len(name) > 3 and pos not in ("1", "P"):
+                            hitters.add(name)
+                    if hitters:
+                        break
+        except Exception:
+            pass
+        _seed = [
+            "Shohei Ohtani", "Aaron Judge", "Juan Soto", "Mookie Betts",
+            "Freddie Freeman", "Bobby Witt Jr.", "Gunnar Henderson",
+            "Yordan Alvarez", "Kyle Tucker", "Elly De La Cruz",
+            "Jose Ramirez", "Vladimir Guerrero Jr.", "Corbin Carroll",
+            "Julio Rodriguez", "Fernando Tatis Jr.", "Rafael Devers",
+            "Francisco Lindor", "Pete Alonso", "Bryce Harper",
+            "Trea Turner", "Corey Seager", "Ketel Marte", "Oneil Cruz",
+            "Jazz Chisholm Jr.", "Jackson Chourio", "Adley Rutschman",
+        ]
+        for n in _seed:
+            hitters.add(n)
+        return sorted(hitters)
 
-    _mc1,_mc2,_mc3,_mc4 = st.columns([2.5,1,1,1])
+
+    @st.cache_data(ttl=86400, show_spinner=False)
+    def mlb_find_player_basic(player_name: str, hitter_only: bool = False) -> dict:
+        """Find MLB player id/team/position from active player feed."""
+        empty = {"id": None, "name": player_name, "team": "", "team_id": None, "position": ""}
+        if not player_name:
+            return empty
+        try:
+            import requests as _req, datetime as _dtx
+            season = _dtx.datetime.now().year
+            _norm = lambda s: str(s or "").lower().strip().replace(".", "").replace("-", " ")
+            target = _norm(player_name)
+            parts = [p for p in target.split() if len(p) > 2]
+            last = target.split()[-1]
+
+            team_map = {}
+            tr = _req.get("https://statsapi.mlb.com/api/v1/teams",
+                          params={"sportId": 1, "season": season}, timeout=8)
+            if tr.ok:
+                team_map = {
+                    int(t.get("id")): mlb_norm_abbr(t.get("abbreviation", ""))
+                    for t in tr.json().get("teams", [])
+                    if t.get("id")
+                }
+
+            r = _req.get(
+                "https://statsapi.mlb.com/api/v1/sports/1/players",
+                params={"season": season, "gameType": "R"},
+                timeout=10,
+            )
+            if not r.ok:
+                return empty
+            people = r.json().get("people", [])
+            matches = (
+                [p for p in people if _norm(p.get("fullName", "")) == target] or
+                [p for p in people if all(pt in _norm(p.get("fullName", "")) for pt in parts)] or
+                [p for p in people if last in _norm(p.get("fullName", "")) and len(last) >= 5]
+            )
+            for p in matches:
+                pos = p.get("primaryPosition", {}).get("code", "")
+                if hitter_only and pos in ("1", "P"):
+                    continue
+                tid = (p.get("currentTeam") or {}).get("id")
+                return {
+                    "id": p.get("id"),
+                    "name": p.get("fullName", player_name),
+                    "team": team_map.get(int(tid), "") if tid else "",
+                    "team_id": tid,
+                    "position": p.get("primaryPosition", {}).get("abbreviation", ""),
+                }
+        except Exception:
+            pass
+        return empty
+
+
+    def mlb_hitter_fantasy_points_from_stat(st: dict) -> float:
+        """PrizePicks MLB hitter fantasy scoring."""
+        try:
+            h = int(st.get("hits", 0) or 0)
+            d = int(st.get("doubles", 0) or 0)
+            t = int(st.get("triples", 0) or 0)
+            hr = int(st.get("homeRuns", 0) or 0)
+            singles = max(0, h - d - t - hr)
+            return (
+                singles * 3 +
+                d * 5 +
+                t * 8 +
+                hr * 10 +
+                int(st.get("runs", 0) or 0) * 2 +
+                int(st.get("rbi", 0) or 0) * 2 +
+                int(st.get("baseOnBalls", 0) or 0) * 2 +
+                int(st.get("hitByPitch", 0) or 0) * 2 +
+                int(st.get("stolenBases", 0) or 0) * 5
+            )
+        except Exception:
+            return 0.0
+
+
+    @st.cache_data(ttl=1800, show_spinner=False)
+    def mlb_get_hitter_logs(player_name: str, n: int = 12) -> pd.DataFrame:
+        """Fetch recent hitter game logs and compute PrizePicks hitter fantasy score."""
+        cols = ["DATE", "OPP", "PA", "H", "TB", "R", "RBI", "BB", "HBP", "SB", "HR", "FS"]
+        empty = pd.DataFrame(columns=cols)
+        basic = mlb_find_player_basic(player_name, hitter_only=True)
+        if not basic.get("id"):
+            return empty
+        try:
+            import requests as _req, datetime as _dtx
+            season = _dtx.datetime.now().year
+            all_rows = []
+            for yr in [season, season - 1]:
+                r = _req.get(
+                    f"https://statsapi.mlb.com/api/v1/people/{basic['id']}/stats",
+                    params={"stats": "gameLog", "group": "hitting", "season": yr, "gameType": "R"},
+                    timeout=10,
+                )
+                if not r.ok:
+                    continue
+                for s in r.json().get("stats", [{}])[0].get("splits", []):
+                    stt = s.get("stat", {})
+                    date = s.get("date", "")
+                    try:
+                        dt = _dtx.date.fromisoformat(date[:10])
+                    except Exception:
+                        continue
+                    pa = int(stt.get("plateAppearances", 0) or 0)
+                    if pa <= 0:
+                        continue
+                    fs = mlb_hitter_fantasy_points_from_stat(stt)
+                    all_rows.append({
+                        "DATE": dt.isoformat(),
+                        "OPP": (s.get("opponent") or {}).get("abbreviation", ""),
+                        "PA": pa,
+                        "H": int(stt.get("hits", 0) or 0),
+                        "TB": int(stt.get("totalBases", 0) or 0),
+                        "R": int(stt.get("runs", 0) or 0),
+                        "RBI": int(stt.get("rbi", 0) or 0),
+                        "BB": int(stt.get("baseOnBalls", 0) or 0),
+                        "HBP": int(stt.get("hitByPitch", 0) or 0),
+                        "SB": int(stt.get("stolenBases", 0) or 0),
+                        "HR": int(stt.get("homeRuns", 0) or 0),
+                        "FS": round(fs, 1),
+                    })
+                if len(all_rows) >= n:
+                    break
+            if not all_rows:
+                return empty
+            df = pd.DataFrame(all_rows)
+            df["DATE"] = pd.to_datetime(df["DATE"])
+            return df.sort_values("DATE", ascending=False).head(n).reset_index(drop=True)[cols]
+        except Exception:
+            return empty
+
+
+    @st.cache_data(ttl=900, show_spinner=False)
+    def mlb_get_team_next_game(team_abbr: str) -> dict:
+        """Next scheduled MLB game for a hitter's team."""
+        empty = {"opp": "", "home_team": "", "away_team": "", "venue": "",
+                 "side": "", "game_date": "", "opp_pitcher": "", "opp_pitcher_hand": "R"}
+        if not team_abbr:
+            return empty
+        try:
+            import requests as _req, datetime as _dtx, pytz
+            et = pytz.timezone("America/New_York")
+            target = mlb_norm_abbr(team_abbr)
+            for offset in range(0, 2):
+                date_str = (_dtx.datetime.now(et) + _dtx.timedelta(days=offset)).strftime("%Y-%m-%d")
+                r = _req.get(
+                    "https://statsapi.mlb.com/api/v1/schedule",
+                    params={"sportId": 1, "date": date_str, "hydrate": "team,venue,probablePitcher"},
+                    timeout=8,
+                )
+                if not r.ok:
+                    continue
+                for day in r.json().get("dates", []):
+                    for game in day.get("games", []):
+                        state = str(game.get("status", {}).get("abstractGameState", "")).lower()
+                        if state in ("final", "live"):
+                            continue
+                        teams = game.get("teams", {})
+                        home = mlb_norm_abbr(teams.get("home", {}).get("team", {}).get("abbreviation", ""))
+                        away = mlb_norm_abbr(teams.get("away", {}).get("team", {}).get("abbreviation", ""))
+                        if target not in (home, away):
+                            continue
+                        side = "home" if target == home else "away"
+                        opp_side = "away" if side == "home" else "home"
+                        opp = away if side == "home" else home
+                        prob = teams.get(opp_side, {}).get("probablePitcher", {})
+                        phand = "R"
+                        if prob.get("id"):
+                            try:
+                                pr = _req.get(f"https://statsapi.mlb.com/api/v1/people/{prob.get('id')}", timeout=5)
+                                if pr.ok:
+                                    phand = pr.json().get("people", [{}])[0].get("pitchHand", {}).get("code", "R")
+                            except Exception:
+                                pass
+                        return {
+                            "opp": opp,
+                            "home_team": home,
+                            "away_team": away,
+                            "venue": game.get("venue", {}).get("name", ""),
+                            "side": side,
+                            "game_date": date_str,
+                            "opp_pitcher": prob.get("fullName", "") or prob.get("lastName", ""),
+                            "opp_pitcher_hand": phand or "R",
+                        }
+        except Exception:
+            pass
+        return empty
+
+
+    def mlb_render_hitter_fantasy_analysis(player_name: str, line: float, side: str):
+        """Render Hitter Fantasy Score analyzer."""
+        _ph = st.empty()
+        _ph.markdown("<div style='font-family:JetBrains Mono,monospace;font-size:0.7rem;color:#6b7f96;padding:0.5rem 0;'>⏳ FETCHING HITTER GAME LOGS...</div>", unsafe_allow_html=True)
+        logs = mlb_get_hitter_logs(player_name, n=12)
+        basic = mlb_find_player_basic(player_name, hitter_only=True)
+        ctx = mlb_get_team_next_game(basic.get("team", ""))
+        _ph.empty()
+        if logs.empty:
+            st.warning(f"No hitter logs found for {player_name}. Try full name or check if he is active.")
+            return
+
+        vals = pd.to_numeric(logs["FS"], errors="coerce").dropna().reset_index(drop=True)
+        avg_fs = float(vals.mean())
+        edge = avg_fs - float(line)
+        whr = mlb_weighted_hr(logs, line, "FS", side)
+        cons = max(0.10, min(0.95, 1.0 - ((float(vals.std()) / avg_fs) * 0.55 if avg_fs > 0 and len(vals) > 1 else 0.35)))
+        base = mlb_calibrated_hit_base(whr, len(vals), cons)
+        l3 = float(vals.head(3).mean()) if len(vals) >= 3 else avg_fs
+        l3_diff = l3 - avg_fs
+
+        adj = base
+        if l3_diff >= 2.5: adj += 0.05
+        elif l3_diff >= 1.2: adj += 0.025
+        elif l3_diff <= -2.5: adj -= 0.05
+        elif l3_diff <= -1.2: adj -= 0.025
+
+        avg_pa = float(pd.to_numeric(logs["PA"], errors="coerce").dropna().mean())
+        if avg_pa >= 4.2: adj += 0.035
+        elif avg_pa >= 3.8: adj += 0.015
+        elif avg_pa <= 3.1: adj -= 0.045
+
+        tb_avg = float(pd.to_numeric(logs["TB"], errors="coerce").dropna().mean())
+        bb_avg = float(pd.to_numeric(logs["BB"], errors="coerce").dropna().mean())
+        rbi_r_avg = float((pd.to_numeric(logs["R"], errors="coerce") + pd.to_numeric(logs["RBI"], errors="coerce")).mean())
+        expected_fs = (tb_avg * 3.0) + (bb_avg * 2.0) + (rbi_r_avg * 2.0) + (float(pd.to_numeric(logs["HBP"], errors="coerce").mean()) * 2.0) + (float(pd.to_numeric(logs["SB"], errors="coerce").mean()) * 5.0)
+        exp_gap = expected_fs - float(line)
+        if exp_gap >= 2.0: adj += 0.05
+        elif exp_gap >= 1.0: adj += 0.025
+        elif exp_gap <= -2.0: adj -= 0.06
+        elif exp_gap <= -1.0: adj -= 0.03
+
+        if side == "Under":
+            adj = 1.0 - adj
+        adj = max(0.05, min(0.92, adj))
+        if cons < 0.42 and abs(edge) < 2.0:
+            adj = min(adj, 0.66)
+
+        tier = (
+            "Strong Over" if side == "Over" and adj >= 0.72 else
+            "Lean Over" if side == "Over" and adj >= 0.55 else
+            "Strong Under" if side == "Under" and adj >= 0.72 else
+            "Lean Under" if side == "Under" and adj >= 0.55 else
+            "Pass"
+        )
+        score = min(99, int(max(0, min((adj - 0.50) / 0.45, 1.0) * 65) + min(abs(edge) / 8, 1) * 14 + cons * 10 + (8 if ctx.get("opp") else 0)))
+        css = {"Strong Over":"green","Lean Over":"yellow","Strong Under":"red","Lean Under":"orange","Pass":"gray"}.get(tier,"gray")
+        col = "#00e896" if score >= 80 else "#ffc107" if score >= 65 else "#f97316"
+
+        opp_txt = f"vs {ctx.get('opp')} · {ctx.get('opp_pitcher') or 'probable TBD'} ({ctx.get('opp_pitcher_hand','R')}HP)" if ctx.get("opp") else "Next game not found"
+        st.markdown(f"<div class='section-header'>{player_name} · Hitter Fantasy Score {side} {line}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div style='background:#111;border:1px solid #1e2a3a;border-left:3px solid #00c4cc;padding:0.55rem 1rem;margin-bottom:0.65rem;font-family:JetBrains Mono,monospace;font-size:0.66rem;color:#9aaec4;'>🎯 {opp_txt}</div>", unsafe_allow_html=True)
+
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            st.markdown(f"<div class='stat-card'><div class='stat-label'>Avg Fantasy Score</div><div class='stat-value {'green' if edge>0 else 'red'}'>{avg_fs:.1f}</div><div class='stat-hint'>Line {line} · edge {edge:+.1f}</div></div>", unsafe_allow_html=True)
+        with c2:
+            st.markdown(f"<div class='stat-card'><div class='stat-label'>Weighted Hit Rate</div><div class='stat-value {'green' if whr>=0.6 else 'yellow' if whr>=0.5 else 'red'}'>{whr:.0%}</div><div class='stat-hint'>L{len(vals)} hitter logs</div></div>", unsafe_allow_html=True)
+        with c3:
+            st.markdown(f"<div class='stat-card'><div class='stat-label'>Avg Plate App.</div><div class='stat-value {'green' if avg_pa>=4 else 'yellow' if avg_pa>=3.5 else 'red'}'>{avg_pa:.1f}</div><div class='stat-hint'>Volume path matters most</div></div>", unsafe_allow_html=True)
+        with c4:
+            st.markdown(f"<div class='stat-card'><div class='stat-label'>Confidence</div><div class='stat-value' style='color:{col};'>{score}</div><div class='stat-hint'>Fantasy score model</div></div>", unsafe_allow_html=True)
+
+        st.markdown(f"<div class='verdict-banner {css}'><div><div class='verdict-label'>{player_name} · Hitter Fantasy Score · {side}</div><div class='verdict-tier {css}'>{tier}</div></div><div style='display:flex;gap:1.5rem;flex-wrap:wrap;'><div><div class='verdict-label'>Adjusted HR</div><div style='font-size:1.4rem;font-weight:800;color:#f0f0f0;'>{adj:.0%}</div></div><div><div class='verdict-label'>Expected FS</div><div style='font-size:1.4rem;font-weight:800;color:#f0f0f0;'>{expected_fs:.1f}</div></div><div><div class='verdict-label'>Consistency</div><div style='font-size:1.4rem;font-weight:800;color:#f0f0f0;'>{cons:.0%}</div></div></div></div>", unsafe_allow_html=True)
+
+        with st.expander(f"📋 Last {len(logs)} Hitter Logs — avg {avg_fs:.1f} FS", expanded=False):
+            view = logs.copy()
+            view["DATE"] = pd.to_datetime(view["DATE"]).dt.strftime("%b %d")
+            view["HIT"] = view["FS"].apply(lambda x: "✅" if (x >= line if side == "Over" else x <= line) else "❌")
+            st.dataframe(view, use_container_width=True)
+
+        with st.expander("🔬 Show hitter fantasy score debug", expanded=False):
+            st.markdown(f"""
+            <div style='font-family:JetBrains Mono,monospace;font-size:0.72rem;color:#9aaec4;line-height:1.8;'>
+            <b style='color:#f97316;'>INPUT</b><br>
+            Player: <span style='color:#e2e8f0;'>{player_name}</span> · Line: <span style='color:#e2e8f0;'>{line} {side}</span><br>
+            Raw weighted hit rate: <span style='color:#e2e8f0;'>{whr:.1%}</span> · Calibrated base: <span style='color:#e2e8f0;'>{base:.1%}</span><br>
+            L3 avg: <span style='color:#e2e8f0;'>{l3:.1f}</span> vs L{len(vals)} avg <span style='color:#e2e8f0;'>{avg_fs:.1f}</span><br>
+            Expected FS path: TB {tb_avg:.1f} · BB {bb_avg:.1f} · R+RBI {rbi_r_avg:.1f} → <span style='color:#e2e8f0;'>{expected_fs:.1f}</span><br>
+            Final: <span style='color:{col};font-weight:800;'>{tier}</span> · {adj:.1%} · confidence {score}/100
+            </div>
+            """, unsafe_allow_html=True)
+
+
+    _mlb_hitters = _mlb_fetch_hitter_list()
+
+    _mc1,_mc2,_mc3,_mc4 = st.columns([1.2,2.5,1,1])
     # Pre-fill pitcher if jumped from Edge Scanner
     _mlb_edge_jp = st.session_state.pop("edge_jump_pitcher", None)
     if _mlb_edge_jp:
         st.session_state["_mlb_prefill_name"] = _mlb_edge_jp
         st.session_state["_mlb_prefill_line"] = st.session_state.pop("edge_jump_line", None)
-    _mlb_pf_name = st.session_state.get("_mlb_prefill_name", "")
-    _mlb_pf_idx  = (_mlb_pitchers.index(_mlb_pf_name) + 1
-                    if _mlb_pf_name and _mlb_pf_name in _mlb_pitchers else 0)
-
+        _mlb_jump_prop = st.session_state.pop("edge_jump_prop", None)
+        if _mlb_jump_prop == "Hitter Fantasy Score":
+            st.session_state.mlb_prop_type = "Hitter Fantasy Score"
+        else:
+            st.session_state.mlb_prop_type = "Strikeouts"
     with _mc1:
+        mlb_prop = st.selectbox("Prop",["Strikeouts","Hitter Fantasy Score"],key="mlb_prop_type")
+    with _mc2:
+        _mlb_options = _mlb_hitters if mlb_prop == "Hitter Fantasy Score" else _mlb_pitchers
+        _mlb_pf_name = st.session_state.get("_mlb_prefill_name", "")
+        _mlb_pf_idx  = (_mlb_options.index(_mlb_pf_name) + 1
+                        if _mlb_pf_name and _mlb_pf_name in _mlb_options else 0)
         mlb_pitcher = st.selectbox(
-            "PITCHER — TYPE TO SEARCH",
-            options=[""] + _mlb_pitchers,
-            format_func=lambda x: "— type pitcher name to search —" if x == "" else x,
-            key=f"mlb_pitcher_sel_{st.session_state.get('mlb_pitcher_key', 0)}",
+            "PLAYER — TYPE TO SEARCH",
+            options=[""] + _mlb_options,
+            format_func=lambda x: f"— type {'hitter' if mlb_prop == 'Hitter Fantasy Score' else 'pitcher'} name to search —" if x == "" else x,
+            key=f"mlb_player_sel_{mlb_prop}_{st.session_state.get('mlb_pitcher_key', 0)}",
             index=_mlb_pf_idx,
         )
-    with _mc2:
-        mlb_prop = st.selectbox("Prop",["Strikeouts","Outs Recorded"],key="mlb_prop_type")
     with _mc3:
         mlb_line = st.number_input("Line",min_value=0.5,max_value=30.0,value=5.5,step=0.5,key="mlb_line")
     with _mc4:
@@ -9270,45 +9609,61 @@ if st.session_state.active_sport == "mlb":
             st.session_state.mlb_pitcher_key = st.session_state.get("mlb_pitcher_key", 0) + 1
             st.rerun()
 
-    _tonight = mlb_get_tonight_game(mlb_pitcher) if mlb_pitcher else {}
+    if mlb_pitcher and mlb_prop == "Hitter Fantasy Score":
+        _mlb_basic = mlb_find_player_basic(mlb_pitcher, hitter_only=True)
+        _tonight = mlb_get_team_next_game(_mlb_basic.get("team", ""))
+    else:
+        _mlb_basic = {}
+        _tonight = mlb_get_tonight_game(mlb_pitcher) if mlb_pitcher else {}
     mlb_opp  = _tonight.get("opp","")
     mlb_home = _tonight.get("home_team","")
 
     if mlb_pitcher and _tonight:
-        _od = f"vs {mlb_opp} · {_tonight.get('venue','')} · {'Home' if _tonight.get('pitcher_side')=='home' else 'Away'}"
+        if mlb_prop == "Hitter Fantasy Score":
+            _od = f"vs {mlb_opp} · {_tonight.get('venue','')} · {_tonight.get('side','')}"
+            if _tonight.get("opp_pitcher"):
+                _od += f" · Opp SP: {_tonight.get('opp_pitcher')}"
+        else:
+            _od = f"vs {mlb_opp} · {_tonight.get('venue','')} · {'Home' if _tonight.get('pitcher_side')=='home' else 'Away'}"
         st.markdown(f"<div style='background:#111;border:1px solid #1e2a3a;border-left:3px solid #00c4cc;"
                     f"padding:0.5rem 1rem;margin-bottom:0.5rem;font-family:JetBrains Mono,monospace;"
                     f"font-size:0.68rem;color:#00c4cc;'>🎯 TONIGHT: {_od}</div>",unsafe_allow_html=True)
     elif mlb_pitcher:
         # Try to figure out next start from recent logs
         _last_date = None
-        try:
-            _tmp_logs = mlb_get_pitcher_logs(mlb_pitcher, n=1)
-            if not _tmp_logs.empty:
-                _last_date = pd.to_datetime(_tmp_logs.iloc[0]["DATE"]).strftime("%b %d")
-        except Exception:
-            pass
+        if mlb_prop == "Strikeouts":
+            try:
+                _tmp_logs = mlb_get_pitcher_logs(mlb_pitcher, n=1)
+                if not _tmp_logs.empty:
+                    _last_date = pd.to_datetime(_tmp_logs.iloc[0]["DATE"]).strftime("%b %d")
+            except Exception:
+                pass
         _last_str = f" · Last start: {_last_date}" if _last_date else ""
+        _role_note = "may not be scheduled to pitch" if mlb_prop == "Strikeouts" else "does not have a detected game today"
         st.markdown(
             f"<div style='background:#111;border:1px solid #1e2a3a;border-left:3px solid #f97316;"
             f"padding:0.5rem 1rem;margin-bottom:0.5rem;font-family:JetBrains Mono,monospace;"
-            f"font-size:0.68rem;color:#f97316;'>⚠️ No game found for today — {mlb_pitcher} may not be scheduled to pitch{_last_str}."
+            f"font-size:0.68rem;color:#f97316;'>⚠️ No game found for today — {mlb_pitcher} {_role_note}{_last_str}."
             f" Park + opponent signals will be unavailable.</div>",
             unsafe_allow_html=True
         )
 
-    mlb_fetch = st.button("⚾  Analyze Pitcher Prop", key="mlb_analyze")
+    _mlb_btn_label = "⚾  Analyze Hitter Fantasy Score" if mlb_prop == "Hitter Fantasy Score" else "⚾  Analyze Pitcher Prop"
+    mlb_fetch = st.button(_mlb_btn_label, key="mlb_analyze")
 
     if not mlb_pitcher:
         st.markdown(
             "<div style='color:#6b7f96;font-family:JetBrains Mono,monospace;font-size:0.68rem;"
-            "margin-top:0.4rem;'>↑ Start typing a pitcher name — e.g. Valdez, Skubal, Sproat</div>",
+            "margin-top:0.4rem;'>↑ Start typing a hitter or pitcher name — e.g. Judge, Ohtani, Skubal</div>",
             unsafe_allow_html=True
         )
 
-    if mlb_fetch and mlb_pitcher:
-        _stat = "K" if mlb_prop=="Strikeouts" else "OUTS"
-        _lbl  = "K" if mlb_prop=="Strikeouts" else "Outs"
+    if mlb_fetch and mlb_pitcher and mlb_prop == "Hitter Fantasy Score":
+        mlb_render_hitter_fantasy_analysis(mlb_pitcher, mlb_line, mlb_side)
+
+    if mlb_fetch and mlb_pitcher and mlb_prop == "Strikeouts":
+        _stat = "K"
+        _lbl  = "K"
 
         _mlb_ph = st.empty()
         _mlb_ph.markdown("<div style='font-family:JetBrains Mono,monospace;font-size:0.7rem;"
@@ -11391,11 +11746,16 @@ if st.session_state.active_sport == "edge":
 
         if result.get("sport") == "MLB":
             is_outs_prop = is_mlb_pitcher_outs_prop(result.get("stat", ""))
+            is_hitter_fs = is_mlb_hitter_fantasy_prop(result.get("stat", ""))
             if result.get("l3") is not None:
                 reasons.append(f"L3 avg {result['l3']}")
             if result.get("opp") == "TBD":
                 reasons.append("Opponent pending")
-            if result.get("opp_k") is not None and not is_outs_prop:
+            if result.get("pa_avg") is not None and is_hitter_fs:
+                reasons.append(f"PA path {result['pa_avg']}")
+            if result.get("expected_fs") is not None and is_hitter_fs:
+                reasons.append(f"Expected FS {result['expected_fs']}")
+            if result.get("opp_k") is not None and not is_outs_prop and not is_hitter_fs:
                 reasons.append(f"Opponent K% {result['opp_k']}%")
             if result.get("opp_bb") is not None and is_outs_prop:
                 reasons.append(f"Opponent BB% {result['opp_bb']}%")
@@ -12472,6 +12832,343 @@ if st.session_state.active_sport == "edge":
             return None
 
 
+    @st.cache_data(ttl=7200, show_spinner=False)
+    def _scanner_find_mlb_hitter(player_name: str) -> dict:
+        """Find active MLB hitter id/team for Edge Scanner Hitter Fantasy Score."""
+        empty = {"id": None, "name": player_name, "team": ""}
+        try:
+            import requests as _req, datetime as _dt
+            target = re.sub(r"[^a-z0-9 ]", "", str(player_name).lower()).strip()
+            parts = [p for p in target.split() if p]
+            if not parts:
+                return empty
+            r = _req.get(
+                "https://statsapi.mlb.com/api/v1/sports/1/players",
+                params={"season": _dt.datetime.now().year, "gameType": "R"},
+                timeout=8,
+            )
+            if not r.ok:
+                return empty
+            best = None
+            for p in r.json().get("people", []):
+                pos_type = str(p.get("primaryPosition", {}).get("type", "")).lower()
+                if "pitcher" in pos_type:
+                    continue
+                nm = str(p.get("fullName", ""))
+                norm = re.sub(r"[^a-z0-9 ]", "", nm.lower()).strip()
+                if norm == target or all(part in norm for part in parts):
+                    best = p
+                    break
+            if not best:
+                return empty
+            team = best.get("currentTeam", {}).get("abbreviation", "")
+            return {
+                "id": best.get("id"),
+                "name": best.get("fullName", player_name),
+                "team": _scanner_norm_mlb_team(team),
+            }
+        except Exception as e:
+            record_debug_error("mlb.edge.hitter.find", e)
+            return empty
+
+
+    def _scanner_hitter_fs_from_stat(st_row: dict) -> float:
+        """PrizePicks-style hitter fantasy score from MLB game-log hitting stats."""
+        try:
+            hits = float(st_row.get("hits", 0) or 0)
+            doubles = float(st_row.get("doubles", 0) or 0)
+            triples = float(st_row.get("triples", 0) or 0)
+            homers = float(st_row.get("homeRuns", 0) or 0)
+            singles = max(0.0, hits - doubles - triples - homers)
+            runs = float(st_row.get("runs", 0) or 0)
+            rbi = float(st_row.get("rbi", st_row.get("runsBattedIn", 0)) or 0)
+            walks = float(st_row.get("baseOnBalls", 0) or 0)
+            hbp = float(st_row.get("hitByPitch", 0) or 0)
+            steals = float(st_row.get("stolenBases", 0) or 0)
+            return (
+                singles * 3 + doubles * 5 + triples * 8 + homers * 10 +
+                runs * 2 + rbi * 2 + walks * 2 + hbp * 2 + steals * 5
+            )
+        except Exception:
+            return 0.0
+
+
+    @st.cache_data(ttl=1800, show_spinner=False)
+    def _scanner_get_hitter_logs(player_name: str, n: int = 14) -> pd.DataFrame:
+        """Recent hitter logs with fantasy score and PA for Edge Scanner."""
+        cols = ["DATE", "FS", "PA", "AB", "H", "BB", "R", "RBI", "HR", "SB"]
+        empty = pd.DataFrame(columns=cols)
+        try:
+            import requests as _req, datetime as _dt
+            basic = _scanner_find_mlb_hitter(player_name)
+            pid = basic.get("id")
+            if not pid:
+                return empty
+            season = _dt.datetime.now().year
+            rows = []
+            for yr in [season, season - 1]:
+                r = _req.get(
+                    f"https://statsapi.mlb.com/api/v1/people/{pid}/stats",
+                    params={"stats": "gameLog", "group": "hitting", "season": yr},
+                    timeout=10,
+                )
+                if not r.ok:
+                    continue
+                splits = r.json().get("stats", [{}])[0].get("splits", []) or []
+                for sp in splits:
+                    st_row = sp.get("stat", {}) or {}
+                    date = sp.get("date", "")
+                    pa = float(st_row.get("plateAppearances", 0) or 0)
+                    rows.append({
+                        "DATE": date,
+                        "FS": _scanner_hitter_fs_from_stat(st_row),
+                        "PA": pa,
+                        "AB": float(st_row.get("atBats", 0) or 0),
+                        "H": float(st_row.get("hits", 0) or 0),
+                        "BB": float(st_row.get("baseOnBalls", 0) or 0),
+                        "R": float(st_row.get("runs", 0) or 0),
+                        "RBI": float(st_row.get("rbi", st_row.get("runsBattedIn", 0)) or 0),
+                        "HR": float(st_row.get("homeRuns", 0) or 0),
+                        "SB": float(st_row.get("stolenBases", 0) or 0),
+                    })
+                if len(rows) >= n:
+                    break
+            if not rows:
+                return empty
+            df = pd.DataFrame(rows)
+            df["DATE"] = pd.to_datetime(df["DATE"], errors="coerce")
+            df = df.dropna(subset=["DATE"]).sort_values("DATE", ascending=False).head(n).reset_index(drop=True)
+            return df[cols]
+        except Exception as e:
+            record_debug_error("mlb.edge.hitter.logs", e)
+            return empty
+
+
+    @st.cache_data(ttl=900, show_spinner=False)
+    def _scanner_get_hitter_game_context(team_abbr: str) -> dict:
+        """Next scheduled game for a hitter's team."""
+        empty = {"opp": "TBD", "home_team": "", "game_date": "", "side": "", "opp_pitcher": ""}
+        team_abbr = _scanner_norm_mlb_team(team_abbr)
+        if not team_abbr:
+            return empty
+        try:
+            import requests as _req, datetime as _dt, pytz as _pytz
+            et = _pytz.timezone("America/New_York")
+            today = _dt.datetime.now(et).date()
+            for offset in range(0, 3):
+                d = today + _dt.timedelta(days=offset)
+                r = _req.get(
+                    "https://statsapi.mlb.com/api/v1/schedule",
+                    params={"sportId": 1, "date": d.strftime("%Y-%m-%d"),
+                            "hydrate": "probablePitcher,team"},
+                    timeout=8,
+                )
+                if not r.ok:
+                    continue
+                for day in r.json().get("dates", []):
+                    for game in day.get("games", []):
+                        teams = game.get("teams", {})
+                        h = teams.get("home", {}).get("team", {})
+                        a = teams.get("away", {}).get("team", {})
+                        home = _scanner_norm_mlb_team(h.get("abbreviation", ""))
+                        away = _scanner_norm_mlb_team(a.get("abbreviation", ""))
+                        if team_abbr not in (home, away):
+                            continue
+                        side = "Home" if team_abbr == home else "Away"
+                        opp = away if side == "Home" else home
+                        opp_slot = "away" if side == "Home" else "home"
+                        opp_pitcher = teams.get(opp_slot, {}).get("probablePitcher", {}).get("fullName", "")
+                        return {
+                            "opp": opp or "TBD",
+                            "home_team": home,
+                            "game_date": d.strftime("%Y-%m-%d"),
+                            "side": side,
+                            "opp_pitcher": opp_pitcher,
+                        }
+        except Exception as e:
+            record_debug_error("mlb.edge.hitter.game", e)
+        return empty
+
+
+    def run_mlb_hitter_fantasy_edge_check(player_name: str, line: float,
+                                          side: str = "Over",
+                                          team: str = "") -> dict | None:
+        """Fast Hitter Fantasy Score edge model for MLB Edge Scanner."""
+        try:
+            _stat_label = "Hitter Fantasy Score"
+            if not is_sane_mlb_pitcher_prop_line(_stat_label, line):
+                return None
+            basic = _scanner_find_mlb_hitter(player_name)
+            team_abbr = _scanner_norm_mlb_team(team or basic.get("team", ""))
+            logs = _scanner_get_hitter_logs(player_name, n=14)
+            if logs is None or logs.empty or len(logs) < 4:
+                return None
+
+            import numpy as _np
+            vals = pd.to_numeric(logs["FS"], errors="coerce").dropna().reset_index(drop=True)
+            pa_vals = pd.to_numeric(logs["PA"], errors="coerce").dropna().reset_index(drop=True)
+            if len(vals) < 4:
+                return None
+
+            n = len(vals)
+            weights = _np.array([1.6 if i < 3 else 1.15 if i < 6 else 1.0 for i in range(n)])
+            hits = (vals >= line) if side == "Over" else (vals <= line)
+            whr = float((hits * weights[:n]).sum() / weights[:n].sum())
+            cons = float(hits.mean())
+            avg = float(vals.mean())
+            l3 = float(vals.head(3).mean())
+            pa_avg = float(pa_vals.mean()) if len(pa_vals) else None
+            edge = avg - line
+            adj = whr
+
+            diff = l3 - avg
+            if diff >= 2.5:
+                adj += 0.05
+            elif diff >= 1.25:
+                adj += 0.025
+            elif diff <= -2.5:
+                adj -= 0.05
+            elif diff <= -1.25:
+                adj -= 0.025
+
+            side_edge = edge if side == "Over" else -edge
+            if side_edge >= 3.0:
+                adj += 0.055
+            elif side_edge >= 1.5:
+                adj += 0.03
+            elif side_edge >= 0.75:
+                adj += 0.012
+            elif side_edge <= -3.0:
+                adj -= 0.055
+            elif side_edge <= -1.5:
+                adj -= 0.03
+            elif side_edge <= -0.75:
+                adj -= 0.012
+
+            if pa_avg:
+                if pa_avg >= 4.35:
+                    adj += 0.035
+                elif pa_avg >= 4.05:
+                    adj += 0.018
+                elif pa_avg <= 3.15:
+                    adj -= 0.045
+                elif pa_avg <= 3.50:
+                    adj -= 0.02
+
+            try:
+                per_pa = float(vals.sum() / max(pa_vals.sum(), 1))
+                expected_fs = per_pa * (pa_avg or 4.0)
+            except Exception:
+                expected_fs = avg
+            proj_prob = _scanner_normal_prob(expected_fs, line, side, sigma=3.6)
+            if proj_prob is not None:
+                adj = (0.62 * adj) + (0.38 * proj_prob)
+                if proj_prob < 0.55:
+                    adj = min(adj, 0.62)
+
+            if cons >= 0.70:
+                adj += 0.018
+            elif cons <= 0.35:
+                adj -= 0.045
+            elif cons <= 0.45:
+                adj -= 0.025
+
+            line_history = summarize_pp_line_history(
+                line,
+                get_pp_line_history_from_supabase(player_name, _stat_label)
+            )
+            market_move = float(line_history.get("open_move") or line_history.get("move") or 0)
+            if market_move >= 0.5 and side_edge > 0:
+                adj += 0.012
+            elif market_move <= -0.5:
+                adj -= 0.02
+
+            game = _scanner_get_hitter_game_context(team_abbr)
+            opp = game.get("opp", "TBD") or "TBD"
+            park = _scanner_mlb_park_signal(game.get("home_team", "")) if game.get("home_team") else "Neutral"
+            if park == "Penalty":
+                adj += 0.012
+            elif park == "Boost":
+                adj -= 0.012
+
+            raw_adj = max(0.05, min(0.92, adj))
+            reliability = 0.52 + min(max(n - 4, 0) * 0.018, 0.16)
+            if pa_avg:
+                reliability += 0.06
+            if game.get("game_date"):
+                reliability += 0.04
+            if proj_prob is not None:
+                reliability += 0.06
+            if int(line_history.get("snapshots", 0) or 0) >= 3:
+                reliability += 0.025
+            reliability = max(0.50, min(0.84, reliability))
+            adj = 0.50 + ((raw_adj - 0.50) * reliability)
+            if cons < 0.40 or n < 6:
+                adj = min(adj, 0.65)
+            adj = max(0.05, min(0.88, adj))
+
+            trap_label = "Clean"
+            trap_reasons = []
+            if pa_avg is not None and pa_avg < 3.5:
+                trap_reasons.append(f"low PA path ({pa_avg:.1f})")
+            if cons < 0.40:
+                trap_reasons.append("volatile fantasy logs")
+            if abs(side_edge) < 0.75:
+                trap_reasons.append("thin avg edge")
+            if trap_reasons:
+                trap_label = "Trap Risk" if len(trap_reasons) >= 2 else "Watchlist"
+                adj = min(adj, 0.68 if trap_label == "Trap Risk" else 0.74)
+
+            data_bonus = sum([
+                4 if pa_avg else 0,
+                3 if game.get("game_date") else 0,
+                3 if proj_prob is not None else 0,
+                2 if int(line_history.get("snapshots", 0) or 0) >= 3 else 0,
+            ])
+            confidence = min(99, int(
+                max(0, min((adj - 0.50) / 0.45, 1.0) * 62) +
+                min(abs(edge) / 7.0, 1.0) * 13 +
+                cons * 10 +
+                data_bonus
+            ))
+
+            return {
+                "sport": "MLB",
+                "player": basic.get("name") or player_name,
+                "stat": _stat_label,
+                "line": line,
+                "side": side,
+                "adj": round(adj * 100, 1),
+                "confidence": confidence,
+                "raw_adj": round(raw_adj * 100, 1),
+                "reliability": round(reliability * 100, 1),
+                "avg": round(avg, 1),
+                "edge_raw": round(edge, 2),
+                "cons": round(cons * 100, 1),
+                "samples": n,
+                "l3": round(l3, 1),
+                "pa_avg": round(pa_avg, 1) if pa_avg is not None else None,
+                "expected_fs": round(expected_fs, 1),
+                "projection_gap": round(expected_fs - line, 1),
+                "projection_prob": round(proj_prob * 100, 1) if proj_prob is not None else None,
+                "opp": opp,
+                "game_date": game.get("game_date", ""),
+                "park": park,
+                "trap_label": trap_label,
+                "trap_reasons": trap_reasons[:3],
+                "market_prev_line": line_history.get("prev_line"),
+                "market_open_line": line_history.get("open_line"),
+                "market_move": line_history.get("move", 0.0),
+                "market_open_move": line_history.get("open_move", 0.0),
+                "market_snapshots": line_history.get("snapshots", 0),
+                "market_signal": line_history.get("market_signal", "Neutral"),
+                "market_note": line_history.get("market_note", ""),
+            }
+        except Exception as e:
+            record_debug_error("mlb.edge.hitter.model", e)
+            return None
+
+
     # ── UI ────────────────────────────────────────────────────────────────
     st.markdown("<div class='section-header'>🎯 PropIQ Edge Scanner</div>",
                 unsafe_allow_html=True)
@@ -12479,11 +13176,11 @@ if st.session_state.active_sport == "edge":
     st.markdown("""
     <div class='v55-hero'>
         <div class='v55-kicker'>V6 Edge Board</div>
-        <div class='v55-title'>MLB pitcher props, filtered into a sharper shortlist.</div>
+        <div class='v55-title'>MLB edge props, filtered into a sharper shortlist.</div>
         <div class='v55-subcopy'>
-            Scan PrizePicks pitcher lines, separate Strikeouts from Pitcher Outs, and rank only
-            probable starters. Cards now blend pitch-count projection, opponent plate discipline,
-            bullpen leash context, market movement, and risk tags before anything reaches your board.
+            Scan PrizePicks Strikeouts and Hitter Fantasy Score, then rank only calibrated
+            shortlist candidates. Cards blend projection anchors, recent form, role/volume,
+            matchup context, market movement, and risk tags before anything reaches your board.
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -12492,11 +13189,11 @@ if st.session_state.active_sport == "edge":
     _edge_sport = "MLB"
     _ec1, _ec2, _ec3 = st.columns([1.2, 1, 1])
     with _ec1:
-        _stat_options = ["All Pitcher Props", "Strikeouts", "Pitcher Outs"]
+        _stat_options = ["All MLB Props", "Strikeouts", "Hitter Fantasy Score"]
         if st.session_state.get("edge_stat_filter") not in _stat_options:
             st.session_state.edge_stat_filter = _stat_options[0]
         _edge_stat = st.selectbox(
-            "MLB pitcher prop",
+            "MLB prop",
             _stat_options,
             key="edge_stat_filter",
             label_visibility="collapsed"
@@ -12585,15 +13282,15 @@ if st.session_state.active_sport == "edge":
         # MLB-only scanner
         _filtered = [p for p in _filtered if p["sport"] == "MLB"]
         _mlb_k_count = sum(1 for p in _filtered if is_mlb_strikeout_prop(p.get("stat", "")))
-        _mlb_out_count = sum(1 for p in _filtered if is_mlb_pitcher_outs_prop(p.get("stat", "")))
+        _mlb_hfs_count = sum(1 for p in _filtered if is_mlb_hitter_fantasy_prop(p.get("stat", "")))
 
         # Stat filter — applied BEFORE threading so we don't spin up
         # 484 threads for 20 actual props
         _STAT_MAP = {
             "Points":               lambda s: "point" in s.lower() or s.lower() == "pts",
             "Strikeouts":           is_mlb_strikeout_prop,
-            "Pitcher Outs":          is_mlb_pitcher_outs_prop,
-            "All Pitcher Props":      lambda s: normalize_mlb_pitcher_prop_stat(s) in ("Strikeouts", "Outs Recorded"),
+            "Hitter Fantasy Score":  is_mlb_hitter_fantasy_prop,
+            "All MLB Props":         lambda s: normalize_mlb_pitcher_prop_stat(s) in ("Strikeouts", "Hitter Fantasy Score"),
             "Rebounds":             lambda s: "rebound" in s.lower() or s.lower() == "reb",
             "Assists":              lambda s: "assist" in s.lower() or s.lower() == "ast",
             "3PM":                  lambda s: "3" in s.lower() or "three" in s.lower(),
@@ -12641,9 +13338,9 @@ if st.session_state.active_sport == "edge":
         _stat_lbl  = _edge_stat
         # Map display name to actual PP stat string for clarity
         _pp_stat_actual = {
-            "All Pitcher Props": "Pitcher Strikeouts + Pitcher Outs",
+            "All MLB Props": "Pitcher Strikeouts + Hitter Fantasy Score",
             "Strikeouts": "Pitcher Strikeouts",
-            "Pitcher Outs": "Pitcher Outs",
+            "Hitter Fantasy Score": "Hitter Fantasy Score",
         }.get(_edge_stat, _edge_stat)
         st.info(f"Analyzing {len(_filtered)} props ({_pp_stat_actual}) — {_sport_lbl}...")
 
@@ -12659,11 +13356,16 @@ if st.session_state.active_sport == "edge":
                 if prop["sport"] == "MLB":
                     # Normalize stat names — PrizePicks uses several pitcher labels
                     _norm_stat = normalize_mlb_pitcher_prop_stat(prop["stat"])
-                    if _norm_stat not in ("Strikeouts", "Outs Recorded"):
+                    if _norm_stat == "Strikeouts":
+                        return run_mlb_edge_check(
+                            prop["player"], prop["line"], _norm_stat, "Over", prop.get("team", "")
+                        )
+                    if _norm_stat == "Hitter Fantasy Score":
+                        return run_mlb_hitter_fantasy_edge_check(
+                            prop["player"], prop["line"], "Over", prop.get("team", "")
+                        )
+                    if _norm_stat not in ("Strikeouts", "Hitter Fantasy Score"):
                         return None
-                    return run_mlb_edge_check(
-                        prop["player"], prop["line"], _norm_stat, "Over", prop.get("team", "")
-                    )
             except Exception:
                 return None
 
@@ -12700,7 +13402,7 @@ if st.session_state.active_sport == "edge":
         st.session_state.edge_results = _results
         st.session_state["edge_scan_summary"] = (
             f"Analyzed {len(_filtered)} matching props · {len(_results)} model candidates returned "
-            f"(slate parsed: {_mlb_k_count} K props, {_mlb_out_count} Outs props)"
+            f"(slate parsed: {_mlb_k_count} K props, {_mlb_hfs_count} Hitter FS props)"
         )
 
     # ── Display Results ───────────────────────────────────────────────────
@@ -12709,15 +13411,15 @@ if st.session_state.active_sport == "edge":
     _results = [
         r for r in _results
         if r.get("sport") == "MLB"
-        and normalize_mlb_pitcher_prop_stat(r.get("stat", "")) in ("Strikeouts", "Outs Recorded")
+        and normalize_mlb_pitcher_prop_stat(r.get("stat", "")) in ("Strikeouts", "Hitter Fantasy Score")
         and is_sane_mlb_pitcher_prop_line(r.get("stat", ""), r.get("line"))
         and r.get("opp")
         and r.get("opp") not in ("?", "")
     ]
     if _edge_stat == "Strikeouts":
         _results = [r for r in _results if is_mlb_strikeout_prop(r.get("stat", ""))]
-    elif _edge_stat == "Pitcher Outs":
-        _results = [r for r in _results if is_mlb_pitcher_outs_prop(r.get("stat", ""))]
+    elif _edge_stat == "Hitter Fantasy Score":
+        _results = [r for r in _results if is_mlb_hitter_fantasy_prop(r.get("stat", ""))]
 
     if _results:
         if st.session_state.get("edge_has_scanned"):
@@ -12812,11 +13514,13 @@ if st.session_state.active_sport == "edge":
                     _risk_pills += "<span class='edge-pill-v55 warn'>Low reliability</span>"
                 if _r.get("trap_label") and _r.get("trap_label") != "Clean":
                     _risk_pills += f"<span class='edge-pill-v55 warn'>Trap {_r.get('trap_label')}</span>"
-                if _r.get("pc_ceiling") is not None and _r.get("pc_ceiling") <= _r["line"] + (0.5 if _r["stat"] == "Strikeouts" else 1.5):
+                if _r.get("stat") == "Strikeouts" and _r.get("pc_ceiling") is not None and _r.get("pc_ceiling") <= _r["line"] + 0.5:
                     _risk_pills += "<span class='edge-pill-v55 warn'>Ceiling tight</span>"
                 _game_pill = f"<span class='edge-pill-v55'>Game {_r.get('game_date')}</span>" if _r.get("game_date") else ""
                 _opp_k_pill = f"<span class='edge-pill-v55'>Opp K% {_r.get('opp_k')}</span>" if _r.get("opp_k") is not None else ""
                 _opp_bb_pill = f"<span class='edge-pill-v55'>Opp BB% {_r.get('opp_bb')}</span>" if _r.get("opp_bb") is not None else ""
+                _pa_pill = f"<span class='edge-pill-v55'>PA {_r.get('pa_avg')}</span>" if _r.get("pa_avg") is not None else ""
+                _expected_fs_pill = f"<span class='edge-pill-v55'>Exp FS {_r.get('expected_fs')}</span>" if _r.get("expected_fs") is not None else ""
                 _opp_profile_pill = (
                     f"<span class='edge-pill-v55'>{_r.get('opp_profile')} lineup</span>"
                     if _r.get("opp_profile") and _r.get("opp_profile") != "Neutral" else ""
@@ -12841,6 +13545,8 @@ if st.session_state.active_sport == "edge":
                     f"{_game_pill}"
                     f"{_opp_k_pill}"
                     f"{_opp_bb_pill}"
+                    f"{_pa_pill}"
+                    f"{_expected_fs_pill}"
                     f"{_opp_profile_pill}"
                     f"<span class='edge-pill-v55'>Park {_r.get('park', 'Neutral')}</span>"
                     f"{_bullpen_pill}"
@@ -12875,7 +13581,7 @@ if st.session_state.active_sport == "edge":
                     f"<span class='edge-pill-v55'>Avg {_r['avg']}</span>"
                     f"<span class='edge-pill-v55'>Avg edge <strong style='color:{_edge_raw_col};'>{_r['edge_raw']:+.1f}</strong></span>"
                     f"<span class='edge-pill-v55'>Consistency {_r['cons']}%</span>"
-                    f"<span class='edge-pill-v55'>{_r['samples']} starts</span>"
+                    f"<span class='edge-pill-v55'>{_r['samples']} {'games' if _r.get('stat') == 'Hitter Fantasy Score' else 'starts'}</span>"
                     f"</div>"
                     f"<div class='edge-bar-v55'><div style='width:{_bar_w}%;background:{_tier_col};'></div></div>"
                     f"</div>",
@@ -12939,7 +13645,7 @@ if st.session_state.active_sport == "edge":
             "<div style='text-align:center;color:#6b7f96;font-family:JetBrains Mono,"
             "monospace;font-size:0.75rem;padding:2rem;'>"
             f"No Edge Scanner candidates to display. {_scan_summary}.{_filter_note} "
-            "Try All Pitcher Props, set minimum edge to Any edge, or clear cache and scan again.</div>",
+            "Try All MLB Props, set minimum edge to Any edge, or clear cache and scan again.</div>",
             unsafe_allow_html=True
         )
     else:
@@ -12951,9 +13657,9 @@ if st.session_state.active_sport == "edge":
             "font-weight:700;color:#f0f4f8;margin-bottom:8px;'>Ready to scan</div>"
             "<div style='font-family:JetBrains Mono,monospace;font-size:0.65rem;"
             "color:#6b7f96;line-height:1.8;'>"
-            "Hit <strong style='color:#00c4cc;'>Scan for Edge Plays</strong> to pull MLB pitcher props "
+            "Hit <strong style='color:#00c4cc;'>Scan for Edge Plays</strong> to pull MLB props "
             "from PrizePicks and rank only calibrated shortlist candidates.<br>"
-            "Best time to run: after starting pitchers and lines are finalized."
+            "Best time to run: after starting lineups, probable pitchers, and lines are finalized."
             "</div></div>",
             unsafe_allow_html=True
         )
