@@ -9456,7 +9456,8 @@ if st.session_state.active_sport == "mlb":
     @st.cache_data(ttl=86400, show_spinner=False)
     def mlb_find_player_basic(player_name: str, hitter_only: bool = False) -> dict:
         """Find MLB player id/team/position from active player feed."""
-        empty = {"id": None, "name": player_name, "team": "", "team_id": None, "position": ""}
+        empty = {"id": None, "name": player_name, "team": "", "team_id": None,
+                 "position": "", "bat_side": ""}
         if not player_name:
             return empty
         try:
@@ -9501,6 +9502,7 @@ if st.session_state.active_sport == "mlb":
                     "team": team_map.get(int(tid), "") if tid else "",
                     "team_id": tid,
                     "position": p.get("primaryPosition", {}).get("abbreviation", ""),
+                    "bat_side": (p.get("batSide") or {}).get("code", ""),
                 }
         except Exception:
             pass
@@ -9595,7 +9597,8 @@ if st.session_state.active_sport == "mlb":
     def mlb_get_team_next_game(team_abbr: str) -> dict:
         """Next scheduled MLB game for a hitter's team."""
         empty = {"opp": "", "home_team": "", "away_team": "", "venue": "",
-                 "side": "", "game_date": "", "opp_pitcher": "", "opp_pitcher_hand": "R"}
+                 "side": "", "game_date": "", "opp_pitcher": "",
+                 "opp_pitcher_id": None, "opp_pitcher_hand": "R"}
         if not team_abbr:
             return empty
         try:
@@ -9641,8 +9644,128 @@ if st.session_state.active_sport == "mlb":
                             "side": side,
                             "game_date": date_str,
                             "opp_pitcher": prob.get("fullName", "") or prob.get("lastName", ""),
+                            "opp_pitcher_id": prob.get("id"),
                             "opp_pitcher_hand": phand or "R",
                         }
+        except Exception:
+            pass
+        return empty
+
+
+    @st.cache_data(ttl=7200, show_spinner=False)
+    def mlb_get_hitter_matchup_splits(player_id: int) -> dict:
+        """Fetch hitter OPS and plate appearances against each pitcher hand."""
+        empty = {
+            "vs_r_ops": None, "vs_l_ops": None,
+            "vs_r_pa": 0, "vs_l_pa": 0, "season": None,
+        }
+        if not player_id:
+            return empty
+        try:
+            import requests as _req, datetime as _dtx
+            current = _dtx.datetime.now().year
+            for season in [current, current - 1]:
+                result = dict(empty)
+                result["season"] = season
+                for sit_code, prefix in [("vsRHP", "vs_r"), ("vsLHP", "vs_l")]:
+                    try:
+                        r = _req.get(
+                            f"https://statsapi.mlb.com/api/v1/people/{player_id}/stats",
+                            params={
+                                "stats": "statSplits", "group": "hitting",
+                                "season": season, "sitCodes": sit_code, "gameType": "R",
+                            },
+                            timeout=8,
+                        )
+                        splits = r.json().get("stats", [{}])[0].get("splits", []) if r.ok else []
+                        if not splits:
+                            continue
+                        stat = splits[0].get("stat", {})
+                        pa = int(stat.get("plateAppearances", 0) or 0)
+                        ops_raw = stat.get("ops")
+                        if ops_raw in (None, ""):
+                            obp = float(stat.get("obp", 0) or 0)
+                            slg = float(stat.get("slg", 0) or 0)
+                            ops = obp + slg if obp or slg else None
+                        else:
+                            ops = float(ops_raw)
+                        result[f"{prefix}_ops"] = round(ops, 3) if ops is not None else None
+                        result[f"{prefix}_pa"] = pa
+                    except Exception:
+                        continue
+                if result["vs_r_ops"] is not None or result["vs_l_ops"] is not None:
+                    return result
+        except Exception:
+            pass
+        return empty
+
+
+    @st.cache_data(ttl=3600, show_spinner=False)
+    def mlb_get_probable_pitcher_profile(pitcher_id: Optional[int], pitcher_name: str = "") -> dict:
+        """Fetch probable pitcher's run prevention and bat-missing profile."""
+        empty = {
+            "era": None, "whip": None, "k9": None, "bb9": None,
+            "ip": 0.0, "season": None, "quality": "TBD", "adj": 0.0,
+        }
+        try:
+            import requests as _req, datetime as _dtx
+            pid = pitcher_id
+            if not pid and pitcher_name:
+                basic = mlb_find_player_basic(pitcher_name)
+                pid = basic.get("id")
+            if not pid:
+                return empty
+
+            current = _dtx.datetime.now().year
+            for season in [current, current - 1]:
+                r = _req.get(
+                    f"https://statsapi.mlb.com/api/v1/people/{pid}/stats",
+                    params={"stats": "season", "group": "pitching",
+                            "season": season, "gameType": "R"},
+                    timeout=8,
+                )
+                splits = r.json().get("stats", [{}])[0].get("splits", []) if r.ok else []
+                if not splits:
+                    continue
+                stat = splits[0].get("stat", {})
+                ip_raw = str(stat.get("inningsPitched", 0) or 0)
+                try:
+                    whole, _, partial = ip_raw.partition(".")
+                    ip = float(int(whole) + (int(partial or 0) / 3.0))
+                except Exception:
+                    ip = 0.0
+                if ip < 5 and season == current:
+                    continue
+                era = float(stat.get("era", 0) or 0)
+                whip = float(stat.get("whip", 0) or 0)
+                strikeouts = float(stat.get("strikeOuts", 0) or 0)
+                walks = float(stat.get("baseOnBalls", 0) or 0)
+                k9 = strikeouts / max(ip, 1.0) * 9.0
+                bb9 = walks / max(ip, 1.0) * 9.0
+
+                quality_score = 0
+                if era and era <= 3.25: quality_score += 1
+                elif era >= 4.75: quality_score -= 1
+                if whip and whip <= 1.12: quality_score += 1
+                elif whip >= 1.38: quality_score -= 1
+                if k9 >= 9.5: quality_score += 1
+                elif k9 <= 7.0: quality_score -= 1
+
+                if quality_score >= 2:
+                    quality, adj = "Tough", -0.045
+                elif quality_score <= -2:
+                    quality, adj = "Favorable", 0.045
+                elif quality_score == 1:
+                    quality, adj = "Slightly tough", -0.020
+                elif quality_score == -1:
+                    quality, adj = "Slightly favorable", 0.020
+                else:
+                    quality, adj = "Neutral", 0.0
+                return {
+                    "era": era, "whip": whip, "k9": round(k9, 1),
+                    "bb9": round(bb9, 1), "ip": ip, "season": season,
+                    "quality": quality, "adj": adj,
+                }
         except Exception:
             pass
         return empty
@@ -9655,6 +9778,10 @@ if st.session_state.active_sport == "mlb":
         logs = mlb_get_hitter_logs(player_name, n=12)
         basic = mlb_find_player_basic(player_name, hitter_only=True)
         ctx = mlb_get_team_next_game(basic.get("team", ""))
+        hitter_splits = mlb_get_hitter_matchup_splits(basic.get("id"))
+        pitcher_profile = mlb_get_probable_pitcher_profile(
+            ctx.get("opp_pitcher_id"), ctx.get("opp_pitcher", "")
+        )
         _ph.empty()
         if logs.empty:
             st.warning(f"No hitter logs found for {player_name}. Try full name or check if he is active.")
@@ -9670,25 +9797,56 @@ if st.session_state.active_sport == "mlb":
         l3_diff = l3 - avg_fs
 
         adj = base
-        if l3_diff >= 2.5: adj += 0.05
-        elif l3_diff >= 1.2: adj += 0.025
-        elif l3_diff <= -2.5: adj -= 0.05
-        elif l3_diff <= -1.2: adj -= 0.025
+        recent_adj = 0.0
+        if l3_diff >= 2.5: recent_adj = 0.05
+        elif l3_diff >= 1.2: recent_adj = 0.025
+        elif l3_diff <= -2.5: recent_adj = -0.05
+        elif l3_diff <= -1.2: recent_adj = -0.025
+        adj += recent_adj
 
         avg_pa = float(pd.to_numeric(logs["PA"], errors="coerce").dropna().mean())
-        if avg_pa >= 4.2: adj += 0.035
-        elif avg_pa >= 3.8: adj += 0.015
-        elif avg_pa <= 3.1: adj -= 0.045
+        l5_pa = float(pd.to_numeric(logs["PA"], errors="coerce").head(5).dropna().mean())
+        expected_pa = max(3.0, min(5.0, (l5_pa * 0.65) + (avg_pa * 0.35)))
+        pa_adj = 0.0
+        if expected_pa >= 4.35: pa_adj = 0.035
+        elif expected_pa >= 3.95: pa_adj = 0.015
+        elif expected_pa <= 3.25: pa_adj = -0.045
+        adj += pa_adj
 
         tb_avg = float(pd.to_numeric(logs["TB"], errors="coerce").dropna().mean())
         bb_avg = float(pd.to_numeric(logs["BB"], errors="coerce").dropna().mean())
         rbi_r_avg = float((pd.to_numeric(logs["R"], errors="coerce") + pd.to_numeric(logs["RBI"], errors="coerce")).mean())
-        expected_fs = (tb_avg * 3.0) + (bb_avg * 2.0) + (rbi_r_avg * 2.0) + (float(pd.to_numeric(logs["HBP"], errors="coerce").mean()) * 2.0) + (float(pd.to_numeric(logs["SB"], errors="coerce").mean()) * 5.0)
+        total_pa = float(pd.to_numeric(logs["PA"], errors="coerce").sum())
+        fs_per_pa = float(vals.sum()) / max(total_pa, 1.0)
+        expected_fs = fs_per_pa * expected_pa
         exp_gap = expected_fs - float(line)
-        if exp_gap >= 2.0: adj += 0.05
-        elif exp_gap >= 1.0: adj += 0.025
-        elif exp_gap <= -2.0: adj -= 0.06
-        elif exp_gap <= -1.0: adj -= 0.03
+        projection_adj = 0.0
+        if exp_gap >= 2.0: projection_adj = 0.05
+        elif exp_gap >= 1.0: projection_adj = 0.025
+        elif exp_gap <= -2.0: projection_adj = -0.06
+        elif exp_gap <= -1.0: projection_adj = -0.03
+        adj += projection_adj
+
+        pitcher_hand = str(ctx.get("opp_pitcher_hand") or "R").upper()
+        split_key = "vs_l" if pitcher_hand.startswith("L") else "vs_r"
+        split_ops = hitter_splits.get(f"{split_key}_ops")
+        split_pa = int(hitter_splits.get(f"{split_key}_pa", 0) or 0)
+        platoon_adj = 0.0
+        if split_ops is not None and split_pa >= 25:
+            sample_scale = 1.0 if split_pa >= 75 else 0.65
+            if split_ops >= 0.850: platoon_adj = 0.040 * sample_scale
+            elif split_ops >= 0.780: platoon_adj = 0.020 * sample_scale
+            elif split_ops <= 0.620: platoon_adj = -0.040 * sample_scale
+            elif split_ops <= 0.680: platoon_adj = -0.020 * sample_scale
+
+        pitcher_adj = float(pitcher_profile.get("adj", 0.0) or 0.0)
+        home_team = mlb_norm_abbr(ctx.get("home_team", ""))
+        park_factor = float(_MLB_PARK_FACTORS.get(home_team, 1.0))
+        park_adj = 0.025 if park_factor >= 1.06 else (-0.025 if park_factor <= 0.95 else 0.0)
+
+        raw_matchup_adj = platoon_adj + pitcher_adj + park_adj
+        matchup_adj = max(-0.07, min(0.07, raw_matchup_adj))
+        adj += matchup_adj
 
         if side == "Under":
             adj = 1.0 - adj
@@ -9703,7 +9861,12 @@ if st.session_state.active_sport == "mlb":
             "Lean Under" if side == "Under" and adj >= 0.55 else
             "Pass"
         )
-        score = min(99, int(max(0, min((adj - 0.50) / 0.45, 1.0) * 65) + min(abs(edge) / 8, 1) * 14 + cons * 10 + (8 if ctx.get("opp") else 0)))
+        data_quality = (
+            (3 if ctx.get("opp") else 0) +
+            (3 if pitcher_profile.get("quality") != "TBD" else 0) +
+            (2 if split_ops is not None and split_pa >= 25 else 0)
+        )
+        score = min(99, int(max(0, min((adj - 0.50) / 0.45, 1.0) * 65) + min(abs(edge) / 8, 1) * 14 + cons * 10 + data_quality))
         css = {"Strong Over":"green","Lean Over":"yellow","Strong Under":"red","Lean Under":"orange","Pass":"gray"}.get(tier,"gray")
         col = "#00e896" if score >= 80 else "#ffc107" if score >= 65 else "#f97316"
 
@@ -9721,6 +9884,27 @@ if st.session_state.active_sport == "mlb":
         with c4:
             st.markdown(f"<div class='stat-card'><div class='stat-label'>Confidence</div><div class='stat-value' style='color:{col};'>{score}</div><div class='stat-hint'>Fantasy score model</div></div>", unsafe_allow_html=True)
 
+        pitcher_quality = pitcher_profile.get("quality", "TBD")
+        pitcher_stats = (
+            f"ERA {pitcher_profile['era']:.2f} · WHIP {pitcher_profile['whip']:.2f} · K/9 {pitcher_profile['k9']:.1f}"
+            if pitcher_profile.get("era") is not None else "Season profile unavailable"
+        )
+        split_label = (
+            f"{split_ops:.3f} OPS vs {pitcher_hand}HP · {split_pa} PA"
+            if split_ops is not None else f"Split vs {pitcher_hand}HP unavailable"
+        )
+        park_label = (
+            "Hitter friendly" if park_adj > 0 else
+            "Pitcher friendly" if park_adj < 0 else "Neutral"
+        )
+        m1, m2, m3 = st.columns(3)
+        with m1:
+            st.markdown(f"<div class='stat-card'><div class='stat-label'>Opposing Pitcher</div><div style='font-size:1rem;font-weight:800;color:#f0f4f8;'>{pitcher_quality}</div><div class='stat-hint'>{pitcher_stats}</div></div>", unsafe_allow_html=True)
+        with m2:
+            st.markdown(f"<div class='stat-card'><div class='stat-label'>Platoon Matchup</div><div style='font-size:1rem;font-weight:800;color:{'#00e896' if platoon_adj>0 else '#ff3d5c' if platoon_adj<0 else '#f0f4f8'};'>{split_label}</div><div class='stat-hint'>{basic.get('bat_side') or '?'}HB facing {pitcher_hand}HP</div></div>", unsafe_allow_html=True)
+        with m3:
+            st.markdown(f"<div class='stat-card'><div class='stat-label'>Park & Opportunity</div><div style='font-size:1rem;font-weight:800;color:#f0f4f8;'>{park_label} · {expected_pa:.1f} PA</div><div class='stat-hint'>{home_team or 'TBD'} factor {park_factor:.2f} · L5 PA {l5_pa:.1f}</div></div>", unsafe_allow_html=True)
+
         st.markdown(f"<div class='verdict-banner {css}'><div><div class='verdict-label'>{player_name} · Hitter Fantasy Score · {side}</div><div class='verdict-tier {css}'>{tier}</div></div><div style='display:flex;gap:1.5rem;flex-wrap:wrap;'><div><div class='verdict-label'>Adjusted HR</div><div style='font-size:1.4rem;font-weight:800;color:#f0f0f0;'>{adj:.0%}</div></div><div><div class='verdict-label'>Expected FS</div><div style='font-size:1.4rem;font-weight:800;color:#f0f0f0;'>{expected_fs:.1f}</div></div><div><div class='verdict-label'>Consistency</div><div style='font-size:1.4rem;font-weight:800;color:#f0f0f0;'>{cons:.0%}</div></div></div></div>", unsafe_allow_html=True)
 
         with st.expander(f"📋 Last {len(logs)} Hitter Logs — avg {avg_fs:.1f} FS", expanded=False):
@@ -9735,8 +9919,13 @@ if st.session_state.active_sport == "mlb":
             <b style='color:#f97316;'>INPUT</b><br>
             Player: <span style='color:#e2e8f0;'>{player_name}</span> · Line: <span style='color:#e2e8f0;'>{line} {side}</span><br>
             Raw weighted hit rate: <span style='color:#e2e8f0;'>{whr:.1%}</span> · Calibrated base: <span style='color:#e2e8f0;'>{base:.1%}</span><br>
-            L3 avg: <span style='color:#e2e8f0;'>{l3:.1f}</span> vs L{len(vals)} avg <span style='color:#e2e8f0;'>{avg_fs:.1f}</span><br>
-            Expected FS path: TB {tb_avg:.1f} · BB {bb_avg:.1f} · R+RBI {rbi_r_avg:.1f} → <span style='color:#e2e8f0;'>{expected_fs:.1f}</span><br>
+            Recent form: L3 <span style='color:#e2e8f0;'>{l3:.1f}</span> vs L{len(vals)} avg <span style='color:#e2e8f0;'>{avg_fs:.1f}</span> · adjustment {recent_adj:+.1%}<br>
+            PA opportunity: L5 {l5_pa:.1f} · expected {expected_pa:.1f} · adjustment {pa_adj:+.1%}<br>
+            Expected FS path: {fs_per_pa:.2f} points/PA × {expected_pa:.1f} PA = <span style='color:#e2e8f0;'>{expected_fs:.1f}</span> · adjustment {projection_adj:+.1%}<br>
+            Opposing pitcher: <span style='color:#e2e8f0;'>{ctx.get('opp_pitcher') or 'TBD'}</span> · {pitcher_quality} · {pitcher_stats} · adjustment {pitcher_adj:+.1%}<br>
+            Platoon split: <span style='color:#e2e8f0;'>{split_label}</span> · adjustment {platoon_adj:+.1%}<br>
+            Park: <span style='color:#e2e8f0;'>{home_team or 'TBD'} {park_factor:.2f}</span> · {park_label} · adjustment {park_adj:+.1%}<br>
+            Matchup cluster: raw {raw_matchup_adj:+.1%} → capped <span style='color:#e2e8f0;'>{matchup_adj:+.1%}</span> to prevent double-counting<br>
             Final: <span style='color:{col};font-weight:800;'>{tier}</span> · {adj:.1%} · confidence {score}/100
             </div>
             """, unsafe_allow_html=True)
