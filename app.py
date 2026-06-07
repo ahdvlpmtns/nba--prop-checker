@@ -10414,11 +10414,41 @@ if st.session_state.active_sport == "mlb":
             _pre_anchor_cap = 0.92 if mlb_prop == "Strikeouts" else 0.95
             _base_opp_k_for_model = None if _is_outs_prop else okpct
             adj = mlb_apply_adj(_calibrated_whr, _base_opp_k_for_model, psig, mlb_side)
+
+            # Correlated matchup cluster. These signals all describe versions
+            # of the same opponent strikeout environment, so cap their combined
+            # influence instead of allowing each one to stack independently.
+            _matchup_cluster_raw = 0.0
+            _matchup_cluster_adj = 0.0
+            _matchup_cluster_correction = 0.0
+            _matchup_cluster_cap = 0.0
+            _base_opp_component = 0.0
+            if not _is_outs_prop:
+                _base_without_opp = mlb_apply_adj(_calibrated_whr, None, psig, mlb_side)
+                _base_opp_component = adj - _base_without_opp
+                _matchup_cluster_raw = (
+                    _base_opp_component + _lineup_adj + _platoon_adj +
+                    _contact_adj + _opp_context_adj
+                )
+                _matchup_cluster_cap = (
+                    0.09 if _lineup_confirmed else
+                    0.07 if _lineup_projected else
+                    0.06
+                )
+                _matchup_cluster_adj = max(
+                    -_matchup_cluster_cap,
+                    min(_matchup_cluster_cap, _matchup_cluster_raw),
+                )
+                _matchup_cluster_correction = (
+                    _matchup_cluster_adj - _matchup_cluster_raw
+                )
+
             adj = max(0.05, min(_pre_anchor_cap, adj
                       + _ha_adj + _form_adj + _rest_adj
                       + _k9_adj + _swstr_adj + _velo_adj + _vtrend_adj + _ip_adj
                       + _ump_adj + _wx_adj + _lineup_adj
                       + _platoon_adj + _contact_adj + _opp_context_adj
+                      + _matchup_cluster_correction
                       + _pc_adj + _variance_adj))
 
             # Projection anchor: recent hit rate can overstate low lines.
@@ -10658,6 +10688,12 @@ if st.session_state.active_sport == "mlb":
                         f"<span class='flag-pill {_ctx_flag}'>"
                         f"Tonight vs L10: {_opp_context.get('label')} "
                         f"({_opp_context.get('tonight_k'):.0%} vs {_opp_context.get('avg_recent_k'):.0%})</span>"
+                    )
+                if abs(_matchup_cluster_correction) > 0.001:
+                    _pills.append(
+                        f"<span class='flag-pill flat'>"
+                        f"Matchup signals capped {_matchup_cluster_raw:+.0%} → "
+                        f"{_matchup_cluster_adj:+.0%}</span>"
                     )
                 if abs(_contact_adj) > 0.001:
                     _contact_flag = "up" if _contact_adj > 0 else "down"
@@ -11344,6 +11380,10 @@ if st.session_state.active_sport == "mlb":
                                                   _opp_context.get("label", "Neutral"),
                                                   _opp_context_adj,
                                                   _opp_context.get("note", "Compares tonight opponent K% to pitcher's L10 opponent mix")),
+                    ("Matchup cluster cap",
+                                                  f"{_matchup_cluster_raw:+.1%} raw → {_matchup_cluster_adj:+.1%}",
+                                                  _matchup_cluster_correction,
+                                                  "Caps correlated opponent K%, lineup, platoon, contact, and recent-opponent signals"),
                     ("Pitcher variance",           f"{cons:.1%} consistency",
                                                   _variance_adj,
                                                   _variance_note),
@@ -11406,13 +11446,15 @@ if st.session_state.active_sport == "mlb":
                 else:
                     _mlb_adjs = [_ha_adj, _form_adj, _rest_adj, _k9_adj,
                                  _swstr_adj, _velo_adj, _vtrend_adj, _ip_adj, _ump_adj, _wx_adj,
-                                 _lineup_adj, _platoon_adj, _contact_adj, _pc_adj,
-                                 _opp_context_adj, _variance_adj]
+                                 _lineup_adj, _platoon_adj, _contact_adj,
+                                 _opp_context_adj, _matchup_cluster_correction, _pc_adj,
+                                 _variance_adj]
                     _mlb_adj_labels = [
                         "Home/Away split", "Recent form", "Rest days", "K/9 rate",
                         "SwStr%/K%", "Velocity", "Velocity trend", "Avg IP/start", "Umpire zone",
                         "Weather", "Batting order", "Platoon matchup", "Contact profile",
-                        "Pitch count est", "Recent opponent difficulty", "Pitcher variance"
+                        "Recent opponent difficulty", "Matchup cluster cap",
+                        "Pitch count est", "Pitcher variance"
                     ]
                 _mlb_running = _mlb_base_adj
                 _mlb_steps = []
@@ -11467,6 +11509,11 @@ if st.session_state.active_sport == "mlb":
                         f"{_opp_context.get('tonight_k'):.1%} tonight vs "
                         f"{_opp_context.get('avg_recent_k'):.1%} L10 avg"
                         if _opp_context.get("avg_recent_k") is not None else "N/A"
+                    ),
+                    "Matchup cluster cap": (
+                        f"{_matchup_cluster_raw:+.1%} raw → "
+                        f"{_matchup_cluster_adj:+.1%} capped "
+                        f"(limit ±{_matchup_cluster_cap:.0%})"
                     ),
                     "Pitcher variance": f"{cons:.1%} consistency · {_variance_note}",
                 }
