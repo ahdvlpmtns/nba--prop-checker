@@ -7447,8 +7447,8 @@ if st.session_state.active_sport == "mlb":
             for d in sched.json().get("dates",[]): games.extend(d.get("games",[]))
 
             def _build(game, side):
-                home  = game["teams"]["home"]["team"]["abbreviation"]
-                away  = game["teams"]["away"]["team"]["abbreviation"]
+                home  = mlb_norm_abbr(game["teams"]["home"]["team"]["abbreviation"])
+                away  = mlb_norm_abbr(game["teams"]["away"]["team"]["abbreviation"])
                 opp   = away if side=="home" else home
                 venue = game.get("venue",{}).get("name","")
                 return {"opp":opp,"home_team":home,"away_team":away,
@@ -10590,11 +10590,8 @@ if st.session_state.active_sport == "mlb":
             )
             _bf_expected_k = _bf_proj.get("expected_k")
             _bf_prob = _bf_proj.get("prob")
-            _bf_blend_weight = 0.0
             _bf_note = _bf_proj.get("note", "")
             _bf_guardrail = _bf_proj.get("guardrail", "")
-            _adj_before_bf_projection = None
-            _adj_after_bf_projection = None
 
             # ── Apply all signals
             # Start from a calibrated hit-rate base instead of raw L10. This
@@ -10640,43 +10637,67 @@ if st.session_state.active_sport == "mlb":
                       + _matchup_cluster_correction
                       + _pc_adj + _variance_adj))
 
-            # Projection anchor: recent hit rate can overstate low lines.
-            # Blend the signal stack with a Poisson-style probability from
-            # expected Ks so 90%+ only happens when projection realism agrees.
+            # Consensus projection anchor. Pitch-count expected K and the
+            # lineup/BF projection estimate overlapping outcomes, so combine
+            # them first and blend once instead of double-counting them.
             _adj_before_projection = adj
             _proj_prob = None
             _proj_blend_weight = 0.0
+            _combined_proj_prob = None
+            _combined_proj_expected_k = None
+            _pc_projection_share = 0.0
+            _bf_projection_share = 0.0
             _projection_note = ""
             if mlb_prop == "Strikeouts" and _pc_expected_k:
                 _proj_prob = mlb_poisson_side_prob(_pc_expected_k, mlb_line, mlb_side)
-                if _proj_prob is not None:
-                    _proj_blend_weight = 0.38
-                    adj = ((1.0 - _proj_blend_weight) * adj) + (_proj_blend_weight * _proj_prob)
-                    if mlb_side == "Over" and _proj_prob < 0.82:
-                        adj = min(adj, _proj_prob + 0.08)
-                    elif mlb_side == "Under" and _proj_prob < 0.82:
-                        adj = min(adj, _proj_prob + 0.08)
-                    _projection_note = (
-                        f"Projection anchor: exp {_pc_expected_k:.1f}K implies "
-                        f"{_proj_prob:.0%} {mlb_side} probability"
-                    )
-                    adj = max(0.05, min(0.95, adj))
-            _adj_after_projection = adj
 
-            # Stronger anchor: expected batters faced + actual lineup K%.
-            # This gets more weight than the simpler pitch-count-only projection.
-            if mlb_prop == "Strikeouts" and _bf_prob is not None:
-                _adj_before_bf_projection = adj
-                _bf_blend_weight = 0.32 if _bf_proj.get("confidence") == "high" else (
-                    0.26 if _bf_proj.get("confidence") == "medium" else 0.18
+            if mlb_prop == "Strikeouts" and (_proj_prob is not None or _bf_prob is not None):
+                if _proj_prob is not None and _bf_prob is not None:
+                    _bf_conf = _bf_proj.get("confidence")
+                    _bf_projection_share = (
+                        0.60 if _bf_conf == "high" else
+                        0.55 if _bf_conf == "medium" else
+                        0.40
+                    )
+                    _pc_projection_share = 1.0 - _bf_projection_share
+                    _combined_proj_prob = (
+                        (_pc_projection_share * _proj_prob) +
+                        (_bf_projection_share * _bf_prob)
+                    )
+                    _combined_proj_expected_k = (
+                        (_pc_projection_share * float(_pc_expected_k)) +
+                        (_bf_projection_share * float(_bf_expected_k))
+                    )
+                    _proj_blend_weight = (
+                        0.45 if _bf_conf == "high" else
+                        0.42 if _bf_conf == "medium" else
+                        0.38
+                    )
+                elif _bf_prob is not None:
+                    _bf_projection_share = 1.0
+                    _combined_proj_prob = _bf_prob
+                    _combined_proj_expected_k = _bf_expected_k
+                    _proj_blend_weight = 0.40
+                else:
+                    _pc_projection_share = 1.0
+                    _combined_proj_prob = _proj_prob
+                    _combined_proj_expected_k = _pc_expected_k
+                    _proj_blend_weight = 0.38
+
+                adj = (
+                    ((1.0 - _proj_blend_weight) * adj) +
+                    (_proj_blend_weight * _combined_proj_prob)
                 )
-                adj = ((1.0 - _bf_blend_weight) * adj) + (_bf_blend_weight * _bf_prob)
-                if mlb_side == "Over" and _bf_prob < 0.80:
-                    adj = min(adj, _bf_prob + 0.07)
-                elif mlb_side == "Under" and _bf_prob < 0.80:
-                    adj = min(adj, _bf_prob + 0.07)
+                # A modest realism ceiling keeps perfect L10 streaks from
+                # overwhelming a projection with only a thin line cushion.
+                if _combined_proj_prob < 0.82:
+                    adj = min(adj, _combined_proj_prob + 0.08)
                 adj = max(0.05, min(0.95, adj))
-                _adj_after_bf_projection = adj
+                _projection_note = (
+                    f"Consensus anchor: exp {_combined_proj_expected_k:.1f}K implies "
+                    f"{_combined_proj_prob:.0%} {mlb_side} probability"
+                )
+            _adj_after_projection = adj
 
             # Pitcher Outs V2 anchor: blend the stack with expected outs.
             if _is_outs_prop and _outs_prob is not None:
@@ -10770,11 +10791,19 @@ if st.session_state.active_sport == "mlb":
                     3 if _velo and _velo > 0 else 0,
                     2 if _weather else 0,
                     2 if _lineup_confirmed else 0,
+                    1 if _lineup_projected else 0,
                     1 if _opp_context.get("avg_recent_k") is not None else 0,
+                    4 if (_proj_prob is not None and _bf_prob is not None) else
+                    (2 if (_proj_prob is not None or _bf_prob is not None) else 0),
+                    4 if (
+                        whr >= 0.80 and cons >= 0.70 and
+                        ((mlb_side == "Over" and edge > 0) or
+                         (mlb_side == "Under" and edge < 0))
+                    ) else 0,
                 ])
             _sc = min(99, int(
                 max(0, min((adj - 0.50) / 0.45, 1.0) * 65) +
-                min(abs(edge) / 8.0, 1.0) * 12 +
+                min(abs(edge) / 4.0, 1.0) * 12 +
                 cons * 8 +
                 _data_bonus
             ))
@@ -10796,7 +10825,7 @@ if st.session_state.active_sport == "mlb":
                 )
             if not _is_outs_prop:
                 if _lineup_projected:
-                    _lineup_penalty = 1 if (_bf_cushion_for_quality is not None and _bf_cushion_for_quality >= 1.25) else 3
+                    _lineup_penalty = 1 if (_bf_cushion_for_quality is not None and _bf_cushion_for_quality >= 1.0) else 3
                     _conf_penalty += _lineup_penalty
                     _quality_notes.append(
                         "projected lineup"
@@ -10829,15 +10858,12 @@ if st.session_state.active_sport == "mlb":
                     _dq.append(f"confidence {_sc}/100")
                 if not _is_outs_prop:
                     _bf_cushion = _bf_cushion_for_quality
-                    if _lineup_projected and (_bf_cushion is None or _bf_cushion < 1.25):
+                    if _lineup_projected and (_bf_cushion is None or _bf_cushion < 1.0):
                         _downgrade = True
                         _dq.append("projected lineup without enough K cushion")
                     if (not _lineup_confirmed and not _lineup_projected):
                         _downgrade = True
                         _dq.append("lineup unavailable")
-                    if not _ump_name and (_sc < 80 or (_lineup_projected and (_bf_cushion is None or _bf_cushion < 1.25))):
-                        _downgrade = True
-                        _dq.append("umpire TBD")
                     if psig == "Penalty" and _pc_expected_k is not None:
                         _pc_cushion = _pc_cushion_for_quality
                         if _pc_cushion < 1.0:
@@ -11576,12 +11602,16 @@ if st.session_state.active_sport == "mlb":
                     ("Pitcher variance",           f"{cons:.1%} consistency",
                                                   _variance_adj,
                                                   _variance_note),
-                    ("Projection anchor",          f"{_proj_prob:.1%}" if _proj_prob is not None else "N/A",
+                    ("Pitch-count projection",     f"{_proj_prob:.1%}" if _proj_prob is not None else "N/A",
                                                   None,
-                                                  _projection_note if _projection_note else "Projection unavailable — pitch-count expected K missing"),
+                                                  f"Pitch-count path: exp {_pc_expected_k:.1f}K implies {_proj_prob:.0%} {mlb_side} probability" if _proj_prob is not None else "Projection unavailable — pitch-count expected K missing"),
                     ("Lineup/BF projection",       f"{_bf_prob:.1%}" if _bf_prob is not None else "N/A",
                                                   None,
                                                   _bf_note if _bf_prob is not None else "Expected batters faced + lineup K projection unavailable"),
+                    ("Consensus projection",       f"{_combined_proj_prob:.1%}" if _combined_proj_prob is not None else "N/A",
+                                                  None,
+                                                  (f"PC share {_pc_projection_share:.0%} · BF share {_bf_projection_share:.0%} · "
+                                                   f"blended once at {_proj_blend_weight:.0%} model weight") if _combined_proj_prob is not None else "Consensus projection unavailable"),
                 ]
                 if _is_outs_prop:
                     _mlb_signals = [
@@ -11722,34 +11752,25 @@ if st.session_state.active_sport == "mlb":
                     <td style='color:{_ic};'>{_aft-_bef:+.1%}</td>
                 </tr>"""
 
-                if _proj_prob is not None:
+                if _combined_proj_prob is not None:
                     _proj_before = max(0.05, min(0.95, _adj_before_projection))
                     _proj_after = max(0.05, min(0.95, _adj_after_projection))
                     _proj_impact = _proj_after - _proj_before
                     _proj_col = "#22c55e" if _proj_impact > 0.001 else ("#ef4444" if _proj_impact < -0.001 else "#6b7f96")
+                    _component_text = (
+                        f"PC {_proj_prob:.1%} · BF {_bf_prob:.1%} → "
+                        if _proj_prob is not None and _bf_prob is not None else
+                        f"PC {_proj_prob:.1%} → " if _proj_prob is not None else
+                        f"BF {_bf_prob:.1%} → "
+                    )
                     trace_rows += f"""
                 <tr style='border-bottom:1px solid #0d1520;'>
-                    <td style='padding:4px 0;color:#9aaec4;'>Projection anchor</td>
-                    <td style='color:#e2e8f0;font-weight:600;'>Exp {_pc_expected_k:.1f}K → {_proj_prob:.1%}</td>
+                    <td style='padding:4px 0;color:#9aaec4;'>Consensus projection</td>
+                    <td style='color:#e2e8f0;font-weight:600;'>{_component_text}{_combined_proj_prob:.1%}</td>
                     <td style='color:{_proj_col};'>blend {int(_proj_blend_weight * 100)}%</td>
                     <td style='color:#7d93ab;'>{_proj_before:.1%}</td>
                     <td style='color:#e2e8f0;'>{_proj_after:.1%}</td>
                     <td style='color:{_proj_col};'>{_proj_impact:+.1%}</td>
-                </tr>"""
-
-                if _bf_prob is not None and _adj_before_bf_projection is not None:
-                    _bf_before = max(0.05, min(0.95, _adj_before_bf_projection))
-                    _bf_after = max(0.05, min(0.95, _adj_after_bf_projection))
-                    _bf_impact = _bf_after - _bf_before
-                    _bf_col = "#22c55e" if _bf_impact > 0.001 else ("#ef4444" if _bf_impact < -0.001 else "#6b7f96")
-                    trace_rows += f"""
-                <tr style='border-bottom:1px solid #0d1520;'>
-                    <td style='padding:4px 0;color:#9aaec4;'>Lineup/BF projection</td>
-                    <td style='color:#e2e8f0;font-weight:600;'>{_bf_note}</td>
-                    <td style='color:{_bf_col};'>blend {int(_bf_blend_weight * 100)}%</td>
-                    <td style='color:#7d93ab;'>{_bf_before:.1%}</td>
-                    <td style='color:#e2e8f0;'>{_bf_after:.1%}</td>
-                    <td style='color:{_bf_col};'>{_bf_impact:+.1%}</td>
                 </tr>"""
 
                 if _outs_prob is not None and _adj_before_outs_projection is not None:
