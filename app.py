@@ -2352,6 +2352,43 @@ def add_to_pick_list(leg: dict) -> None:
     st.session_state.parlay_notice = f"Added {player} to your pick list."
 
 
+def add_to_pick_list_and_tracker(leg: dict, entry: dict) -> None:
+    """Add a shortlist pick and preserve its probability for calibration."""
+    add_to_pick_list(leg)
+    try:
+        tracker = st.session_state.setdefault("tracker", [])
+        player = str(entry.get("Player", ""))
+        line = str(entry.get("Line", ""))
+        matchup = str(entry.get("Matchup", ""))
+        existing_idx = next(
+            (
+                i for i, old in enumerate(tracker)
+                if str(old.get("Player", "")) == player
+                and str(old.get("Line", "")) == line
+                and str(old.get("Matchup", "")) == matchup
+            ),
+            None,
+        )
+        if existing_idx is not None:
+            old_id = tracker[existing_idx].get("id")
+            tracker[existing_idx] = {**entry, **({"id": old_id} if old_id else {})}
+            if old_id:
+                delete_from_supabase(old_id)
+            new_id = save_to_supabase(st.session_state.session_id, entry)
+            if new_id:
+                tracker[existing_idx]["id"] = new_id
+        else:
+            new_id = save_to_supabase(st.session_state.session_id, entry)
+            if new_id:
+                entry = {**entry, "id": new_id}
+            tracker.append(entry)
+        st.session_state.parlay_notice = (
+            f"Added {player} to your pick list and calibration tracker."
+        )
+    except Exception as err:
+        record_debug_error("tracker.add_calibration", err)
+
+
 def render_pick_list() -> None:
     """Visible main-page shortlist for props the user is considering."""
     legs = st.session_state.get("parlay_legs", [])
@@ -4221,20 +4258,26 @@ def load_tracker_from_supabase(session_id: str) -> list:
         rows = sb.select("prop_tracker", {"session_id": session_id})
         if not rows or not isinstance(rows, list):
             return []
-        return [{
-            "id":          r.get("id"),
-            "Player":      r.get("player", ""),
-            "Line":        r.get("line", ""),
-            "Opponent":    r.get("opponent", "—"),
-            "Matchup":     r.get("matchup", ""),
-            "Venue":       r.get("venue", ""),
-            "Avg PTS":     r.get("avg_pts", 0),
-            "Hit Rate":    r.get("hit_rate", ""),
-            "Adjusted":    r.get("adjusted", ""),
-            "Consistency": r.get("consistency", ""),
-            "Verdict":     r.get("verdict", ""),
-            "Result":      r.get("result", "Pending"),
-        } for r in rows]
+        entries = []
+        for r in rows:
+            matchup = r.get("matchup", "")
+            sport = "MLB" if matchup in ("Strikeouts", "Hitter Fantasy Score") else "NBA"
+            entries.append({
+                "id":          r.get("id"),
+                "Player":      r.get("player", ""),
+                "Line":        r.get("line", ""),
+                "Opponent":    r.get("opponent", "—"),
+                "Matchup":     matchup,
+                "Venue":       r.get("venue", ""),
+                "Avg PTS":     r.get("avg_pts", 0),
+                "Hit Rate":    r.get("hit_rate", ""),
+                "Adjusted":    r.get("adjusted", ""),
+                "Consistency": r.get("consistency", ""),
+                "Verdict":     r.get("verdict", ""),
+                "Result":      r.get("result", "Pending"),
+                "Sport":       sport,
+            })
+        return entries
     except Exception:
         return []
 
@@ -4698,6 +4741,7 @@ def auto_detect_result(entry: dict) -> Optional[str]:
     hasn't been played yet.
     """
     try:
+        from datetime import datetime as _auto_datetime
         player_name = entry.get("Player", "")
         line_str    = entry.get("Line", "")  # e.g. "24.5 Over" or "17.0 Under"
 
@@ -4714,7 +4758,46 @@ def auto_detect_result(entry: dict) -> Optional[str]:
             return None
         side = parts[1] if len(parts) > 1 else "Over"
 
-        # Find player ID
+        sport = str(entry.get("Sport", "")).upper()
+        prop = str(entry.get("Matchup", ""))
+        is_mlb = sport == "MLB" or prop in ("Strikeouts", "Hitter Fantasy Score")
+
+        if is_mlb:
+            log_fn = (
+                globals().get("mlb_get_hitter_logs")
+                if prop == "Hitter Fantasy Score"
+                else globals().get("mlb_get_pitcher_logs")
+            )
+            if not callable(log_fn):
+                return None
+            logs = log_fn(player_name, n=3)
+            if logs is None or logs.empty:
+                return None
+            date_col = "DATE"
+            stat_col = "FS" if prop == "Hitter Fantasy Score" else "K"
+            last_game_date = pd.to_datetime(logs.iloc[0][date_col], errors="coerce")
+            if pd.isna(last_game_date):
+                return None
+            venue_meta = str(entry.get("Venue", ""))
+            expected_match = re.search(r"date:(\d{4}-\d{2}-\d{2})", venue_meta)
+            if expected_match:
+                expected_date = pd.to_datetime(expected_match.group(1), errors="coerce")
+                if pd.notna(expected_date) and last_game_date.date() < expected_date.date():
+                    return None
+            import pytz
+            et = pytz.timezone("America/New_York")
+            if (_auto_datetime.now(et).date() - last_game_date.date()).days > 2:
+                return None
+            actual = pd.to_numeric(logs.iloc[0].get(stat_col), errors="coerce")
+            if pd.isna(actual):
+                return None
+            return (
+                "Hit" if actual >= line_val else "Miss"
+            ) if side == "Over" else (
+                "Hit" if actual <= line_val else "Miss"
+            )
+
+        # Find NBA player ID
         nba_id, _ = nba_find_player(player_name)
         if not nba_id:
             return None
@@ -7566,40 +7649,52 @@ if st.session_state.active_sport == "mlb":
                 return empty
             pid = pitcher["id"]
 
-            # Fetch season stats
-            sr = _req.get(
-                f"https://statsapi.mlb.com/api/v1/people/{pid}/stats",
-                params={"stats": "season", "group": "pitching",
-                        "season": datetime.datetime.now().year},
-                timeout=8
-            )
-            if not sr.ok: return empty
-            stat = sr.json().get("stats",[{}])[0].get("splits",[{}])[0].get("stat",{})
-            if not stat: return empty
+            current_year = datetime.datetime.now().year
+            for season in [current_year, current_year - 1]:
+                sr = _req.get(
+                    f"https://statsapi.mlb.com/api/v1/people/{pid}/stats",
+                    params={"stats": "season", "group": "pitching",
+                            "season": season, "gameType": "R"},
+                    timeout=8
+                )
+                if not sr.ok:
+                    continue
+                splits = sr.json().get("stats", [{}])[0].get("splits", [])
+                stat = splits[0].get("stat", {}) if splits else {}
+                if not stat:
+                    continue
 
-            # K/9
-            ip_str = str(stat.get("inningsPitched","0"))
-            try:
-                ip_f = float(ip_str.split(".")[0]) + float("0."+ip_str.split(".")[1])/3 if "." in ip_str else float(ip_str)
-            except:
-                ip_f = 0.0
-            k9   = round(float(stat.get("strikeOuts",0)) / max(ip_f,1) * 9, 2)
-            bb9  = round(float(stat.get("baseOnBalls",0)) / max(ip_f,1) * 9, 2)
-            era  = float(stat.get("era","0") or 0)
-            whip = float(stat.get("whip","0") or 0)
+                ip_str = str(stat.get("inningsPitched", "0") or "0")
+                try:
+                    whole, _, partial = ip_str.partition(".")
+                    ip_f = int(whole or 0) + (int(partial or 0) / 3.0)
+                except Exception:
+                    ip_f = 0.0
+                starts = int(stat.get("gamesStarted", 0) or 0)
+                if season == current_year and starts < 2 and ip_f < 8:
+                    continue
 
-            # Avg IP per start from gamesStarted
-            starts = int(stat.get("gamesStarted", 1) or 1)
-            avg_ip = round(ip_f / max(starts, 1), 1)
-
-            # SwStr% — not in standard API, use strikeout % as proxy
-            # (strikeOuts / battersFaced)
-            bf    = int(stat.get("battersFaced", 0) or 0)
-            swstr = round(float(stat.get("strikeOuts",0)) / max(bf,1), 3) if bf > 0 else None
-
-            return {"k9": k9, "swstr": swstr, "bb9": bb9, "era": era,
+                strikeouts = float(stat.get("strikeOuts", 0) or 0)
+                walks = float(stat.get("baseOnBalls", 0) or 0)
+                bf = int(stat.get("battersFaced", 0) or 0)
+                total_pitches = int(stat.get("numberOfPitches", 0) or 0)
+                k9 = round(strikeouts / max(ip_f, 1) * 9, 2)
+                bb9 = round(walks / max(ip_f, 1) * 9, 2)
+                era = float(stat.get("era", "0") or 0)
+                whip = float(stat.get("whip", "0") or 0)
+                avg_ip = round(ip_f / max(starts, 1), 1)
+                k_rate = round(strikeouts / bf, 3) if bf > 0 else None
+                pitches_per_bf = (
+                    round(total_pitches / bf, 3)
+                    if total_pitches > 0 and bf >= 20 else None
+                )
+                return {
+                    "k9": k9, "swstr": k_rate, "bb9": bb9, "era": era,
                     "avg_ip": avg_ip, "whip": whip, "ip_total": ip_f,
-                    "starts": starts}
+                    "starts": starts, "season": season,
+                    "batters_faced": bf, "total_pitches": total_pitches,
+                    "pitches_per_bf": pitches_per_bf,
+                }
         except Exception:
             return empty
 
@@ -7668,7 +7763,8 @@ if st.session_state.active_sport == "mlb":
         Opponent plate-discipline profile for pitcher outs.
         BB% is a major outs killer because long innings shorten leash.
         """
-        empty = {"k_rate": None, "bb_rate": None, "pa": None, "profile": "Neutral"}
+        empty = {"k_rate": None, "bb_rate": None, "pa": None,
+                 "pitches_per_pa": None, "profile": "Neutral"}
         if not opp_abbr:
             return empty
         try:
@@ -7701,6 +7797,10 @@ if st.session_state.active_sport == "mlb":
                 return empty
             k_rate = int(stat.get("strikeOuts", 0) or 0) / denom
             bb_rate = int(stat.get("baseOnBalls", 0) or 0) / denom
+            pitches_seen = int(stat.get("numberOfPitches", 0) or 0)
+            pitches_per_pa = (
+                pitches_seen / pa if pitches_seen > 0 and pa > 0 else None
+            )
             if k_rate >= 0.255 and bb_rate <= 0.085:
                 profile = "Aggressive K"
             elif k_rate <= 0.195 and bb_rate >= 0.095:
@@ -7711,8 +7811,12 @@ if st.session_state.active_sport == "mlb":
                 profile = "Patient"
             else:
                 profile = "Neutral"
-            return {"k_rate": round(k_rate, 3), "bb_rate": round(bb_rate, 3),
-                    "pa": denom, "profile": profile}
+            return {
+                "k_rate": round(k_rate, 3), "bb_rate": round(bb_rate, 3),
+                "pa": denom,
+                "pitches_per_pa": round(pitches_per_pa, 3) if pitches_per_pa else None,
+                "profile": profile,
+            }
         except Exception:
             return empty
 
@@ -8625,7 +8729,8 @@ if st.session_state.active_sport == "mlb":
         Returns {avg_pitches, min_pitches, starts_analyzed, on_limit: bool, limit_est}
         """
         empty = {"avg_pitches": None, "min_pitches": None,
-                 "starts_analyzed": 0, "on_limit": False, "limit_est": None}
+                 "starts_analyzed": 0, "on_limit": False, "limit_est": None,
+                 "pitches_per_bf": None}
         try:
             import requests as _req, datetime as _dtx
             _norm   = lambda s: s.lower().strip().replace(".", "").replace("-", " ")
@@ -8662,9 +8767,12 @@ if st.session_state.active_sport == "mlb":
             if not splits: return empty
 
             pitch_counts = []
+            total_valid_pitches = 0
+            total_valid_bf = 0
             for sp in splits:
                 st   = sp.get("stat", {})
                 np   = int(st.get("numberOfPitches", 0) or 0)
+                bf   = int(st.get("battersFaced", 0) or 0)
                 date = sp.get("date", "")[:10]
                 # Exclude spring training (before March 27) and relief appearances
                 # Spring Training pitchers throw 40-65 pitches intentionally — not real data
@@ -8678,12 +8786,19 @@ if st.session_state.active_sport == "mlb":
                     pass
                 if np > 65 and not is_spring:  # real starts only (65+ pitches, not spring)
                     pitch_counts.append(np)
+                    if bf > 0:
+                        total_valid_pitches += np
+                        total_valid_bf += bf
 
             if not pitch_counts: return empty
 
             avg_p = round(sum(pitch_counts) / len(pitch_counts))
             min_p = min(pitch_counts)
-            n_starts = len(splits)
+            n_starts = len(pitch_counts)
+            pitches_per_bf = (
+                round(total_valid_pitches / total_valid_bf, 3)
+                if total_valid_bf >= 20 else None
+            )
 
             # Detect if pitcher is on a soft limit
             # Indicators: recent starts trending down, early season, or avg < 85 pitches
@@ -8702,6 +8817,7 @@ if st.session_state.active_sport == "mlb":
                 "on_limit":        on_limit,
                 "limit_est":       limit_est,
                 "pitch_trend":     _recent_trend,
+                "pitches_per_bf":  pitches_per_bf,
             }
         except Exception:
             return empty
@@ -9092,7 +9208,7 @@ if st.session_state.active_sport == "mlb":
         pc_avg: Optional[float],
         pc_k_ceiling: Optional[float],
         pc_outs_ceiling: Optional[float],
-        bf_expected_k: Optional[float],
+        expected_k: Optional[float],
         outs_expected: Optional[float],
         opp_bb_rate: Optional[float],
         bullpen_signal: str,
@@ -9166,21 +9282,21 @@ if st.session_state.active_sport == "mlb":
                         add_caution("Low-walk opponent can speed innings")
             else:
                 if side == "Over":
-                    if bf_expected_k is not None:
-                        if bf_expected_k <= line + 0.25:
-                            add_risk(f"Expected Ks barely clear line ({bf_expected_k:.1f})", 3)
-                        elif bf_expected_k <= line + 0.75:
-                            add_risk(f"Thin K cushion ({bf_expected_k:.1f})", 2)
-                        elif bf_expected_k >= line + 1.5:
+                    if expected_k is not None:
+                        if expected_k <= line + 0.25:
+                            add_risk(f"Expected Ks barely clear line ({expected_k:.1f})", 3)
+                        elif expected_k <= line + 0.75:
+                            add_risk(f"Thin K cushion ({expected_k:.1f})", 2)
+                        elif expected_k >= line + 1.5:
                             positives.append("K projection has cushion")
                     if pc_k_ceiling is not None and pc_k_ceiling <= line + 0.25:
                         add_risk(f"K ceiling tight ({pc_k_ceiling:.1f})", 3)
                 else:
-                    if bf_expected_k is not None:
-                        if bf_expected_k >= line - 0.25:
-                            add_risk(f"Expected Ks too close for Under ({bf_expected_k:.1f})", 3)
-                        elif bf_expected_k >= line - 0.75:
-                            add_risk(f"Thin Under cushion ({bf_expected_k:.1f})", 2)
+                    if expected_k is not None:
+                        if expected_k >= line - 0.25:
+                            add_risk(f"Expected Ks too close for Under ({expected_k:.1f})", 3)
+                        elif expected_k >= line - 0.75:
+                            add_risk(f"Thin Under cushion ({expected_k:.1f})", 2)
 
             if "Strong" in str(tier) and adj < 0.76:
                 add_caution("Strong tier is near threshold")
@@ -9231,6 +9347,9 @@ if st.session_state.active_sport == "mlb":
         opp_k_rate: Optional[float],
         lineup_confirmed: bool,
         lineup_projected: bool,
+        pitcher_pitches_per_bf: Optional[float] = None,
+        opponent_pitches_per_pa: Optional[float] = None,
+        opponent_bb_rate: Optional[float] = None,
     ) -> dict:
         """
         Batter-facing projection for MLB K props.
@@ -9240,6 +9359,7 @@ if st.session_state.active_sport == "mlb":
         empty = {
             "expected_k": None, "prob": None, "weighted_lineup_k": None,
             "expected_bf": None, "pitcher_k_rate": None, "confidence": "low",
+            "pitches_per_bf": None, "bf_method": "",
             "note": "Lineup/BF projection unavailable",
             "guardrail": "",
         }
@@ -9271,12 +9391,50 @@ if st.session_state.active_sport == "mlb":
                 pitcher_k_rate = None
 
             if pitch_count and pitch_count > 0:
-                # MLB starters usually live around 3.8-4.1 pitches per BF.
-                expected_bf = float(pitch_count) / 3.95
+                valid_pitcher_ppbf = (
+                    float(pitcher_pitches_per_bf)
+                    if pitcher_pitches_per_bf is not None
+                    and 3.2 <= float(pitcher_pitches_per_bf) <= 5.0
+                    else None
+                )
+                valid_opp_ppa = (
+                    float(opponent_pitches_per_pa)
+                    if opponent_pitches_per_pa is not None
+                    and 3.2 <= float(opponent_pitches_per_pa) <= 5.0
+                    else None
+                )
+                if valid_pitcher_ppbf and valid_opp_ppa:
+                    matchup_ppbf = (0.68 * valid_pitcher_ppbf) + (0.32 * valid_opp_ppa)
+                    bf_method = "pitcher P/BF + opponent P/PA"
+                elif valid_pitcher_ppbf:
+                    matchup_ppbf = valid_pitcher_ppbf
+                    bf_method = "pitcher P/BF"
+                elif valid_opp_ppa:
+                    matchup_ppbf = valid_opp_ppa
+                    bf_method = "opponent P/PA"
+                else:
+                    matchup_ppbf = 3.95
+                    bf_method = "league-average P/BF"
+
+                # Walk-heavy opponents tend to extend plate appearances and
+                # innings. Keep this adjustment small because P/PA already
+                # captures much of the same behavior when available.
+                if opponent_bb_rate is not None:
+                    bb_rate = float(opponent_bb_rate)
+                    if bb_rate >= 0.105:
+                        matchup_ppbf += 0.08
+                    elif bb_rate <= 0.070:
+                        matchup_ppbf -= 0.05
+                matchup_ppbf = max(3.35, min(4.55, matchup_ppbf))
+                expected_bf = float(pitch_count) / matchup_ppbf
             elif avg_ip and avg_ip > 0:
                 expected_bf = float(avg_ip) * 4.25
+                matchup_ppbf = None
+                bf_method = "innings fallback"
             else:
                 expected_bf = None
+                matchup_ppbf = None
+                bf_method = ""
 
             if expected_bf is None or pitcher_k_rate is None:
                 return empty
@@ -9319,10 +9477,13 @@ if st.session_state.active_sport == "mlb":
                 "weighted_lineup_k": round(weighted_lineup_k, 3) if weighted_lineup_k is not None else None,
                 "expected_bf": round(expected_bf, 1),
                 "pitcher_k_rate": round(pitcher_k_rate, 3),
+                "pitches_per_bf": round(matchup_ppbf, 2) if matchup_ppbf else None,
+                "bf_method": bf_method,
                 "confidence": confidence,
                 "note": (
                     f"Expected BF {expected_bf:.1f} · pitcher K/BF {pitcher_k_rate:.1%}"
                     + (f" · lineup K% {weighted_lineup_k:.1%}" if weighted_lineup_k is not None else "")
+                    + (f" · {matchup_ppbf:.2f} P/BF ({bf_method})" if matchup_ppbf else "")
                     + f" → exp {expected_k:.1f}K"
                 ),
                 "guardrail": guardrail,
@@ -10231,12 +10392,17 @@ if st.session_state.active_sport == "mlb":
             _k9 = _pstats.get("k9", 0.0)
 
             # K/9 fallback priority:
-            # 1. Current season stats API (if 5+ starts)
+            # 1. Current season stats API once it has 2 starts or 8 IP
             # 2. Prior season stats API (most reliable — full season sample)
             # 3. Current game logs (last resort — small sample)
             # 4. Neutral (no adjustment) — never penalize without data
-            _k9_source = "2026"
-            _needs_fallback = (_k9 == 0.0 or _pstats.get("starts", 0) < 5)
+            _current_mlb_year = datetime.datetime.now().year
+            _k9_source = str(_pstats.get("season") or _current_mlb_year)
+            _k9_ip = float(_pstats.get("ip_total", 0) or 0)
+            _needs_fallback = (
+                _k9 == 0.0 or
+                (_pstats.get("starts", 0) < 2 and _k9_ip < 8)
+            )
 
             if _needs_fallback:
                 # Try prior season stats API first (best sample size)
@@ -10271,14 +10437,14 @@ if st.session_state.active_sport == "mlb":
                                     _ps  = _ps[0].get("stat",{}) if _ps else {}
                                     _ip_s = str(_ps.get("inningsPitched","0") or "0")
                                     try:
-                                        _ip_f = (float(_ip_s.split(".")[0]) +
-                                                 float("0."+_ip_s.split(".")[1])/3
-                                                 if "." in _ip_s else float(_ip_s))
-                                    except:
+                                        _whole, _, _partial = _ip_s.partition(".")
+                                        _ip_f = int(_whole or 0) + (int(_partial or 0) / 3.0)
+                                    except Exception:
                                         _ip_f = 0.0
                                     if _ip_f >= 30:  # at least 30 IP for reliable K/9
                                         _k9 = round(float(_ps.get("strikeOuts",0)) / _ip_f * 9, 2)
                                         _k9_source = str(_prev_yr)
+                                        _k9_ip = _ip_f
                                         break
                 except Exception:
                     pass
@@ -10288,8 +10454,8 @@ if st.session_state.active_sport == "mlb":
                     try:
                         _log_ks = pd.to_numeric(mlb_logs["K"], errors="coerce").dropna().sum()
                         _log_ips = mlb_logs["IP"].apply(lambda x: (
-                            float(str(x).split(".")[0]) +
-                            float("0."+str(x).split(".")[1])/3
+                            int(str(x).partition(".")[0] or 0) +
+                            (int(str(x).partition(".")[2] or 0) / 3.0)
                             if "." in str(x) else float(str(x) or 0)
                         )).sum()
                         if _log_ips >= 15:  # need at least 15 IP — ~3 starts
@@ -10301,8 +10467,7 @@ if st.session_state.active_sport == "mlb":
             _k9_adj = 0.0
             # Require minimum 20 IP for K/9 to be meaningful
             # Bradish-type situations: 13.2 K/9 from 5 innings = noise, not signal
-            _k9_ip = _pstats.get("ip_total", 999)  # IP from season stats
-            _k9_reliable = (_k9_ip >= 20) if _k9_ip < 500 else True  # 999 = unknown
+            _k9_reliable = _k9_ip >= 20
             if _k9 >= 10.5 and _k9_reliable:  _k9_adj = +0.07
             elif _k9 >= 10.5:                  _k9_adj = +0.03  # elite but small sample
             elif _k9 >= 9.0 and _k9_reliable:  _k9_adj = +0.04
@@ -10587,6 +10752,9 @@ if st.session_state.active_sport == "mlb":
                 mlb_line, mlb_side, _k9, _avg_ip, _pc_avg,
                 _lineup_avg_k, _order_k_rates, okpct,
                 _lineup_confirmed, _lineup_projected,
+                _pitchcnt.get("pitches_per_bf") or _pstats.get("pitches_per_bf"),
+                _opp_plate.get("pitches_per_pa"),
+                _opp_plate.get("bb_rate"),
             )
             _bf_expected_k = _bf_proj.get("expected_k")
             _bf_prob = _bf_proj.get("prob")
@@ -10716,10 +10884,11 @@ if st.session_state.active_sport == "mlb":
             _adj_before_guardrails = adj
             _guardrail_note = ""
             if mlb_prop == "Strikeouts":
+                _guardrail_expected_k = _combined_proj_expected_k or _bf_expected_k
                 if mlb_side == "Over":
-                    if _bf_expected_k and _bf_expected_k <= mlb_line + 0.25:
+                    if _guardrail_expected_k and _guardrail_expected_k <= mlb_line + 0.25:
                         adj = min(adj, 0.66)
-                    elif _bf_expected_k and _bf_expected_k <= mlb_line + 0.75:
+                    elif _guardrail_expected_k and _guardrail_expected_k <= mlb_line + 0.75:
                         adj = min(adj, 0.74)
                     if _pc_expected_k and _pc_expected_k <= mlb_line - 0.25:
                         adj = min(adj, 0.68)
@@ -10728,9 +10897,9 @@ if st.session_state.active_sport == "mlb":
                     if not _lineup_confirmed and abs(edge) < 1.0:
                         adj = min(adj, 0.72)
                 else:
-                    if _bf_expected_k and _bf_expected_k >= mlb_line - 0.25:
+                    if _guardrail_expected_k and _guardrail_expected_k >= mlb_line - 0.25:
                         adj = min(adj, 0.66)
-                    elif _bf_expected_k and _bf_expected_k >= mlb_line - 0.75:
+                    elif _guardrail_expected_k and _guardrail_expected_k >= mlb_line - 0.75:
                         adj = min(adj, 0.74)
                     if _pc_expected_k and _pc_expected_k >= mlb_line + 1.0:
                         adj = min(adj, 0.68)
@@ -10810,11 +10979,12 @@ if st.session_state.active_sport == "mlb":
             _quality_notes = []
             _conf_penalty = 0
             _bf_cushion_for_quality = None
-            if _bf_expected_k is not None:
+            _quality_expected_k = _combined_proj_expected_k or _bf_expected_k
+            if _quality_expected_k is not None:
                 _bf_cushion_for_quality = (
-                    _bf_expected_k - mlb_line
+                    _quality_expected_k - mlb_line
                     if mlb_side == "Over" else
-                    mlb_line - _bf_expected_k
+                    mlb_line - _quality_expected_k
                 )
             _pc_cushion_for_quality = None
             if _pc_expected_k is not None:
@@ -10879,7 +11049,8 @@ if st.session_state.active_sport == "mlb":
             _trap = mlb_trap_detector(
                 mlb_prop, mlb_side, mlb_line, tier, adj, edge, cons,
                 _lineup_confirmed, _lineup_projected, _pc_avg,
-                _pc_k_ceiling, _pc_outs_ceiling, _bf_expected_k,
+                _pc_k_ceiling, _pc_outs_ceiling,
+                _combined_proj_expected_k or _bf_expected_k,
                 _outs_expected, _opp_plate.get("bb_rate"),
                 _bullpen.get("signal", "Neutral") if _bullpen else "Neutral",
                 _wx_impact,
@@ -11469,12 +11640,29 @@ if st.session_state.active_sport == "mlb":
                         "sport":      "MLB",
                         "added":      __import__("datetime").datetime.now().strftime("%I:%M %p"),
                     }
+                    _new_mlb_tracker = {
+                        "Player":      mlb_pitcher,
+                        "Line":        f"{mlb_line} {mlb_side}",
+                        "Opponent":    mlb_opp or "—",
+                        "Matchup":     mlb_prop,
+                        "Venue":       (
+                            f"{'Home' if _tonight.get('pitcher_side') == 'home' else 'Away'} · "
+                            f"{mlb_home or '?'} · date:{_tonight.get('game_date', '')}"
+                        ),
+                        "Avg PTS":     round(avg_val, 1),
+                        "Hit Rate":    f"{whr:.1%}",
+                        "Adjusted":    f"{adj:.1%}",
+                        "Consistency": f"{cons:.1%}",
+                        "Verdict":     tier,
+                        "Result":      "Pending",
+                        "Sport":       "MLB",
+                    }
                     st.button(
-                        "➕ Add to Pick List",
+                        "➕ Add & Track",
                         key=f"mlb_parlay_{mlb_pitcher}_{mlb_prop}_{mlb_line}_{mlb_side}",
                         use_container_width=True,
-                        on_click=add_to_pick_list,
-                        args=(_new_mlb_leg,),
+                        on_click=add_to_pick_list_and_tracker,
+                        args=(_new_mlb_leg, _new_mlb_tracker),
                     )
 
             # Share button
@@ -11565,7 +11753,7 @@ if st.session_state.active_sport == "mlb":
                                                   "Short rest (<4d) = fatigue risk · Extra rest (8d+) = fresh arm"),
                     (f"K/9 rate ({_k9_source})",   f"{_k9:.1f}" if _k9>0 else "N/A",
                                                   _k9_adj,
-                                                  (f"{'Elite' if _k9>=10.5 else 'Above avg' if _k9>=9.0 else 'Average' if _k9>=7.5 else 'Below avg'} — league avg 8.3" + (f" · no 2026 data, using {_k9_source}" if _k9_source not in ("2026","no data") else "")) if _k9>0 else "No prior season data — rookie or debut season · no adjustment applied"),
+                                                  (f"{'Elite' if _k9>=10.5 else 'Above avg' if _k9>=9.0 else 'Average' if _k9>=7.5 else 'Below avg'} — league avg 8.3" + (f" · using {_k9_source} fallback" if _k9_source not in (str(_current_mlb_year),"no data") else "")) if _k9>0 else "No prior season data — rookie or debut season · no adjustment applied"),
                     ("SwStr% / K% " + _swstr_src, f"{_swstr:.1%}" if _swstr else "N/A",
                                                   _swstr_adj,
                                                   f"{'Real whiff rate from Savant' if _swstr_real else 'K/BF proxy — Savant data unavailable'}"),
@@ -11602,6 +11790,16 @@ if st.session_state.active_sport == "mlb":
                     ("Pitcher variance",           f"{cons:.1%} consistency",
                                                   _variance_adj,
                                                   _variance_note),
+                    ("BF efficiency",              (
+                                                  f"{_bf_proj.get('pitches_per_bf'):.2f} P/BF"
+                                                  if _bf_proj.get("pitches_per_bf") else "League fallback"),
+                                                  None,
+                                                  (
+                                                      f"{_bf_proj.get('bf_method','')} · "
+                                                      f"expected {_bf_proj.get('expected_bf'):.1f} BF"
+                                                      if _bf_proj.get("expected_bf") is not None
+                                                      else "Expected batters faced unavailable"
+                                                  )),
                     ("Pitch-count projection",     f"{_proj_prob:.1%}" if _proj_prob is not None else "N/A",
                                                   None,
                                                   f"Pitch-count path: exp {_pc_expected_k:.1f}K implies {_proj_prob:.0%} {mlb_side} probability" if _proj_prob is not None else "Projection unavailable — pitch-count expected K missing"),
@@ -17322,6 +17520,100 @@ else:
         f"</div>",
         unsafe_allow_html=True
     )
+
+    # MLB probability calibration: compare forecast buckets with settled results.
+    _mlb_cal_rows = []
+    for _e in st.session_state.tracker:
+        _sport = str(_e.get("Sport", "")).upper()
+        _prop = str(_e.get("Matchup", ""))
+        if _sport != "MLB" and _prop not in ("Strikeouts", "Hitter Fantasy Score"):
+            continue
+        if _e.get("Result") not in ("Hit", "Miss"):
+            continue
+        try:
+            _prob = float(str(_e.get("Adjusted", "")).replace("%", "").strip()) / 100.0
+        except Exception:
+            continue
+        if 0.0 <= _prob <= 1.0:
+            _mlb_cal_rows.append({
+                "prob": _prob,
+                "actual": 1.0 if _e.get("Result") == "Hit" else 0.0,
+                "prop": _prop,
+            })
+
+    if _mlb_cal_rows:
+        _cal_n = len(_mlb_cal_rows)
+        _mean_pred = sum(r["prob"] for r in _mlb_cal_rows) / _cal_n
+        _actual_rate = sum(r["actual"] for r in _mlb_cal_rows) / _cal_n
+        _brier = sum((r["prob"] - r["actual"]) ** 2 for r in _mlb_cal_rows) / _cal_n
+        _cal_gap = _actual_rate - _mean_pred
+        _sample_label = "Provisional" if _cal_n < 20 else ("Developing" if _cal_n < 50 else "Established")
+        _gap_color = "#00e896" if abs(_cal_gap) <= 0.05 else ("#ffc107" if abs(_cal_gap) <= 0.12 else "#ff3d5c")
+        _gap_label = (
+            "Well calibrated" if abs(_cal_gap) <= 0.05 else
+            "Underconfident" if _cal_gap > 0 else
+            "Overconfident"
+        )
+
+        st.markdown("<div class='section-header'>MLB Model Calibration</div>", unsafe_allow_html=True)
+        st.markdown(
+            f"<div style='background:rgba(0,196,204,0.05);border:1px solid rgba(0,196,204,0.16);"
+            f"border-radius:10px;padding:0.8rem 1rem;margin-bottom:0.6rem;"
+            f"display:flex;gap:18px;flex-wrap:wrap;font-family:JetBrains Mono,monospace;'>"
+            f"<div><div style='font-size:0.52rem;color:#6b7f96;'>SAMPLE</div>"
+            f"<div style='font-size:0.85rem;color:#f0f4f8;font-weight:800;'>{_cal_n} · {_sample_label}</div></div>"
+            f"<div><div style='font-size:0.52rem;color:#6b7f96;'>AVG FORECAST</div>"
+            f"<div style='font-size:0.85rem;color:#f0f4f8;font-weight:800;'>{_mean_pred:.1%}</div></div>"
+            f"<div><div style='font-size:0.52rem;color:#6b7f96;'>ACTUAL HIT RATE</div>"
+            f"<div style='font-size:0.85rem;color:#f0f4f8;font-weight:800;'>{_actual_rate:.1%}</div></div>"
+            f"<div><div style='font-size:0.52rem;color:#6b7f96;'>CALIBRATION</div>"
+            f"<div style='font-size:0.85rem;color:{_gap_color};font-weight:800;'>{_gap_label} · {_cal_gap:+.1%}</div></div>"
+            f"<div><div style='font-size:0.52rem;color:#6b7f96;'>BRIER SCORE</div>"
+            f"<div style='font-size:0.85rem;color:#f0f4f8;font-weight:800;'>{_brier:.3f}</div></div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+        _bucket_defs = [
+            ("50–59%", 0.50, 0.60),
+            ("60–69%", 0.60, 0.70),
+            ("70–79%", 0.70, 0.80),
+            ("80%+", 0.80, 1.01),
+        ]
+        _bucket_rows = ""
+        for _label, _lo, _hi in _bucket_defs:
+            _rows = [r for r in _mlb_cal_rows if _lo <= r["prob"] < _hi]
+            if not _rows:
+                continue
+            _n = len(_rows)
+            _pred = sum(r["prob"] for r in _rows) / _n
+            _actual = sum(r["actual"] for r in _rows) / _n
+            _gap = _actual - _pred
+            _color = "#00e896" if abs(_gap) <= 0.08 else ("#ffc107" if abs(_gap) <= 0.15 else "#ff3d5c")
+            _bucket_rows += (
+                "<tr style='border-bottom:1px solid rgba(255,255,255,0.05);'>"
+                f"<td style='padding:5px 8px;color:#f0f4f8;font-weight:700;'>{_label}</td>"
+                f"<td style='padding:5px 8px;color:#9aaec4;'>{_n}</td>"
+                f"<td style='padding:5px 8px;color:#9aaec4;'>{_pred:.1%}</td>"
+                f"<td style='padding:5px 8px;color:#9aaec4;'>{_actual:.1%}</td>"
+                f"<td style='padding:5px 8px;color:{_color};font-weight:700;'>{_gap:+.1%}</td>"
+                "</tr>"
+            )
+        if _bucket_rows:
+            st.markdown(
+                "<table style='width:100%;border-collapse:collapse;font-family:JetBrains Mono,monospace;"
+                "font-size:0.66rem;margin-bottom:0.8rem;'>"
+                "<thead><tr style='color:#6b7f96;border-bottom:1px solid rgba(255,255,255,0.1);'>"
+                "<th style='padding:4px 8px;text-align:left;'>BUCKET</th>"
+                "<th style='padding:4px 8px;text-align:left;'>N</th>"
+                "<th style='padding:4px 8px;text-align:left;'>PREDICTED</th>"
+                "<th style='padding:4px 8px;text-align:left;'>ACTUAL</th>"
+                "<th style='padding:4px 8px;text-align:left;'>GAP</th>"
+                f"</tr></thead><tbody>{_bucket_rows}</tbody></table>",
+                unsafe_allow_html=True,
+            )
+        if _cal_n < 20:
+            st.caption("Calibration is provisional until at least 20 MLB picks settle; 50+ is much more informative.")
 
     to_remove = None
     for i, entry in enumerate(st.session_state.tracker):
