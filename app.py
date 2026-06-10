@@ -7631,7 +7631,7 @@ if st.session_state.active_sport == "mlb":
 
             # Find player ID
             r = _req.get("https://statsapi.mlb.com/api/v1/sports/1/players",
-                         params={"season": datetime.datetime.now().year, "gameType": "R"},
+                         params={"season": datetime.now().year, "gameType": "R"},
                          timeout=8)
             if not r.ok: return empty
             people = r.json().get("people", [])
@@ -7649,7 +7649,7 @@ if st.session_state.active_sport == "mlb":
                 return empty
             pid = pitcher["id"]
 
-            current_year = datetime.datetime.now().year
+            current_year = datetime.now().year
             for season in [current_year, current_year - 1]:
                 sr = _req.get(
                     f"https://statsapi.mlb.com/api/v1/people/{pid}/stats",
@@ -7708,7 +7708,7 @@ if st.session_state.active_sport == "mlb":
         empty = {"vs_r": None, "vs_l": None, "overall": None}
         try:
             import requests as _req
-            season = datetime.datetime.now().year
+            season = datetime.now().year
             # Get team ID
             tr = _req.get("https://statsapi.mlb.com/api/v1/teams",
                           params={"sportId":1,"season":season}, timeout=7)
@@ -7769,7 +7769,7 @@ if st.session_state.active_sport == "mlb":
             return empty
         try:
             import requests as _req
-            season = datetime.datetime.now().year
+            season = datetime.now().year
             tr = _req.get(
                 "https://statsapi.mlb.com/api/v1/teams",
                 params={"sportId": 1, "season": season},
@@ -8046,7 +8046,7 @@ if st.session_state.active_sport == "mlb":
             _target = _norm(player_name)
             _parts  = [p for p in _target.split() if len(p) > 2]
             r = _req.get("https://statsapi.mlb.com/api/v1/sports/1/players",
-                         params={"season": datetime.datetime.now().year,"gameType":"R"},
+                         params={"season": datetime.now().year,"gameType":"R"},
                          timeout=7)
             if not r.ok: return "R"
             people = r.json().get("people",[])
@@ -10283,7 +10283,7 @@ if st.session_state.active_sport == "mlb":
             _mlb_ph.empty()
             # Try to give a helpful message based on what we know
             _err_lines = [
-                f"No game logs found for <strong style='color:#f0f4f8;'>{mlb_pitcher}</strong> in {datetime.datetime.now().year}.",
+                f"No game logs found for <strong style='color:#f0f4f8;'>{mlb_pitcher}</strong> in {datetime.now().year}.",
                 "This usually means one of:",
                 "· Player hasn't started a game yet this season (call-up / IL return)",
                 "· Name spelling — try full name (e.g. 'Cristopher Sanchez' not 'Christopher')",
@@ -10396,7 +10396,9 @@ if st.session_state.active_sport == "mlb":
             # 2. Prior season stats API (most reliable — full season sample)
             # 3. Current game logs (last resort — small sample)
             # 4. Neutral (no adjustment) — never penalize without data
-            _current_mlb_year = datetime.datetime.now().year
+            # Import-style-proof: this app uses both `import datetime` and
+            # `from datetime import datetime` in different scopes.
+            _current_mlb_year = __import__("datetime").datetime.now().year
             _k9_source = str(_pstats.get("season") or _current_mlb_year)
             _k9_ip = float(_pstats.get("ip_total", 0) or 0)
             _needs_fallback = (
