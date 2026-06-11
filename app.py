@@ -11170,6 +11170,21 @@ if st.session_state.active_sport == "mlb":
                 if _downgrade:
                     tier = "Lean Over" if tier == "Strong Over" else "Lean Under"
                     _tier_quality_note = "Strong label downgraded: " + ", ".join(_dq[:3])
+
+            # A lean is still an actionable recommendation. Do not surface one
+            # when the combined confidence score says the data quality, edge,
+            # and model agreement are collectively too weak.
+            if tier in ("Lean Over", "Lean Under") and _sc < 55:
+                _previous_tier = tier
+                tier = "Pass"
+                _lean_gate_note = (
+                    f"{_previous_tier} changed to Pass: confidence {_sc}/100 "
+                    f"is below the 55-point lean minimum"
+                )
+                _tier_quality_note = (
+                    f"{_tier_quality_note} · {_lean_gate_note}"
+                    if _tier_quality_note else _lean_gate_note
+                )
             _cc  = "#00c4cc" if _sc >= 80 else ("#ffc107" if _sc >= 65 else "#f97316")
             css  = {"Strong Over":"green","Lean Over":"yellow","Strong Under":"red",
                     "Lean Under":"orange","Pass":"gray"}.get(tier,"gray")
@@ -12189,7 +12204,11 @@ if st.session_state.active_sport == "mlb":
                     "#ef4444" if "Strong Under" in tier else "#6b7f96"
                 )
                 _mlb_strong_thresh = "≥ 72% + quality gate" if mlb_side=="Over" else "≥ 72% + quality gate"
-                _mlb_lean_thresh   = "≥ 52% AND edge > 0" if mlb_side=="Over" else "≥ 52% AND edge < 0"
+                _mlb_lean_thresh = (
+                    "≥ 52% · edge > 0 · confidence ≥ 55"
+                    if mlb_side == "Over" else
+                    "≥ 52% · edge < 0 · confidence ≥ 55"
+                )
                 _edge_ok_mlb       = (edge >= -1.5 if mlb_side=="Over" else edge <= 1.5)
                 _loaded_signals_html = (
                     f"{'✅ OutsProj' if _outs_expected is not None else '❌ OutsProj'} · "
