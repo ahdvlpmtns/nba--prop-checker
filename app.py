@@ -7618,7 +7618,7 @@ if st.session_state.active_sport == "mlb":
     @st.cache_data(ttl=7200, show_spinner=False)
     def mlb_get_pitcher_season_stats(player_name: str) -> dict:
         """
-        Fetch pitcher's season-level stats: K/9, SwStr%, BB/9, ERA, avg IP/start.
+        Fetch pitcher's season-level stats: K/9, K/BF proxy, BB/9, ERA, avg IP/start.
         Returns dict with keys: k9, swstr, bb9, era, avg_ip, whip
         """
         empty = {}
@@ -8202,10 +8202,10 @@ if st.session_state.active_sport == "mlb":
     @st.cache_data(ttl=3600, show_spinner=False)
     def mlb_get_savant_stats(player_name: str) -> dict:
         """
-        Fetch SwStr%/whiff rate and fastball velocity.
+        Fetch Savant Whiff% and fastball velocity.
         3-method fallback: pitch-arsenal-stats CSV → statcast leaderboard → MLB Stats K%
         """
-        empty = {"swstr_pct": None, "velo": None, "k_pct": None, "bb_pct": None}
+        empty = {"whiff_pct": None, "velo": None, "k_pct": None, "bb_pct": None}
         if not player_name: return empty
         try:
             import requests as _req, io, datetime as _dtx
@@ -8307,9 +8307,9 @@ if st.session_state.active_sport == "mlb":
                     pass
 
                 if _best_velo or _best_whiff:
-                    return {"swstr_pct": _best_whiff, "velo": _best_velo,
+                    return {"whiff_pct": _best_whiff, "velo": _best_velo,
                             "k_pct": None, "bb_pct": None,
-                            "_source": f"Savant pitch-movement {_yr}",
+                            "_source": f"Savant Whiff% {_yr}",
                             "_usage": _best_usage}
 
             # Method 2: Savant statcast leaderboard
@@ -8327,13 +8327,14 @@ if st.session_state.active_sport == "mlb":
                     row2 = _find_row(df2, nc2)
                     if row2 is None: continue
                     v2 = _get(row2, df2, "avg_speed","p_formatted_speed","release_speed")
-                    w2 = _get(row2, df2, "whiff_percent","swstr_pct","whiff")
+                    w2 = _get(row2, df2, "whiff_percent", "whiff_pct", "whiff")
                     k2 = _get(row2, df2, "k_percent","strikeout_percent")
                     if w2 and w2 > 1: w2 = round(w2/100, 3)
                     if k2 and k2 > 1: k2 = round(k2/100, 3)
                     if v2 and (v2 > 103 or v2 < 75): v2 = None
                     if v2 or w2 or k2:
-                        return {"swstr_pct": w2, "velo": v2, "k_pct": k2, "bb_pct": None}
+                        return {"whiff_pct": w2, "velo": v2, "k_pct": k2, "bb_pct": None,
+                                "_source": f"Savant Whiff% {_yr}"}
                 except Exception:
                     continue
 
@@ -8363,7 +8364,7 @@ if st.session_state.active_sport == "mlb":
                     _bf = int(_st.get("battersFaced",0) or 0)
                     _ks = int(_st.get("strikeOuts",0) or 0)
                     if _bf >= 30:
-                        return {"swstr_pct": None, "velo": None,
+                        return {"whiff_pct": None, "velo": None,
                                 "k_pct": round(_ks/_bf, 3), "bb_pct": None}
                 except Exception:
                     continue
@@ -10274,8 +10275,8 @@ if st.session_state.active_sport == "mlb":
             except Exception:
                 pass
 
-        # Override K% proxy with real Savant SwStr% if available
-        _swstr_real = _savant.get("swstr_pct")
+        # Override K/BF proxy with Savant Whiff% when available.
+        _whiff_real = _savant.get("whiff_pct")
         _velo       = _savant.get("velo")
         _k_pct_sv   = _savant.get("k_pct")
 
@@ -10484,31 +10485,20 @@ if st.session_state.active_sport == "mlb":
             if _k9 > 0 and not _k9_reliable:
                 _k9_source = f"{_k9_source} (small sample)"
 
-            # ── Signal 8: Real SwStr% from Baseball Savant (whiff rate)
-            # Use Savant real swinging strike % if available, else K/BF proxy
-            _swstr     = _swstr_real if _swstr_real else _pstats.get("swstr")
-            _swstr_src = "Savant SwStr%" if _swstr_real else ("MLB Stats K%" if (_swstr and not _swstr_real) else "K/BF proxy")
-            # Sanity check: real SwStr% should be 5-25%, K/BF ratio is 15-35%
-            # If _swstr_real > 0.25 it's likely the K% not real whiff rate
-            if _swstr_real and _swstr_real > 0.28:
-                _swstr_src  = "Savant K%"  # actually K rate not whiff rate
-                _swstr_real = None          # don't treat as real whiff rate
-                # Re-apply K/BF scale thresholds
-                if _swstr >= 0.28:   _swstr_adj = +0.06
-                elif _swstr >= 0.23: _swstr_adj = +0.03
-                elif _swstr >= 0.18: _swstr_adj = 0.0
-                elif _swstr >= 0.14: _swstr_adj = -0.03
-                else:                _swstr_adj = -0.06
+            # ── Signal 8: Savant Whiff% or MLB Stats K/BF fallback
+            # Whiff% is swings-and-misses / swings (league average mid-20s).
+            # It is not SwStr%, which is swings-and-misses / all pitches.
+            _swstr     = _whiff_real if _whiff_real is not None else _pstats.get("swstr")
+            _swstr_src = "Savant Whiff%" if _whiff_real is not None else ("MLB Stats K%" if _swstr is not None else "K/BF proxy")
             _swstr_adj = 0.0
             if _swstr is not None:
-                # Real SwStr% league avg ~11%. K/BF avg ~21% — different scales
-                if _swstr_real:  # Real SwStr% — league avg ~11%
-                    if _swstr >= 0.16:   _swstr_adj = +0.07  # elite (top 10%)
-                    elif _swstr >= 0.14: _swstr_adj = +0.05  # very good
-                    elif _swstr >= 0.12: _swstr_adj = +0.03  # above avg
-                    elif _swstr >= 0.10: _swstr_adj = +0.01  # slight edge
-                    elif _swstr >= 0.08: _swstr_adj = -0.03  # below avg
-                    else:                _swstr_adj = -0.07  # very low whiff
+                if _whiff_real is not None:
+                    if _swstr >= 0.35:   _swstr_adj = +0.07
+                    elif _swstr >= 0.31: _swstr_adj = +0.05
+                    elif _swstr >= 0.28: _swstr_adj = +0.03
+                    elif _swstr >= 0.23: _swstr_adj = 0.0
+                    elif _swstr >= 0.20: _swstr_adj = -0.03
+                    else:                _swstr_adj = -0.06
                 else:  # K/BF proxy scale — avg ~21%
                     if _swstr >= 0.28:   _swstr_adj = +0.06
                     elif _swstr >= 0.25: _swstr_adj = +0.04
@@ -10956,7 +10946,7 @@ if st.session_state.active_sport == "mlb":
                 _data_bonus = sum([
                     5 if okpct is not None else 0,
                     4 if _k9 > 0 else 0,
-                    5 if _swstr_real else (3 if _swstr else 0),
+                    5 if _whiff_real is not None else (3 if _swstr is not None else 0),
                     3 if _ump_name else 0,
                     3 if _avg_ip > 0 else 0,
                     3 if _velo and _velo > 0 else 0,
@@ -11172,9 +11162,9 @@ if st.session_state.active_sport == "mlb":
                 _pills.append(f"<span class='flag-pill {_velo_flag}'>🔥 {_velo:.1f}mph ({_velo_lbl})</span>")
 
             # SwStr source label
-            if (not _is_outs_prop) and _swstr_real:
-                _sw_flag2 = "up" if _swstr_real>=0.13 else ("down" if _swstr_real<0.09 else "flat")
-                _pills.append(f"<span class='flag-pill {_sw_flag2}'>SwStr% {_swstr_real:.1%} (Savant)</span>")
+            if (not _is_outs_prop) and _whiff_real is not None:
+                _sw_flag2 = "up" if _whiff_real >= 0.28 else ("down" if _whiff_real < 0.23 else "flat")
+                _pills.append(f"<span class='flag-pill {_sw_flag2}'>Whiff% {_whiff_real:.1%} (Savant)</span>")
 
             if _is_outs_prop:
                 if _outs_expected is not None:
@@ -11756,9 +11746,9 @@ if st.session_state.active_sport == "mlb":
                     (f"K/9 rate ({_k9_source})",   f"{_k9:.1f}" if _k9>0 else "N/A",
                                                   _k9_adj,
                                                   (f"{'Elite' if _k9>=10.5 else 'Above avg' if _k9>=9.0 else 'Average' if _k9>=7.5 else 'Below avg'} — league avg 8.3" + (f" · using {_k9_source} fallback" if _k9_source not in (str(_current_mlb_year),"no data") else "")) if _k9>0 else "No prior season data — rookie or debut season · no adjustment applied"),
-                    ("SwStr% / K% " + _swstr_src, f"{_swstr:.1%}" if _swstr else "N/A",
+                    ("Whiff% / K% " + _swstr_src, f"{_swstr:.1%}" if _swstr is not None else "N/A",
                                                   _swstr_adj,
-                                                  f"{'Real whiff rate from Savant' if _swstr_real else 'K/BF proxy — Savant data unavailable'}"),
+                                                  f"{'Whiff rate from Savant (misses per swing)' if _whiff_real is not None else 'K/BF proxy — Savant data unavailable'}"),
                     ("Fastball velocity",         f"{_velo:.1f}mph" if _velo else "N/A",
                                                   _velo_adj,
                                                   f"{'Elite velo (97+)' if (_velo or 0)>=97 else 'Hard (94+)' if (_velo or 0)>=94 else 'Avg' if (_velo or 0)>=91 else 'Soft (<91)' if _velo else 'N/A — pitchMix & Savant CSV both unavailable'}"
@@ -11870,7 +11860,7 @@ if st.session_state.active_sport == "mlb":
                                  _variance_adj]
                     _mlb_adj_labels = [
                         "Home/Away split", "Recent form", "Rest days", "K/9 rate",
-                        "SwStr%/K%", "Velocity", "Velocity trend", "Avg IP/start", "Umpire zone",
+                        "Whiff%/K%", "Velocity", "Velocity trend", "Avg IP/start", "Umpire zone",
                         "Weather", "Batting order", "Platoon matchup", "Contact profile",
                         "Recent opponent difficulty", "Matchup cluster cap",
                         "Pitch count est", "Pitcher variance"
@@ -11909,7 +11899,7 @@ if st.session_state.active_sport == "mlb":
                     "Recent form":      f"L3: {_l3_avg:.1f} vs avg {avg_val:.1f}" if not pd.isna(_l3_avg) else "N/A",
                     "Rest days":        f"{_rest_days}d" if _rest_days else "N/A",
                     "K/9 rate":         f"{_k9:.1f} ({_k9_source})" if _k9 > 0 else "N/A",
-                    "SwStr%/K%":        f"{_swstr:.1%}" if _swstr else "N/A",
+                    "Whiff%/K%":        f"{_swstr:.1%}" if _swstr is not None else "N/A",
                     "Velocity":         f"{_velo:.1f}mph" if _velo else "N/A",
                     "Velocity trend":   f"{_vtrend_mph:+.1f}mph · {_vtrend_dir}" if _vtrender.get("avg_velo") else "N/A",
                     "Avg IP/start":     f"{_avg_ip:.1f} IP ({_ip_source})" if _avg_ip > 0 else "N/A",
@@ -12064,7 +12054,7 @@ if st.session_state.active_sport == "mlb":
                     f"{_lineup_loaded_label}"
                     if _is_outs_prop else
                     f"{'✅ K/9' if _k9>0 else '❌ K/9'} · "
-                    f"{'✅ SwStr%' if _swstr_real else '⚠️ K% proxy'} · "
+                    f"{'✅ Whiff%' if _whiff_real is not None else '⚠️ K% proxy'} · "
                     f"{'✅ Velo' if _velo else '❌ Velo'} · "
                     f"{'✅ Umpire' if _ump_name else '⚠️ TBD'} · "
                     f"{'✅ Weather' if _weather and _weather.get('temp_f') else '⚠️ N/A'} · "
