@@ -10872,6 +10872,8 @@ if st.session_state.active_sport == "mlb":
             _proj_prob = None
             _proj_blend_weight = 0.0
             _combined_proj_prob = None
+            _combined_proj_prob_raw = None
+            _projection_reliability = None
             _combined_proj_expected_k = None
             _pc_projection_share = 0.0
             _bf_projection_share = 0.0
@@ -10912,6 +10914,33 @@ if st.session_state.active_sport == "mlb":
                     _combined_proj_expected_k = _pc_expected_k
                     _proj_blend_weight = 0.38
 
+                # Poisson assumes a stable event rate, while real pitcher K
+                # outcomes are overdispersed by hooks, efficiency, and changing
+                # stuff. Shrink certainty toward 50% using observed consistency
+                # and unresolved pregame information.
+                _combined_proj_prob_raw = _combined_proj_prob
+                _projection_reliability = 0.78 + (
+                    0.12 * max(0.0, min(1.0, cons))
+                )
+                if _lineup_projected:
+                    _projection_reliability -= 0.05
+                elif not _lineup_confirmed:
+                    _projection_reliability -= 0.08
+                _projection_favors_side = _combined_proj_prob > 0.50
+                _recent_form_conflicts = (
+                    (_projection_favors_side and _form_adj < 0) or
+                    (not _projection_favors_side and _form_adj > 0)
+                )
+                if _recent_form_conflicts:
+                    _projection_reliability -= 0.05
+                _projection_reliability = max(
+                    0.62, min(0.92, _projection_reliability)
+                )
+                _combined_proj_prob = (
+                    0.50 +
+                    ((_combined_proj_prob - 0.50) * _projection_reliability)
+                )
+
                 adj = (
                     ((1.0 - _proj_blend_weight) * adj) +
                     (_proj_blend_weight * _combined_proj_prob)
@@ -10924,6 +10953,11 @@ if st.session_state.active_sport == "mlb":
                 _projection_note = (
                     f"Consensus anchor: exp {_combined_proj_expected_k:.1f}K implies "
                     f"{_combined_proj_prob:.0%} {mlb_side} probability"
+                    + (
+                        f" (raw {_combined_proj_prob_raw:.0%}, "
+                        f"{_projection_reliability:.0%} reliability)"
+                        if _combined_proj_prob_raw is not None else ""
+                    )
                 )
             _adj_after_projection = adj
 
@@ -11911,7 +11945,10 @@ if st.session_state.active_sport == "mlb":
                     ("Consensus projection",       f"{_combined_proj_prob:.1%}" if _combined_proj_prob is not None else "N/A",
                                                   None,
                                                   (f"PC share {_pc_projection_share:.0%} · BF share {_bf_projection_share:.0%} · "
-                                                   f"blended once at {_proj_blend_weight:.0%} model weight") if _combined_proj_prob is not None else "Consensus projection unavailable"),
+                                                   f"raw {_combined_proj_prob_raw:.1%} → uncertainty-calibrated "
+                                                   f"{_combined_proj_prob:.1%} at {_projection_reliability:.0%} reliability · "
+                                                   f"blended once at {_proj_blend_weight:.0%} model weight")
+                                                  if _combined_proj_prob is not None else "Consensus projection unavailable"),
                 ]
                 if _is_outs_prop:
                     _mlb_signals = [
