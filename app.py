@@ -8296,9 +8296,7 @@ if st.session_state.active_sport == "mlb":
 
                 # Method 1b: build an arsenal-wide Whiff%, weighted by pitch usage.
                 # A single pitch type is not representative of a pitcher's full profile.
-                _arsenal_whiff_sum = 0.0
-                _arsenal_usage_sum = 0.0
-                _arsenal_pitch_count = 0
+                _arsenal_pitches = {}
                 try:
                     for _pt in ["FF","SI","SL","CH","FC","CU","ST","FS"]:
                         r_ar = _req.get(
@@ -8312,6 +8310,12 @@ if st.session_state.active_sport == "mlb":
                         if nc_ar is None or df_ar.empty: continue
                         row_ar = _find_row(df_ar, nc_ar)
                         if row_ar is None: continue
+                        # Savant occasionally returns a stale/default pitch
+                        # table even when a pitchType query was supplied.
+                        # Validate the returned pitch and deduplicate by code.
+                        returned_pitch = str(row_ar.get("pitch_type", "") or "").upper()
+                        if returned_pitch != _pt or returned_pitch in _arsenal_pitches:
+                            continue
                         whiff = _get(row_ar, df_ar, "whiff_percent","whiff_pct","whiff")
                         usage_ar = _get(row_ar, df_ar, "pitch_usage", "pitch_per", "usage")
                         if whiff is None or usage_ar is None:
@@ -8322,16 +8326,25 @@ if st.session_state.active_sport == "mlb":
                             usage_ar /= 100.0
                         if not (0.03 <= whiff <= 0.70 and 0.01 <= usage_ar <= 1.0):
                             continue
-                        _arsenal_whiff_sum += whiff * usage_ar
-                        _arsenal_usage_sum += usage_ar
-                        _arsenal_pitch_count += 1
+                        _arsenal_pitches[returned_pitch] = {
+                            "whiff": whiff,
+                            "usage": usage_ar,
+                        }
                 except Exception:
                     pass
 
+                _arsenal_usage_sum = sum(
+                    p["usage"] for p in _arsenal_pitches.values()
+                )
+                _arsenal_pitch_count = len(_arsenal_pitches)
                 # Require broad arsenal coverage. Otherwise fall through to the
                 # overall leaderboard instead of trusting a partial pitch sample.
                 _arsenal_whiff = None
                 if _arsenal_usage_sum >= 0.55 and _arsenal_pitch_count >= 2:
+                    _arsenal_whiff_sum = sum(
+                        p["whiff"] * p["usage"]
+                        for p in _arsenal_pitches.values()
+                    )
                     _arsenal_whiff = round(
                         _arsenal_whiff_sum / _arsenal_usage_sum, 3
                     )
@@ -8341,8 +8354,9 @@ if st.session_state.active_sport == "mlb":
                             "velo": _year_velo or _fallback_velo,
                             "k_pct": None, "bb_pct": None,
                             "_source": f"Savant arsenal-weighted Whiff% {_yr}",
-                            "_usage": round(_arsenal_usage_sum, 3),
-                            "_pitch_count": _arsenal_pitch_count}
+                            "_usage": round(min(_arsenal_usage_sum, 1.0), 3),
+                            "_pitch_count": _arsenal_pitch_count,
+                            "_pitch_types": sorted(_arsenal_pitches)}
 
             # Method 2: Savant statcast leaderboard
             for _yr in [season, season-1]:
