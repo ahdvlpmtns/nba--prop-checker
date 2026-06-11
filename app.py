@@ -10392,9 +10392,13 @@ if st.session_state.active_sport == "mlb":
             _calibrated_whr = mlb_calibrated_hit_base(whr, _n_starts, cons)
             _variance_adj = 0.0
             _variance_note = "Stable"
-            if cons >= 0.78 and abs(edge) >= 1.0:
+            if _n_starts >= 6 and cons >= 0.78 and abs(edge) >= 1.0:
                 _variance_adj = +0.015
                 _variance_note = "Low variance — recent hit rate more trustworthy"
+            elif _n_starts < 6 and cons >= 0.78:
+                _variance_note = (
+                    f"Promising consistency, but only {_n_starts} starts — no boost"
+                )
             elif cons < 0.45:
                 _variance_adj = -0.045
                 _variance_note = "High variance — confidence penalty"
@@ -10714,6 +10718,23 @@ if st.session_state.active_sport == "mlb":
             _pc_expected_k = None
             _pc_k_ceiling = None  # optimistic upper band from pitch count
             _park_leash_adj = 0.0
+            _log_k_per_inn = (
+                avg_val / max(_avg_ip, 1.0)
+                if avg_val > 0 and _avg_ip > 0 else None
+            )
+            _season_k_per_inn = (_k9 / 9.0) if _k9 > 0 else None
+            if not _k9_reliable and _log_k_per_inn and _season_k_per_inn:
+                # Regress a small-sample season K/9 toward what the actual
+                # analyzed starts produced instead of treating it as settled.
+                _projection_k_per_inn = (
+                    0.40 * _season_k_per_inn +
+                    0.60 * _log_k_per_inn
+                )
+            else:
+                _projection_k_per_inn = (
+                    _season_k_per_inn or _log_k_per_inn or 0.0
+                )
+            _projection_k9 = _projection_k_per_inn * 9.0
 
             if _pc_avg:
                 # Estimate expected Ks and an optimistic ceiling from pitch count.
@@ -10721,7 +10742,7 @@ if st.session_state.active_sport == "mlb":
                 # plus a small cushion, so "ceiling" is no longer just the average path.
                 _innings_est    = _pc_avg / 16.0
                 _ceiling_ip_est = _pc_avg / 14.5
-                _k_per_inn      = (_k9 / 9.0) if _k9 > 0 else (avg_val / max(_avg_ip, 1.0))
+                _k_per_inn      = _projection_k_per_inn
                 _pc_expected_k  = round(_innings_est * _k_per_inn, 1)
                 _pc_k_ceiling   = round((_ceiling_ip_est * _k_per_inn) + 0.4, 1)
 
@@ -10809,7 +10830,7 @@ if st.session_state.active_sport == "mlb":
             # Lineup/BF projection anchor. This is the sharpest MLB K input:
             # actual or projected order K quality + expected batters faced.
             _bf_proj = mlb_lineup_bf_projection(
-                mlb_line, mlb_side, _k9, _avg_ip, _pc_avg,
+                mlb_line, mlb_side, _projection_k9, _avg_ip, _pc_avg,
                 _lineup_avg_k, _order_k_rates, okpct,
                 _lineup_confirmed, _lineup_projected,
                 _pitchcnt.get("pitches_per_bf") or _pstats.get("pitches_per_bf"),
@@ -10926,6 +10947,10 @@ if st.session_state.active_sport == "mlb":
                     _projection_reliability -= 0.05
                 elif not _lineup_confirmed:
                     _projection_reliability -= 0.08
+                if _n_starts < 4:
+                    _projection_reliability -= 0.12
+                elif _n_starts < 6:
+                    _projection_reliability -= 0.06
                 _projection_favors_side = _combined_proj_prob > 0.50
                 _recent_form_conflicts = (
                     (_projection_favors_side and _form_adj < 0) or
@@ -11122,6 +11147,12 @@ if st.session_state.active_sport == "mlb":
                     mlb_line - _pc_expected_k
                 )
             if not _is_outs_prop:
+                if _n_starts < 4:
+                    _conf_penalty += 12
+                    _quality_notes.append(f"only {_n_starts} starts")
+                elif _n_starts < 6:
+                    _conf_penalty += 6
+                    _quality_notes.append(f"small sample ({_n_starts} starts)")
                 if _lineup_projected:
                     _lineup_penalty = 1 if (_bf_cushion_for_quality is not None and _bf_cushion_for_quality >= 1.0) else 3
                     _conf_penalty += _lineup_penalty
@@ -11146,6 +11177,10 @@ if st.session_state.active_sport == "mlb":
                     _conf_penalty += 2
                     _quality_notes.append("low BF projection confidence")
             _sc = max(0, _sc - _conf_penalty)
+            if _n_starts < 4:
+                _sc = min(_sc, 69)
+            elif _n_starts < 6:
+                _sc = min(_sc, 76)
 
             _tier_quality_note = ""
             if tier in ("Strong Over", "Strong Under"):
@@ -11154,6 +11189,9 @@ if st.session_state.active_sport == "mlb":
                 if _sc < 80:
                     _downgrade = True
                     _dq.append(f"confidence {_sc}/100")
+                if _n_starts < 6:
+                    _downgrade = True
+                    _dq.append(f"only {_n_starts} starts")
                 if not _is_outs_prop:
                     _bf_cushion = _bf_cushion_for_quality
                     if _lineup_projected and (_bf_cushion is None or _bf_cushion < 1.0):
