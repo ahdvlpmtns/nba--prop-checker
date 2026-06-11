@@ -9392,7 +9392,8 @@ if st.session_state.active_sport == "mlb":
         """
         empty = {
             "expected_k": None, "prob": None, "weighted_lineup_k": None,
-            "expected_bf": None, "pitcher_k_rate": None, "confidence": "low",
+            "expected_bf": None, "pitcher_k_rate": None,
+            "matchup_k_rate": None, "confidence": "low",
             "pitches_per_bf": None, "bf_method": "",
             "note": "Lineup/BF projection unavailable",
             "guardrail": "",
@@ -9477,13 +9478,24 @@ if st.session_state.active_sport == "mlb":
             if weighted_lineup_k is None:
                 matchup_k_rate = pitcher_k_rate
             else:
-                # Pitcher skill matters most, but the actual order is the
-                # strongest opponent input once it exists.
-                matchup_k_rate = (0.52 * pitcher_k_rate) + (0.36 * weighted_lineup_k)
-                if opp_k_rate is not None:
-                    matchup_k_rate += 0.12 * float(opp_k_rate)
-                else:
-                    matchup_k_rate += 0.12 * weighted_lineup_k
+                # Preserve pitcher talent as the base, then adjust it by how
+                # strikeout-prone the opposing lineup is relative to league
+                # average. A linear 50/50 blend incorrectly turns low-K arms
+                # into high-K pitchers whenever they face a whiff-heavy team.
+                league_k_rate = 0.225
+                lineup_reliability = (
+                    0.85 if lineup_confirmed else
+                    0.65 if lineup_projected else
+                    0.45
+                )
+                regressed_lineup_k = (
+                    lineup_reliability * weighted_lineup_k +
+                    (1.0 - lineup_reliability) * league_k_rate
+                )
+                lineup_multiplier = max(
+                    0.78, min(1.25, regressed_lineup_k / league_k_rate)
+                )
+                matchup_k_rate = pitcher_k_rate * lineup_multiplier
 
             matchup_k_rate = max(0.07, min(0.40, matchup_k_rate))
             expected_k = expected_bf * matchup_k_rate
@@ -9511,12 +9523,14 @@ if st.session_state.active_sport == "mlb":
                 "weighted_lineup_k": round(weighted_lineup_k, 3) if weighted_lineup_k is not None else None,
                 "expected_bf": round(expected_bf, 1),
                 "pitcher_k_rate": round(pitcher_k_rate, 3),
+                "matchup_k_rate": round(matchup_k_rate, 3),
                 "pitches_per_bf": round(matchup_ppbf, 2) if matchup_ppbf else None,
                 "bf_method": bf_method,
                 "confidence": confidence,
                 "note": (
                     f"Expected BF {expected_bf:.1f} · pitcher K/BF {pitcher_k_rate:.1%}"
                     + (f" · lineup K% {weighted_lineup_k:.1%}" if weighted_lineup_k is not None else "")
+                    + f" · matchup K/BF {matchup_k_rate:.1%}"
                     + (f" · {matchup_ppbf:.2f} P/BF ({bf_method})" if matchup_ppbf else "")
                     + f" → exp {expected_k:.1f}K"
                 ),
@@ -10714,6 +10728,10 @@ if st.session_state.active_sport == "mlb":
                             _pc_adj = min(_pc_adj, -0.08)
                         elif _expected_gap >= 1.5:
                             _pc_adj = max(_pc_adj, +0.03)
+                        elif _expected_gap < 0.5 and _pc_adj > 0:
+                            # A workload projection that barely clears the
+                            # line is not positive evidence for an Over.
+                            _pc_adj = 0.0
                     if _pc_k_ceiling:
                         _ceiling_gap = _pc_k_ceiling - mlb_line
                         if _ceiling_gap <= 0:        # ceiling is at or below line
