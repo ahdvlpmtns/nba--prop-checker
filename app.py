@@ -8241,11 +8241,11 @@ if st.session_state.active_sport == "mlb":
             # Method 1a: Savant pitch-movement — has avg_speed + pitch_per (usage)
             # Columns confirmed: avg_speed, pitches_thrown, total_pitches, pitch_per,
             #                    pitch_type, pitch_type_name
-            _best_velo  = None
-            _best_whiff = None
-            _best_usage = 0.0
+            _fallback_velo = None
 
             for _yr in [season, season-1]:
+                _year_velo = None
+                _year_velo_usage = 0.0
                 try:
                     r_mv = _req.get(
                         "https://baseballsavant.mlb.com/leaderboard/pitch-movement",
@@ -8270,16 +8270,24 @@ if st.session_state.active_sport == "mlb":
                                 for _, pr in pitcher_rows.iterrows():
                                     try:
                                         _usage = float(pr.get("pitch_per", 0) or 0)
+                                        if _usage > 1:
+                                            _usage /= 100.0
                                         _vraw  = pr.get("avg_speed")
                                         _v     = float(_vraw) if _vraw else 0
-                                        if _usage > _best_usage and 75 < _v < 103:
-                                            _best_usage = _usage
-                                            _best_velo  = round(_v, 1)
+                                        if _usage > _year_velo_usage and 75 < _v < 103:
+                                            _year_velo_usage = _usage
+                                            _year_velo = round(_v, 1)
                                     except: pass
                 except Exception:
                     pass
+                if _year_velo and _fallback_velo is None:
+                    _fallback_velo = _year_velo
 
-                # Method 1b: pitch-arsenal-stats — has whiff_percent (no velocity)
+                # Method 1b: build an arsenal-wide Whiff%, weighted by pitch usage.
+                # A single pitch type is not representative of a pitcher's full profile.
+                _arsenal_whiff_sum = 0.0
+                _arsenal_usage_sum = 0.0
+                _arsenal_pitch_count = 0
                 try:
                     for _pt in ["FF","SI","SL","CH","FC","CU","ST","FS"]:
                         r_ar = _req.get(
@@ -8294,23 +8302,36 @@ if st.session_state.active_sport == "mlb":
                         row_ar = _find_row(df_ar, nc_ar)
                         if row_ar is None: continue
                         whiff = _get(row_ar, df_ar, "whiff_percent","whiff_pct","whiff")
-                        usage_ar = float(row_ar.get("pitch_usage", 0) or 0)
-                        if whiff and usage_ar > _best_usage:
-                            if whiff > 1: whiff = round(whiff/100, 3)
-                            _best_whiff = whiff
-                            _best_usage = usage_ar
-                        elif whiff and not _best_whiff:
-                            if whiff > 1: whiff = round(whiff/100, 3)
-                            _best_whiff = whiff
-                        if _best_whiff: break
+                        usage_ar = _get(row_ar, df_ar, "pitch_usage", "pitch_per", "usage")
+                        if whiff is None or usage_ar is None:
+                            continue
+                        if whiff > 1:
+                            whiff /= 100.0
+                        if usage_ar > 1:
+                            usage_ar /= 100.0
+                        if not (0.03 <= whiff <= 0.70 and 0.01 <= usage_ar <= 1.0):
+                            continue
+                        _arsenal_whiff_sum += whiff * usage_ar
+                        _arsenal_usage_sum += usage_ar
+                        _arsenal_pitch_count += 1
                 except Exception:
                     pass
 
-                if _best_velo or _best_whiff:
-                    return {"whiff_pct": _best_whiff, "velo": _best_velo,
+                # Require broad arsenal coverage. Otherwise fall through to the
+                # overall leaderboard instead of trusting a partial pitch sample.
+                _arsenal_whiff = None
+                if _arsenal_usage_sum >= 0.55 and _arsenal_pitch_count >= 2:
+                    _arsenal_whiff = round(
+                        _arsenal_whiff_sum / _arsenal_usage_sum, 3
+                    )
+
+                if _arsenal_whiff is not None:
+                    return {"whiff_pct": _arsenal_whiff,
+                            "velo": _year_velo or _fallback_velo,
                             "k_pct": None, "bb_pct": None,
-                            "_source": f"Savant Whiff% {_yr}",
-                            "_usage": _best_usage}
+                            "_source": f"Savant arsenal-weighted Whiff% {_yr}",
+                            "_usage": round(_arsenal_usage_sum, 3),
+                            "_pitch_count": _arsenal_pitch_count}
 
             # Method 2: Savant statcast leaderboard
             for _yr in [season, season-1]:
@@ -8332,8 +8353,9 @@ if st.session_state.active_sport == "mlb":
                     if w2 and w2 > 1: w2 = round(w2/100, 3)
                     if k2 and k2 > 1: k2 = round(k2/100, 3)
                     if v2 and (v2 > 103 or v2 < 75): v2 = None
-                    if v2 or w2 or k2:
-                        return {"whiff_pct": w2, "velo": v2, "k_pct": k2, "bb_pct": None,
+                    if v2 or w2 or k2 or _fallback_velo:
+                        return {"whiff_pct": w2, "velo": v2 or _fallback_velo,
+                                "k_pct": k2, "bb_pct": None,
                                 "_source": f"Savant Whiff% {_yr}"}
                 except Exception:
                     continue
@@ -10875,28 +10897,56 @@ if st.session_state.active_sport == "mlb":
             # prevent "Strong Over" when the realistic route to the line is thin.
             _adj_before_guardrails = adj
             _guardrail_note = ""
+            _guardrail_reasons = []
+
+            def _apply_probability_cap(current: float, cap: float, reason: str) -> float:
+                if current > cap:
+                    _guardrail_reasons.append(reason)
+                    return cap
+                return current
+
             if mlb_prop == "Strikeouts":
                 _guardrail_expected_k = _combined_proj_expected_k or _bf_expected_k
                 if mlb_side == "Over":
                     if _guardrail_expected_k and _guardrail_expected_k <= mlb_line + 0.25:
-                        adj = min(adj, 0.66)
+                        adj = _apply_probability_cap(
+                            adj, 0.66, "Consensus K projection barely clears the line"
+                        )
                     elif _guardrail_expected_k and _guardrail_expected_k <= mlb_line + 0.75:
-                        adj = min(adj, 0.74)
+                        adj = _apply_probability_cap(
+                            adj, 0.74, "Consensus K projection has a thin cushion"
+                        )
                     if _pc_expected_k and _pc_expected_k <= mlb_line - 0.25:
-                        adj = min(adj, 0.68)
+                        adj = _apply_probability_cap(
+                            adj, 0.68, "Pitch-count projection is below the line"
+                        )
                     if _pc_k_ceiling and _pc_k_ceiling <= mlb_line + 0.25:
-                        adj = min(adj, 0.63)
+                        adj = _apply_probability_cap(
+                            adj, 0.63, "Pitch-count ceiling is tight against the line"
+                        )
                     if not _lineup_confirmed and abs(edge) < 1.0:
-                        adj = min(adj, 0.72)
+                        adj = _apply_probability_cap(
+                            adj, 0.72,
+                            "Projected lineup with historical edge under 1.0 K"
+                        )
                 else:
                     if _guardrail_expected_k and _guardrail_expected_k >= mlb_line - 0.25:
-                        adj = min(adj, 0.66)
+                        adj = _apply_probability_cap(
+                            adj, 0.66, "Consensus K projection sits too close to the line"
+                        )
                     elif _guardrail_expected_k and _guardrail_expected_k >= mlb_line - 0.75:
-                        adj = min(adj, 0.74)
+                        adj = _apply_probability_cap(
+                            adj, 0.74, "Consensus Under projection has a thin cushion"
+                        )
                     if _pc_expected_k and _pc_expected_k >= mlb_line + 1.0:
-                        adj = min(adj, 0.68)
+                        adj = _apply_probability_cap(
+                            adj, 0.68, "Pitch-count projection is above the line"
+                        )
                     if not _lineup_confirmed and abs(edge) < 1.0:
-                        adj = min(adj, 0.72)
+                        adj = _apply_probability_cap(
+                            adj, 0.72,
+                            "Projected lineup with historical edge under 1.0 K"
+                        )
             elif _is_outs_prop:
                 if mlb_side == "Over":
                     if _outs_expected and _outs_expected <= mlb_line + 0.5:
@@ -10913,7 +10963,13 @@ if st.session_state.active_sport == "mlb":
                     elif _outs_expected and _outs_expected >= mlb_line - 1.5:
                         adj = min(adj, 0.74)
             if adj < _adj_before_guardrails - 0.001:
-                _guardrail_reason = _outs_guardrail if _is_outs_prop else (_bf_guardrail or "Ceiling/line check")
+                _guardrail_reason = (
+                    _outs_guardrail
+                    if _is_outs_prop
+                    else " | ".join(_guardrail_reasons)
+                    or _bf_guardrail
+                    or "Projection/line guardrail"
+                )
                 _guardrail_note = f"{_guardrail_reason} · capped from {_adj_before_guardrails:.0%} to {adj:.0%}"
 
             # Volatility guardrail. For noisy pitchers, don't let a hot L10
@@ -11748,7 +11804,15 @@ if st.session_state.active_sport == "mlb":
                                                   (f"{'Elite' if _k9>=10.5 else 'Above avg' if _k9>=9.0 else 'Average' if _k9>=7.5 else 'Below avg'} — league avg 8.3" + (f" · using {_k9_source} fallback" if _k9_source not in (str(_current_mlb_year),"no data") else "")) if _k9>0 else "No prior season data — rookie or debut season · no adjustment applied"),
                     ("Whiff% / K% " + _swstr_src, f"{_swstr:.1%}" if _swstr is not None else "N/A",
                                                   _swstr_adj,
-                                                  f"{'Whiff rate from Savant (misses per swing)' if _whiff_real is not None else 'K/BF proxy — Savant data unavailable'}"),
+                                                  (
+                                                      f"Arsenal-weighted Savant Whiff% across "
+                                                      f"{_savant.get('_pitch_count')} pitch types "
+                                                      f"({_savant.get('_usage', 0):.0%} usage represented)"
+                                                      if _whiff_real is not None and _savant.get("_pitch_count")
+                                                      else "Overall Savant Whiff% (misses per swing)"
+                                                      if _whiff_real is not None
+                                                      else "K/BF proxy — Savant data unavailable"
+                                                  )),
                     ("Fastball velocity",         f"{_velo:.1f}mph" if _velo else "N/A",
                                                   _velo_adj,
                                                   f"{'Elite velo (97+)' if (_velo or 0)>=97 else 'Hard (94+)' if (_velo or 0)>=94 else 'Avg' if (_velo or 0)>=91 else 'Soft (<91)' if _velo else 'N/A — pitchMix & Savant CSV both unavailable'}"
