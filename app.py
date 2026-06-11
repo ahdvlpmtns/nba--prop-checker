@@ -8083,7 +8083,8 @@ if st.session_state.active_sport == "mlb":
     def mlb_get_weather(home_team: str, game_date: str = "") -> dict:
         """Fetch game-time weather from Open-Meteo. Guaranteed to return data or explain why not."""
         empty = {"temp_f": None, "wind_mph": None, "wind_dir": "",
-                 "condition": "", "k_impact": "Neutral", "note": ""}
+                 "condition": "", "k_impact": "Neutral", "k_adj": 0.0,
+                 "note": ""}
         home_team = mlb_norm_abbr(home_team)
         # Retractable/dome venues where open-air weather is usually not a
         # reliable K input. Outdoor parks intentionally stay out of this list.
@@ -8175,24 +8176,34 @@ if st.session_state.active_sport == "mlb":
             }
             condition = _cmap.get(wcode, f"Code {wcode}")
             k_impact = "Neutral"
+            k_adj = 0.0
             parts = []
             if temp_f < 50:
-                k_impact = "Helps Over"; parts.append(f"Cold {temp_f:.0f}°F")
+                # Temperature has a modest effect on the run environment, but
+                # it should never move a pitcher K model by a full signal tier.
+                k_impact = "Helps Over"
+                k_adj = 0.015
+                parts.append(f"Cold {temp_f:.0f}°F")
             elif temp_f < 60:
                 parts.append(f"Cool {temp_f:.0f}°F — mild pitcher advantage")
             else:
                 parts.append(f"{temp_f:.0f}°F")
             if wind_mph >= 15:
-                k_impact = "Helps Over"; parts.append(f"High wind {wind_mph:.0f}mph {wind_dir}")
+                # Compass direction alone does not tell us whether wind is
+                # blowing in or out without park-specific field orientation.
+                # Keep it informational instead of inventing a K adjustment.
+                parts.append(f"High wind {wind_mph:.0f}mph {wind_dir} — K neutral")
             elif wind_mph >= 10:
                 parts.append(f"Moderate wind {wind_mph:.0f}mph {wind_dir}")
             elif wind_mph > 0:
                 parts.append(f"{wind_mph:.0f}mph {wind_dir}")
             if wcode in (61,63,65,80,81,82,95,96,99):
-                k_impact = "Hurts Over"; parts.append("Rain possible")
+                k_impact = "Hurts Over"
+                k_adj = -0.03
+                parts.append("Rain possible")
             return {
                 "temp_f": temp_f, "wind_mph": wind_mph, "wind_dir": wind_dir,
-                "condition": condition, "k_impact": k_impact,
+                "condition": condition, "k_impact": k_impact, "k_adj": k_adj,
                 "note": " · ".join(parts) if parts else f"{temp_f:.0f}°F",
                 "game_hour": times[idx] if idx < len(times) else "",
             }
@@ -10575,13 +10586,9 @@ if st.session_state.active_sport == "mlb":
             # ── Signal 11: Weather
             _wx_impact = _weather.get("k_impact","Neutral") if _weather else "Neutral"
             _wx_note   = _weather.get("note","") if _weather else ""
-            _wx_adj    = 0.0
-            if mlb_side == "Over":
-                if _wx_impact == "Helps Over":  _wx_adj = +0.04
-                elif _wx_impact == "Hurts Over": _wx_adj = -0.05
-            else:
-                if _wx_impact == "Helps Over":  _wx_adj = -0.04
-                elif _wx_impact == "Hurts Over": _wx_adj = +0.05
+            _wx_adj = float(_weather.get("k_adj", 0.0) or 0.0) if _weather else 0.0
+            if mlb_side == "Under":
+                _wx_adj = -_wx_adj
 
             # ── Signal 12: Batting order + platoon composition ─────────────
             _lineup_confirmed  = _lineup.get("confirmed", False) if _lineup else False
@@ -10723,6 +10730,13 @@ if st.session_state.active_sport == "mlb":
                     elif psig == "Boost" and _pc_expected_k and (_pc_expected_k - mlb_line) >= 1.0:
                         _park_leash_adj = 0.010 if mlb_side == "Over" else -0.010
                     _pc_adj += _park_leash_adj
+
+                    # A small-sample/soft-limit flag and a positive workload
+                    # adjustment are contradictory. Keep the projection based
+                    # on the observed pitch count, but do not award extra model
+                    # probability until the workload is established.
+                    if _pc_limit and _pc_adj > 0:
+                        _pc_adj = 0.0
 
             # Partial lineup penalty
             if _lineup_order and len(_lineup_order) < 7:
