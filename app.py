@@ -13360,6 +13360,102 @@ if st.session_state.active_sport == "edge":
         return grade, color, reasons[:5]
 
 
+    def build_mlb_best_entry(candidates: list, target_size: int = 3) -> dict:
+        """
+        Build a conservative MLB entry from validated Edge Scanner results.
+        Prioritizes confidence, projection support, and clean validation while
+        avoiding duplicate players and stacking too much watchlist risk.
+        """
+        eligible = []
+        for r in candidates:
+            if r.get("sport") != "MLB":
+                continue
+            if r.get("is_goblin"):
+                continue
+            try:
+                adj = float(r.get("adj", 0) or 0)
+                conf = float(r.get("confidence", 0) or 0)
+                edge_pct = float(r.get("edge_pct", adj - 55.0) or 0)
+                edge_raw = float(r.get("edge_raw", 0) or 0)
+                cons = float(r.get("cons", 0) or 0)
+                reliability = float(r.get("reliability", 0) or 0)
+            except Exception:
+                continue
+            trap = str(r.get("trap_label", "Clean") or "Clean")
+            validation = str(r.get("validation_label", "") or "")
+            risk_reasons = list(r.get("validation_reasons", []) or []) + list(r.get("trap_reasons", []) or [])
+            is_watch = trap != "Clean" or "Watchlist" in validation or bool(risk_reasons)
+            if trap in ("Do Not Force", "Trap Risk"):
+                continue
+            if adj < 60 or conf < 65 or edge_pct < 3:
+                continue
+            if is_mlb_strikeout_prop(r.get("stat", "")):
+                gap = r.get("projection_gap")
+                if gap is not None and float(gap) < 0.75:
+                    continue
+            score = (
+                conf * 1.15 +
+                edge_pct * 3.2 +
+                adj * 0.35 +
+                cons * 0.15 +
+                reliability * 0.12 +
+                min(max(edge_raw, 0), 4.0) * 4.0
+            )
+            if is_watch:
+                score -= 18
+            if "Validated Strong" in validation:
+                score += 10
+            elif "Validated" in validation:
+                score += 4
+            if float(r.get("market_open_move") or 0) > 0:
+                score += 3
+            eligible.append({**r, "_entry_score": round(score, 2), "_entry_watch": is_watch})
+
+        eligible.sort(key=lambda x: x["_entry_score"], reverse=True)
+        selected = []
+        seen_players = set()
+        watch_count = 0
+        for r in eligible:
+            player_key = normalize_name(r.get("player", ""))
+            if player_key in seen_players:
+                continue
+            if r.get("_entry_watch") and watch_count >= 1:
+                continue
+            selected.append(r)
+            seen_players.add(player_key)
+            if r.get("_entry_watch"):
+                watch_count += 1
+            if len(selected) >= target_size:
+                break
+
+        if len(selected) < 2:
+            selected = []
+            seen_players = set()
+            for r in eligible:
+                player_key = normalize_name(r.get("player", ""))
+                if player_key in seen_players:
+                    continue
+                selected.append(r)
+                seen_players.add(player_key)
+                if len(selected) >= 2:
+                    break
+
+        combined = 1.0
+        avg_conf = 0.0
+        if selected:
+            for r in selected:
+                combined *= max(0.01, min(0.99, float(r.get("adj", 0) or 0) / 100.0))
+            avg_conf = sum(float(r.get("confidence", 0) or 0) for r in selected) / len(selected)
+        risk = "Low" if selected and avg_conf >= 80 and watch_count == 0 else ("Medium" if selected else "N/A")
+        return {
+            "legs": selected,
+            "combined": combined,
+            "avg_conf": avg_conf,
+            "watch_count": watch_count,
+            "risk": risk,
+        }
+
+
     def run_nba_edge_check(player_name: str, line: float, stat: str,
                            team: str, side: str = "Over") -> dict | None:
         """
@@ -15496,6 +15592,112 @@ if st.session_state.active_sport == "edge":
                 f"</div>",
                 unsafe_allow_html=True
             )
+
+            # ── Best Entry Builder: MLB-only recommended combo ────────────
+            if _edge_sport == "MLB":
+                _best_entry = build_mlb_best_entry(_with_edge, target_size=3)
+                _best_legs = _best_entry.get("legs", [])
+                if len(_best_legs) >= 2:
+                    _best_combined = _best_entry.get("combined", 0.0)
+                    _best_avg_conf = _best_entry.get("avg_conf", 0.0)
+                    _best_risk = _best_entry.get("risk", "Medium")
+                    _best_risk_col = "#00e896" if _best_risk == "Low" else "#ffc107"
+                    _best_rows = ""
+                    for _bi, _leg in enumerate(_best_legs, start=1):
+                        _leg_watch = " · Watchlist" if _leg.get("_entry_watch") else ""
+                        _best_rows += (
+                            f"<div style='display:grid;grid-template-columns:24px minmax(0,1fr) auto;"
+                            f"gap:8px;align-items:center;padding:7px 0;border-top:1px solid rgba(255,255,255,0.055);'>"
+                            f"<div style='font-family:JetBrains Mono,monospace;color:#6b7f96;font-size:0.62rem;'>#{_bi}</div>"
+                            f"<div style='min-width:0;'>"
+                            f"<div style='font-family:Plus Jakarta Sans,sans-serif;color:#f0f4f8;font-weight:900;font-size:0.88rem;"
+                            f"white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'>{_leg.get('player')}</div>"
+                            f"<div style='font-family:JetBrains Mono,monospace;color:#7d93ab;font-size:0.55rem;margin-top:2px;'>"
+                            f"{_leg.get('stat')} Over {_leg.get('line')} · vs {_leg.get('opp', 'TBD')}{_leg_watch}</div>"
+                            f"</div>"
+                            f"<div style='text-align:right;font-family:JetBrains Mono,monospace;'>"
+                            f"<div style='color:#00e896;font-weight:900;font-size:0.8rem;'>{_leg.get('adj')}%</div>"
+                            f"<div style='color:#6b7f96;font-size:0.5rem;'>Conf {_leg.get('confidence')}</div>"
+                            f"</div></div>"
+                        )
+                    st.markdown(
+                        f"<div style='background:linear-gradient(135deg,rgba(0,196,204,0.10),rgba(255,255,255,0.025));"
+                        f"border:1px solid rgba(0,196,204,0.22);border-radius:14px;padding:1rem 1.1rem;"
+                        f"margin:0 0 1rem 0;box-shadow:0 12px 34px rgba(0,0,0,0.34);'>"
+                        f"<div style='display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;'>"
+                        f"<div>"
+                        f"<div style='font-family:JetBrains Mono,monospace;color:#00c4cc;font-size:0.56rem;"
+                        f"font-weight:900;letter-spacing:0.16em;text-transform:uppercase;'>Best Entry Builder</div>"
+                        f"<div style='font-family:Plus Jakarta Sans,sans-serif;color:#f0f4f8;font-weight:900;"
+                        f"font-size:1.05rem;margin-top:3px;'>Recommended MLB {_best_legs and len(_best_legs)}-leg entry</div>"
+                        f"<div style='font-family:JetBrains Mono,monospace;color:#7d93ab;font-size:0.62rem;margin-top:4px;'>"
+                        f"Built from validated scanner results · duplicate players avoided · watchlist risk limited</div>"
+                        f"</div>"
+                        f"<div style='display:flex;gap:8px;flex-wrap:wrap;'>"
+                        f"<span class='edge-pill-v55 accent'>Combined {_best_combined:.1%}</span>"
+                        f"<span class='edge-pill-v55'>Avg conf {_best_avg_conf:.0f}</span>"
+                        f"<span class='edge-pill-v55' style='color:{_best_risk_col};border-color:{_best_risk_col}55;'>Risk {_best_risk}</span>"
+                        f"</div></div>"
+                        f"<div style='margin-top:0.7rem;'>{_best_rows}</div>"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+                    if st.button("➕ Add Recommended Entry", key="add_best_mlb_entry", use_container_width=True):
+                        import datetime as _dt_best_entry
+                        for _leg in _best_legs:
+                            _is_strong_leg = (
+                                float(_leg.get("adj", 0) or 0) >= 67
+                                and float(_leg.get("edge_pct", 0) or 0) >= 7
+                                and int(_leg.get("confidence", 0) or 0) >= 75
+                                and not _leg.get("_entry_watch")
+                            )
+                            _tier_leg = "Strong Over" if _is_strong_leg else "Lean Over"
+                            _new_leg = {
+                                "player":     _leg["player"],
+                                "prop":       f"{_leg['stat']} Over",
+                                "line":       _leg["line"],
+                                "side":       "Over",
+                                "verdict":    _tier_leg,
+                                "confidence": int(_leg.get("confidence", 0) or 0),
+                                "adj":        _leg["adj"],
+                                "sport":      "MLB",
+                                "added":      _dt_best_entry.datetime.now().strftime("%I:%M %p"),
+                            }
+                            _entry = {
+                                "Player":      _leg["player"],
+                                "Line":        f"{_leg['line']} Over",
+                                "Opponent":    _leg.get("opp", "—"),
+                                "Matchup":     _leg["stat"],
+                                "Venue":       f"Best Entry · Edge Scanner · date:{_leg.get('game_date', '')}",
+                                "Avg PTS":     float(_leg.get("avg", 0) or 0),
+                                "Hit Rate":    f"{float(_leg.get('raw_adj', _leg['adj']) or 0):.1f}%",
+                                "Adjusted":    f"{float(_leg.get('adj', 0) or 0):.1f}%",
+                                "Consistency": f"{float(_leg.get('cons', 0) or 0):.1f}%",
+                                "Confidence":  int(_leg.get("confidence", 0) or 0),
+                                "Edge":        float(_leg.get("edge_raw", 0) or 0),
+                                "Sample":      int(_leg.get("samples", 0) or 0),
+                                "Risk Flags":  " | ".join(
+                                    (_leg.get("validation_reasons", []) or []) +
+                                    (_leg.get("trap_reasons", []) or [])
+                                ),
+                                "Trap":        _leg.get("trap_label", ""),
+                                "Validation":  _leg.get("validation_label", ""),
+                                "Verdict":     _tier_leg,
+                                "Result":      "Pending",
+                                "Sport":       "MLB",
+                            }
+                            add_to_pick_list_and_tracker(_new_leg, _entry)
+                        st.toast(f"Added {len(_best_legs)} recommended legs.", icon="✅")
+                        st.rerun()
+                elif _with_edge:
+                    st.markdown(
+                        "<div style='background:rgba(255,193,7,0.06);border:1px solid rgba(255,193,7,0.2);"
+                        "border-radius:12px;padding:0.8rem 1rem;margin-bottom:1rem;"
+                        "font-family:JetBrains Mono,monospace;font-size:0.66rem;color:#ffc107;'>"
+                        "Best Entry Builder: not enough clean MLB legs for a recommended entry. "
+                        "Use individual cards only.</div>",
+                        unsafe_allow_html=True,
+                    )
 
             # Render each result as a card
             for _r in _with_edge:
