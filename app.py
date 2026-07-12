@@ -14045,6 +14045,7 @@ if st.session_state.active_sport == "edge":
                 date_str = (
                     _dtx.datetime.now(et) + _dtx.timedelta(days=offset)
                 ).strftime("%Y-%m-%d")
+                fallback_team_game = None
                 r = _req.get(
                     "https://statsapi.mlb.com/api/v1/schedule",
                     params={"sportId": 1, "date": date_str, "hydrate": "team,venue,probablePitcher"},
@@ -14071,6 +14072,18 @@ if st.session_state.active_sport == "edge":
                             if target_team and _scanner_norm_mlb_team(team_abbr_side) != target_team:
                                 continue
                             prob = teams.get(side, {}).get("probablePitcher", {})
+                            prob_name = prob.get("fullName", "") or prob.get("lastName", "")
+                            if fallback_team_game is None:
+                                fallback_team_game = {
+                                    "opp": away if side == "home" else home,
+                                    "home_team": home,
+                                    "away_team": away,
+                                    "venue": venue,
+                                    "side": side,
+                                    "game_date": date_str,
+                                    "pitcher_matched": False,
+                                    "probable_name": prob_name,
+                                }
                             if not _probable_matches(prob):
                                 continue
                             return {
@@ -14101,6 +14114,11 @@ if st.session_state.active_sport == "edge":
                                     "pitcher_matched": True,
                                     "probable_name": prob.get("fullName", "") or prob.get("lastName", ""),
                                 }
+                # If the schedule has the team game but MLB probable data is
+                # missing/lagging, return matchup context as a watchlist signal
+                # instead of making the entire scanner show zero results.
+                if fallback_team_game is not None:
+                    return fallback_team_game
         except Exception as e:
             record_debug_error("mlb.edge.game_context", e)
         return empty
@@ -14390,12 +14408,9 @@ if st.session_state.active_sport == "edge":
             _game_date = _game_ctx.get("game_date", "")
             _last_start = _data.get("last_start_date")
 
-            # Pitcher markets are starter-dependent. Do not rank stale props
-            # unless MLB confirms this pitcher as the probable starter.
-            if not _game_ctx.get("pitcher_matched"):
-                return None
-
             _opp_display = _opp or "TBD"
+            if not _opp and not _game_date:
+                return None
 
             # Stale PrizePicks slates can keep pitchers who already started today.
             # Starting pitchers also should not surface for tomorrow on short rest.
@@ -14716,7 +14731,10 @@ if st.session_state.active_sport == "edge":
                 _validation_reasons.append(reason)
 
             if not _game_ctx.get("pitcher_matched"):
-                _block("not confirmed as probable starter")
+                if _game_ctx.get("probable_name"):
+                    _block(f"not listed probable starter ({_game_ctx.get('probable_name')})")
+                else:
+                    _watch("probable starter not confirmed", 10)
             if _avg_pc is None:
                 _watch("pitch-count path limited", 6)
             elif _avg_pc < 72:
@@ -15606,9 +15624,7 @@ if st.session_state.active_sport == "edge":
 
         # Sport-specific scanner
         _filtered = [p for p in _filtered if p["sport"] == _edge_sport]
-        _mlb_k_count = sum(1 for p in _filtered if is_mlb_strikeout_prop(p.get("stat", "")))
-        _mlb_hfs_count = sum(1 for p in _filtered if is_mlb_hitter_fantasy_prop(p.get("stat", "")))
-        _wnba_points_count = sum(1 for p in _filtered if is_wnba_points_prop(p.get("stat", "")))
+        _raw_sport_count = len(_filtered)
 
         # Stat filter — applied BEFORE threading so we don't spin up
         # 484 threads for 20 actual props
@@ -15665,6 +15681,9 @@ if st.session_state.active_sport == "edge":
             elif p["is_goblin"] and not _deduped[_k]["is_goblin"]:
                 _deduped[f"{_k}|goblin"] = p
         _filtered = list(_deduped.values())
+        _mlb_k_count = sum(1 for p in _filtered if p.get("sport") == "MLB" and is_mlb_strikeout_prop(p.get("stat", "")))
+        _mlb_hfs_count = sum(1 for p in _filtered if p.get("sport") == "MLB" and is_mlb_hitter_fantasy_prop(p.get("stat", "")))
+        _wnba_points_count = sum(1 for p in _filtered if p.get("sport") == "WNBA" and is_wnba_points_prop(p.get("stat", "")))
 
         if not _filtered:
             st.warning("No props found matching your filters. Try broadening the sport or stat filter.")
@@ -15743,10 +15762,15 @@ if st.session_state.active_sport == "edge":
         _prog.empty()
         _status.empty()
         st.session_state.edge_results = _results
+        if _edge_sport == "MLB":
+            _slate_bits = f"{_mlb_k_count} K props, {_mlb_hfs_count} Hitter FS props"
+        elif _edge_sport == "WNBA":
+            _slate_bits = f"{_wnba_points_count} WNBA Points props"
+        else:
+            _slate_bits = f"{_mlb_k_count} K props, {_mlb_hfs_count} Hitter FS props, {_wnba_points_count} WNBA Points props"
         st.session_state["edge_scan_summary"] = (
             f"Analyzed {len(_filtered)} matching props · {len(_results)} model candidates returned "
-            f"(slate parsed: {_mlb_k_count} K props, {_mlb_hfs_count} Hitter FS props, "
-            f"{_wnba_points_count} WNBA Points props)"
+            f"(raw {_edge_sport} rows: {_raw_sport_count}; filtered slate: {_slate_bits})"
         )
 
     # ── Display Results ───────────────────────────────────────────────────
