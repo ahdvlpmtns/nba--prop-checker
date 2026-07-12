@@ -4957,8 +4957,6 @@ def normalize_mlb_pitcher_prop_stat(stat: str) -> str:
         "fantasy points", "fantasy pts", "hitter fantasy", "batter fantasy"
     )):
         return "Hitter Fantasy Score"
-    if re.search(r"\b(k|ks)\b", s) and "pitch" not in s:
-        return "Strikeouts"
     if any(token in s for token in (
         "pitcher strikeout", "pitcher strikeouts", "strikeout", "strikeouts",
         "strike out", "strike outs", "pitcher k", "pitcher ks"
@@ -13226,19 +13224,42 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
 
     # PrizePicks rate-limits server IPs unpredictably. Use a reasonably fresh
     # last-good slate first so repeated scans do not hammer their API.
+    def _cache_slate_looks_valid(cached: list) -> bool:
+        """Reject old polluted slates caused by mixed PrizePicks responses."""
+        if not isinstance(cached, list) or not cached:
+            return False
+        try:
+            if sport_filter == "MLB":
+                mlb_rows = [p for p in cached if p.get("sport") == "MLB"]
+                k_rows = [p for p in mlb_rows if is_mlb_strikeout_prop(p.get("stat", ""))]
+                hfs_rows = [p for p in mlb_rows if is_mlb_hitter_fantasy_prop(p.get("stat", ""))]
+                # A normal PrizePicks MLB single-stat slate should not contain
+                # hundreds of pitcher K props. That indicates an older bad cache
+                # where every sport was stamped as MLB.
+                return len(mlb_rows) <= 700 and len(k_rows) <= 120 and len(hfs_rows) <= 180
+            if sport_filter == "WNBA":
+                rows = [p for p in cached if p.get("sport") == "WNBA"]
+                return len(rows) <= 300
+            return len(cached) <= 1500
+        except Exception:
+            return False
+
     cached_props = get_cached_pp_props_from_supabase(sport_filter, max_age_minutes=60)
-    if cached_props:
+    if cached_props and _cache_slate_looks_valid(cached_props):
         return cached_props
     cached_props = get_cached_pp_props_from_local(sport_filter, max_age_minutes=60)
-    if cached_props:
+    if cached_props and _cache_slate_looks_valid(cached_props):
         save_pp_props_to_supabase(sport_filter, cached_props)
         return cached_props
 
     def _stale_cache() -> Optional[list]:
-        return (
-            get_cached_pp_props_from_supabase(sport_filter, max_age_minutes=1440)
-            or get_cached_pp_props_from_local(sport_filter, max_age_minutes=1440)
-        )
+        stale = get_cached_pp_props_from_supabase(sport_filter, max_age_minutes=1440)
+        if stale and _cache_slate_looks_valid(stale):
+            return stale
+        stale = get_cached_pp_props_from_local(sport_filter, max_age_minutes=1440)
+        if stale and _cache_slate_looks_valid(stale):
+            return stale
+        return None
 
     cooldown_key = f"pp_rate_limit_until_{sport_filter.lower()}"
     cooldown_until = float(st.session_state.get(cooldown_key, 0) or 0)
@@ -13263,16 +13284,22 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
     elif sport_filter == "MLB": _all_leagues = [("2", "MLB")]
     elif sport_filter == "WNBA": _all_leagues = [("3", "WNBA")]
 
-    def _parse(data: dict, sport: str) -> list:
+    def _parse(data: dict, sport: str, expected_league_id: str) -> list:
         result = []
         pmap = {}
         for item in data.get("included", []):
             if item.get("type") == "new_player":
                 a = item.get("attributes", {})
+                rel = item.get("relationships", {}) or {}
+                player_league_id = str(
+                    ((rel.get("league", {}) or {}).get("data", {}) or {}).get("id", "")
+                    or a.get("league_id", "")
+                )
                 pmap[item["id"]] = {
                     "name": a.get("display_name") or a.get("name", ""),
                     "team": a.get("team_abbreviation", ""),
                     "pos":  a.get("position", ""),
+                    "league_id": player_league_id,
                 }
         seen = {}
         for proj in data.get("data", []):
@@ -13282,10 +13309,23 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
             odds_type = a.get("odds_type", "standard")
             if not line or not stat:
                 continue
+            rel = proj.get("relationships", {}) or {}
+            proj_league_id = str(
+                ((rel.get("league", {}) or {}).get("data", {}) or {}).get("id", "")
+                or a.get("league_id", "")
+            )
             pid = (proj.get("relationships", {})
                       .get("new_player", {})
                       .get("data", {}).get("id"))
             pi = pmap.get(pid, {})
+            player_league_id = str(pi.get("league_id", "") or "")
+            # Some PrizePicks endpoints can return a mixed slate even when a
+            # league_id param is supplied. Trust relationship metadata over the
+            # request URL and discard anything outside the requested league.
+            if proj_league_id and proj_league_id != str(expected_league_id):
+                continue
+            if player_league_id and player_league_id != str(expected_league_id):
+                continue
             name = pi.get("name", "")
             if not name:
                 continue
@@ -13293,6 +13333,7 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
             entry = {
                 "sport": sport, "player": name,
                 "team": pi.get("team", ""), "stat": stat,
+                "pos":  pi.get("pos", ""),
                 "line": float(line),
                 "is_goblin": odds_type == "goblin",
                 "is_demon":  odds_type == "demon",
@@ -13360,7 +13401,16 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
                     data = r.json()
                     row_count = len(data.get("data", []) or [])
                     if row_count:
-                        parsed = _parse(data, _sport)
+                        parsed = _parse(data, _sport, _league_id)
+                        if (
+                            (_sport == "MLB" and len(parsed) > 700)
+                            or (_sport == "WNBA" and len(parsed) > 300)
+                            or (_sport == "NBA" and len(parsed) > 900)
+                        ):
+                            fetch_notes.append(
+                                f"{_sport} {_url_label} {_per_page}: mixed slate ignored ({len(parsed)} parsed)"
+                            )
+                            continue
                         props.extend(parsed)
                         fetch_notes.append(f"{_sport} {_url_label} {_per_page}: {row_count} rows, {len(parsed)} parsed")
                         _fetched = True
@@ -15655,6 +15705,15 @@ if st.session_state.active_sport == "edge":
             _filtered = [
                 p for p in _filtered
                 if is_sane_mlb_pitcher_prop_line(p.get("stat", ""), p.get("line"))
+                and (
+                    not is_mlb_strikeout_prop(p.get("stat", ""))
+                    or not p.get("pos")
+                    or str(p.get("pos", "")).upper() in ("P", "SP", "RP", "LHP", "RHP")
+                )
+                and (
+                    not is_mlb_hitter_fantasy_prop(p.get("stat", ""))
+                    or str(p.get("pos", "")).upper() not in ("P", "SP", "RP", "LHP", "RHP")
+                )
             ]
         else:
             _filtered = [
