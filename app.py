@@ -2276,6 +2276,136 @@ button[data-testid="baseButton-primary"]:focus-visible {
         transition-duration: 0.001ms !important;
     }
 }
+
+/* ══════════════════════════════════════════
+   PropIQ V6.3 — Mobile pick board
+══════════════════════════════════════════ */
+.pick-tray-v63 {
+    position: fixed;
+    left: 50%;
+    bottom: 14px;
+    transform: translateX(-50%);
+    width: min(720px, calc(100vw - 24px));
+    z-index: 999;
+    background: rgba(8, 13, 19, 0.92);
+    border: 1px solid rgba(119,244,255,0.22);
+    border-radius: 14px;
+    box-shadow: 0 18px 48px rgba(0,0,0,0.55), 0 0 24px rgba(0,196,204,0.10);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    padding: 0.65rem 0.8rem;
+}
+.pick-tray-v63-inner {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 10px;
+    align-items: center;
+}
+.pick-tray-title-v63 {
+    font-family: var(--font-display);
+    font-size: 0.85rem;
+    font-weight: 900;
+    color: var(--text);
+    letter-spacing: -0.2px;
+    line-height: 1.15;
+}
+.pick-tray-sub-v63 {
+    font-family: var(--font-mono);
+    font-size: 0.54rem;
+    color: var(--text3);
+    margin-top: 3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.pick-tray-stat-v63 {
+    min-width: 58px;
+    text-align: center;
+    background: rgba(255,255,255,0.045);
+    border: 1px solid rgba(255,255,255,0.075);
+    border-radius: 10px;
+    padding: 0.42rem 0.5rem;
+}
+.pick-tray-stat-v63 span {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 0.45rem;
+    color: var(--text3);
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+}
+.pick-tray-stat-v63 strong {
+    display: block;
+    font-family: var(--font-display);
+    font-size: 0.95rem;
+    font-weight: 900;
+    color: var(--accent3);
+    line-height: 1.05;
+}
+.pick-tray-risk-v63 strong { color: var(--green); }
+.pick-tray-risk-v63.medium strong { color: var(--yellow); }
+.pick-tray-risk-v63.high strong { color: var(--red); }
+.edge-details-v55 {
+    display: none;
+    margin-top: 0.65rem;
+    font-family: var(--font-mono);
+    color: var(--text2);
+}
+.edge-details-v55 summary {
+    cursor: pointer;
+    color: var(--accent3);
+    font-size: 0.58rem;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    list-style: none;
+}
+.edge-details-v55 summary::-webkit-details-marker { display: none; }
+
+@media (max-width: 768px) {
+    .block-container {
+        padding-bottom: 7.8rem !important;
+    }
+    .pick-tray-v63 {
+        bottom: 10px;
+        width: calc(100vw - 18px);
+        border-radius: 13px;
+        padding: 0.58rem 0.62rem;
+    }
+    .pick-tray-v63-inner {
+        grid-template-columns: minmax(0, 1fr) 54px 54px;
+        gap: 7px;
+    }
+    .pick-tray-title-v63 {
+        font-size: 0.78rem;
+    }
+    .pick-tray-sub-v63 {
+        font-size: 0.49rem;
+    }
+    .pick-tray-stat-v63 {
+        min-width: 0;
+        padding: 0.36rem 0.32rem;
+        border-radius: 9px;
+    }
+    .pick-tray-stat-v63 strong {
+        font-size: 0.82rem;
+    }
+    .edge-card-v55 {
+        border-left-width: 5px !important;
+    }
+    .edge-top-v55 {
+        gap: 0.55rem !important;
+    }
+    .edge-player-v55 {
+        padding-right: 0.25rem;
+    }
+    .edge-detail-row-v55 {
+        display: none !important;
+    }
+    .edge-details-v55 {
+        display: block;
+    }
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -2658,6 +2788,51 @@ def render_pick_list() -> None:
         if st.button("Clear Pick List", key="main_clear_pick_list", use_container_width=True):
             st.session_state.parlay_legs = []
             st.rerun()
+
+
+def render_sticky_pick_tray() -> None:
+    """Fixed bottom shortlist status for mobile pick-board workflow."""
+    legs = st.session_state.get("parlay_legs", []) or []
+    count = len(legs)
+    confidences = []
+    for leg in legs:
+        try:
+            confidences.append(float(leg.get("confidence", leg.get("adj", 0)) or 0))
+        except Exception:
+            pass
+    avg_conf = round(sum(confidences) / len(confidences)) if confidences else 0
+    weak = sum(1 for c in confidences if c < 65)
+    watch = sum(
+        1 for leg in legs
+        if "watch" in str(leg.get("verdict", "")).lower()
+        or "trap" in str(leg.get("verdict", "")).lower()
+    )
+    if count == 0:
+        risk_label, risk_class = "Ready", ""
+        sub = "Add candidates from Edge or an analyzer"
+    elif weak or watch:
+        risk_label, risk_class = "High", "high"
+        sub = f"{count}/6 selected · review weak legs"
+    elif avg_conf >= 80 and count <= 4:
+        risk_label, risk_class = "Low", ""
+        sub = f"{count}/6 selected · shortlist looks clean"
+    else:
+        risk_label, risk_class = "Med", "medium"
+        sub = f"{count}/6 selected · keep it selective"
+
+    st.markdown(
+        f"<div class='pick-tray-v63'>"
+        f"<div class='pick-tray-v63-inner'>"
+        f"<div>"
+        f"<div class='pick-tray-title-v63'>PrizePicks Pick List</div>"
+        f"<div class='pick-tray-sub-v63'>{sub}</div>"
+        f"</div>"
+        f"<div class='pick-tray-stat-v63'><span>Picks</span><strong>{count}/6</strong></div>"
+        f"<div class='pick-tray-stat-v63 pick-tray-risk-v63 {risk_class}'>"
+        f"<span>Risk</span><strong>{risk_label}</strong></div>"
+        f"</div></div>",
+        unsafe_allow_html=True,
+    )
 
 
 def set_runtime_metric(key: str, status: str, detail: str = "", **extra) -> None:
@@ -7074,6 +7249,7 @@ with _sp3:
         st.rerun()
 
 render_pick_list()
+render_sticky_pick_tray()
 
 
 with st.expander("Runtime Diagnostics", expanded=False):
@@ -15059,7 +15235,7 @@ if st.session_state.active_sport == "edge":
                     f"</div>"
                     f"</div>"
                     f"{_reason_row_html}"
-                    f"<div class='edge-meta-v55' style='margin-top:0.75rem;'>"
+                    f"<div class='edge-meta-v55 edge-detail-row-v55' style='margin-top:0.75rem;'>"
                     f"<span class='edge-pill-v55'>Raw {_r.get('raw_adj', _r['adj'])}%</span>"
                     f"<span class='edge-pill-v55'>Reliability {_r.get('reliability', '—')}%</span>"
                     f"<span class='edge-pill-v55'>Avg {_r['avg']}</span>"
@@ -15067,6 +15243,17 @@ if st.session_state.active_sport == "edge":
                     f"<span class='edge-pill-v55'>Consistency {_r['cons']}%</span>"
                     f"<span class='edge-pill-v55'>{_r['samples']} {'games' if _r.get('stat') == 'Hitter Fantasy Score' else 'starts'}</span>"
                     f"</div>"
+                    f"<details class='edge-details-v55'>"
+                    f"<summary>Details</summary>"
+                    f"<div class='edge-meta-v55' style='margin-top:0.55rem;'>"
+                    f"<span class='edge-pill-v55'>Raw {_r.get('raw_adj', _r['adj'])}%</span>"
+                    f"<span class='edge-pill-v55'>Reliability {_r.get('reliability', '—')}%</span>"
+                    f"<span class='edge-pill-v55'>Avg {_r['avg']}</span>"
+                    f"<span class='edge-pill-v55'>Avg edge <strong style='color:{_edge_raw_col};'>{_r['edge_raw']:+.1f}</strong></span>"
+                    f"<span class='edge-pill-v55'>Consistency {_r['cons']}%</span>"
+                    f"<span class='edge-pill-v55'>{_r['samples']} {'games' if _r.get('stat') == 'Hitter Fantasy Score' else 'starts'}</span>"
+                    f"</div>"
+                    f"</details>"
                     f"<div class='edge-bar-v55'><div style='width:{_bar_w}%;background:{_tier_col};'></div></div>"
                     f"</div>",
                     unsafe_allow_html=True
