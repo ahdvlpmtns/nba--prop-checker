@@ -13224,18 +13224,20 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
     props = []
     fetch_notes = []
 
-    cached_props = get_cached_pp_props_from_supabase(sport_filter, max_age_minutes=15)
+    # PrizePicks rate-limits server IPs unpredictably. Use a reasonably fresh
+    # last-good slate first so repeated scans do not hammer their API.
+    cached_props = get_cached_pp_props_from_supabase(sport_filter, max_age_minutes=60)
     if cached_props:
         return cached_props
-    cached_props = get_cached_pp_props_from_local(sport_filter, max_age_minutes=15)
+    cached_props = get_cached_pp_props_from_local(sport_filter, max_age_minutes=60)
     if cached_props:
         save_pp_props_to_supabase(sport_filter, cached_props)
         return cached_props
 
     def _stale_cache() -> Optional[list]:
         return (
-            get_cached_pp_props_from_supabase(sport_filter, max_age_minutes=720)
-            or get_cached_pp_props_from_local(sport_filter, max_age_minutes=720)
+            get_cached_pp_props_from_supabase(sport_filter, max_age_minutes=1440)
+            or get_cached_pp_props_from_local(sport_filter, max_age_minutes=1440)
         )
 
     cooldown_key = f"pp_rate_limit_until_{sport_filter.lower()}"
@@ -13307,7 +13309,9 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
         ("https://partner-api.prizepicks.com/projections", "partner-api.prizepicks.com"),
         ("https://api.prizepicks.com/projections", "api.prizepicks.com"),
     ]
-    _page_sizes = ["250", "100"]
+    # Start below the max page size. Smaller pages are less likely to trip the
+    # partner API's throttle, while 250 remains a final attempt for fuller slates.
+    _page_sizes = ["100", "50", "250"]
     _base_headers = {
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "en-US,en;q=0.9",
@@ -13337,7 +13341,13 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
                     if r.status_code == 429:
                         fetch_notes.append(f"{_sport} {_url_label} {_per_page}: 429 rate-limited")
                         st.session_state[cooldown_key] = _time.time() + (10 * 60)
-                        _blocked = True
+                        # Do not let one throttled endpoint/page size kill the
+                        # whole fetch. Try the alternate endpoint and smaller
+                        # page sizes before falling back to cache.
+                        if _per_page != _page_sizes[-1]:
+                            continue
+                        if "api.prizepicks.com" in _url_label:
+                            _blocked = True
                         break
                     if r.status_code == 403:
                         fetch_notes.append(f"{_sport} {_url_label} {_per_page}: HTTP 403 blocked")
