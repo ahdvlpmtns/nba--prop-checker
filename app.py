@@ -7739,9 +7739,12 @@ if st.session_state.active_sport == "mlb":
                 away  = mlb_norm_abbr(game["teams"]["away"]["team"]["abbreviation"])
                 opp   = away if side=="home" else home
                 venue = game.get("venue",{}).get("name","")
+                prob  = game.get("teams",{}).get(side,{}).get("probablePitcher",{})
                 return {"opp":opp,"home_team":home,"away_team":away,
                         "pitcher_side":side,"venue":venue,"game_date":today,
-                        "pitcher_team":home if side=="home" else away}
+                        "pitcher_team":home if side=="home" else away,
+                        "probable_name": prob.get("fullName", "") or prob.get("lastName", ""),
+                        "probable_id": prob.get("id")}
 
             # Pass 1: match by team abbreviation (most reliable)
             if team_abbr:
@@ -9448,6 +9451,144 @@ if st.session_state.active_sport == "mlb":
         except Exception:
             return empty
 
+    def mlb_detect_pitcher_role(
+        pitcher_name: str,
+        logs: pd.DataFrame,
+        tonight: dict,
+        pitchcnt: dict,
+        pstats: dict,
+        injury: dict,
+    ) -> dict:
+        """
+        Starter role/leash detector for MLB pitcher props.
+        Returns an Over-side adjustment; Under flips the sign where used.
+        """
+        empty = {
+            "label": "Role TBD", "status": "Unknown", "adj": 0.0,
+            "confidence_penalty": 0, "severity": 0, "summary": [],
+            "confirmed": False, "color": "#9aaec4",
+        }
+        try:
+            def _norm_name(name: str) -> str:
+                return re.sub(r"\s+", " ", str(name or "").lower().replace(".", "").replace("-", " ")).strip()
+
+            def _name_match(a: str, b: str) -> bool:
+                aa, bb = _norm_name(a), _norm_name(b)
+                if not aa or not bb:
+                    return False
+                if aa == bb or aa in bb or bb in aa:
+                    return True
+                ap, bp = aa.split(), bb.split()
+                return bool(ap and bp and ap[-1] == bp[-1] and ap[0][:1] == bp[0][:1])
+
+            def _ip_to_float(ip_raw) -> float:
+                try:
+                    s = str(ip_raw or "0")
+                    whole, _, frac = s.partition(".")
+                    return int(whole or 0) + (int((frac or "0")[0]) / 3.0)
+                except Exception:
+                    return 0.0
+
+            probable_name = tonight.get("probable_name", "") if tonight else ""
+            confirmed = _name_match(pitcher_name, probable_name)
+            role_notes = []
+            severity = 0
+            adj = 0.0
+            conf_penalty = 0
+
+            starts = len(logs) if logs is not None else 0
+            pc_avg = pitchcnt.get("avg_pitches") if pitchcnt else None
+            pc_starts = int(pitchcnt.get("starts_analyzed", 0) or 0) if pitchcnt else 0
+            on_limit = bool(pitchcnt.get("on_limit", False)) if pitchcnt else False
+            avg_ip = float(pstats.get("avg_ip", 0) or 0) if pstats else 0.0
+            if (not avg_ip) and logs is not None and not logs.empty and "IP" in logs.columns:
+                ip_vals = [_ip_to_float(x) for x in logs["IP"].head(5).tolist()]
+                ip_vals = [x for x in ip_vals if x > 0]
+                avg_ip = sum(ip_vals) / len(ip_vals) if ip_vals else 0.0
+
+            injury_status = str((injury or {}).get("status", "Active") or "Active")
+            if not (injury or {}).get("is_available", True):
+                return {
+                    **empty, "label": "Unavailable / injury risk",
+                    "status": "Unavailable", "adj": -0.18,
+                    "confidence_penalty": 18, "severity": 3,
+                    "summary": [injury_status],
+                    "color": "#ff3d5c",
+                }
+
+            if not confirmed:
+                role_notes.append(
+                    f"Not matched to probable starter{f' ({probable_name})' if probable_name else ''}"
+                )
+                severity = max(severity, 3)
+                adj -= 0.10
+                conf_penalty += 12
+
+            if pc_avg is not None:
+                if pc_avg < 72:
+                    role_notes.append(f"Opener/bulk workload risk (~{pc_avg} pitches)")
+                    severity = max(severity, 3)
+                    adj -= 0.12
+                    conf_penalty += 14
+                elif pc_avg < 82 or on_limit:
+                    role_notes.append(f"Short leash / ramp risk (~{pc_avg} pitches)")
+                    severity = max(severity, 2)
+                    adj -= 0.06
+                    conf_penalty += 8
+                elif pc_avg >= 92 and starts >= 6:
+                    role_notes.append(f"Established starter workload (~{pc_avg} pitches)")
+            elif starts < 6:
+                role_notes.append("Pitch-count path unavailable")
+                severity = max(severity, 1)
+                conf_penalty += 4
+
+            if starts < 4:
+                role_notes.append(f"Only {starts} starts in sample")
+                severity = max(severity, 2)
+                adj -= 0.04
+                conf_penalty += 8
+            elif starts < 6:
+                role_notes.append(f"Small starter sample ({starts} starts)")
+                severity = max(severity, 1)
+                adj -= 0.02
+                conf_penalty += 4
+
+            if avg_ip and avg_ip < 4.2:
+                role_notes.append(f"Short outing profile ({avg_ip:.1f} IP/start)")
+                severity = max(severity, 2)
+                adj -= 0.05
+                conf_penalty += 7
+            elif avg_ip and avg_ip < 5.0:
+                role_notes.append(f"Limited depth ({avg_ip:.1f} IP/start)")
+                severity = max(severity, 1)
+                adj -= 0.025
+                conf_penalty += 3
+
+            if not role_notes:
+                role_notes.append("Confirmed starter workload")
+
+            if severity >= 3:
+                label, status, color = "Opener / role risk", "Risk", "#ff3d5c"
+            elif severity == 2:
+                label, status, color = "Short leash risk", "Watchlist", "#ffc107"
+            elif severity == 1:
+                label, status, color = "Starter, monitor leash", "Monitor", "#ff7043"
+            else:
+                label, status, color = "Confirmed starter", "Stable", "#00e896"
+
+            return {
+                "label": label, "status": status,
+                "adj": max(-0.18, min(0.03, adj)),
+                "confidence_penalty": min(24, conf_penalty),
+                "severity": severity, "summary": role_notes[:4],
+                "confirmed": confirmed, "color": color,
+                "probable_name": probable_name,
+                "avg_ip": round(avg_ip, 1) if avg_ip else None,
+                "pc_avg": pc_avg,
+            }
+        except Exception:
+            return empty
+
     def mlb_trap_detector(
         prop: str,
         side: str,
@@ -10513,6 +10654,12 @@ if st.session_state.active_sport == "mlb":
         except: _opp_plate = {}
         try:    _bullpen = _f_bullpen.result(timeout=8) if _f_bullpen else {}
         except: _bullpen = {}
+        _role = mlb_detect_pitcher_role(
+            mlb_pitcher, mlb_logs, _tonight, _pitchcnt, _pstats, _injury
+        )
+        _role_adj = float(_role.get("adj", 0.0) or 0.0)
+        if mlb_side == "Under":
+            _role_adj = -_role_adj
 
         # Initialize all derived signal variables with safe defaults
         _vtrend_mph = 0.0
@@ -11089,7 +11236,7 @@ if st.session_state.active_sport == "mlb":
                       + _ump_adj + _wx_adj + _lineup_adj
                       + _platoon_adj + _contact_adj + _opp_context_adj
                       + _matchup_cluster_correction
-                      + _pc_adj + _variance_adj))
+                      + _role_adj + _pc_adj + _variance_adj))
 
             # Consensus projection anchor. Pitch-count expected K and the
             # lineup/BF projection estimate overlapping outcomes, so combine
@@ -11352,6 +11499,10 @@ if st.session_state.active_sport == "mlb":
                     mlb_line - _pc_expected_k
                 )
             if not _is_outs_prop:
+                _role_conf_penalty = int(_role.get("confidence_penalty", 0) or 0)
+                if _role_conf_penalty:
+                    _conf_penalty += _role_conf_penalty
+                    _quality_notes.append(_role.get("label", "pitcher role risk"))
                 if _n_starts < 4:
                     _conf_penalty += 12
                     _quality_notes.append(f"only {_n_starts} starts")
@@ -11398,6 +11549,9 @@ if st.session_state.active_sport == "mlb":
                     _downgrade = True
                     _dq.append(f"only {_n_starts} starts")
                 if not _is_outs_prop:
+                    if int(_role.get("severity", 0) or 0) >= 2:
+                        _downgrade = True
+                        _dq.append(_role.get("label", "role risk"))
                     _bf_cushion = _bf_cushion_for_quality
                     if _lineup_projected and (_bf_cushion is None or _bf_cushion < 1.0):
                         _downgrade = True
@@ -11428,6 +11582,16 @@ if st.session_state.active_sport == "mlb":
                     f"{_tier_quality_note} · {_lean_gate_note}"
                     if _tier_quality_note else _lean_gate_note
                 )
+            if tier in ("Lean Over", "Lean Under") and int(_role.get("severity", 0) or 0) >= 3:
+                _previous_tier = tier
+                tier = "Pass"
+                _role_gate_note = (
+                    f"{_previous_tier} changed to Pass: {_role.get('label', 'pitcher role risk')}"
+                )
+                _tier_quality_note = (
+                    f"{_tier_quality_note} · {_role_gate_note}"
+                    if _tier_quality_note else _role_gate_note
+                )
             _cc  = "#00c4cc" if _sc >= 80 else ("#ffc107" if _sc >= 65 else "#f97316")
             css  = {"Strong Over":"green","Lean Over":"yellow","Strong Under":"red",
                     "Lean Under":"orange","Pass":"gray"}.get(tier,"gray")
@@ -11440,7 +11604,7 @@ if st.session_state.active_sport == "mlb":
                 _outs_expected, _opp_plate.get("bb_rate"),
                 _bullpen.get("signal", "Neutral") if _bullpen else "Neutral",
                 _wx_impact,
-                bool(_tonight and _tonight.get("pitcher_team")),
+                bool(_role.get("confirmed", False)),
             )
 
             _mlb_ph.empty()
@@ -11947,6 +12111,38 @@ if st.session_state.active_sport == "mlb":
                     unsafe_allow_html=True
                 )
 
+            # ── Pitcher role / leash detector ───────────────────────
+            _role_color = _role.get("color", "#9aaec4")
+            _role_summary = " | ".join(_role.get("summary", [])) or "No role risk detected"
+            _role_probable = _role.get("probable_name", "")
+            _role_meta_bits = []
+            if _role_probable:
+                _role_meta_bits.append(f"Probable: {_role_probable}")
+            if _role.get("pc_avg"):
+                _role_meta_bits.append(f"Pitch count: ~{_role.get('pc_avg')}p")
+            if _role.get("avg_ip"):
+                _role_meta_bits.append(f"Avg IP: {_role.get('avg_ip')}")
+            _role_meta = " · ".join(_role_meta_bits)
+            st.markdown(
+                f"<div style='background:{_role_color}12;border:1px solid {_role_color}44;"
+                f"border-left:4px solid {_role_color};border-radius:0 12px 12px 0;"
+                f"padding:0.8rem 1rem;margin-bottom:0.75rem;'>"
+                f"<div style='display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;'>"
+                f"<div>"
+                f"<div style='font-family:JetBrains Mono,monospace;font-size:0.56rem;color:#6b7f96;"
+                f"letter-spacing:0.16em;text-transform:uppercase;margin-bottom:3px;'>Pitcher Role</div>"
+                f"<div style='font-family:Plus Jakarta Sans,sans-serif;font-size:1rem;font-weight:900;color:{_role_color};'>"
+                f"{_role.get('label', 'Role TBD')}</div>"
+                f"</div>"
+                f"<div style='font-family:JetBrains Mono,monospace;font-size:0.6rem;color:#7d93ab;text-align:right;'>"
+                f"{_role_meta}</div>"
+                f"</div>"
+                f"<div style='font-family:JetBrains Mono,monospace;font-size:0.64rem;color:#9aaec4;"
+                f"margin-top:6px;line-height:1.6;'>{_role_summary}</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
             # ── Probability bar + confidence meter ──────────────
             _mlb_bar_pct = min(100, int(adj * 100))
             _mlb_bar_col = ("#00e896" if tier in ("Strong Over","Lean Over")
@@ -12042,8 +12238,12 @@ if st.session_state.active_sport == "mlb":
                         "Confidence":  _sc,
                         "Edge":        round(edge, 2),
                         "Sample":      _n_starts,
-                        "Risk Flags":  " | ".join(_trap.get("summary", [])) if _trap else "",
+                        "Risk Flags":  " | ".join(
+                            (_role.get("summary", []) or []) +
+                            (_trap.get("summary", []) if _trap else [])
+                        ),
                         "Trap":        _trap.get("label", "") if _trap else "",
+                        "Role":        _role.get("label", ""),
                         "Verdict":     tier,
                         "Result":      "Pending",
                         "Sport":       "MLB",
@@ -12186,6 +12386,9 @@ if st.session_state.active_sport == "mlb":
                                                   f"{_matchup_cluster_raw:+.1%} raw → {_matchup_cluster_adj:+.1%}",
                                                   _matchup_cluster_correction,
                                                   "Caps correlated opponent K%, lineup, platoon, contact, and recent-opponent signals"),
+                    ("Pitcher role",             _role.get("label", "Role TBD"),
+                                                  _role_adj,
+                                                  " | ".join(_role.get("summary", [])) or "No role risk detected"),
                     ("Pitcher variance",           f"{cons:.1%} consistency",
                                                   _variance_adj,
                                                   _variance_note),
@@ -12226,6 +12429,8 @@ if st.session_state.active_sport == "mlb":
                         ("Opponent BB%", f"{_opp_plate.get('bb_rate'):.1%}" if _opp_plate.get("bb_rate") is not None else "N/A", None, f"{_opp_plate.get('profile','Neutral')} plate profile"),
                         ("Bullpen leash", _bullpen.get("signal", "Neutral"), None, f"L2 relief outs {_bullpen.get('relief_outs_l2','N/A')}"),
                         ("Weather", _weather_condition_label, _wx_adj, _wx_note if _wx_note else "No weather data"),
+                        ("Pitcher role", _role.get("label", "Role TBD"), _role_adj,
+                         " | ".join(_role.get("summary", [])) or "No role risk detected"),
                         ("Pitcher variance", f"{cons:.1%} consistency", _variance_adj, _variance_note),
                         ("Outs projection", f"{_outs_prob:.1%}" if _outs_prob is not None else "N/A", None, _outs_note if _outs_note else "Workload projection unavailable"),
                     ]
@@ -12257,23 +12462,25 @@ if st.session_state.active_sport == "mlb":
                     "calibrated base only"
                 )
                 if _is_outs_prop:
-                    _mlb_adjs = [_ha_adj, _form_adj, _rest_adj, _ip_adj, _wx_adj, _pc_adj, _variance_adj]
+                    _mlb_adjs = [_ha_adj, _form_adj, _rest_adj, _ip_adj, _wx_adj,
+                                 _role_adj, _pc_adj, _variance_adj]
                     _mlb_adj_labels = [
                         "Home/Away split", "Recent form", "Rest days",
-                        "Avg IP/start", "Weather", "Pitch count est", "Pitcher variance"
+                        "Avg IP/start", "Weather", "Pitcher role",
+                        "Pitch count est", "Pitcher variance"
                     ]
                 else:
                     _mlb_adjs = [_ha_adj, _form_adj, _rest_adj, _k9_adj,
                                  _swstr_adj, _velo_adj, _vtrend_adj, _ip_adj, _ump_adj, _wx_adj,
                                  _lineup_adj, _platoon_adj, _contact_adj,
-                                 _opp_context_adj, _matchup_cluster_correction, _pc_adj,
-                                 _variance_adj]
+                                 _opp_context_adj, _matchup_cluster_correction,
+                                 _role_adj, _pc_adj, _variance_adj]
                     _mlb_adj_labels = [
                         "Home/Away split", "Recent form", "Rest days", "K/9 rate",
                         "Whiff%/K%", "Velocity", "Velocity trend", "Avg IP/start", "Umpire zone",
                         "Weather", "Batting order", "Platoon matchup", "Contact profile",
                         "Recent opponent difficulty", "Matchup cluster cap",
-                        "Pitch count est", "Pitcher variance"
+                        "Pitcher role", "Pitch count est", "Pitcher variance"
                     ]
                 _mlb_running = _mlb_base_adj
                 _mlb_steps = []
@@ -12333,6 +12540,10 @@ if st.session_state.active_sport == "mlb":
                         f"{_matchup_cluster_raw:+.1%} raw → "
                         f"{_matchup_cluster_adj:+.1%} capped "
                         f"(limit ±{_matchup_cluster_cap:.0%})"
+                    ),
+                    "Pitcher role": (
+                        f"{_role.get('label', 'Role TBD')} · "
+                        f"{_role.get('status', 'Unknown')}"
                     ),
                     "Pitcher variance": f"{cons:.1%} consistency · {_variance_note}",
                 }
@@ -12465,7 +12676,8 @@ if st.session_state.active_sport == "mlb":
                     f"{'✅ Opp BB%' if _opp_plate.get('bb_rate') is not None else '⚠️ Opp BB%'} · "
                     f"{'✅ Bullpen' if _bullpen.get('signal') and _bullpen.get('signal') != 'Neutral' else '⚪ Bullpen'} · "
                     f"{'✅ Weather' if _weather and _weather.get('temp_f') else '⚠️ Weather'} · "
-                    f"{_lineup_loaded_label}"
+                    f"{_lineup_loaded_label} · "
+                    f"{'✅ Role' if _role.get('confirmed') else '⚠️ Role'}"
                     if _is_outs_prop else
                     f"{'✅ K/9' if _k9>0 else '❌ K/9'} · "
                     f"{'✅ Whiff%' if _whiff_real is not None else '⚠️ K% proxy'} · "
@@ -12474,7 +12686,8 @@ if st.session_state.active_sport == "mlb":
                     f"{'✅ Weather' if _weather and _weather.get('temp_f') else '⚠️ N/A'} · "
                     f"{_lineup_loaded_label} · "
                     f"{'✅ Platoon' if (_platoon_vs_l and _platoon_vs_r) else '⚠️ N/A'} · "
-                    f"{'✅ PitchCnt' if _pc_avg else '⚠️ N/A'}"
+                    f"{'✅ PitchCnt' if _pc_avg else '⚠️ N/A'} · "
+                    f"{'✅ Role' if _role.get('confirmed') else '⚠️ Role'}"
                 )
                 _projection_anchor_label = "Outs projection" if _is_outs_prop else "Projection anchor"
                 _projection_anchor_text = (
@@ -12489,6 +12702,10 @@ if st.session_state.active_sport == "mlb":
                 _trap_debug = (
                     f"{_trap['label']} · "
                     f"{' | '.join(_trap['summary'])}"
+                )
+                _role_debug = (
+                    f"{_role.get('label', 'Role TBD')} · "
+                    f"{' | '.join(_role.get('summary', [])) or 'No role risk detected'}"
                 )
                 _lineup_bf_final_row = ""
                 if not _is_outs_prop:
@@ -12555,6 +12772,10 @@ if st.session_state.active_sport == "mlb":
                     <tr>
                         <td style='padding:3px 8px 3px 0;color:#6b7f96;'>Trap detector</td>
                         <td colspan='3' style='color:#9aaec4;'>{_trap_debug}</td>
+                    </tr>
+                    <tr>
+                        <td style='padding:3px 8px 3px 0;color:#6b7f96;'>Pitcher role</td>
+                        <td colspan='3' style='color:#9aaec4;'>{_role_debug}</td>
                     </tr>
                     <tr>
                         <td style='padding:3px 8px 3px 0;color:#6b7f96;'>{_projection_anchor_label}</td>
@@ -12888,7 +13109,12 @@ if st.session_state.active_sport == "edge":
         samples = int(result.get("samples", 0) or 0)
         reasons = []
 
-        if adj >= 78 and edge >= 2 and cons >= 60:
+        validation_label = str(result.get("validation_label", "") or "")
+        validation_reasons = result.get("validation_reasons", []) or []
+
+        if "Watchlist" in validation_label:
+            grade, color = "Watchlist", "#ffc107"
+        elif adj >= 78 and edge >= 2 and cons >= 60:
             grade, color = "A+ Edge", "#00e896"
         elif adj >= 72 and edge >= 1:
             grade, color = "A Edge", "#22c55e"
@@ -12920,6 +13146,10 @@ if st.session_state.active_sport == "edge":
                 reasons.append(f"Projection gap {result['projection_gap']:+.1f}")
             if result.get("trap_label") and result.get("trap_label") != "Clean":
                 reasons.append(f"Trap: {result['trap_label']}")
+            if validation_label:
+                reasons.append(validation_label)
+            for _vreason in validation_reasons[:2]:
+                reasons.append(_vreason)
             if is_outs_prop and result.get("avg_ip"):
                 reasons.append(f"Avg {result['avg_ip']} IP/start")
             if result.get("bullpen") and result.get("bullpen") != "Neutral":
@@ -13942,6 +14172,81 @@ if st.session_state.active_sport == "edge":
                 _data_bonus
             ))
 
+            # Final validation pass. The scanner is allowed to be fast, but
+            # anything shown on the board still needs to survive the same core
+            # questions as the individual analyzer: confirmed starter, enough
+            # workload, projection support, and no obvious trap profile.
+            _validation_reasons = []
+            _validation_penalty = 0
+            _validation_block = False
+
+            def _watch(reason: str, pts: int = 4):
+                nonlocal _validation_penalty
+                _validation_penalty += pts
+                _validation_reasons.append(reason)
+
+            def _block(reason: str):
+                nonlocal _validation_block, _validation_penalty
+                _validation_block = True
+                _validation_penalty += 16
+                _validation_reasons.append(reason)
+
+            if not _game_ctx.get("pitcher_matched"):
+                _block("not confirmed as probable starter")
+            if _avg_pc is None:
+                _watch("pitch-count path limited", 6)
+            elif _avg_pc < 72:
+                _block(f"opener/bulk risk (~{_avg_pc:.0f}p)")
+            elif _avg_pc < 82:
+                _watch(f"short leash risk (~{_avg_pc:.0f}p)", 8)
+            if _avg_ip is None:
+                _watch("avg IP unavailable", 5)
+            elif _avg_ip < 4.2:
+                _block(f"short outing profile ({_avg_ip:.1f} IP)")
+            elif _avg_ip < 5.0:
+                _watch(f"limited depth ({_avg_ip:.1f} IP)", 5)
+            if _pc_expected is None or _proj_prob is None:
+                _watch("projection anchor missing", 8)
+            elif _proj_prob < 0.54:
+                _block(f"projection disagrees ({_proj_prob:.0%})")
+            elif _proj_prob < 0.62:
+                _watch(f"weak projection support ({_proj_prob:.0%})", 7)
+            if _proj_gap is not None:
+                if _is_outs:
+                    if _proj_gap < 0.5:
+                        _block(f"thin outs cushion ({_pc_expected:.1f})")
+                    elif _proj_gap < 1.5:
+                        _watch(f"small outs cushion ({_pc_expected:.1f})", 6)
+                else:
+                    if _proj_gap < 0.25:
+                        _block(f"thin K cushion ({_pc_expected:.1f})")
+                    elif _proj_gap < 0.75:
+                        _watch(f"small K cushion ({_pc_expected:.1f})", 6)
+            if _pc_ceiling is not None:
+                if (_is_outs and _pc_ceiling <= line + 0.5) or ((not _is_outs) and _pc_ceiling <= line + 0.25):
+                    _block(f"tight ceiling ({_pc_ceiling:.1f})")
+            if _trap_label == "Do Not Force":
+                _block("trap detector rejected")
+            elif _trap_label == "Trap Risk":
+                _watch("trap detector watchlist", 7)
+            if _n < 5:
+                _watch(f"small sample ({_n})", 6)
+            if _scanner_conf < 55:
+                _block(f"confidence too low ({_scanner_conf}/100)")
+            elif _scanner_conf < 68:
+                _watch(f"medium confidence ({_scanner_conf}/100)", 5)
+
+            _scanner_conf = max(0, _scanner_conf - _validation_penalty)
+            if _validation_block:
+                return None
+
+            if _validation_reasons:
+                _validation_label = "Validated Watchlist"
+            elif _scanner_conf >= 80 and _adj >= 0.67:
+                _validation_label = "Validated Strong"
+            else:
+                _validation_label = "Validated"
+
             return {
                 "sport":    "MLB",
                 "player":   pitcher_name,
@@ -13972,6 +14277,8 @@ if st.session_state.active_sport == "edge":
                 "projection_prob": round(_proj_prob * 100, 1) if _proj_prob is not None else None,
                 "trap_label": _trap_label,
                 "trap_reasons": _trap_reasons[:3],
+                "validation_label": _validation_label,
+                "validation_reasons": _validation_reasons[:3],
                 "game_date": _game_date,
                 "last_start": _last_start,
                 "l3":       round(_l3, 1),
@@ -14608,8 +14915,16 @@ if st.session_state.active_sport == "edge":
             )
         else:
             # Summary strip
-            _strong  = [r for r in _with_edge if r["adj"] >= 67 and r["edge_pct"] >= 7]
-            _lean    = [r for r in _with_edge if 60 <= r["adj"] < 67 or 3 <= r["edge_pct"] < 7]
+            _strong  = [
+                r for r in _with_edge
+                if r["adj"] >= 67 and r["edge_pct"] >= 7
+                and int(r.get("confidence", 0) or 0) >= 75
+                and "Watchlist" not in str(r.get("validation_label", ""))
+            ]
+            _lean    = [
+                r for r in _with_edge
+                if r not in _strong and (r["adj"] >= 60 or r["edge_pct"] >= 3)
+            ]
             _goblins = [r for r in _with_edge if r.get("is_goblin")]
             st.markdown(
                 f"<div style='display:flex;gap:12px;flex-wrap:wrap;"
@@ -14641,8 +14956,14 @@ if st.session_state.active_sport == "edge":
                     f"<div class='edge-reasons-v55'>{_reason_html}</div>"
                     if _reason_html else ""
                 )
-                _is_strong  = _r["adj"] >= 67 and _r["edge_pct"] >= 7
-                _is_lean    = (60 <= _r["adj"] < 67) or (3 <= _r["edge_pct"] < 7)
+                _is_strong  = (
+                    _r["adj"] >= 67 and _r["edge_pct"] >= 7
+                    and int(_r.get("confidence", 0) or 0) >= 75
+                    and "Watchlist" not in str(_r.get("validation_label", ""))
+                )
+                _is_lean    = (not _is_strong) and (
+                    _r["adj"] >= 60 or _r["edge_pct"] >= 3
+                )
                 _tier_lbl   = ("Strong Over" if _is_strong else
                                "Lean Over"   if _is_lean  else "Edge Play")
                 _tier_col   = ("#00e896" if _is_strong else
@@ -14669,6 +14990,14 @@ if st.session_state.active_sport == "edge":
                     _risk_pills += "<span class='edge-pill-v55 warn'>Low reliability</span>"
                 if _r.get("trap_label") and _r.get("trap_label") != "Clean":
                     _risk_pills += f"<span class='edge-pill-v55 warn'>Trap {_r.get('trap_label')}</span>"
+                if _r.get("validation_label"):
+                    _validation_cls = "accent" if "Strong" in _r.get("validation_label", "") else ""
+                    _risk_pills += (
+                        f"<span class='edge-pill-v55 {_validation_cls}'>"
+                        f"{_r.get('validation_label')}</span>"
+                    )
+                for _vr in (_r.get("validation_reasons") or [])[:2]:
+                    _risk_pills += f"<span class='edge-pill-v55 warn'>{_vr}</span>"
                 if _r.get("stat") == "Strikeouts" and _r.get("pc_ceiling") is not None and _r.get("pc_ceiling") <= _r["line"] + 0.5:
                     _risk_pills += "<span class='edge-pill-v55 warn'>Ceiling tight</span>"
                 _game_pill = f"<span class='edge-pill-v55'>Game {_r.get('game_date')}</span>" if _r.get("game_date") else ""
@@ -14774,8 +15103,12 @@ if st.session_state.active_sport == "edge":
                         "Confidence":  int(_r.get("confidence", 0) or 0),
                         "Edge":        float(_r.get("edge_raw", 0) or 0),
                         "Sample":      int(_r.get("samples", 0) or 0),
-                        "Risk Flags":  " | ".join(_r.get("trap_reasons", []) or []),
+                        "Risk Flags":  " | ".join(
+                            (_r.get("validation_reasons", []) or []) +
+                            (_r.get("trap_reasons", []) or [])
+                        ),
                         "Trap":        _r.get("trap_label", ""),
+                        "Validation":  _r.get("validation_label", ""),
                         "Verdict":     _tier_lbl,
                         "Result":      "Pending",
                         "Sport":       "MLB",
