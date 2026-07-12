@@ -2389,6 +2389,211 @@ def add_to_pick_list_and_tracker(leg: dict, entry: dict) -> None:
         record_debug_error("tracker.add_calibration", err)
 
 
+def _parse_percent_value(value, default: Optional[float] = None) -> Optional[float]:
+    """Return probability as 0-1 from values like '64.2%', 64.2, or 0.642."""
+    try:
+        if value is None or value == "":
+            return default
+        if isinstance(value, str):
+            raw = value.strip().replace("%", "")
+            if raw in ("", "—", "N/A"):
+                return default
+            num = float(raw)
+            return num / 100.0 if num > 1 else num
+        num = float(value)
+        return num / 100.0 if num > 1 else num
+    except Exception:
+        return default
+
+
+def _parse_numeric_value(value, default: Optional[float] = None) -> Optional[float]:
+    try:
+        if value is None or value == "":
+            return default
+        if isinstance(value, str):
+            raw = value.strip().replace("%", "").replace("+", "")
+            if raw in ("", "—", "N/A"):
+                return default
+            return float(raw)
+        return float(value)
+    except Exception:
+        return default
+
+
+def _mlb_backtest_rows(tracker_entries: list) -> list:
+    """Normalize settled MLB tracker entries into rows for calibration/backtest."""
+    rows = []
+    for entry in tracker_entries:
+        sport = str(entry.get("Sport", "")).upper()
+        prop = str(entry.get("Matchup", ""))
+        if sport != "MLB" and prop not in ("Strikeouts", "Hitter Fantasy Score"):
+            continue
+        result = str(entry.get("Result", "Pending"))
+        if result not in ("Hit", "Miss"):
+            continue
+
+        prob = _parse_percent_value(entry.get("Adjusted"))
+        if prob is None or not (0.0 <= prob <= 1.0):
+            continue
+
+        confidence = _parse_numeric_value(
+            entry.get("Confidence", entry.get("confidence")),
+            default=None,
+        )
+        if confidence is None:
+            confidence = round(prob * 100)
+
+        edge = _parse_numeric_value(entry.get("Edge", entry.get("edge")), default=None)
+        sample = _parse_numeric_value(entry.get("Sample", entry.get("samples")), default=None)
+        consistency = _parse_percent_value(entry.get("Consistency"), default=None)
+        verdict = str(entry.get("Verdict", ""))
+        risk_text = " | ".join(
+            str(entry.get(k, ""))
+            for k in ("Risk Flags", "Trap", "Notes", "Venue")
+            if entry.get(k)
+        )
+        risk_lower = risk_text.lower()
+        rows.append({
+            "player": entry.get("Player", ""),
+            "prop": prop or "MLB",
+            "prob": prob,
+            "confidence": float(confidence),
+            "edge": edge,
+            "sample": sample,
+            "consistency": consistency,
+            "verdict": verdict or "Unlabeled",
+            "actual": 1.0 if result == "Hit" else 0.0,
+            "result": result,
+            "projected_lineup": "projected" in risk_lower,
+            "low_pitch_count": ("low pitch" in risk_lower or "~7" in risk_lower or "limit" in risk_lower),
+            "watchlist": ("watchlist" in risk_lower or "trap" in risk_lower),
+            "small_sample": (
+                sample is not None and sample < 6
+            ) or "small sample" in risk_lower or "only " in risk_lower,
+        })
+    return rows
+
+
+def _mlb_backtest_group(rows: list, label: str, predicate) -> Optional[dict]:
+    group = [r for r in rows if predicate(r)]
+    if not group:
+        return None
+    n = len(group)
+    pred = sum(r["prob"] for r in group) / n
+    actual = sum(r["actual"] for r in group) / n
+    brier = sum((r["prob"] - r["actual"]) ** 2 for r in group) / n
+    conf = sum(r["confidence"] for r in group) / n
+    gap = actual - pred
+    return {
+        "label": label,
+        "n": n,
+        "pred": pred,
+        "actual": actual,
+        "gap": gap,
+        "brier": brier,
+        "conf": conf,
+    }
+
+
+def _render_mlb_backtest_dashboard(tracker_entries: list) -> None:
+    rows = _mlb_backtest_rows(tracker_entries)
+    st.markdown("<div class='section-header'>MLB Backtest Dashboard</div>", unsafe_allow_html=True)
+    if not rows:
+        st.markdown(
+            "<div style='background:#0f172a;border:1px dashed #1e293b;border-radius:12px;"
+            "padding:1rem 1.1rem;color:#6b7f96;font-family:JetBrains Mono,monospace;"
+            "font-size:0.68rem;line-height:1.7;'>"
+            "No settled MLB picks yet. Add MLB picks to the tracker and mark them Hit/Miss; "
+            "this dashboard will bucket performance by confidence, verdict, prop, and risk flags."
+            "</div>",
+            unsafe_allow_html=True,
+        )
+        return
+
+    n = len(rows)
+    pred = sum(r["prob"] for r in rows) / n
+    actual = sum(r["actual"] for r in rows) / n
+    brier = sum((r["prob"] - r["actual"]) ** 2 for r in rows) / n
+    roi_units = sum(1 if r["actual"] else -1 for r in rows)
+    gap = actual - pred
+    sample_label = "Provisional" if n < 20 else ("Developing" if n < 50 else "Established")
+    gap_color = "#00e896" if abs(gap) <= 0.05 else ("#ffc107" if abs(gap) <= 0.12 else "#ff3d5c")
+    edge_color = "#00e896" if roi_units > 0 else ("#ff3d5c" if roi_units < 0 else "#ffc107")
+
+    st.markdown(
+        f"<div style='background:rgba(0,196,204,0.05);border:1px solid rgba(0,196,204,0.16);"
+        f"border-radius:10px;padding:0.85rem 1rem;margin-bottom:0.75rem;"
+        f"display:flex;gap:18px;flex-wrap:wrap;font-family:JetBrains Mono,monospace;'>"
+        f"<div><div style='font-size:0.52rem;color:#6b7f96;'>SAMPLE</div>"
+        f"<div style='font-size:0.9rem;color:#f0f4f8;font-weight:800;'>{n} · {sample_label}</div></div>"
+        f"<div><div style='font-size:0.52rem;color:#6b7f96;'>MODEL AVG</div>"
+        f"<div style='font-size:0.9rem;color:#f0f4f8;font-weight:800;'>{pred:.1%}</div></div>"
+        f"<div><div style='font-size:0.52rem;color:#6b7f96;'>ACTUAL HIT</div>"
+        f"<div style='font-size:0.9rem;color:#f0f4f8;font-weight:800;'>{actual:.1%}</div></div>"
+        f"<div><div style='font-size:0.52rem;color:#6b7f96;'>CALIBRATION</div>"
+        f"<div style='font-size:0.9rem;color:{gap_color};font-weight:800;'>{gap:+.1%}</div></div>"
+        f"<div><div style='font-size:0.52rem;color:#6b7f96;'>FLAT UNITS</div>"
+        f"<div style='font-size:0.9rem;color:{edge_color};font-weight:800;'>{roi_units:+.0f}</div></div>"
+        f"<div><div style='font-size:0.52rem;color:#6b7f96;'>BRIER</div>"
+        f"<div style='font-size:0.9rem;color:#f0f4f8;font-weight:800;'>{brier:.3f}</div></div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+    groups = []
+    group_specs = [
+        ("Confidence 80+", lambda r: r["confidence"] >= 80),
+        ("Confidence 65-79", lambda r: 65 <= r["confidence"] < 80),
+        ("Confidence 55-64", lambda r: 55 <= r["confidence"] < 65),
+        ("Confidence <55", lambda r: r["confidence"] < 55),
+        ("Strong Picks", lambda r: "Strong" in r["verdict"]),
+        ("Lean Picks", lambda r: "Lean" in r["verdict"]),
+        ("Strikeouts", lambda r: r["prop"] == "Strikeouts"),
+        ("Hitter FS", lambda r: r["prop"] == "Hitter Fantasy Score"),
+        ("Projected Lineup", lambda r: r["projected_lineup"]),
+        ("Low Pitch Count", lambda r: r["low_pitch_count"]),
+        ("Small Sample", lambda r: r["small_sample"]),
+        ("Watchlist/Trap", lambda r: r["watchlist"]),
+    ]
+    for label, pred_fn in group_specs:
+        item = _mlb_backtest_group(rows, label, pred_fn)
+        if item:
+            groups.append(item)
+
+    row_html = ""
+    for g in groups:
+        gap_col = "#00e896" if abs(g["gap"]) <= 0.08 else ("#ffc107" if abs(g["gap"]) <= 0.15 else "#ff3d5c")
+        row_html += (
+            "<tr style='border-bottom:1px solid rgba(255,255,255,0.05);'>"
+            f"<td style='padding:6px 8px;color:#f0f4f8;font-weight:800;'>{g['label']}</td>"
+            f"<td style='padding:6px 8px;color:#9aaec4;'>{g['n']}</td>"
+            f"<td style='padding:6px 8px;color:#9aaec4;'>{g['conf']:.0f}</td>"
+            f"<td style='padding:6px 8px;color:#9aaec4;'>{g['pred']:.1%}</td>"
+            f"<td style='padding:6px 8px;color:#9aaec4;'>{g['actual']:.1%}</td>"
+            f"<td style='padding:6px 8px;color:{gap_col};font-weight:800;'>{g['gap']:+.1%}</td>"
+            f"<td style='padding:6px 8px;color:#9aaec4;'>{g['brier']:.3f}</td>"
+            "</tr>"
+        )
+    if row_html:
+        st.markdown(
+            "<table style='width:100%;border-collapse:collapse;font-family:JetBrains Mono,monospace;"
+            "font-size:0.66rem;margin-bottom:0.8rem;'>"
+            "<thead><tr style='color:#6b7f96;border-bottom:1px solid rgba(255,255,255,0.1);'>"
+            "<th style='padding:4px 8px;text-align:left;'>SEGMENT</th>"
+            "<th style='padding:4px 8px;text-align:left;'>N</th>"
+            "<th style='padding:4px 8px;text-align:left;'>CONF</th>"
+            "<th style='padding:4px 8px;text-align:left;'>PRED</th>"
+            "<th style='padding:4px 8px;text-align:left;'>ACTUAL</th>"
+            "<th style='padding:4px 8px;text-align:left;'>GAP</th>"
+            "<th style='padding:4px 8px;text-align:left;'>BRIER</th>"
+            f"</tr></thead><tbody>{row_html}</tbody></table>",
+            unsafe_allow_html=True,
+        )
+
+    if n < 20:
+        st.caption("Backtest is provisional until at least 20 MLB picks settle; 50+ is much more informative.")
+
+
 def render_pick_list() -> None:
     """Visible main-page shortlist for props the user is considering."""
     legs = st.session_state.get("parlay_legs", [])
@@ -11834,6 +12039,11 @@ if st.session_state.active_sport == "mlb":
                         "Hit Rate":    f"{whr:.1%}",
                         "Adjusted":    f"{adj:.1%}",
                         "Consistency": f"{cons:.1%}",
+                        "Confidence":  _sc,
+                        "Edge":        round(edge, 2),
+                        "Sample":      _n_starts,
+                        "Risk Flags":  " | ".join(_trap.get("summary", [])) if _trap else "",
+                        "Trap":        _trap.get("label", "") if _trap else "",
                         "Verdict":     tier,
                         "Result":      "Pending",
                         "Sport":       "MLB",
@@ -14551,12 +14761,31 @@ if st.session_state.active_sport == "edge":
                         "sport":      _r["sport"],
                         "added":      _dt_edge.datetime.now().strftime("%I:%M %p"),
                     }
+                    _edge_tracker_entry = {
+                        "Player":      _r["player"],
+                        "Line":        f"{_r['line']} Over",
+                        "Opponent":    _r.get("opp", "—"),
+                        "Matchup":     _r["stat"],
+                        "Venue":       f"Edge Scanner · { _r.get('park', 'Neutral') } · date:{_r.get('game_date', '')}",
+                        "Avg PTS":     float(_r.get("avg", 0) or 0),
+                        "Hit Rate":    f"{float(_r.get('raw_adj', _r['adj']) or 0):.1f}%",
+                        "Adjusted":    f"{float(_r.get('adj', 0) or 0):.1f}%",
+                        "Consistency": f"{float(_r.get('cons', 0) or 0):.1f}%",
+                        "Confidence":  int(_r.get("confidence", 0) or 0),
+                        "Edge":        float(_r.get("edge_raw", 0) or 0),
+                        "Sample":      int(_r.get("samples", 0) or 0),
+                        "Risk Flags":  " | ".join(_r.get("trap_reasons", []) or []),
+                        "Trap":        _r.get("trap_label", ""),
+                        "Verdict":     _tier_lbl,
+                        "Result":      "Pending",
+                        "Sport":       "MLB",
+                    }
                     st.button(
-                        "➕ Add to Pick List",
+                        "➕ Add & Track",
                         key=f"ep_{_btn_key_safe}",
                         use_container_width=True,
-                        on_click=add_to_pick_list,
-                        args=(_new_leg,),
+                        on_click=add_to_pick_list_and_tracker,
+                        args=(_new_leg, _edge_tracker_entry),
                     )
 
                 with _act_c3:
@@ -17717,99 +17946,7 @@ else:
         unsafe_allow_html=True
     )
 
-    # MLB probability calibration: compare forecast buckets with settled results.
-    _mlb_cal_rows = []
-    for _e in st.session_state.tracker:
-        _sport = str(_e.get("Sport", "")).upper()
-        _prop = str(_e.get("Matchup", ""))
-        if _sport != "MLB" and _prop not in ("Strikeouts", "Hitter Fantasy Score"):
-            continue
-        if _e.get("Result") not in ("Hit", "Miss"):
-            continue
-        try:
-            _prob = float(str(_e.get("Adjusted", "")).replace("%", "").strip()) / 100.0
-        except Exception:
-            continue
-        if 0.0 <= _prob <= 1.0:
-            _mlb_cal_rows.append({
-                "prob": _prob,
-                "actual": 1.0 if _e.get("Result") == "Hit" else 0.0,
-                "prop": _prop,
-            })
-
-    if _mlb_cal_rows:
-        _cal_n = len(_mlb_cal_rows)
-        _mean_pred = sum(r["prob"] for r in _mlb_cal_rows) / _cal_n
-        _actual_rate = sum(r["actual"] for r in _mlb_cal_rows) / _cal_n
-        _brier = sum((r["prob"] - r["actual"]) ** 2 for r in _mlb_cal_rows) / _cal_n
-        _cal_gap = _actual_rate - _mean_pred
-        _sample_label = "Provisional" if _cal_n < 20 else ("Developing" if _cal_n < 50 else "Established")
-        _gap_color = "#00e896" if abs(_cal_gap) <= 0.05 else ("#ffc107" if abs(_cal_gap) <= 0.12 else "#ff3d5c")
-        _gap_label = (
-            "Well calibrated" if abs(_cal_gap) <= 0.05 else
-            "Underconfident" if _cal_gap > 0 else
-            "Overconfident"
-        )
-
-        st.markdown("<div class='section-header'>MLB Model Calibration</div>", unsafe_allow_html=True)
-        st.markdown(
-            f"<div style='background:rgba(0,196,204,0.05);border:1px solid rgba(0,196,204,0.16);"
-            f"border-radius:10px;padding:0.8rem 1rem;margin-bottom:0.6rem;"
-            f"display:flex;gap:18px;flex-wrap:wrap;font-family:JetBrains Mono,monospace;'>"
-            f"<div><div style='font-size:0.52rem;color:#6b7f96;'>SAMPLE</div>"
-            f"<div style='font-size:0.85rem;color:#f0f4f8;font-weight:800;'>{_cal_n} · {_sample_label}</div></div>"
-            f"<div><div style='font-size:0.52rem;color:#6b7f96;'>AVG FORECAST</div>"
-            f"<div style='font-size:0.85rem;color:#f0f4f8;font-weight:800;'>{_mean_pred:.1%}</div></div>"
-            f"<div><div style='font-size:0.52rem;color:#6b7f96;'>ACTUAL HIT RATE</div>"
-            f"<div style='font-size:0.85rem;color:#f0f4f8;font-weight:800;'>{_actual_rate:.1%}</div></div>"
-            f"<div><div style='font-size:0.52rem;color:#6b7f96;'>CALIBRATION</div>"
-            f"<div style='font-size:0.85rem;color:{_gap_color};font-weight:800;'>{_gap_label} · {_cal_gap:+.1%}</div></div>"
-            f"<div><div style='font-size:0.52rem;color:#6b7f96;'>BRIER SCORE</div>"
-            f"<div style='font-size:0.85rem;color:#f0f4f8;font-weight:800;'>{_brier:.3f}</div></div>"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-
-        _bucket_defs = [
-            ("50–59%", 0.50, 0.60),
-            ("60–69%", 0.60, 0.70),
-            ("70–79%", 0.70, 0.80),
-            ("80%+", 0.80, 1.01),
-        ]
-        _bucket_rows = ""
-        for _label, _lo, _hi in _bucket_defs:
-            _rows = [r for r in _mlb_cal_rows if _lo <= r["prob"] < _hi]
-            if not _rows:
-                continue
-            _n = len(_rows)
-            _pred = sum(r["prob"] for r in _rows) / _n
-            _actual = sum(r["actual"] for r in _rows) / _n
-            _gap = _actual - _pred
-            _color = "#00e896" if abs(_gap) <= 0.08 else ("#ffc107" if abs(_gap) <= 0.15 else "#ff3d5c")
-            _bucket_rows += (
-                "<tr style='border-bottom:1px solid rgba(255,255,255,0.05);'>"
-                f"<td style='padding:5px 8px;color:#f0f4f8;font-weight:700;'>{_label}</td>"
-                f"<td style='padding:5px 8px;color:#9aaec4;'>{_n}</td>"
-                f"<td style='padding:5px 8px;color:#9aaec4;'>{_pred:.1%}</td>"
-                f"<td style='padding:5px 8px;color:#9aaec4;'>{_actual:.1%}</td>"
-                f"<td style='padding:5px 8px;color:{_color};font-weight:700;'>{_gap:+.1%}</td>"
-                "</tr>"
-            )
-        if _bucket_rows:
-            st.markdown(
-                "<table style='width:100%;border-collapse:collapse;font-family:JetBrains Mono,monospace;"
-                "font-size:0.66rem;margin-bottom:0.8rem;'>"
-                "<thead><tr style='color:#6b7f96;border-bottom:1px solid rgba(255,255,255,0.1);'>"
-                "<th style='padding:4px 8px;text-align:left;'>BUCKET</th>"
-                "<th style='padding:4px 8px;text-align:left;'>N</th>"
-                "<th style='padding:4px 8px;text-align:left;'>PREDICTED</th>"
-                "<th style='padding:4px 8px;text-align:left;'>ACTUAL</th>"
-                "<th style='padding:4px 8px;text-align:left;'>GAP</th>"
-                f"</tr></thead><tbody>{_bucket_rows}</tbody></table>",
-                unsafe_allow_html=True,
-            )
-        if _cal_n < 20:
-            st.caption("Calibration is provisional until at least 20 MLB picks settle; 50+ is much more informative.")
+    _render_mlb_backtest_dashboard(st.session_state.tracker)
 
     to_remove = None
     for i, entry in enumerate(st.session_state.tracker):
