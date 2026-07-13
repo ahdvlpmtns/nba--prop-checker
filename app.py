@@ -1035,6 +1035,7 @@ button[key="mobile_quick_analyze"] {
     /* Keep the sport switcher reachable as users scroll */
     button[key="sport_nba"],
     button[key="sport_mlb"],
+    button[key="sport_wnba"],
     button[key="sport_edge"] {
         position: sticky !important;
         top: 0 !important;
@@ -1413,11 +1414,13 @@ button[key="mobile_quick_analyze"] {
 /* Navigation buttons */
 button[key="sport_nba"],
 button[key="sport_mlb"],
+button[key="sport_wnba"],
 button[key="sport_edge"] {
     min-height: 48px !important;
 }
 button[data-testid="baseButton-primary"][key="sport_nba"],
 button[data-testid="baseButton-primary"][key="sport_mlb"],
+button[data-testid="baseButton-primary"][key="sport_wnba"],
 button[data-testid="baseButton-primary"][key="sport_edge"] {
     background: linear-gradient(135deg, #00d5df, #19e6b1) !important;
     color: #031115 !important;
@@ -1426,6 +1429,7 @@ button[data-testid="baseButton-primary"][key="sport_edge"] {
 }
 button[data-testid="baseButton-secondary"][key="sport_nba"],
 button[data-testid="baseButton-secondary"][key="sport_mlb"],
+button[data-testid="baseButton-secondary"][key="sport_wnba"],
 button[data-testid="baseButton-secondary"][key="sport_edge"] {
     background: rgba(255,255,255,0.045) !important;
     border: 1px solid rgba(255,255,255,0.10) !important;
@@ -2757,6 +2761,7 @@ body,
 /* Navigation feels like a segmented command bar */
 button[key="sport_nba"],
 button[key="sport_mlb"],
+button[key="sport_wnba"],
 button[key="sport_edge"] {
     min-height: 42px !important;
     border-radius: 7px !important;
@@ -2766,6 +2771,7 @@ button[key="sport_edge"] {
 }
 button[data-testid="baseButton-primary"][key="sport_nba"],
 button[data-testid="baseButton-primary"][key="sport_mlb"],
+button[data-testid="baseButton-primary"][key="sport_wnba"],
 button[data-testid="baseButton-primary"][key="sport_edge"] {
     background: #193a42 !important;
     color: #dffbfc !important;
@@ -2774,6 +2780,7 @@ button[data-testid="baseButton-primary"][key="sport_edge"] {
 }
 button[data-testid="baseButton-secondary"][key="sport_nba"],
 button[data-testid="baseButton-secondary"][key="sport_mlb"],
+button[data-testid="baseButton-secondary"][key="sport_wnba"],
 button[data-testid="baseButton-secondary"][key="sport_edge"] {
     background: rgba(16,21,27,0.88) !important;
     color: var(--text2) !important;
@@ -3032,6 +3039,7 @@ div[data-testid="stExpander"] {
     .score-card { min-width: 132px !important; }
     button[key="sport_nba"],
     button[key="sport_mlb"],
+    button[key="sport_wnba"],
     button[key="sport_edge"] {
         min-height: 44px !important;
         font-size: 0.76rem !important;
@@ -3114,6 +3122,8 @@ for key, default in [
     ("defense_data", None), ("tracker", []), ("active_tab", "player"),
     ("recent_players", []), ("supabase_loaded", False), ("show_share", False),
     ("active_sport", "mlb"), ("edge_results", []), ("edge_running", False), ("edge_manual_props", []), ("edge_manual_props", []), ("edge_jump_player", None), ("edge_jump_pitcher", None), ("edge_jump_line", None), ("edge_jump_side", "Over"), ("edge_jump_prop", "Strikeouts"),
+    ("wnba_jump_player", None), ("wnba_jump_line", None),
+    ("wnba_jump_side", "Over"), ("wnba_jump_stat", "Points"),
     ("runtime_debug_errors", []), ("runtime_metrics", {}),
 ]:
     if key not in st.session_state:
@@ -7916,7 +7926,7 @@ if _all_scores:
 # ─────────────────────────────────────────────
 # Sport Switcher
 # ─────────────────────────────────────────────
-_sp1, _sp2, _sp3, _sp4 = st.columns([1, 1, 1, 2])
+_sp1, _sp2, _sp3, _sp4 = st.columns(4)
 with _sp1:
     if st.button(
         "🏀  NBA",
@@ -7936,6 +7946,15 @@ with _sp2:
         st.session_state.active_sport = "mlb"
         st.rerun()
 with _sp3:
+    if st.button(
+        "🏀  WNBA",
+        key="sport_wnba",
+        use_container_width=True,
+        type="primary" if st.session_state.active_sport == "wnba" else "secondary"
+    ):
+        st.session_state.active_sport = "wnba"
+        st.rerun()
+with _sp4:
     if st.button(
         "🎯  EDGE",
         key="sport_edge",
@@ -13667,6 +13686,497 @@ if st.session_state.active_sport == "mlb":
 
 
 # ═══════════════════════════════════════════════════════
+# WNBA MODE — Individual Player Analyzer
+# ═══════════════════════════════════════════════════════
+
+WNBA_ANALYZER_SITE = "https://site.api.espn.com/apis/site/v2/sports/basketball/wnba"
+WNBA_STAT_COLUMNS = {
+    "Points": "PTS",
+    "Rebounds": "REB",
+    "Assists": "AST",
+    "3-Pointers Made": "3PM",
+    "Pts + Reb + Ast": "PRA",
+    "Points + Rebounds": "PR",
+    "Points + Assists": "PA",
+    "Rebounds + Assists": "RA",
+}
+
+
+def _wnba_norm_team(abbr: str) -> str:
+    return re.sub(r"[^A-Z]", "", str(abbr or "").upper().strip())
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def wnba_get_players() -> list:
+    """Load active WNBA rosters from ESPN."""
+    found = []
+    try:
+        teams_data = espn_get(f"{WNBA_ANALYZER_SITE}/teams")
+        teams = (
+            teams_data.get("sports", [{}])[0]
+            .get("leagues", [{}])[0]
+            .get("teams", [])
+        )
+        for item in teams:
+            team = item.get("team", {}) or {}
+            team_id = str(team.get("id", "") or "")
+            team_abbr = _wnba_norm_team(team.get("abbreviation", ""))
+            if not team_id:
+                continue
+            roster = espn_get(f"{WNBA_ANALYZER_SITE}/teams/{team_id}/roster")
+            for group in roster.get("athletes", []) or []:
+                for athlete in (group.get("items") or [group]):
+                    player_id = str(athlete.get("id", "") or "")
+                    name = athlete.get("displayName") or athlete.get("fullName") or ""
+                    if player_id and name:
+                        found.append({
+                            "id": player_id,
+                            "name": name,
+                            "team": team_abbr,
+                            "team_id": team_id,
+                        })
+    except Exception as err:
+        record_debug_error("wnba.players", err)
+    unique = {p["id"]: p for p in found}
+    return sorted(unique.values(), key=lambda p: normalize_name(p["name"]))
+
+
+def wnba_find_player(player_name: str) -> dict:
+    target = normalize_name(player_name)
+    players = wnba_get_players()
+    exact = next((p for p in players if normalize_name(p["name"]) == target), None)
+    if exact:
+        return exact
+    partial = [p for p in players if target and target in normalize_name(p["name"])]
+    return partial[0] if partial else {"id": None, "name": player_name, "team": "", "team_id": ""}
+
+
+@st.cache_data(ttl=1200, show_spinner=False)
+def wnba_get_next_game(team_abbr: str) -> dict:
+    """Return the next scheduled WNBA game, searching seven days ahead."""
+    empty = {"opp": "TBD", "game_date": "", "side": "", "event_id": ""}
+    if not team_abbr:
+        return empty
+    try:
+        import pytz
+        et = pytz.timezone("America/New_York")
+        today = datetime.now(et).date()
+        target = _wnba_norm_team(team_abbr)
+        for offset in range(8):
+            game_day = today + timedelta(days=offset)
+            data = espn_get(
+                f"{WNBA_ANALYZER_SITE}/scoreboard",
+                params={"dates": game_day.strftime("%Y%m%d")},
+            )
+            for event in data.get("events", []) or []:
+                comp = (event.get("competitions") or [{}])[0]
+                status = str(event.get("status", {}).get("type", {}).get("name", "")).lower()
+                if "final" in status or "complete" in status:
+                    continue
+                competitors = comp.get("competitors", []) or []
+                mine = next(
+                    (c for c in competitors if _wnba_norm_team(c.get("team", {}).get("abbreviation", "")) == target),
+                    None,
+                )
+                opponent = next((c for c in competitors if c is not mine), None)
+                if mine and opponent:
+                    return {
+                        "opp": _wnba_norm_team(opponent.get("team", {}).get("abbreviation", "")) or "TBD",
+                        "game_date": game_day.isoformat(),
+                        "side": "Home" if mine.get("homeAway") == "home" else "Away",
+                        "event_id": str(event.get("id", "") or ""),
+                    }
+    except Exception as err:
+        record_debug_error("wnba.next_game", err)
+    return empty
+
+
+@st.cache_data(ttl=1200, show_spinner=False)
+def wnba_get_game_logs(player_id: str, season: int, n: int = 24) -> pd.DataFrame:
+    """Parse ESPN's WNBA game log into all supported prop markets."""
+    columns = ["DATE", "OPP", "VENUE", "MIN", "PTS", "REB", "AST", "3PM", "STL", "BLK", "TOV", "PRA", "PR", "PA", "RA"]
+    empty = pd.DataFrame(columns=columns)
+    if not player_id:
+        return empty
+    try:
+        url = (
+            "https://site.web.api.espn.com/apis/common/v3/sports/basketball/wnba/"
+            f"athletes/{player_id}/gamelog"
+        )
+        response = requests.get(url, params={"season": season}, headers=ESPN_HEADERS, timeout=12)
+        response.raise_for_status()
+        data = response.json()
+        names = data.get("names", []) or []
+        positions = {name: i for i, name in enumerate(names)}
+        event_meta = data.get("events", {}) or {}
+        rows = []
+
+        def value(stats, key, default=0.0):
+            try:
+                return float(str(stats[positions[key]]).split("-")[0])
+            except Exception:
+                return default
+
+        for season_type in data.get("seasonTypes", []) or []:
+            label = str(season_type.get("displayName", "")).lower()
+            if "regular" not in label and "postseason" not in label:
+                continue
+            for category in season_type.get("categories", []) or []:
+                for event in category.get("events", []) or []:
+                    stats = event.get("stats", []) or []
+                    meta = event_meta.get(str(event.get("eventId", "")), {}) if isinstance(event_meta, dict) else {}
+                    pts = value(stats, "points")
+                    reb = value(stats, "totalRebounds")
+                    ast = value(stats, "assists")
+                    rows.append({
+                        "DATE": pd.to_datetime(meta.get("gameDate", ""), errors="coerce"),
+                        "OPP": _wnba_norm_team(meta.get("opponent", {}).get("abbreviation", "")),
+                        "VENUE": "Home" if str(meta.get("atVs", "")).lower() == "vs" else "Away",
+                        "MIN": value(stats, "minutes"),
+                        "PTS": pts,
+                        "REB": reb,
+                        "AST": ast,
+                        "3PM": value(stats, "threePointFieldGoalsMade-threePointFieldGoalsAttempted"),
+                        "STL": value(stats, "steals"),
+                        "BLK": value(stats, "blocks"),
+                        "TOV": value(stats, "turnovers"),
+                        "PRA": pts + reb + ast,
+                        "PR": pts + reb,
+                        "PA": pts + ast,
+                        "RA": reb + ast,
+                    })
+        if not rows:
+            return empty
+        frame = pd.DataFrame(rows).dropna(subset=["DATE"])
+        frame = frame.drop_duplicates(subset=["DATE", "OPP", "PTS", "MIN"])
+        return frame.sort_values("DATE", ascending=False).head(n).reset_index(drop=True)[columns]
+    except Exception as err:
+        record_debug_error("wnba.logs", err)
+        return empty
+
+
+def _wnba_normal_probability(mean: float, sigma: float, line: float, side: str) -> float:
+    import math
+    sigma = max(float(sigma), 0.35)
+    z = (float(line) - float(mean)) / sigma
+    cdf = 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
+    return float(1.0 - cdf if side == "Over" else cdf)
+
+
+def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
+                      game: dict) -> dict:
+    """Calibrated WNBA model: history, projection, minutes, venue, H2H, and data quality."""
+    import numpy as np
+    col = WNBA_STAT_COLUMNS[stat]
+    work = logs.copy().head(15).reset_index(drop=True)
+    values = pd.to_numeric(work[col], errors="coerce")
+    minutes = pd.to_numeric(work["MIN"], errors="coerce")
+    valid = values.notna()
+    work, values, minutes = work[valid].reset_index(drop=True), values[valid].reset_index(drop=True), minutes[valid].reset_index(drop=True)
+    n = len(values)
+    if n < 4:
+        raise ValueError("At least four recent games are required for a reliable analysis.")
+
+    weights = np.array([1.65 if i < 3 else 1.25 if i < 6 else 1.0 for i in range(n)], dtype=float)
+    hits = (values > line) if side == "Over" else (values < line)
+    raw = float(np.average(hits.astype(float), weights=weights))
+    calibrated = float((float((hits * weights).sum()) + 2.0) / (float(weights.sum()) + 4.0))
+    avg = float(values.mean())
+    l3 = float(values.head(min(3, n)).mean())
+    l5 = float(values.head(min(5, n)).mean())
+    recent_projection = 0.58 * l5 + 0.27 * avg + 0.15 * float(values.median())
+    avg_min = float(minutes.mean()) if minutes.notna().any() else 0.0
+    l3_min = float(minutes.head(min(3, n)).mean()) if minutes.notna().any() else avg_min
+    min_ratio = max(0.88, min(1.12, l3_min / avg_min)) if avg_min >= 8 else 1.0
+    projection = recent_projection * min_ratio
+    sigma_floor = {"PTS": 4.5, "REB": 2.4, "AST": 1.9, "3PM": 1.15, "PRA": 6.0, "PR": 5.2, "PA": 5.0, "RA": 3.3}.get(col, 3.0)
+    sigma = max(float(values.std(ddof=1) or 0), sigma_floor)
+    projection_prob = _wnba_normal_probability(projection, sigma, line, side)
+    probability = 0.48 * calibrated + 0.52 * projection_prob
+    trace = [{
+        "Signal": "Calibrated recent hit rate",
+        "Value": f"{raw:.1%} raw → {calibrated:.1%}",
+        "Adjustment": "Starting point",
+        "Notes": f"Recency-weighted L{n}, shrunk toward 50% to control small samples",
+    }, {
+        "Signal": "Recent projection",
+        "Value": f"{projection:.1f} {stat}",
+        "Adjustment": f"Blend → {projection_prob:.1%}",
+        "Notes": f"L5 {l5:.1f} · L{n} {avg:.1f} · volatility {sigma:.1f}",
+    }]
+
+    # Minutes/role adjustment is deliberately bounded because it is correlated with recent production.
+    minute_adj = 0.0
+    if avg_min >= 8:
+        minute_change = l3_min - avg_min
+        if minute_change >= 4:
+            minute_adj = 0.025
+        elif minute_change <= -5:
+            minute_adj = -0.04
+        elif minute_change <= -3:
+            minute_adj = -0.02
+        if side == "Under":
+            minute_adj *= -1
+        probability += minute_adj
+        trace.append({
+            "Signal": "Minutes trend",
+            "Value": f"L3 {l3_min:.1f} vs L{n} {avg_min:.1f}",
+            "Adjustment": f"{minute_adj:+.1%}" if minute_adj else "No change",
+            "Notes": "Bounded role adjustment; projection already scales for recent minutes",
+        })
+
+    opp = _wnba_norm_team(game.get("opp", ""))
+    h2h_source = logs.copy().head(24)
+    h2h = h2h_source[h2h_source["OPP"].astype(str).map(_wnba_norm_team) == opp] if opp and opp != "TBD" else h2h_source.iloc[0:0]
+    h2h_prob, h2h_avg, h2h_n = None, None, len(h2h)
+    if h2h_n >= 2:
+        h2h_values = pd.to_numeric(h2h[col], errors="coerce").dropna()
+        h2h_n = len(h2h_values)
+        if h2h_n >= 2:
+            h2h_avg = float(h2h_values.mean())
+            h2h_hits = (h2h_values > line) if side == "Over" else (h2h_values < line)
+            h2h_prob = float((h2h_hits.sum() + 1.0) / (h2h_n + 2.0))
+            h2h_weight = min(0.14, 0.05 + 0.025 * h2h_n)
+            probability = (1.0 - h2h_weight) * probability + h2h_weight * h2h_prob
+            trace.append({
+                "Signal": "Opponent history",
+                "Value": f"{h2h_avg:.1f} avg · {h2h_n} games vs {opp}",
+                "Adjustment": f"{h2h_weight:.0%} blend",
+                "Notes": "Player-specific matchup history; capped to avoid overfitting",
+            })
+    else:
+        trace.append({"Signal": "Opponent history", "Value": f"{h2h_n} game vs {opp or 'TBD'}", "Adjustment": "No change", "Notes": "Two games required before matchup history affects the model"})
+
+    venue = game.get("side", "")
+    venue_rows = work[work["VENUE"] == venue] if venue else work.iloc[0:0]
+    venue_adj = 0.0
+    if len(venue_rows) >= 4:
+        venue_avg = float(pd.to_numeric(venue_rows[col], errors="coerce").mean())
+        venue_delta = venue_avg - avg
+        threshold = max(0.55, sigma_floor * 0.35)
+        if venue_delta >= threshold:
+            venue_adj = 0.018
+        elif venue_delta <= -threshold:
+            venue_adj = -0.018
+        if side == "Under":
+            venue_adj *= -1
+        probability += venue_adj
+        trace.append({"Signal": "Venue split", "Value": f"{venue_avg:.1f} avg · {len(venue_rows)} {venue.lower()} games", "Adjustment": f"{venue_adj:+.1%}" if venue_adj else "No change", "Notes": "Only active with at least four same-venue games"})
+
+    rest_adj = 0.0
+    rest_days = None
+    if game.get("game_date") and not work.empty:
+        rest_days = (pd.Timestamp(game["game_date"]).normalize() - pd.Timestamp(work.iloc[0]["DATE"]).normalize()).days
+        if rest_days <= 1:
+            rest_adj = -0.025
+        elif rest_days >= 4:
+            rest_adj = 0.008
+        if side == "Under":
+            rest_adj *= -1
+        probability += rest_adj
+        trace.append({"Signal": "Rest", "Value": f"{max(rest_days - 1, 0)} full day(s)", "Adjustment": f"{rest_adj:+.1%}" if rest_adj else "No change", "Notes": "Small bounded adjustment; back-to-backs carry the meaningful penalty"})
+
+    minute_std = float(minutes.std(ddof=1) or 0) if minutes.notna().any() else 8.0
+    consistency = max(0.0, min(1.0, 1.0 - sigma / max(abs(avg) + sigma_floor, 1.0)))
+    agreement = 1.0 - min(abs(calibrated - projection_prob) / 0.35, 1.0)
+    reliability = 0.58 + min(n, 15) / 15 * 0.15 + max(0.0, 1.0 - minute_std / 10.0) * 0.08 + agreement * 0.08
+    if game.get("opp") not in (None, "", "TBD"):
+        reliability += 0.04
+    if h2h_n >= 2:
+        reliability += 0.03
+    reliability = max(0.60, min(0.92, reliability))
+    pre_reliability = max(0.05, min(0.95, probability))
+    probability = 0.50 + (pre_reliability - 0.50) * reliability
+    probability = max(0.05, min(0.95, probability))
+    trace.append({"Signal": "Evidence reliability", "Value": f"{reliability:.0%}", "Adjustment": f"{pre_reliability:.1%} → {probability:.1%}", "Notes": "Shrinks incomplete or disagreeing evidence toward neutral"})
+
+    directional_edge = (projection - line) if side == "Over" else (line - projection)
+    confidence = int(round(
+        24 * min(n / 12, 1.0)
+        + 20 * max(0.0, 1.0 - minute_std / 9.0)
+        + 18 * agreement
+        + 14 * consistency
+        + 12 * min(abs(probability - 0.5) / 0.25, 1.0)
+        + (7 if game.get("opp") not in (None, "", "TBD") else 0)
+        + (5 if h2h_n >= 2 else 0)
+    ))
+    confidence = max(25, min(96, confidence))
+    cushion = {"PTS": 1.5, "REB": 0.8, "AST": 0.7, "3PM": 0.35, "PRA": 2.2, "PR": 1.8, "PA": 1.7, "RA": 1.1}.get(col, 1.0)
+    flags = []
+    if avg_min < 20:
+        flags.append(f"Low role ({avg_min:.0f} min avg)")
+    if l3_min <= avg_min - 4:
+        flags.append("Recent minutes are down")
+    if n < 8:
+        flags.append(f"Small sample (L{n})")
+    if consistency < 0.35:
+        flags.append("High game-to-game volatility")
+    if directional_edge < cushion:
+        flags.append("Thin projection cushion")
+    if game.get("opp") in (None, "", "TBD"):
+        flags.append("Next opponent unavailable")
+
+    if probability >= 0.70 and confidence >= 72 and directional_edge >= cushion:
+        tier = f"Strong {side}"
+    elif probability >= 0.56 and confidence >= 55 and directional_edge > 0:
+        tier = f"Lean {side}"
+    else:
+        tier = "Pass"
+    return {
+        "stat": stat, "column": col, "line": float(line), "side": side,
+        "sample": n, "raw": raw, "calibrated": calibrated,
+        "probability": probability, "confidence": confidence, "tier": tier,
+        "avg": avg, "l3": l3, "l5": l5, "projection": projection,
+        "edge": directional_edge, "sigma": sigma, "consistency": consistency,
+        "avg_min": avg_min, "l3_min": l3_min, "minute_std": minute_std,
+        "h2h_avg": h2h_avg, "h2h_n": h2h_n, "rest_days": rest_days,
+        "reliability": reliability, "flags": flags, "trace": trace,
+        "logs": work,
+    }
+
+
+if st.session_state.active_sport == "wnba":
+    st.markdown(
+        "<div class='v55-hero'><div class='v55-kicker'>WNBA · INDIVIDUAL ANALYZER</div>"
+        "<div class='v55-title'>Player Prop Lab</div>"
+        "<div class='v55-subcopy'>Calibrated recent form, minutes stability, opponent history, venue, rest, and projection agreement in one decision.</div></div>",
+        unsafe_allow_html=True,
+    )
+    players = wnba_get_players()
+    if not players:
+        st.error("WNBA rosters are unavailable from ESPN right now. Retry in a moment.")
+        st.stop()
+
+    names = [p["name"] for p in players]
+    jump_player = st.session_state.pop("wnba_jump_player", None)
+    jump_line = st.session_state.pop("wnba_jump_line", None)
+    jump_side = st.session_state.pop("wnba_jump_side", "Over")
+    jump_stat = st.session_state.pop("wnba_jump_stat", "Points")
+    if jump_player is not None:
+        for widget_key in ("wnba_player_select", "wnba_stat_select", "wnba_line_input", "wnba_side_select"):
+            st.session_state.pop(widget_key, None)
+    default_player = jump_player if jump_player in names else names[0]
+    stat_options = list(WNBA_STAT_COLUMNS.keys())
+    default_stat = jump_stat if jump_stat in stat_options else "Points"
+
+    wc1, wc2 = st.columns([1.35, 1])
+    with wc1:
+        selected_name = st.selectbox("Player", names, index=names.index(default_player), key="wnba_player_select")
+    with wc2:
+        selected_stat = st.selectbox("Prop", stat_options, index=stat_options.index(default_stat), key="wnba_stat_select")
+    wc3, wc4 = st.columns(2)
+    with wc3:
+        default_line = float(jump_line) if jump_line is not None else (15.5 if selected_stat == "Points" else 5.5)
+        line = st.number_input("PrizePicks line", min_value=0.5, max_value=70.5, value=default_line, step=0.5, key="wnba_line_input")
+    with wc4:
+        side_options = ["Over", "Under"]
+        default_side = jump_side if jump_side in side_options else "Over"
+        side = st.radio("Side", side_options, index=side_options.index(default_side), horizontal=True, key="wnba_side_select")
+
+    analyze = st.button("Analyze WNBA Prop", type="primary", use_container_width=True, key="wnba_analyze")
+    should_run = analyze or jump_player is not None or st.session_state.get("wnba_last_analysis") == (selected_name, selected_stat, float(line), side)
+    if analyze:
+        st.session_state["wnba_last_analysis"] = (selected_name, selected_stat, float(line), side)
+
+    if should_run:
+        player = wnba_find_player(selected_name)
+        with st.spinner("Loading WNBA game logs and matchup context..."):
+            logs = wnba_get_game_logs(player.get("id"), datetime.now().year, n=24)
+            game = wnba_get_next_game(player.get("team", ""))
+        if logs.empty:
+            st.error("No current-season game logs were returned for this player.")
+            st.stop()
+        try:
+            result = wnba_analyze_prop(logs, selected_stat, float(line), side, game)
+        except ValueError as err:
+            st.warning(str(err))
+            st.stop()
+
+        opp = game.get("opp", "TBD")
+        matchup = f"{player.get('team', '')} vs {opp}" if game.get("side") == "Home" else f"{player.get('team', '')} @ {opp}"
+        tier = result["tier"]
+        color = "#00e896" if tier == "Strong Over" else "#ffc107" if tier == "Lean Over" else "#ff7043" if tier == "Lean Under" else "#ff3d5c" if tier == "Strong Under" else "#7d93ab"
+        st.markdown(
+            f"<div class='section-header'>{selected_name} · {matchup} · {game.get('game_date') or 'Schedule TBD'}</div>",
+            unsafe_allow_html=True,
+        )
+        m1, m2, m3, m4 = st.columns(4)
+        metrics = [
+            (m1, "MODEL PROBABILITY", f"{result['probability']:.0%}", "Chance of selected side"),
+            (m2, "CONFIDENCE", f"{result['confidence']}/100", "Quality and agreement"),
+            (m3, "PROJECTION", f"{result['projection']:.1f}", f"Line {line:.1f} · edge {result['edge']:+.1f}"),
+            (m4, "RECENT ROLE", f"{result['avg_min']:.1f} min", f"L3 {result['l3_min']:.1f} min"),
+        ]
+        for column, label, value, hint in metrics:
+            with column:
+                st.markdown(f"<div class='stat-card'><div class='stat-label'>{label}</div><div class='stat-value' style='color:{color};font-size:1.65rem;'>{value}</div><div class='stat-hint'>{hint}</div></div>", unsafe_allow_html=True)
+
+        flags_html = "".join(f"<span class='flag-pill down'>{flag}</span>" for flag in result["flags"])
+        if not flags_html:
+            flags_html = "<span class='flag-pill up'>No major model traps</span>"
+        st.markdown(
+            f"<div class='verdict-banner {'green' if 'Over' in tier and tier != 'Pass' else 'red' if 'Under' in tier else 'gray'}'>"
+            f"<div><div class='verdict-label'>{selected_stat} · {side} {line:.1f}</div>"
+            f"<div class='verdict-tier' style='color:{color};font-size:2rem;'>{tier}</div>"
+            f"<div class='flag-row'>{flags_html}</div></div>"
+            f"<div style='min-width:210px'><div class='verdict-label'>EVIDENCE</div>"
+            f"<div style='font-family:JetBrains Mono,monospace;color:#9aaec4;font-size:.7rem;line-height:1.8;'>"
+            f"L{result['sample']} avg {result['avg']:.1f}<br>L5 avg {result['l5']:.1f}<br>Reliability {result['reliability']:.0%}</div></div></div>",
+            unsafe_allow_html=True,
+        )
+        st.caption("Model probability estimates the selected side. Confidence measures sample quality, role stability, matchup completeness, and agreement between independent model paths.")
+
+        add_leg = {
+            "player": selected_name, "prop": selected_stat, "line": float(line), "side": side,
+            "verdict": tier, "confidence": result["confidence"],
+            "adj": round(result["probability"] * 100, 1), "sport": "WNBA",
+        }
+        tracker_entry = {
+            "Player": selected_name, "Line": f"{line:.1f} {side}", "Opponent": opp,
+            "Matchup": matchup, "Venue": game.get("side", "TBD"),
+            "Avg PTS": round(result["avg"], 1), "Hit Rate": f"{result['raw']:.1%}",
+            "Adjusted": f"{result['probability']:.1%}", "Consistency": f"{result['consistency']:.1%}",
+            "Confidence": result["confidence"], "Edge": round(result["edge"], 2),
+            "Sample": result["sample"], "Risk Flags": " | ".join(result["flags"]),
+            "Verdict": tier, "Result": "Pending", "Sport": "WNBA",
+        }
+        st.button(
+            "➕ Add & Track",
+            key="wnba_add_track",
+            use_container_width=True,
+            on_click=add_to_pick_list_and_tracker,
+            args=(add_leg, tracker_entry),
+        )
+
+        st.markdown("<div class='section-header'>Recent Game Log</div>", unsafe_allow_html=True)
+        display_logs = result["logs"][["DATE", "OPP", "VENUE", "MIN", result["column"]]].copy()
+        display_logs["DATE"] = pd.to_datetime(display_logs["DATE"]).dt.strftime("%b %d")
+        display_logs["HIT"] = display_logs[result["column"]].apply(lambda v: "Yes" if (v > line if side == "Over" else v < line) else "No")
+        display_logs = display_logs.rename(columns={result["column"]: selected_stat})
+        st.dataframe(display_logs, hide_index=True, use_container_width=True)
+
+        with st.expander("Full model debugger"):
+            st.markdown(
+                f"**Input:** {selected_name} · {selected_stat} {side} {line:.1f} · L{result['sample']} · {matchup}  \n"
+                f"**Final:** {result['probability']:.1%} probability · {result['confidence']}/100 confidence · **{tier}**"
+            )
+            st.dataframe(pd.DataFrame(result["trace"]), hide_index=True, use_container_width=True)
+            debug_summary = pd.DataFrame([
+                ["Historical average", f"{result['avg']:.2f}"],
+                ["L3 / L5", f"{result['l3']:.2f} / {result['l5']:.2f}"],
+                ["Projection / edge", f"{result['projection']:.2f} / {result['edge']:+.2f}"],
+                ["Observed volatility", f"{result['sigma']:.2f}"],
+                ["Opponent history", f"{result['h2h_avg']:.2f} in {result['h2h_n']} games" if result['h2h_avg'] is not None else "Insufficient"],
+                ["Evidence reliability", f"{result['reliability']:.1%}"],
+                ["Quality flags", " | ".join(result["flags"]) or "None"],
+            ], columns=["Check", "Result"])
+            st.dataframe(debug_summary, hide_index=True, use_container_width=True)
+    else:
+        st.markdown("<div class='explainer'><strong>Select a player and line, then analyze.</strong> The searchable player list includes active ESPN WNBA rosters and supports eight common PrizePicks markets.</div>", unsafe_allow_html=True)
+    st.stop()
+
+
+# ═══════════════════════════════════════════════════════
 # EDGE MODE — PropIQ Edge Scanner
 # ═══════════════════════════════════════════════════════
 @st.cache_data(ttl=300, show_spinner=False)
@@ -16764,7 +17274,12 @@ if st.session_state.active_sport == "edge":
                             st.session_state.edge_jump_prop    = _r["stat"]
                             st.rerun()
                         else:
-                            st.toast("WNBA deep-dive analyzer is next. Added scanner support first.", icon="🏀")
+                            st.session_state.active_sport = "wnba"
+                            st.session_state.wnba_jump_player = _r["player"]
+                            st.session_state.wnba_jump_line = _r["line"]
+                            st.session_state.wnba_jump_side = _r.get("side", "Over")
+                            st.session_state.wnba_jump_stat = "Points"
+                            st.rerun()
 
     elif st.session_state.get("edge_has_scanned"):
         _scan_summary = st.session_state.get("edge_scan_summary", "No model candidates returned.")
