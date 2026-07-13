@@ -3220,6 +3220,53 @@ def add_to_pick_list_and_tracker(leg: dict, entry: dict) -> None:
         record_debug_error("tracker.add_calibration", err)
 
 
+def player_typeahead(label: str, options: list, key: str,
+                     prefill: Optional[str] = None,
+                     aliases: Optional[dict] = None,
+                     noun: str = "player") -> Optional[str]:
+    """Editable player search with native, client-side suggestions."""
+    choices = sorted(
+        {str(option).strip() for option in (options or []) if str(option).strip()},
+        key=lambda name: normalize_name(name),
+    )
+    alias_map = {
+        normalize_name(alias): full_name
+        for alias, full_name in (aliases or {}).items()
+    }
+    canonical_prefill = alias_map.get(normalize_name(prefill or ""), prefill)
+    index = choices.index(canonical_prefill) if canonical_prefill in choices else None
+    raw = st.selectbox(
+        label,
+        options=choices,
+        index=index,
+        key=key,
+        placeholder=f"Type a {noun} name...",
+        accept_new_options=True,
+        help=f"Start typing any part of the {noun}'s name; matching suggestions filter instantly.",
+    )
+    if not raw:
+        return None
+    raw_text = str(raw).strip()
+    normalized = normalize_name(raw_text)
+    if normalized in alias_map:
+        return alias_map[normalized]
+    exact = next((name for name in choices if normalize_name(name) == normalized), None)
+    if exact:
+        return exact
+    # If a partial name was submitted instead of tapping a suggestion, resolve
+    # it only when the match is unambiguous.
+    matches = [
+        name for name in choices
+        if normalized in normalize_name(name)
+        or all(
+            token in normalize_name(name)
+            for token in normalized.split()
+            if len(token) >= 2
+        )
+    ]
+    return matches[0] if len(matches) == 1 else raw_text
+
+
 def _parse_percent_value(value, default: Optional[float] = None) -> Optional[float]:
     """Return probability as 0-1 from values like '64.2%', 64.2, or 0.642."""
     try:
@@ -11398,6 +11445,7 @@ if st.session_state.active_sport == "mlb":
     # Pre-fill pitcher if jumped from Edge Scanner
     _mlb_edge_jp = st.session_state.pop("edge_jump_pitcher", None)
     if _mlb_edge_jp:
+        st.session_state.mlb_pitcher_key = st.session_state.get("mlb_pitcher_key", 0) + 1
         st.session_state["_mlb_prefill_name"] = _mlb_edge_jp
         st.session_state["_mlb_prefill_line"] = st.session_state.pop("edge_jump_line", None)
         _mlb_jump_prop = st.session_state.pop("edge_jump_prop", None)
@@ -11412,12 +11460,12 @@ if st.session_state.active_sport == "mlb":
         _mlb_pf_name = st.session_state.get("_mlb_prefill_name", "")
         _mlb_pf_idx  = (_mlb_options.index(_mlb_pf_name) + 1
                         if _mlb_pf_name and _mlb_pf_name in _mlb_options else 0)
-        mlb_pitcher = st.selectbox(
-            "PLAYER — TYPE TO SEARCH",
-            options=[""] + _mlb_options,
-            format_func=lambda x: f"— type {'hitter' if mlb_prop == 'Hitter Fantasy Score' else 'pitcher'} name to search —" if x == "" else x,
+        mlb_pitcher = player_typeahead(
+            "Player search",
+            _mlb_options,
             key=f"mlb_player_sel_{mlb_prop}_{st.session_state.get('mlb_pitcher_key', 0)}",
-            index=_mlb_pf_idx,
+            prefill=_mlb_pf_name if _mlb_pf_idx else None,
+            noun="hitter" if mlb_prop == "Hitter Fantasy Score" else "pitcher",
         )
     with _mc3:
         mlb_line = st.number_input("Line",min_value=0.5,max_value=30.0,value=5.5,step=0.5,key="mlb_line")
@@ -11429,6 +11477,7 @@ if st.session_state.active_sport == "mlb":
         if st.button("✕ Clear", key="mlb_clear_pitcher",
                      help="Clear pitcher selection"):
             st.session_state.mlb_pitcher_key = st.session_state.get("mlb_pitcher_key", 0) + 1
+            st.session_state.pop("_mlb_prefill_name", None)
             st.rerun()
 
     if mlb_pitcher and mlb_prop == "Hitter Fantasy Score":
@@ -14055,13 +14104,19 @@ if st.session_state.active_sport == "wnba":
     if jump_player is not None:
         for widget_key in ("wnba_player_select", "wnba_stat_select", "wnba_line_input", "wnba_side_select"):
             st.session_state.pop(widget_key, None)
-    default_player = jump_player if jump_player in names else names[0]
+    default_player = jump_player if jump_player in names else None
     stat_options = list(WNBA_STAT_COLUMNS.keys())
     default_stat = jump_stat if jump_stat in stat_options else "Points"
 
     wc1, wc2 = st.columns([1.35, 1])
     with wc1:
-        selected_name = st.selectbox("Player", names, index=names.index(default_player), key="wnba_player_select")
+        selected_name = player_typeahead(
+            "Player search",
+            names,
+            key="wnba_player_select",
+            prefill=default_player,
+            noun="WNBA player",
+        )
     with wc2:
         selected_stat = st.selectbox("Prop", stat_options, index=stat_options.index(default_stat), key="wnba_stat_select")
     wc3, wc4 = st.columns(2)
@@ -14074,9 +14129,15 @@ if st.session_state.active_sport == "wnba":
         side = st.radio("Side", side_options, index=side_options.index(default_side), horizontal=True, key="wnba_side_select")
 
     analyze = st.button("Analyze WNBA Prop", type="primary", use_container_width=True, key="wnba_analyze")
-    should_run = analyze or jump_player is not None or st.session_state.get("wnba_last_analysis") == (selected_name, selected_stat, float(line), side)
-    if analyze:
+    should_run = bool(selected_name) and (
+        analyze or jump_player is not None
+        or st.session_state.get("wnba_last_analysis") == (selected_name, selected_stat, float(line), side)
+    )
+    if analyze and selected_name:
         st.session_state["wnba_last_analysis"] = (selected_name, selected_stat, float(line), side)
+
+    if analyze and not selected_name:
+        st.warning("Start typing a WNBA player name and choose a suggestion first.")
 
     if should_run:
         player = wnba_find_player(selected_name)
@@ -17967,19 +18028,19 @@ with col_a:
     _recent_pick   = st.session_state.pop("_recent_pick", None)
     _edge_jump_nba = st.session_state.pop("edge_jump_player", None)
     _pick_target   = _edge_jump_nba or _recent_pick
-    _preselect_idx = 0
-    if _pick_target and _pick_target in player_names_list:
-        _preselect_idx = player_names_list.index(_pick_target) + 1
+    if _pick_target:
+        st.session_state.pop(f"player_sel_{st.session_state.player_key}", None)
     # Also pre-set line if jumped from edge
     if _edge_jump_nba and st.session_state.get("edge_jump_line"):
         st.session_state["_edge_prefill_line"] = st.session_state.pop("edge_jump_line", None)
 
-    player_query = st.selectbox(
-        "Player — type name, nickname, or initials",
-        options=[""] + player_names_list,
-        index=_preselect_idx,
-        format_func=lambda x: "— search by name, nickname, or initials —" if x == "" else x,
+    player_query = player_typeahead(
+        "Player search",
+        player_names_list,
         key=f"player_sel_{st.session_state.player_key}",
+        prefill=_pick_target,
+        aliases=_aliases,
+        noun="NBA player",
     )
 
     # Resolve alias: if user typed a known nickname, swap to full name
