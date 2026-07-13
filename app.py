@@ -2641,6 +2641,462 @@ div[data-testid="stTextInput"] input {
         transform: none !important;
     }
 }
+
+/* ══════════════════════════════════════════
+   PropIQ V7 — Modern product system
+   Calm, information-dense, mobile-first
+══════════════════════════════════════════ */
+:root {
+    --bg: #090c10;
+    --bg2: #10151b;
+    --bg3: #161c24;
+    --bg4: #1c2430;
+    --border: rgba(226,232,240,0.08);
+    --border2: rgba(226,232,240,0.15);
+    --accent: #36c6d3;
+    --accent2: #14929f;
+    --accent3: #8be8ee;
+    --accent-glow: rgba(54,198,211,0.14);
+    --green: #36d399;
+    --yellow: #f4c95d;
+    --orange: #f28b50;
+    --red: #f05d75;
+    --text: #f4f7fa;
+    --text2: #aeb9c7;
+    --text3: #748294;
+    --r-xs: 4px;
+    --r-sm: 6px;
+    --r-md: 8px;
+    --r-lg: 8px;
+    --r-xl: 8px;
+    --shadow-sm: 0 1px 2px rgba(0,0,0,0.32);
+    --shadow-md: 0 10px 28px rgba(0,0,0,0.28);
+    --shadow-lg: 0 22px 52px rgba(0,0,0,0.40);
+}
+
+html {
+    color-scheme: dark;
+    background: var(--bg) !important;
+}
+body,
+[data-testid="stAppViewContainer"] {
+    background: linear-gradient(180deg, #090c10 0%, #0d1218 48%, #090c10 100%) !important;
+}
+[data-testid="stAppViewContainer"]::before,
+[data-testid="stAppViewContainer"]::after {
+    display: none !important;
+}
+.main .block-container,
+.block-container {
+    width: min(100%, 1160px) !important;
+    max-width: 1160px !important;
+    padding: 0 1.15rem 6.5rem !important;
+}
+
+/* App bar */
+.pl-header {
+    min-height: 64px !important;
+    padding: 0.7rem 1rem !important;
+    background: rgba(9,12,16,0.94) !important;
+    border-bottom: 1px solid var(--border2) !important;
+    box-shadow: 0 8px 28px rgba(0,0,0,0.24) !important;
+    backdrop-filter: blur(18px) saturate(125%) !important;
+    -webkit-backdrop-filter: blur(18px) saturate(125%) !important;
+}
+.pl-header::after { display: none !important; }
+.pl-logo-wrap { gap: 11px !important; }
+.pl-icon {
+    width: 44px !important;
+    height: 36px !important;
+    opacity: 0.96;
+}
+.pl-logo {
+    font-size: 1.55rem !important;
+    font-weight: 850 !important;
+    letter-spacing: 0 !important;
+}
+.pl-sub {
+    color: #7f8da0 !important;
+    font-size: 0.45rem !important;
+    letter-spacing: 0.16em !important;
+}
+.pl-badge {
+    padding: 4px 9px !important;
+    border-radius: 5px !important;
+    background: rgba(54,198,211,0.09) !important;
+    border: 1px solid rgba(54,198,211,0.24) !important;
+    color: var(--accent3) !important;
+    font-size: 0.55rem !important;
+    letter-spacing: 0.08em !important;
+}
+
+/* Ticker and live strips */
+.pl-ticker-wrap {
+    height: 29px !important;
+    background: #0c1015 !important;
+    border-bottom-color: var(--border) !important;
+}
+.pl-ticker-label {
+    background: #183039 !important;
+    color: var(--accent3) !important;
+    border-right: 1px solid rgba(54,198,211,0.18);
+}
+.score-strip {
+    padding: 9px 0 11px !important;
+    gap: 7px !important;
+}
+.score-card {
+    min-width: 154px !important;
+    padding: 8px 11px !important;
+    background: rgba(16,21,27,0.92) !important;
+    border-color: var(--border) !important;
+    border-radius: 7px !important;
+    box-shadow: none !important;
+}
+
+/* Navigation feels like a segmented command bar */
+button[key="sport_nba"],
+button[key="sport_mlb"],
+button[key="sport_edge"] {
+    min-height: 42px !important;
+    border-radius: 7px !important;
+    text-transform: none !important;
+    letter-spacing: 0 !important;
+    font-size: 0.82rem !important;
+}
+button[data-testid="baseButton-primary"][key="sport_nba"],
+button[data-testid="baseButton-primary"][key="sport_mlb"],
+button[data-testid="baseButton-primary"][key="sport_edge"] {
+    background: #193a42 !important;
+    color: #dffbfc !important;
+    border: 1px solid rgba(54,198,211,0.42) !important;
+    box-shadow: inset 0 0 0 1px rgba(54,198,211,0.07) !important;
+}
+button[data-testid="baseButton-secondary"][key="sport_nba"],
+button[data-testid="baseButton-secondary"][key="sport_mlb"],
+button[data-testid="baseButton-secondary"][key="sport_edge"] {
+    background: rgba(16,21,27,0.88) !important;
+    color: var(--text2) !important;
+    border: 1px solid var(--border) !important;
+}
+
+/* Page hierarchy */
+.section-header {
+    margin: 1.6rem 0 0.75rem !important;
+    padding: 0 0 0.55rem !important;
+    border-bottom: 1px solid var(--border) !important;
+    color: #8b99aa !important;
+    font-size: 0.58rem !important;
+    letter-spacing: 0.15em !important;
+}
+.section-header::before {
+    width: 2px !important;
+    height: 13px !important;
+    border-radius: 1px !important;
+    background: var(--accent) !important;
+}
+.v55-hero {
+    padding: 0.9rem 0 1rem !important;
+    margin-bottom: 0.85rem !important;
+    background: transparent !important;
+    border: 0 !important;
+    border-bottom: 1px solid var(--border) !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+}
+.v55-kicker {
+    color: var(--accent3) !important;
+    font-size: 0.54rem !important;
+    letter-spacing: 0.13em !important;
+}
+.v55-title {
+    max-width: 720px;
+    margin-top: 5px !important;
+    color: var(--text) !important;
+    font-size: 1.45rem !important;
+    font-weight: 800 !important;
+    letter-spacing: 0 !important;
+    line-height: 1.18 !important;
+}
+.v55-subcopy {
+    max-width: 820px;
+    margin-top: 7px !important;
+    color: #93a1b2 !important;
+    font-size: 0.76rem !important;
+    line-height: 1.62 !important;
+}
+.v55-command-note,
+.model-note,
+.explainer {
+    padding: 0.65rem 0.8rem !important;
+    background: rgba(16,21,27,0.72) !important;
+    border: 1px solid var(--border) !important;
+    border-left: 2px solid rgba(54,198,211,0.45) !important;
+    border-radius: 6px !important;
+    color: #8f9daf !important;
+}
+
+/* Controls */
+.stSelectbox label,
+.stTextInput label,
+.stNumberInput label,
+.stCheckbox label {
+    color: #8290a2 !important;
+    letter-spacing: 0.08em !important;
+}
+div[data-testid="stSelectbox"] > div > div,
+div[data-testid="stNumberInput"] input,
+div[data-testid="stTextInput"] input {
+    min-height: 44px !important;
+    background: #0e1319 !important;
+    border: 1px solid rgba(226,232,240,0.13) !important;
+    border-radius: 7px !important;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.02) !important;
+}
+div[data-testid="stSelectbox"] > div > div:hover,
+div[data-testid="stNumberInput"] input:hover,
+div[data-testid="stTextInput"] input:hover {
+    border-color: rgba(54,198,211,0.34) !important;
+}
+.stButton > button,
+button[data-testid="baseButton-primary"],
+button[data-testid="baseButton-secondary"] {
+    min-height: 42px !important;
+    border-radius: 7px !important;
+    font-weight: 700 !important;
+    text-transform: none !important;
+    letter-spacing: 0 !important;
+    box-shadow: none !important;
+}
+.stButton > button {
+    background: #26b8c5 !important;
+    color: #061114 !important;
+}
+.stButton > button:hover {
+    background: #45ccd7 !important;
+    transform: translateY(-1px) !important;
+    box-shadow: 0 8px 20px rgba(20,146,159,0.18) !important;
+}
+button[data-testid="baseButton-secondary"] {
+    background: #11171e !important;
+    color: var(--text2) !important;
+    border: 1px solid var(--border2) !important;
+}
+
+/* Data surfaces */
+.stat-card,
+.defense-card,
+.hot-pick-card,
+.parlay-builder,
+.ai-box,
+div[data-testid="stExpander"] {
+    background: rgba(16,21,27,0.94) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 8px !important;
+    box-shadow: var(--shadow-sm) !important;
+}
+.stat-card {
+    padding: 0.9rem 0.95rem !important;
+}
+.stat-label,
+.verdict-label {
+    color: #7e8c9e !important;
+    letter-spacing: 0.10em !important;
+}
+.stat-value {
+    font-size: 1.9rem !important;
+    letter-spacing: 0 !important;
+}
+.verdict-banner {
+    border-radius: 8px !important;
+    box-shadow: var(--shadow-md) !important;
+}
+.verdict-tier {
+    letter-spacing: 0 !important;
+}
+
+/* Edge cards become scan-first rows */
+.edge-card-v55 {
+    padding: 0.9rem 0.95rem !important;
+    margin-bottom: 0.65rem !important;
+    background: rgba(16,21,27,0.96) !important;
+    border: 1px solid var(--border) !important;
+    border-left: 3px solid #425064 !important;
+    border-radius: 8px !important;
+    box-shadow: var(--shadow-sm) !important;
+}
+.edge-card-v55.strong {
+    background: linear-gradient(90deg, rgba(54,211,153,0.07), rgba(16,21,27,0.96) 30%) !important;
+    border-left-color: var(--green) !important;
+}
+.edge-card-v55.lean {
+    background: linear-gradient(90deg, rgba(244,201,93,0.06), rgba(16,21,27,0.96) 30%) !important;
+    border-left-color: var(--yellow) !important;
+}
+.edge-card-v55:hover {
+    transform: translateY(-1px) !important;
+    border-color: rgba(54,198,211,0.22) !important;
+    box-shadow: var(--shadow-md) !important;
+}
+.edge-top-v55 {
+    grid-template-columns: minmax(0,1fr) minmax(310px,0.72fr) !important;
+    gap: 14px !important;
+}
+.edge-player-v55 {
+    color: var(--text) !important;
+    font-size: 1rem !important;
+    font-weight: 800 !important;
+    letter-spacing: 0 !important;
+}
+.edge-meta-v55 { gap: 5px !important; }
+.edge-pill-v55,
+.flag-pill,
+.parlay-leg-pick {
+    min-height: 24px;
+    padding: 3px 7px !important;
+    border-radius: 5px !important;
+    background: rgba(226,232,240,0.045) !important;
+    border: 1px solid rgba(226,232,240,0.075) !important;
+    color: #94a2b3 !important;
+    letter-spacing: 0 !important;
+}
+.edge-pill-v55.accent {
+    background: rgba(54,198,211,0.08) !important;
+    border-color: rgba(54,198,211,0.20) !important;
+    color: var(--accent3) !important;
+}
+.edge-pill-v55.warn {
+    background: rgba(242,139,80,0.08) !important;
+    border-color: rgba(242,139,80,0.20) !important;
+    color: #f3aa7d !important;
+}
+.edge-score-v55 {
+    gap: 5px !important;
+}
+.edge-score-item-v55 {
+    min-width: 0 !important;
+    padding: 0.45rem 0.4rem !important;
+    background: #0c1117 !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 6px !important;
+}
+.edge-score-item-v55 span {
+    color: #718094 !important;
+    letter-spacing: 0.06em !important;
+}
+.edge-score-item-v55 strong {
+    margin-top: 3px !important;
+    font-size: 0.94rem !important;
+    letter-spacing: 0 !important;
+}
+.edge-reasons-v55 { margin-top: 0.6rem !important; }
+.edge-bar-v55 {
+    height: 3px !important;
+    margin-top: 0.7rem !important;
+    background: rgba(226,232,240,0.07) !important;
+}
+
+/* Pick list remains available without dominating the viewport */
+.pick-tray-v63 {
+    bottom: max(10px, env(safe-area-inset-bottom)) !important;
+    width: min(680px, calc(100vw - 20px)) !important;
+    padding: 0.55rem 0.65rem !important;
+    background: rgba(10,14,19,0.96) !important;
+    border: 1px solid rgba(226,232,240,0.13) !important;
+    border-radius: 8px !important;
+    box-shadow: 0 16px 44px rgba(0,0,0,0.50) !important;
+}
+.pick-tray-title-v63 { font-size: 0.78rem !important; }
+.pick-tray-stat-v63 {
+    border-radius: 6px !important;
+    background: rgba(226,232,240,0.04) !important;
+}
+
+/* Mobile */
+@media (max-width: 768px) {
+    .main .block-container,
+    .block-container {
+        padding: 0 0.65rem 7.5rem !important;
+    }
+    .pl-header {
+        min-height: 56px !important;
+        padding: 0.55rem 0.7rem !important;
+    }
+    .pl-icon {
+        width: 37px !important;
+        height: 31px !important;
+    }
+    .pl-logo { font-size: 1.28rem !important; }
+    .pl-badge { padding: 3px 7px !important; }
+    .pl-ticker-wrap { height: 27px !important; }
+    .score-card { min-width: 132px !important; }
+    button[key="sport_nba"],
+    button[key="sport_mlb"],
+    button[key="sport_edge"] {
+        min-height: 44px !important;
+        font-size: 0.76rem !important;
+        padding: 0.55rem 0.35rem !important;
+    }
+    .v55-hero {
+        padding: 0.75rem 0 0.85rem !important;
+    }
+    .v55-title { font-size: 1.16rem !important; }
+    .v55-subcopy {
+        font-size: 0.7rem !important;
+        line-height: 1.55 !important;
+    }
+    div[data-testid="stSelectbox"] input,
+    div[data-testid="stTextInput"] input,
+    div[data-testid="stNumberInput"] input,
+    input[type="text"],
+    input[type="number"] {
+        font-size: 16px !important;
+    }
+    .edge-card-v55 {
+        padding: 0.8rem !important;
+    }
+    .edge-top-v55 {
+        grid-template-columns: 1fr !important;
+        gap: 0.65rem !important;
+    }
+    .edge-score-v55 {
+        grid-template-columns: repeat(4, minmax(0,1fr)) !important;
+    }
+    .edge-score-item-v55 {
+        padding: 0.4rem 0.25rem !important;
+    }
+    .edge-score-item-v55 strong { font-size: 0.84rem !important; }
+    .edge-meta-v55,
+    .edge-reasons-v55 {
+        overflow-x: auto !important;
+        flex-wrap: nowrap !important;
+        scrollbar-width: none;
+    }
+    .edge-meta-v55::-webkit-scrollbar,
+    .edge-reasons-v55::-webkit-scrollbar { display: none; }
+    .edge-pill-v55 { flex: 0 0 auto; }
+    .stat-value { font-size: 1.55rem !important; }
+    .pick-tray-v63 {
+        width: calc(100vw - 14px) !important;
+        padding: 0.48rem 0.55rem !important;
+    }
+    .pick-tray-v63-inner {
+        grid-template-columns: minmax(0,1fr) auto auto !important;
+        gap: 6px !important;
+    }
+    .pick-tray-sub-v63 { display: none !important; }
+    .pick-tray-stat-v63 {
+        min-width: 47px !important;
+        padding: 0.3rem 0.35rem !important;
+    }
+}
+
+@media (max-width: 390px) {
+    .pl-logo { font-size: 1.18rem !important; }
+    .pl-badge { font-size: 0.48rem !important; }
+    .edge-score-item-v55 span { font-size: 0.43rem !important; }
+    .edge-score-item-v55 strong { font-size: 0.78rem !important; }
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -3059,7 +3515,7 @@ def render_sticky_pick_tray() -> None:
         f"<div class='pick-tray-v63'>"
         f"<div class='pick-tray-v63-inner'>"
         f"<div>"
-        f"<div class='pick-tray-title-v63'>PrizePicks Pick List</div>"
+        f"<div class='pick-tray-title-v63'>Pick List</div>"
         f"<div class='pick-tray-sub-v63'>{sub}</div>"
         f"</div>"
         f"<div class='pick-tray-stat-v63'><span>Picks</span><strong>{count}/6</strong></div>"
@@ -7240,7 +7696,7 @@ st.markdown("""
         </div>
     </div>
     <div style="display:flex; align-items:center; gap:10px;">
-        <span class="pl-badge">V6</span>
+        <span class="pl-badge">V7</span>
     </div>
 </div>
 
@@ -15621,8 +16077,8 @@ if st.session_state.active_sport == "edge":
 
     st.markdown("""
     <div class='v55-hero'>
-        <div class='v55-kicker'>V6 Edge Board</div>
-        <div class='v55-title'>MLB edge props, filtered into a sharper shortlist.</div>
+        <div class='v55-kicker'>V7 Edge Board</div>
+        <div class='v55-title'>A focused board for the strongest available edges.</div>
         <div class='v55-subcopy'>
             Scan PrizePicks MLB props and WNBA Points, then rank only calibrated
             shortlist candidates. Cards blend projection anchors, recent form, role/volume,
