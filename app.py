@@ -13222,6 +13222,46 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
     props = []
     fetch_notes = []
 
+    def _league_projection_count(sport_name: str) -> Optional[int]:
+        """Read PrizePicks' own current projection count for a league."""
+        try:
+            r = _req.get(
+                "https://partner-api.prizepicks.com/leagues",
+                headers={
+                    "Accept": "application/json, text/plain, */*",
+                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                                  "AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
+                    "Referer": "https://prizepicks.com/",
+                    "Origin": "https://prizepicks.com",
+                },
+                timeout=10,
+            )
+            if not r.ok:
+                return None
+            target = str(sport_name or "").upper()
+            for league in r.json().get("data", []):
+                attrs = league.get("attributes", {}) or {}
+                league_name = str(attrs.get("name") or attrs.get("display_name") or "").upper()
+                if league_name == target:
+                    count = attrs.get("projections_count")
+                    return int(count) if count is not None else None
+        except Exception as e:
+            record_debug_error("prizepicks.league_status", e)
+        return None
+
+    # Check availability before reading stale caches or touching projections.
+    # This avoids a burst of requests when PrizePicks itself reports no slate.
+    if sport_filter in ("MLB", "WNBA", "NBA"):
+        current_projection_count = _league_projection_count(sport_filter)
+        if current_projection_count == 0:
+            detail = f"PrizePicks league catalog · {sport_filter} · 0 projections currently posted"
+            set_runtime_metric("prizepicks", "info", detail)
+            st.session_state["edge_fetch_debug"] = [detail]
+            raise RuntimeError(
+                f"PrizePicks currently lists 0 {sport_filter} projections. "
+                "The next slate has not been posted yet; try again after PrizePicks publishes new lines."
+            )
+
     # PrizePicks rate-limits server IPs unpredictably. Use a reasonably fresh
     # last-good slate first so repeated scans do not hammer their API.
     def _cache_slate_looks_valid(cached: list) -> bool:
@@ -13350,9 +13390,9 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
         ("https://partner-api.prizepicks.com/projections", "partner-api.prizepicks.com"),
         ("https://api.prizepicks.com/projections", "api.prizepicks.com"),
     ]
-    # Start below the max page size. Smaller pages are less likely to trip the
-    # partner API's throttle, while 250 remains a final attempt for fuller slates.
-    _page_sizes = ["100", "50", "250"]
+    # One request per endpoint. Repeated page-size retries from the same Railway
+    # IP intensify Cloudflare throttling and do not create a missing slate.
+    _page_sizes = ["250"]
     _base_headers = {
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "en-US,en;q=0.9",
@@ -13365,8 +13405,9 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
     for _league_id, _sport in _all_leagues:
         _fetched = False
         _blocked = False
+        _confirmed_empty = False
         for _endpoint, _url_label in _endpoints:
-            if _fetched or _blocked:
+            if _fetched or _blocked or _confirmed_empty:
                 break
             for _per_page in _page_sizes:
                 if _fetched or _blocked:
@@ -13416,11 +13457,30 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
                         _fetched = True
                         break
                     fetch_notes.append(f"{_sport} {_url_label} {_per_page}: empty data")
+                    # A 200/empty response can be legitimate between slates.
+                    # Confirm against PrizePicks' league catalog before trying
+                    # more endpoints and turning an empty slate into a 429 storm.
+                    if _url_label == "partner-api.prizepicks.com":
+                        projection_count = _league_projection_count(_sport)
+                        if projection_count == 0:
+                            _confirmed_empty = True
+                            fetch_notes.append(
+                                f"{_sport} PrizePicks league catalog: 0 projections currently posted"
+                            )
+                            break
                 except Exception as e:
                     fetch_notes.append(f"{_sport} {_url_label} {_per_page}: {type(e).__name__}")
                     record_debug_error("prizepicks.fetch", e)
 
     if not props:
+        if any("0 projections currently posted" in note for note in fetch_notes):
+            detail = " | ".join(fetch_notes[-4:])
+            set_runtime_metric("prizepicks", "info", detail)
+            st.session_state["edge_fetch_debug"] = fetch_notes[-8:]
+            raise RuntimeError(
+                f"PrizePicks currently lists 0 {sport_filter} projections. "
+                "The next slate has not been posted yet; try again after PrizePicks publishes new lines."
+            )
         cached_props = _stale_cache()
         if cached_props:
             st.session_state["edge_fetch_debug"] = (
@@ -15637,11 +15697,16 @@ if st.session_state.active_sport == "edge":
         st.session_state["_edge_last_stat_filter"] = _edge_stat
 
         with st.spinner(f"Fetching PrizePicks {_edge_sport} slate..."):
+            _fetch_err_text = ""
             try:
                 _all_props = fetch_all_pp_props(sport_filter=_edge_sport)
             except Exception as _fetch_err:
                 _all_props = []
-                st.error(f"Fetch error: {_fetch_err}")
+                _fetch_err_text = str(_fetch_err)
+                if "currently lists 0" in _fetch_err_text:
+                    st.info(f"Slate status: {_fetch_err_text}")
+                else:
+                    st.error(f"Fetch error: {_fetch_err_text}")
 
         _cache_status = st.session_state.get("edge_cache_save_status")
         if _cache_status:
@@ -15661,10 +15726,16 @@ if st.session_state.active_sport == "edge":
 
         if not _all_props:
             fetch_all_pp_props.clear()
-            st.warning(
-                "⚠️ PrizePicks is temporarily blocking server requests (Cloudflare). "
-                "This resolves on its own — **try again in a few hours**. Cache cleared."
-            )
+            if "currently lists 0" in _fetch_err_text:
+                st.caption(
+                    "The scanner is ready. No current PrizePicks MLB lines are available to analyze, "
+                    "so PropIQ is not substituting stale or cross-sport props."
+                )
+            else:
+                st.warning(
+                    "PrizePicks is temporarily rate-limiting this server. PropIQ preserved the "
+                    "last-good cache and will retry after the cooldown."
+                )
             st.stop()
 
 
