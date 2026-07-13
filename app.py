@@ -4987,7 +4987,9 @@ def is_mlb_hitter_fantasy_prop(stat: str) -> bool:
 def is_wnba_points_prop(stat: str) -> bool:
     """Normalize PrizePicks WNBA points markets."""
     s = re.sub(r"[^a-z0-9]+", " ", str(stat or "").lower()).strip()
-    return s in ("points", "pts") or ("point" in s and "rebound" not in s and "assist" not in s)
+    # Keep the individual Points market only. "Points (Combo)" represents a
+    # different market and cannot be modeled from one player's game log.
+    return s in ("points", "pts")
 
 
 def is_sane_mlb_pitcher_prop_line(stat: str, line) -> bool:
@@ -13279,7 +13281,8 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
                 return len(mlb_rows) <= 700 and len(k_rows) <= 120 and len(hfs_rows) <= 180
             if sport_filter == "WNBA":
                 rows = [p for p in cached if p.get("sport") == "WNBA"]
-                return len(rows) <= 300
+                points_rows = [p for p in rows if is_wnba_points_prop(p.get("stat", ""))]
+                return len(rows) <= 1500 and len(points_rows) <= 400
             return len(cached) <= 1500
         except Exception:
             return False
@@ -13445,7 +13448,7 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
                         parsed = _parse(data, _sport, _league_id)
                         if (
                             (_sport == "MLB" and len(parsed) > 700)
-                            or (_sport == "WNBA" and len(parsed) > 300)
+                            or (_sport == "WNBA" and len(parsed) > 1500)
                             or (_sport == "NBA" and len(parsed) > 900)
                         ):
                             fetch_notes.append(
@@ -15750,11 +15753,10 @@ if st.session_state.active_sport == "edge":
         # Stat filter — applied BEFORE threading so we don't spin up
         # 484 threads for 20 actual props
         _STAT_MAP = {
-            "Points":               lambda s: "point" in s.lower() or s.lower() == "pts",
             "Strikeouts":           is_mlb_strikeout_prop,
             "Hitter Fantasy Score":  is_mlb_hitter_fantasy_prop,
             "All MLB Props":         lambda s: normalize_mlb_pitcher_prop_stat(s) in ("Strikeouts", "Hitter Fantasy Score"),
-            "Points":                lambda s: is_wnba_points_prop(s) or "point" in str(s).lower(),
+            "Points":                is_wnba_points_prop,
             "Rebounds":             lambda s: "rebound" in s.lower() or s.lower() == "reb",
             "Assists":              lambda s: "assist" in s.lower() or s.lower() == "ast",
             "3PM":                  lambda s: "3" in s.lower() or "three" in s.lower(),
