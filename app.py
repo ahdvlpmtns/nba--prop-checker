@@ -13387,12 +13387,12 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
                         # page sizes before falling back to cache.
                         if _per_page != _page_sizes[-1]:
                             continue
-                        if "api.prizepicks.com" in _url_label:
+                        if _url_label == "api.prizepicks.com":
                             _blocked = True
                         break
                     if r.status_code == 403:
                         fetch_notes.append(f"{_sport} {_url_label} {_per_page}: HTTP 403 blocked")
-                        if "api.prizepicks.com" in _url_label:
+                        if _url_label == "api.prizepicks.com":
                             _blocked = True
                         break
                     if not r.ok:
