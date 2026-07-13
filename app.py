@@ -13912,6 +13912,19 @@ def _wnba_normal_probability(mean: float, sigma: float, line: float, side: str) 
     return float(1.0 - cdf if side == "Over" else cdf)
 
 
+def _wnba_calendar_date(value):
+    """Convert ESPN timestamps and date-only values to an Eastern calendar date."""
+    try:
+        timestamp = pd.to_datetime(value, errors="coerce")
+        if pd.isna(timestamp):
+            return None
+        if getattr(timestamp, "tzinfo", None) is not None:
+            timestamp = timestamp.tz_convert("America/New_York")
+        return timestamp.date()
+    except Exception:
+        return None
+
+
 def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
                       game: dict) -> dict:
     """Calibrated WNBA model: history, projection, minutes, venue, H2H, and data quality."""
@@ -14015,15 +14028,20 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
     rest_adj = 0.0
     rest_days = None
     if game.get("game_date") and not work.empty:
-        rest_days = (pd.Timestamp(game["game_date"]).normalize() - pd.Timestamp(work.iloc[0]["DATE"]).normalize()).days
-        if rest_days <= 1:
-            rest_adj = -0.025
-        elif rest_days >= 4:
-            rest_adj = 0.008
-        if side == "Under":
-            rest_adj *= -1
-        probability += rest_adj
-        trace.append({"Signal": "Rest", "Value": f"{max(rest_days - 1, 0)} full day(s)", "Adjustment": f"{rest_adj:+.1%}" if rest_adj else "No change", "Notes": "Small bounded adjustment; back-to-backs carry the meaningful penalty"})
+        upcoming_date = _wnba_calendar_date(game["game_date"])
+        last_game_date = _wnba_calendar_date(work.iloc[0]["DATE"])
+        if upcoming_date and last_game_date:
+            rest_days = (upcoming_date - last_game_date).days
+            if rest_days <= 1:
+                rest_adj = -0.025
+            elif rest_days >= 4:
+                rest_adj = 0.008
+            if side == "Under":
+                rest_adj *= -1
+            probability += rest_adj
+            trace.append({"Signal": "Rest", "Value": f"{max(rest_days - 1, 0)} full day(s)", "Adjustment": f"{rest_adj:+.1%}" if rest_adj else "No change", "Notes": "Small bounded adjustment; back-to-backs carry the meaningful penalty"})
+        else:
+            trace.append({"Signal": "Rest", "Value": "Unavailable", "Adjustment": "No change", "Notes": "Schedule or last-game date could not be normalized"})
 
     minute_std = float(minutes.std(ddof=1) or 0) if minutes.notna().any() else 8.0
     consistency = max(0.0, min(1.0, 1.0 - sigma / max(abs(avg) + sigma_floor, 1.0)))
