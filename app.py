@@ -1695,6 +1695,10 @@ div[data-baseweb="popover"] > div {
 html {
     scroll-behavior: smooth;
 }
+.analyzer-scroll-anchor {
+    height: 1px;
+    scroll-margin-top: 72px;
+}
 body {
     overscroll-behavior-y: contain;
 }
@@ -1755,6 +1759,13 @@ div[data-baseweb="popover"] {
 ul[data-testid="stSelectboxVirtualDropdown"] {
     max-height: 46vh !important;
     overscroll-behavior: contain !important;
+}
+ul[role="listbox"],
+div[data-baseweb="menu"] {
+    max-height: min(46vh, 22rem) !important;
+    overflow-y: auto !important;
+    overscroll-behavior: contain !important;
+    -webkit-overflow-scrolling: touch !important;
 }
 ul[data-testid="stSelectboxVirtualDropdown"] li,
 div[data-baseweb="menu"] li {
@@ -3264,7 +3275,65 @@ def player_typeahead(label: str, options: list, key: str,
             if len(token) >= 2
         )
     ]
-    return matches[0] if len(matches) == 1 else raw_text
+    if len(matches) == 1:
+        return matches[0]
+
+    # Resolve a clear typo only when one candidate is substantially closer
+    # than every other option. This catches "Shohei Othani" without guessing
+    # between genuinely ambiguous names.
+    if len(normalized) >= 6:
+        from difflib import SequenceMatcher
+        ranked = sorted(
+            (
+                (SequenceMatcher(None, normalized, normalize_name(name)).ratio(), name)
+                for name in choices
+            ),
+            reverse=True,
+        )
+        if ranked:
+            best_score, best_name = ranked[0]
+            next_score = ranked[1][0] if len(ranked) > 1 else 0.0
+            if best_score >= 0.86 and best_score - next_score >= 0.04:
+                return best_name
+    return raw_text
+
+
+def set_navigation_scroll_target(target: str) -> None:
+    """Request a one-time scroll after switching analyzer views."""
+    st.session_state["_navigation_scroll_target"] = target
+
+
+def render_navigation_scroll_target(target: str) -> None:
+    """Scroll the parent Streamlit page to a freshly rendered analyzer."""
+    if st.session_state.get("_navigation_scroll_target") != target:
+        return
+    st.session_state.pop("_navigation_scroll_target", None)
+    try:
+        import json as _json
+        import streamlit.components.v1 as _components
+        target_json = _json.dumps(target)
+        _components.html(
+            f"""
+            <script>
+            (() => {{
+                const targetId = {target_json};
+                const scrollToTarget = () => {{
+                    const doc = window.parent.document;
+                    const node = doc.getElementById(targetId);
+                    if (node) {{
+                        node.scrollIntoView({{behavior: "auto", block: "start"}});
+                    }}
+                }};
+                window.parent.requestAnimationFrame(scrollToTarget);
+                window.parent.setTimeout(scrollToTarget, 120);
+            }})();
+            </script>
+            """,
+            height=0,
+            width=0,
+        )
+    except Exception as err:
+        record_debug_error("ui.navigation_scroll", err)
 
 
 def _parse_percent_value(value, default: Optional[float] = None) -> Optional[float]:
@@ -8017,6 +8086,7 @@ with _sp1:
         type="primary" if st.session_state.active_sport == "nba" else "secondary"
     ):
         st.session_state.active_sport = "nba"
+        set_navigation_scroll_target("nba-analyzer-controls")
         st.rerun()
 with _sp2:
     if st.button(
@@ -8026,6 +8096,7 @@ with _sp2:
         type="primary" if st.session_state.active_sport == "mlb" else "secondary"
     ):
         st.session_state.active_sport = "mlb"
+        set_navigation_scroll_target("mlb-analyzer-controls")
         st.rerun()
 with _sp3:
     if st.button(
@@ -8035,6 +8106,7 @@ with _sp3:
         type="primary" if st.session_state.active_sport == "wnba" else "secondary"
     ):
         st.session_state.active_sport = "wnba"
+        set_navigation_scroll_target("wnba-analyzer-controls")
         st.rerun()
 with _sp4:
     if st.button(
@@ -8044,6 +8116,7 @@ with _sp4:
         type="primary" if st.session_state.active_sport == "edge" else "secondary"
     ):
         st.session_state.active_sport = "edge"
+        set_navigation_scroll_target("edge-scanner-controls")
         st.rerun()
 
 render_pick_list()
@@ -10900,6 +10973,8 @@ if st.session_state.active_sport == "mlb":
         return "Pass"
 
     # ── MLB UI ────────────────────────────────────────────────
+    st.markdown("<div id='mlb-analyzer-controls' class='analyzer-scroll-anchor'></div>", unsafe_allow_html=True)
+    render_navigation_scroll_target("mlb-analyzer-controls")
     st.markdown("<div class='section-header'>⚾ MLB Pitcher Prop Analyzer</div>", unsafe_allow_html=True)
 
     # ── Dynamic pitcher list from MLB Stats API ──────────────────────────────
@@ -10923,7 +10998,12 @@ if st.session_state.active_sport == "mlb":
                 if r.ok:
                     for p in r.json().get("people", []):
                         pos = p.get("primaryPosition", {}).get("code", "")
-                        if pos in ("1", "P"):  # pitchers only
+                        is_two_way = bool(
+                            p.get("isTwoWayPlayer")
+                            or p.get("twoWayPlayer")
+                            or p.get("primaryPosition", {}).get("abbreviation") == "TWP"
+                        )
+                        if pos in ("1", "P") or is_two_way:
                             name = p.get("fullName", "").strip()
                             if name and len(name) > 3:
                                 pitchers.add(name)
@@ -10934,7 +11014,7 @@ if st.session_state.active_sport == "mlb":
 
         # Always include key names as seed in case API is slow/unavailable
         _seed = [
-            "Tarik Skubal","Paul Skenes","Yoshinobu Yamamoto","Tyler Glasnow",
+            "Shohei Ohtani","Tarik Skubal","Paul Skenes","Yoshinobu Yamamoto","Tyler Glasnow",
             "Zack Wheeler","Aaron Nola","Gerrit Cole","Shota Imanaga",
             "Logan Webb","Dylan Cease","Hunter Greene","Framber Valdez",
             "Emmett Sheehan","Brandon Sproat","Noah Schultz","Joey Cantillo",
@@ -11476,21 +11556,27 @@ if st.session_state.active_sport == "mlb":
 
     _mlb_hitters = _mlb_fetch_hitter_list()
 
-    _mc1,_mc2,_mc3,_mc4 = st.columns([1.2,2.5,1,1])
     # Pre-fill pitcher if jumped from Edge Scanner
     _mlb_edge_jp = st.session_state.pop("edge_jump_pitcher", None)
+    _mlb_jump_line = st.session_state.pop("edge_jump_line", None) if _mlb_edge_jp else None
+    _mlb_jump_side = st.session_state.pop("edge_jump_side", "Over") if _mlb_edge_jp else "Over"
+    _mlb_jump_prop = st.session_state.pop("edge_jump_prop", None) if _mlb_edge_jp else None
     if _mlb_edge_jp:
         st.session_state.mlb_pitcher_key = st.session_state.get("mlb_pitcher_key", 0) + 1
         st.session_state["_mlb_prefill_name"] = _mlb_edge_jp
-        st.session_state["_mlb_prefill_line"] = st.session_state.pop("edge_jump_line", None)
-        _mlb_jump_prop = st.session_state.pop("edge_jump_prop", None)
-        if _mlb_jump_prop == "Hitter Fantasy Score":
-            st.session_state.mlb_prop_type = "Hitter Fantasy Score"
-        else:
-            st.session_state.mlb_prop_type = "Strikeouts"
-    with _mc1:
-        mlb_prop = st.selectbox("Prop",["Strikeouts","Hitter Fantasy Score"],key="mlb_prop_type")
-    with _mc2:
+        st.session_state.pop("mlb_prop_type", None)
+        st.session_state.pop("mlb_line", None)
+        st.session_state.pop("mlb_side", None)
+    _mlb_prop_default = "Hitter Fantasy Score" if _mlb_jump_prop == "Hitter Fantasy Score" else "Strikeouts"
+    _mlb_top1, _mlb_top2 = st.columns([1.1, 2.9])
+    with _mlb_top1:
+        _mlb_prop_options = ["Strikeouts", "Hitter Fantasy Score"]
+        mlb_prop = st.selectbox(
+            "Prop", _mlb_prop_options,
+            index=_mlb_prop_options.index(_mlb_prop_default),
+            key="mlb_prop_type",
+        )
+    with _mlb_top2:
         _mlb_options = _mlb_hitters if mlb_prop == "Hitter Fantasy Score" else _mlb_pitchers
         _mlb_pf_name = st.session_state.get("_mlb_prefill_name", "")
         _mlb_pf_idx  = (_mlb_options.index(_mlb_pf_name) + 1
@@ -11500,12 +11586,26 @@ if st.session_state.active_sport == "mlb":
             _mlb_options,
             key=f"mlb_player_sel_{mlb_prop}_{st.session_state.get('mlb_pitcher_key', 0)}",
             prefill=_mlb_pf_name if _mlb_pf_idx else None,
+            aliases={
+                "Shohei Othani": "Shohei Ohtani",
+                "Othani": "Shohei Ohtani",
+            },
             noun="hitter" if mlb_prop == "Hitter Fantasy Score" else "pitcher",
         )
-    with _mc3:
-        mlb_line = st.number_input("Line",min_value=0.5,max_value=30.0,value=5.5,step=0.5,key="mlb_line")
-    with _mc4:
-        mlb_side = st.selectbox("Over / Under",["Over","Under"],key="mlb_side")
+    _mlb_bottom1, _mlb_bottom2 = st.columns(2)
+    with _mlb_bottom1:
+        _mlb_line_default = float(_mlb_jump_line) if _mlb_jump_line is not None else 5.5
+        mlb_line = st.number_input(
+            "Line", min_value=0.5, max_value=30.0,
+            value=_mlb_line_default, step=0.5, key="mlb_line",
+        )
+    with _mlb_bottom2:
+        _mlb_side_options = ["Over", "Under"]
+        _mlb_side_default = _mlb_jump_side if _mlb_jump_side in _mlb_side_options else "Over"
+        mlb_side = st.selectbox(
+            "Over / Under", _mlb_side_options,
+            index=_mlb_side_options.index(_mlb_side_default), key="mlb_side",
+        )
 
     # Clear button
     if mlb_pitcher:
@@ -11555,7 +11655,7 @@ if st.session_state.active_sport == "mlb":
         )
 
     _mlb_btn_label = "⚾  Analyze Hitter Fantasy Score" if mlb_prop == "Hitter Fantasy Score" else "⚾  Analyze Pitcher Prop"
-    mlb_fetch = st.button(_mlb_btn_label, key="mlb_analyze")
+    mlb_fetch = st.button(_mlb_btn_label, key="mlb_analyze", use_container_width=True) or bool(_mlb_edge_jp)
 
     if not mlb_pitcher:
         st.markdown(
@@ -14381,6 +14481,8 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
 
 
 if st.session_state.active_sport == "wnba":
+    st.markdown("<div id='wnba-analyzer-controls' class='analyzer-scroll-anchor'></div>", unsafe_allow_html=True)
+    render_navigation_scroll_target("wnba-analyzer-controls")
     st.markdown(
         "<div class='v55-hero'><div class='v55-kicker'>WNBA · INDIVIDUAL ANALYZER</div>"
         "<div class='v55-title'>Player Prop Lab</div>"
@@ -14404,25 +14506,24 @@ if st.session_state.active_sport == "wnba":
     stat_options = list(WNBA_STAT_COLUMNS.keys())
     default_stat = jump_stat if jump_stat in stat_options else "Points"
 
-    wc1, wc2 = st.columns([1.35, 1])
-    with wc1:
-        selected_name = player_typeahead(
-            "Player search",
-            names,
-            key="wnba_player_select",
-            prefill=default_player,
-            noun="WNBA player",
-        )
+    # Keep typeahead full-width so the keyboard and suggestion menu have room
+    # on mobile; compact prop controls sit on the row below it.
+    selected_name = player_typeahead(
+        "Player search",
+        names,
+        key="wnba_player_select",
+        prefill=default_player,
+        noun="WNBA player",
+    )
+    wc2, wc3 = st.columns(2)
     with wc2:
         selected_stat = st.selectbox("Prop", stat_options, index=stat_options.index(default_stat), key="wnba_stat_select")
-    wc3, wc4 = st.columns(2)
     with wc3:
         default_line = float(jump_line) if jump_line is not None else (15.5 if selected_stat == "Points" else 5.5)
         line = st.number_input("PrizePicks line", min_value=0.5, max_value=70.5, value=default_line, step=0.5, key="wnba_line_input")
-    with wc4:
-        side_options = ["Over", "Under"]
-        default_side = jump_side if jump_side in side_options else "Over"
-        side = st.radio("Side", side_options, index=side_options.index(default_side), horizontal=True, key="wnba_side_select")
+    side_options = ["Over", "Under"]
+    default_side = jump_side if jump_side in side_options else "Over"
+    side = st.radio("Side", side_options, index=side_options.index(default_side), horizontal=True, key="wnba_side_select")
 
     analyze = st.button("Analyze WNBA Prop", type="primary", use_container_width=True, key="wnba_analyze")
     should_run = bool(selected_name) and (
@@ -14913,6 +15014,9 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
 
 if st.session_state.active_sport == "edge":
 
+    st.markdown("<div id='edge-scanner-controls' class='analyzer-scroll-anchor'></div>", unsafe_allow_html=True)
+    render_navigation_scroll_target("edge-scanner-controls")
+
     import re as _re_edge
 
     def _edge_weighted_rate_from_values(vals: pd.Series, line: float, side: str,
@@ -15218,7 +15322,7 @@ if st.session_state.active_sport == "edge":
 
 
     def run_nba_edge_check(player_name: str, line: float, stat: str,
-                           team: str, side: str = "Over") -> dict | None:
+                           team: str, side: str = "Over") -> Optional[dict]:
         """
         NBA edge check — uses current game logs + stat-specific context signals.
         Matches individual analyzer more closely for consistent results.
@@ -15964,7 +16068,7 @@ if st.session_state.active_sport == "edge":
 
     def run_mlb_edge_check(pitcher_name: str, line: float,
                            stat: str, side: str = "Over",
-                           team: str = "") -> dict | None:
+                           team: str = "") -> Optional[dict]:
         """
         MLB scanner edge check — 6 signals using cached game log data.
         Matches full analyzer more closely without extra API calls.
@@ -16807,7 +16911,7 @@ if st.session_state.active_sport == "edge":
 
     def run_mlb_hitter_fantasy_edge_check(player_name: str, line: float,
                                           side: str = "Over",
-                                          team: str = "") -> dict | None:
+                                          team: str = "") -> Optional[dict]:
         """Fast Hitter Fantasy Score edge model for MLB Edge Scanner."""
         try:
             _stat_label = "Hitter Fantasy Score"
@@ -17143,7 +17247,7 @@ if st.session_state.active_sport == "edge":
 
     def _legacy_run_wnba_edge_check(player_name: str, line: float,
                                     stat: str, side: str = "Over",
-                                    team: str = "") -> dict | None:
+                                    team: str = "") -> Optional[dict]:
         """Retained temporarily for deployment rollback; the shared model below is active."""
         try:
             if not is_wnba_points_prop(stat):
@@ -17315,7 +17419,7 @@ if st.session_state.active_sport == "edge":
 
     def run_wnba_edge_check(player_name: str, line: float,
                             stat: str, side: str = "Over",
-                            team: str = "") -> dict | None:
+                            team: str = "") -> Optional[dict]:
         """Run the same calibrated WNBA engine used by the individual analyzer."""
         try:
             market = normalize_wnba_prop_stat(stat)
@@ -18286,6 +18390,7 @@ if st.session_state.active_sport == "edge":
                             st.session_state.edge_jump_player = _r["player"]
                             st.session_state.edge_jump_line   = _r["line"]
                             st.session_state.edge_jump_side   = _result_side
+                            set_navigation_scroll_target("nba-analyzer-controls")
                             st.rerun()
                         elif _r["sport"] == "MLB":
                             st.session_state.active_sport     = "mlb"
@@ -18293,6 +18398,7 @@ if st.session_state.active_sport == "edge":
                             st.session_state.edge_jump_line    = _r["line"]
                             st.session_state.edge_jump_side    = _result_side
                             st.session_state.edge_jump_prop    = _r["stat"]
+                            set_navigation_scroll_target("mlb-analyzer-controls")
                             st.rerun()
                         else:
                             st.session_state.active_sport = "wnba"
@@ -18300,6 +18406,7 @@ if st.session_state.active_sport == "edge":
                             st.session_state.wnba_jump_line = _r["line"]
                             st.session_state.wnba_jump_side = _r.get("side", "Over")
                             st.session_state.wnba_jump_stat = _r["stat"]
+                            set_navigation_scroll_target("wnba-analyzer-controls")
                             st.rerun()
 
     elif st.session_state.get("edge_has_scanned"):
@@ -18962,6 +19069,8 @@ with st.expander("🎯  Parlay Checker — validate your entry before locking"):
 # Player & Prop inputs
 # ─────────────────────────────────────────────
 
+st.markdown("<div id='nba-analyzer-controls' class='analyzer-scroll-anchor'></div>", unsafe_allow_html=True)
+render_navigation_scroll_target("nba-analyzer-controls")
 st.markdown("<div class='section-header'>Player & Prop</div>", unsafe_allow_html=True)
 st.markdown("""
 <div style='background:#0d1520;border:1px solid rgba(0,196,204,0.15);border-radius:10px;
@@ -18978,7 +19087,7 @@ st.markdown("""
 if "player_key" not in st.session_state:
     st.session_state.player_key = 0
 
-col_a, col_b, col_c, col_d, col_e = st.columns([2.5, 1, 1, 1, 0.8])
+col_a = st.container()
 
 with col_a:
     # Fuzzy search — native searchable selectbox is fastest and smoother on mobile.
@@ -18991,9 +19100,13 @@ with col_a:
     _pick_target   = _edge_jump_nba or _recent_pick
     if _pick_target:
         st.session_state.pop(f"player_sel_{st.session_state.player_key}", None)
-    # Also pre-set line if jumped from edge
-    if _edge_jump_nba and st.session_state.get("edge_jump_line"):
-        st.session_state["_edge_prefill_line"] = st.session_state.pop("edge_jump_line", None)
+    # Carry the complete Edge selection and auto-run the destination once.
+    if _edge_jump_nba:
+        st.session_state["_drilldown_line"] = st.session_state.pop("edge_jump_line", None)
+        st.session_state["_drilldown_side"] = st.session_state.pop("edge_jump_side", "Over")
+        st.session_state["_drilldown_fetch"] = True
+        st.session_state.pop("nba_line_input", None)
+        st.session_state.pop("nba_side_select", None)
 
     player_query = player_typeahead(
         "Player search",
@@ -19030,6 +19143,8 @@ with col_a:
                 st.session_state._recent_pick = _rp
                 st.rerun()
 
+col_b, col_c, col_d, col_e = st.columns([1, 1, 1, 0.8])
+
 with col_b:
     _dd_line = st.session_state.get("_drilldown_line", None)
     line = st.number_input(
@@ -19039,6 +19154,7 @@ with col_b:
         value=float(_dd_line) if _dd_line else 24.5,
         step=0.5,
         format="%.1f",
+        key="nba_line_input",
         help="The number shown on PrizePicks — use the standard line, not goblin/demon"
     )
 with col_c:
@@ -19046,6 +19162,7 @@ with col_c:
     side = st.selectbox(
         "Over / Under", ["Over", "Under"],
         index=0 if not _dd_side or _dd_side == "Over" else 1,
+        key="nba_side_select",
         help="Match what PrizePicks shows. Over = player scores MORE than the line"
     )
 with col_d:
