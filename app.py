@@ -5497,12 +5497,47 @@ def is_mlb_hitter_fantasy_prop(stat: str) -> bool:
     return normalize_mlb_pitcher_prop_stat(stat) == "Hitter Fantasy Score"
 
 
-def is_wnba_points_prop(stat: str) -> bool:
-    """Normalize PrizePicks WNBA points markets."""
+def normalize_wnba_prop_stat(stat: str) -> str:
+    """Map PrizePicks WNBA market labels to the analyzer's canonical names."""
     s = re.sub(r"[^a-z0-9]+", " ", str(stat or "").lower()).strip()
-    # Keep the individual Points market only. "Points (Combo)" represents a
-    # different market and cannot be modeled from one player's game log.
-    return s in ("points", "pts")
+    compact = s.replace(" ", "")
+    aliases = {
+        "points": "Points", "pts": "Points",
+        "rebounds": "Rebounds", "rebound": "Rebounds", "rebs": "Rebounds", "reb": "Rebounds",
+        "assists": "Assists", "assist": "Assists", "asts": "Assists", "ast": "Assists",
+        "3ptmade": "3-Pointers Made", "3ptsmade": "3-Pointers Made", "3pm": "3-Pointers Made",
+        "3pointersmade": "3-Pointers Made", "threepointersmade": "3-Pointers Made",
+        "ptsrebsasts": "Pts + Reb + Ast", "pointsreboundsassists": "Pts + Reb + Ast", "pra": "Pts + Reb + Ast",
+        "ptsrebs": "Points + Rebounds", "pointsrebounds": "Points + Rebounds", "pr": "Points + Rebounds",
+        "ptsasts": "Points + Assists", "pointsassists": "Points + Assists", "pa": "Points + Assists",
+        "rebsasts": "Rebounds + Assists", "reboundsassists": "Rebounds + Assists", "ra": "Rebounds + Assists",
+    }
+    return aliases.get(compact, str(stat or ""))
+
+
+def is_wnba_supported_prop(stat: str) -> bool:
+    return normalize_wnba_prop_stat(stat) in WNBA_STAT_COLUMNS
+
+
+def is_wnba_points_prop(stat: str) -> bool:
+    return normalize_wnba_prop_stat(stat) == "Points"
+
+
+def is_sane_wnba_prop_line(stat: str, line) -> bool:
+    """Reject cross-mapped or malformed WNBA lines before model execution."""
+    try:
+        market = normalize_wnba_prop_stat(stat)
+        value = float(line)
+    except Exception:
+        return False
+    ranges = {
+        "Points": (0.5, 40.5), "Rebounds": (0.5, 20.5),
+        "Assists": (0.5, 15.5), "3-Pointers Made": (0.5, 8.5),
+        "Pts + Reb + Ast": (4.5, 65.5), "Points + Rebounds": (2.5, 55.5),
+        "Points + Assists": (2.5, 52.5), "Rebounds + Assists": (1.5, 32.5),
+    }
+    low, high = ranges.get(market, (1.0, 0.0))
+    return low <= value <= high
 
 
 def is_sane_mlb_pitcher_prop_line(stat: str, line) -> bool:
@@ -14332,6 +14367,7 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
         "sample": n, "raw": raw, "calibrated": calibrated,
         "probability": probability, "confidence": confidence, "tier": tier,
         "avg": avg, "l3": l3, "l5": l5, "projection": projection,
+        "projection_prob": projection_prob,
         "edge": directional_edge, "sigma": sigma, "consistency": consistency,
         "avg_min": avg_min, "l3_min": l3_min, "minute_std": minute_std,
         "h2h_avg": h2h_avg, "h2h_n": h2h_n, "rest_days": rest_days,
@@ -14642,8 +14678,8 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
                 return len(mlb_rows) <= 700 and len(k_rows) <= 120 and len(hfs_rows) <= 180
             if sport_filter == "WNBA":
                 rows = [p for p in cached if p.get("sport") == "WNBA"]
-                points_rows = [p for p in rows if is_wnba_points_prop(p.get("stat", ""))]
-                return len(rows) <= 1500 and len(points_rows) <= 400
+                supported_rows = [p for p in rows if is_wnba_supported_prop(p.get("stat", ""))]
+                return len(rows) <= 1500 and len(supported_rows) <= 900
             return len(cached) <= 1500
         except Exception:
             return False
@@ -15067,10 +15103,12 @@ if st.session_state.active_sport == "edge":
                 reasons.append(f"L3 avg {result['l3']}")
             if result.get("opp"):
                 reasons.append(f"Next vs {result['opp']}")
-            if result.get("matchup") and result.get("matchup") != "Neutral":
-                reasons.append(f"Defense matchup {result['matchup'].lower()}")
-            if result.get("usage_expected") is not None:
-                reasons.append(f"Usage path {result['usage_expected']} pts")
+            if result.get("defense_label") and result.get("defense_label") != "Neutral":
+                reasons.append(f"{result['defense_label']} defense")
+            if result.get("projection") is not None:
+                reasons.append(f"Projection {result['projection']}")
+            if result.get("injury_status") not in (None, "", "Active", "Active/Unlisted"):
+                reasons.append(str(result["injury_status"]))
 
         if edge:
             reasons.append(f"Avg edge {edge:+.1f}")
@@ -16804,10 +16842,10 @@ if st.session_state.active_sport == "edge":
             return empty
 
 
-    def run_wnba_edge_check(player_name: str, line: float,
-                            stat: str, side: str = "Over",
-                            team: str = "") -> dict | None:
-        """WNBA Points edge model for the Edge Scanner."""
+    def _legacy_run_wnba_edge_check(player_name: str, line: float,
+                                    stat: str, side: str = "Over",
+                                    team: str = "") -> dict | None:
+        """Retained temporarily for deployment rollback; the shared model below is active."""
         try:
             if not is_wnba_points_prop(stat):
                 return None
@@ -16976,6 +17014,93 @@ if st.session_state.active_sport == "edge":
             return None
 
 
+    def run_wnba_edge_check(player_name: str, line: float,
+                            stat: str, side: str = "Over",
+                            team: str = "") -> dict | None:
+        """Run the same calibrated WNBA engine used by the individual analyzer."""
+        try:
+            market = normalize_wnba_prop_stat(stat)
+            line = float(line)
+            if market not in WNBA_STAT_COLUMNS or not is_sane_wnba_prop_line(market, line):
+                return None
+
+            player = wnba_find_player(player_name)
+            if not player.get("id"):
+                return None
+            team_abbr = _wnba_norm_team(team or player.get("team", ""))
+            game = wnba_get_next_game(team_abbr)
+            opp = _wnba_norm_team(game.get("opp", ""))
+            if not opp or opp == "TBD":
+                return None
+
+            logs = wnba_get_game_logs(player["id"], datetime.now().year, n=24)
+            if logs is None or len(logs) < 4:
+                return None
+
+            opponent = next((p for p in wnba_get_players() if _wnba_norm_team(p.get("team")) == opp), {})
+            defense = wnba_get_team_defense_context(opponent.get("team_id", ""), opp, n=8)
+            injury = wnba_get_injury_status(player.get("team_id", ""), player.get("name") or player_name)
+            model = wnba_analyze_prop(logs, market, line, side, game, defense, injury)
+            if model["tier"] == "Pass" or model["confidence"] < 55:
+                return None
+
+            history_key = f"WNBA {market}"
+            line_history = summarize_pp_line_history(
+                line, get_pp_line_history_from_supabase(player_name, history_key)
+            )
+            flags = list(model.get("flags") or [])
+            severe_flags = [flag for flag in flags if "Low role" in flag or "Availability" in flag]
+            trap_label = "Trap Risk" if severe_flags else "Watchlist" if flags else "Clean"
+            if trap_label == "Trap Risk":
+                return None
+
+            probability = float(model["probability"])
+            directional_avg_edge = (
+                float(model["avg"]) - line if side == "Over" else line - float(model["avg"])
+            )
+            return {
+                "sport": "WNBA",
+                "player": player.get("name") or player_name,
+                "stat": market,
+                "line": line,
+                "side": side,
+                "adj": round(probability * 100, 1),
+                "confidence": int(model["confidence"]),
+                "raw_adj": round(float(model["calibrated"]) * 100, 1),
+                "reliability": round(float(model["reliability"]) * 100, 1),
+                "avg": round(float(model["avg"]), 1),
+                "edge_raw": round(directional_avg_edge, 2),
+                "cons": round(float(model["consistency"]) * 100, 1),
+                "samples": int(model["sample"]),
+                "l3": round(float(model["l3"]), 1),
+                "avg_min": round(float(model["avg_min"]), 1),
+                "opp": opp,
+                "game_date": game.get("game_date", ""),
+                "park": model.get("defense_label", "Unavailable"),
+                "projection_gap": round(float(model["edge"]), 1),
+                "projection_prob": round(float(model["projection_prob"]) * 100, 1),
+                "projection": round(float(model["projection"]), 1),
+                "tier": model["tier"],
+                "trap_label": trap_label,
+                "trap_reasons": flags[:3],
+                "defense_label": model.get("defense_label", "Unavailable"),
+                "defense_games": int(model.get("defense_games", 0) or 0),
+                "defense_allowed": model.get("defense_allowed"),
+                "injury_status": (model.get("injury") or {}).get("status", "Active/Unlisted"),
+                "confidence_parts": model.get("confidence_parts", {}),
+                "market_prev_line": line_history.get("prev_line"),
+                "market_open_line": line_history.get("open_line"),
+                "market_move": line_history.get("move", 0.0),
+                "market_open_move": line_history.get("open_move", 0.0),
+                "market_snapshots": line_history.get("snapshots", 0),
+                "market_signal": line_history.get("market_signal", "Neutral"),
+                "market_note": line_history.get("market_note", ""),
+            }
+        except Exception as err:
+            record_debug_error("wnba.edge.shared_model", err)
+            return None
+
+
     # ── UI ────────────────────────────────────────────────────────────────
     st.markdown("<div class='section-header'>🎯 PropIQ Edge Scanner</div>",
                 unsafe_allow_html=True)
@@ -16985,7 +17110,7 @@ if st.session_state.active_sport == "edge":
         <div class='v55-kicker'>V7 Edge Board</div>
         <div class='v55-title'>A focused board for the strongest available edges.</div>
         <div class='v55-subcopy'>
-            Scan PrizePicks MLB props and WNBA Points, then rank only calibrated
+            Scan PrizePicks MLB and core WNBA props, then rank only calibrated
             shortlist candidates. Cards blend projection anchors, recent form, role/volume,
             matchup context, market movement, and risk tags before anything reaches your board.
         </div>
@@ -17005,7 +17130,8 @@ if st.session_state.active_sport == "edge":
         _stat_options = (
             ["All MLB Props", "Strikeouts", "Hitter Fantasy Score"]
             if _edge_sport == "MLB" else
-            ["Points"]
+            ["All WNBA Props", "Points", "Rebounds", "Assists", "3-Pointers Made",
+             "Pts + Reb + Ast", "Points + Rebounds", "Points + Assists", "Rebounds + Assists"]
         )
         if st.session_state.get("edge_stat_filter") not in _stat_options:
             st.session_state.edge_stat_filter = _stat_options[0]
@@ -17117,14 +17243,15 @@ if st.session_state.active_sport == "edge":
             "Strikeouts":           is_mlb_strikeout_prop,
             "Hitter Fantasy Score":  is_mlb_hitter_fantasy_prop,
             "All MLB Props":         lambda s: normalize_mlb_pitcher_prop_stat(s) in ("Strikeouts", "Hitter Fantasy Score"),
-            "Points":                is_wnba_points_prop,
-            "Rebounds":             lambda s: "rebound" in s.lower() or s.lower() == "reb",
-            "Assists":              lambda s: "assist" in s.lower() or s.lower() == "ast",
-            "3PM":                  lambda s: "3" in s.lower() or "three" in s.lower(),
-            "PRA":                  lambda s: all(x in s.lower() for x in ("point", "rebound", "assist")) or s.lower() == "pra",
-            "PR":                   lambda s: "assist" not in s.lower() and ("point" in s.lower() and "rebound" in s.lower() or s.lower() == "pr"),
-            "PA":                   lambda s: "rebound" not in s.lower() and ("point" in s.lower() and "assist" in s.lower() or s.lower() == "pa"),
-            "RA":                   lambda s: "point" not in s.lower() and ("rebound" in s.lower() and "assist" in s.lower() or s.lower() == "ra"),
+            "All WNBA Props":        is_wnba_supported_prop,
+            "Points":                lambda s: normalize_wnba_prop_stat(s) == "Points",
+            "Rebounds":             lambda s: normalize_wnba_prop_stat(s) == "Rebounds",
+            "Assists":              lambda s: normalize_wnba_prop_stat(s) == "Assists",
+            "3-Pointers Made":      lambda s: normalize_wnba_prop_stat(s) == "3-Pointers Made",
+            "Pts + Reb + Ast":      lambda s: normalize_wnba_prop_stat(s) == "Pts + Reb + Ast",
+            "Points + Rebounds":    lambda s: normalize_wnba_prop_stat(s) == "Points + Rebounds",
+            "Points + Assists":     lambda s: normalize_wnba_prop_stat(s) == "Points + Assists",
+            "Rebounds + Assists":   lambda s: normalize_wnba_prop_stat(s) == "Rebounds + Assists",
             "Steals":               lambda s: "steal" in s.lower(),
             "Blocks":               lambda s: "block" in s.lower(),
             "Hits":                 lambda s: s.lower() == "hits",
@@ -17152,8 +17279,8 @@ if st.session_state.active_sport == "edge":
         else:
             _filtered = [
                 p for p in _filtered
-                if is_wnba_points_prop(p.get("stat", ""))
-                and 2.5 <= float(p.get("line", 0) or 0) <= 35.5
+                if is_wnba_supported_prop(p.get("stat", ""))
+                and is_sane_wnba_prop_line(p.get("stat", ""), p.get("line"))
             ]
 
         # Goblin filter
@@ -17165,7 +17292,7 @@ if st.session_state.active_sport == "edge":
         for p in _filtered:
             _norm_stat = (
                 normalize_mlb_pitcher_prop_stat(p.get("stat", ""))
-                if _edge_sport == "MLB" else "Points"
+                if _edge_sport == "MLB" else normalize_wnba_prop_stat(p.get("stat", ""))
             )
             p["stat"] = _norm_stat
             _k = f"{p['sport']}|{p['player']}|{_norm_stat}"
@@ -17176,7 +17303,12 @@ if st.session_state.active_sport == "edge":
         _filtered = list(_deduped.values())
         _mlb_k_count = sum(1 for p in _filtered if p.get("sport") == "MLB" and is_mlb_strikeout_prop(p.get("stat", "")))
         _mlb_hfs_count = sum(1 for p in _filtered if p.get("sport") == "MLB" and is_mlb_hitter_fantasy_prop(p.get("stat", "")))
-        _wnba_points_count = sum(1 for p in _filtered if p.get("sport") == "WNBA" and is_wnba_points_prop(p.get("stat", "")))
+        _wnba_market_counts = {}
+        for p in _filtered:
+            if p.get("sport") == "WNBA":
+                _market = normalize_wnba_prop_stat(p.get("stat", ""))
+                _wnba_market_counts[_market] = _wnba_market_counts.get(_market, 0) + 1
+        _wnba_supported_count = sum(_wnba_market_counts.values())
 
         if not _filtered:
             st.warning("No props found matching your filters. Try broadening the sport or stat filter.")
@@ -17191,6 +17323,7 @@ if st.session_state.active_sport == "edge":
             "Strikeouts": "Pitcher Strikeouts",
             "Hitter Fantasy Score": "Hitter Fantasy Score",
             "Points": "WNBA Points",
+            "All WNBA Props": "All supported WNBA props",
         }.get(_edge_stat, _edge_stat)
         st.info(f"Analyzing {len(_filtered)} props ({_pp_stat_actual}) — {_edge_sport}...")
 
@@ -17217,10 +17350,14 @@ if st.session_state.active_sport == "edge":
                     if _norm_stat not in ("Strikeouts", "Hitter Fantasy Score"):
                         return None
                 if prop["sport"] == "WNBA":
-                    if is_wnba_points_prop(prop.get("stat", "")):
-                        return run_wnba_edge_check(
-                            prop["player"], prop["line"], "Points", "Over", prop.get("team", "")
-                        )
+                    _market = normalize_wnba_prop_stat(prop.get("stat", ""))
+                    if is_wnba_supported_prop(_market):
+                        _sides = [
+                            run_wnba_edge_check(prop["player"], prop["line"], _market, _side, prop.get("team", ""))
+                            for _side in ("Over", "Under")
+                        ]
+                        _sides = [result for result in _sides if result]
+                        return max(_sides, key=lambda result: (result["adj"], result["confidence"])) if _sides else None
             except Exception:
                 return None
 
@@ -17258,9 +17395,9 @@ if st.session_state.active_sport == "edge":
         if _edge_sport == "MLB":
             _slate_bits = f"{_mlb_k_count} K props, {_mlb_hfs_count} Hitter FS props"
         elif _edge_sport == "WNBA":
-            _slate_bits = f"{_wnba_points_count} WNBA Points props"
+            _slate_bits = ", ".join(f"{count} {market}" for market, count in sorted(_wnba_market_counts.items()))
         else:
-            _slate_bits = f"{_mlb_k_count} K props, {_mlb_hfs_count} Hitter FS props, {_wnba_points_count} WNBA Points props"
+            _slate_bits = f"{_mlb_k_count} K props, {_mlb_hfs_count} Hitter FS props, {_wnba_supported_count} WNBA props"
         st.session_state["edge_scan_summary"] = (
             f"Analyzed {len(_filtered)} matching props · {len(_results)} model candidates returned "
             f"(raw {_edge_sport} rows: {_raw_sport_count}; filtered slate: {_slate_bits})"
@@ -17279,8 +17416,8 @@ if st.session_state.active_sport == "edge":
             )
             or (
                 r.get("sport") == "WNBA"
-                and is_wnba_points_prop(r.get("stat", ""))
-                and 2.5 <= float(r.get("line", 0) or 0) <= 35.5
+                and is_wnba_supported_prop(r.get("stat", ""))
+                and is_sane_wnba_prop_line(r.get("stat", ""), r.get("line"))
             )
         )
         and r.get("opp")
@@ -17290,8 +17427,11 @@ if st.session_state.active_sport == "edge":
         _results = [r for r in _results if is_mlb_strikeout_prop(r.get("stat", ""))]
     elif _edge_stat == "Hitter Fantasy Score":
         _results = [r for r in _results if is_mlb_hitter_fantasy_prop(r.get("stat", ""))]
-    elif _edge_stat == "Points":
-        _results = [r for r in _results if r.get("sport") == "WNBA" and is_wnba_points_prop(r.get("stat", ""))]
+    elif _edge_sport == "WNBA" and _edge_stat != "All WNBA Props":
+        _results = [
+            r for r in _results
+            if r.get("sport") == "WNBA" and normalize_wnba_prop_stat(r.get("stat", "")) == _edge_stat
+        ]
 
     if _results:
         if st.session_state.get("edge_has_scanned"):
@@ -17480,8 +17620,9 @@ if st.session_state.active_sport == "edge":
                 _is_lean    = (not _is_strong) and (
                     _r["adj"] >= 60 or _r["edge_pct"] >= 3
                 )
-                _tier_lbl   = ("Strong Over" if _is_strong else
-                               "Lean Over"   if _is_lean  else "Edge Play")
+                _result_side = _r.get("side", "Over")
+                _tier_lbl   = (f"Strong {_result_side}" if _is_strong else
+                               f"Lean {_result_side}" if _is_lean else "Edge Play")
                 _tier_col   = ("#00e896" if _is_strong else
                                "#ffc107" if _is_lean  else "#9aaec4")
                 _tier_bg    = ("rgba(0,232,150,0.06)" if _is_strong else
@@ -17538,9 +17679,19 @@ if st.session_state.active_sport == "edge":
                     f"<span class='edge-pill-v55'>Proj prob {_r.get('projection_prob')}%</span>"
                     if _r.get("projection_prob") is not None else ""
                 )
+                _defense_pill = (
+                    f"<span class='edge-pill-v55'>{_r.get('defense_label')} defense"
+                    f" · {_r.get('defense_games')}G</span>"
+                    if _r.get("sport") == "WNBA" and _r.get("defense_label") else ""
+                )
+                _injury_pill = (
+                    f"<span class='edge-pill-v55 {'warn' if _r.get('injury_status') not in ('Active/Unlisted', 'Active') else ''}'>"
+                    f"{_r.get('injury_status')}</span>"
+                    if _r.get("sport") == "WNBA" and _r.get("injury_status") else ""
+                )
                 _ctx_pills = (
                     f"<span class='edge-pill-v55 accent'>{_r['stat']}</span>"
-                    f"<span class='edge-pill-v55'>Over {_r['line']}</span>"
+                    f"<span class='edge-pill-v55'>{_result_side} {_r['line']}</span>"
                     f"<span class='edge-pill-v55'>vs {_r.get('opp', 'TBD')}</span>"
                     f"{_game_pill}"
                     f"{_opp_k_pill}"
@@ -17552,6 +17703,7 @@ if st.session_state.active_sport == "edge":
                     f"{_bullpen_pill}"
                     f"{_projection_pill}"
                     f"{_projection_prob_pill}"
+                    f"{_defense_pill}{_injury_pill}"
                     f"{_goblin_tag}{_risk_pills}"
                 )
                 if _r.get("market_snapshots"):
@@ -17581,7 +17733,7 @@ if st.session_state.active_sport == "edge":
                     f"<span class='edge-pill-v55'>Avg {_r['avg']}</span>"
                     f"<span class='edge-pill-v55'>Avg edge <strong style='color:{_edge_raw_col};'>{_r['edge_raw']:+.1f}</strong></span>"
                     f"<span class='edge-pill-v55'>Consistency {_r['cons']}%</span>"
-                    f"<span class='edge-pill-v55'>{_r['samples']} {'games' if _r.get('stat') == 'Hitter Fantasy Score' else 'starts'}</span>"
+                    f"<span class='edge-pill-v55'>{_r['samples']} {'games' if _r.get('sport') == 'WNBA' or _r.get('stat') == 'Hitter Fantasy Score' else 'starts'}</span>"
                     f"</div>"
                     f"<details class='edge-details-v55'>"
                     f"<summary>Details</summary>"
@@ -17591,7 +17743,7 @@ if st.session_state.active_sport == "edge":
                     f"<span class='edge-pill-v55'>Avg {_r['avg']}</span>"
                     f"<span class='edge-pill-v55'>Avg edge <strong style='color:{_edge_raw_col};'>{_r['edge_raw']:+.1f}</strong></span>"
                     f"<span class='edge-pill-v55'>Consistency {_r['cons']}%</span>"
-                    f"<span class='edge-pill-v55'>{_r['samples']} {'games' if _r.get('stat') == 'Hitter Fantasy Score' else 'starts'}</span>"
+                    f"<span class='edge-pill-v55'>{_r['samples']} {'games' if _r.get('sport') == 'WNBA' or _r.get('stat') == 'Hitter Fantasy Score' else 'starts'}</span>"
                     f"</div>"
                     f"</details>"
                     f"<div class='edge-bar-v55'><div style='width:{_bar_w}%;background:{_tier_col};'></div></div>"
@@ -17608,9 +17760,9 @@ if st.session_state.active_sport == "edge":
                     import datetime as _dt_edge
                     _new_leg = {
                         "player":     _r["player"],
-                        "prop":       f"{_r['stat']} Over",
+                        "prop":       f"{_r['stat']} {_result_side}",
                         "line":       _r["line"],
-                        "side":       "Over",
+                        "side":       _result_side,
                         "verdict":    _tier_lbl,
                         "confidence": _conf_val,
                         "adj":        _r["adj"],
@@ -17619,7 +17771,7 @@ if st.session_state.active_sport == "edge":
                     }
                     _edge_tracker_entry = {
                         "Player":      _r["player"],
-                        "Line":        f"{_r['line']} Over",
+                        "Line":        f"{_r['line']} {_result_side}",
                         "Opponent":    _r.get("opp", "—"),
                         "Matchup":     _r["stat"],
                         "Venue":       f"Edge Scanner · { _r.get('park', 'Neutral') } · date:{_r.get('game_date', '')}",
@@ -17638,7 +17790,7 @@ if st.session_state.active_sport == "edge":
                         "Validation":  _r.get("validation_label", ""),
                         "Verdict":     _tier_lbl,
                         "Result":      "Pending",
-                        "Sport":       "MLB",
+                        "Sport":       _r["sport"],
                     }
                     st.button(
                         "➕ Add & Track",
@@ -17659,13 +17811,13 @@ if st.session_state.active_sport == "edge":
                             st.session_state.active_tab      = "player"
                             st.session_state.edge_jump_player = _r["player"]
                             st.session_state.edge_jump_line   = _r["line"]
-                            st.session_state.edge_jump_side   = "Over"
+                            st.session_state.edge_jump_side   = _result_side
                             st.rerun()
                         elif _r["sport"] == "MLB":
                             st.session_state.active_sport     = "mlb"
                             st.session_state.edge_jump_pitcher = _r["player"]
                             st.session_state.edge_jump_line    = _r["line"]
-                            st.session_state.edge_jump_side    = "Over"
+                            st.session_state.edge_jump_side    = _result_side
                             st.session_state.edge_jump_prop    = _r["stat"]
                             st.rerun()
                         else:
@@ -17673,7 +17825,7 @@ if st.session_state.active_sport == "edge":
                             st.session_state.wnba_jump_player = _r["player"]
                             st.session_state.wnba_jump_line = _r["line"]
                             st.session_state.wnba_jump_side = _r.get("side", "Over")
-                            st.session_state.wnba_jump_stat = "Points"
+                            st.session_state.wnba_jump_stat = _r["stat"]
                             st.rerun()
 
     elif st.session_state.get("edge_has_scanned"):
@@ -17687,7 +17839,8 @@ if st.session_state.active_sport == "edge":
             "<div style='text-align:center;color:#6b7f96;font-family:JetBrains Mono,"
             "monospace;font-size:0.75rem;padding:2rem;'>"
             f"No Edge Scanner candidates to display. {_scan_summary}.{_filter_note} "
-            "Try All MLB Props, set minimum edge to Any edge, or clear cache and scan again.</div>",
+            f"Try {'All WNBA Props' if _edge_sport == 'WNBA' else 'All MLB Props'}, "
+            "set minimum edge to Any edge, or clear cache and scan again.</div>",
             unsafe_allow_html=True
         )
     else:
