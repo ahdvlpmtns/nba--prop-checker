@@ -17088,6 +17088,14 @@ if st.session_state.active_sport == "edge":
                 "defense_allowed": model.get("defense_allowed"),
                 "injury_status": (model.get("injury") or {}).get("status", "Active/Unlisted"),
                 "confidence_parts": model.get("confidence_parts", {}),
+                "model_trace": model.get("trace", []),
+                "model_flags": model.get("flags", []),
+                "h2h_avg": model.get("h2h_avg"),
+                "h2h_n": int(model.get("h2h_n", 0) or 0),
+                "rest_days": model.get("rest_days"),
+                "stale_days": int(model.get("stale_days", 0) or 0),
+                "sigma": round(float(model.get("sigma", 0) or 0), 2),
+                "l3_min": round(float(model.get("l3_min", 0) or 0), 1),
                 "market_prev_line": line_history.get("prev_line"),
                 "market_open_line": line_history.get("open_line"),
                 "market_move": line_history.get("move", 0.0),
@@ -17118,7 +17126,7 @@ if st.session_state.active_sport == "edge":
     """, unsafe_allow_html=True)
 
     # Controls
-    _ec0, _ec1, _ec2, _ec3 = st.columns([0.9, 1.2, 1, 1])
+    _ec0, _ec1, _ec2, _ec3, _ec4 = st.columns([0.8, 1.35, 0.9, 1, 0.9])
     with _ec0:
         _edge_sport = st.selectbox(
             "Sport",
@@ -17127,6 +17135,10 @@ if st.session_state.active_sport == "edge":
             label_visibility="collapsed",
         )
     with _ec1:
+        if _edge_sport == "WNBA" and not st.session_state.get("wnba_edge_controls_v2"):
+            st.session_state.edge_stat_filter = "All WNBA Props"
+            st.session_state.edge_side_filter = "All sides"
+            st.session_state.wnba_edge_controls_v2 = True
         _stat_options = (
             ["All MLB Props", "Strikeouts", "Hitter Fantasy Score"]
             if _edge_sport == "MLB" else
@@ -17136,19 +17148,29 @@ if st.session_state.active_sport == "edge":
         if st.session_state.get("edge_stat_filter") not in _stat_options:
             st.session_state.edge_stat_filter = _stat_options[0]
         _edge_stat = st.selectbox(
-            "MLB prop",
+            "Prop market",
             _stat_options,
             key="edge_stat_filter",
             label_visibility="collapsed"
         )
     with _ec2:
+        _side_options = ["Overs"] if _edge_sport == "MLB" else ["All sides", "Overs", "Unders"]
+        if st.session_state.get("edge_side_filter") not in _side_options:
+            st.session_state.edge_side_filter = _side_options[0]
+        _edge_side = st.selectbox(
+            "Side",
+            _side_options,
+            key="edge_side_filter",
+            label_visibility="collapsed",
+        )
+    with _ec3:
         _edge_min = st.selectbox(
             "Min calibrated edge",
             ["Any edge", "+3%", "+5%", "+7%", "+10%"],
             key="edge_min_filter",
             label_visibility="collapsed"
         )
-    with _ec3:
+    with _ec4:
         _include_goblin = st.checkbox("Include goblins", value=True, key="edge_goblins")
 
     _min_edge_val = {
@@ -17185,6 +17207,7 @@ if st.session_state.active_sport == "edge":
         st.session_state["edge_has_scanned"] = True
         st.session_state["edge_scan_summary"] = ""
         st.session_state["_edge_last_stat_filter"] = _edge_stat
+        st.session_state["_edge_last_side_filter"] = _edge_side
 
         with st.spinner(f"Fetching PrizePicks {_edge_sport} slate..."):
             _fetch_err_text = ""
@@ -17352,9 +17375,14 @@ if st.session_state.active_sport == "edge":
                 if prop["sport"] == "WNBA":
                     _market = normalize_wnba_prop_stat(prop.get("stat", ""))
                     if is_wnba_supported_prop(_market):
+                        _requested_sides = (
+                            ("Over",) if _edge_side == "Overs" else
+                            ("Under",) if _edge_side == "Unders" else
+                            ("Over", "Under")
+                        )
                         _sides = [
                             run_wnba_edge_check(prop["player"], prop["line"], _market, _side, prop.get("team", ""))
-                            for _side in ("Over", "Under")
+                            for _side in _requested_sides
                         ]
                         _sides = [result for result in _sides if result]
                         return max(_sides, key=lambda result: (result["adj"], result["confidence"])) if _sides else None
@@ -17399,7 +17427,8 @@ if st.session_state.active_sport == "edge":
         else:
             _slate_bits = f"{_mlb_k_count} K props, {_mlb_hfs_count} Hitter FS props, {_wnba_supported_count} WNBA props"
         st.session_state["edge_scan_summary"] = (
-            f"Analyzed {len(_filtered)} matching props · {len(_results)} model candidates returned "
+            f"Analyzed {len(_filtered)} matching prop lines ({_edge_side.lower()}) · "
+            f"{len(_results)} model candidates returned "
             f"(raw {_edge_sport} rows: {_raw_sport_count}; filtered slate: {_slate_bits})"
         )
 
@@ -17432,6 +17461,11 @@ if st.session_state.active_sport == "edge":
             r for r in _results
             if r.get("sport") == "WNBA" and normalize_wnba_prop_stat(r.get("stat", "")) == _edge_stat
         ]
+    if _edge_sport == "WNBA":
+        if _edge_side == "Overs":
+            _results = [r for r in _results if r.get("side", "Over") == "Over"]
+        elif _edge_side == "Unders":
+            _results = [r for r in _results if r.get("side") == "Under"]
 
     if _results:
         if st.session_state.get("edge_has_scanned"):
@@ -17750,6 +17784,65 @@ if st.session_state.active_sport == "edge":
                     f"</div>",
                     unsafe_allow_html=True
                 )
+
+                if _r.get("sport") == "WNBA":
+                    with st.expander(
+                        f"Full model debugger · {_r['player']} · {_r['stat']} {_result_side} {_r['line']}",
+                        expanded=False,
+                    ):
+                        st.markdown(
+                            f"**Input:** {_r['player']} · {_r['stat']} {_result_side} {_r['line']} · "
+                            f"L{_r['samples']} · vs {_r.get('opp', 'TBD')}  \n"
+                            f"**Final:** {_r['adj']:.1f}% probability · {_conf_val}/100 confidence · **{_tier_lbl}**"
+                        )
+                        _trace_rows = _r.get("model_trace") or []
+                        if _trace_rows:
+                            st.dataframe(pd.DataFrame(_trace_rows), hide_index=True, use_container_width=True)
+
+                        _debug_checks = [
+                            ["Historical average", f"{float(_r.get('avg', 0)):.2f}"],
+                            ["L3 / projection", f"{float(_r.get('l3', 0)):.2f} / {float(_r.get('projection', 0)):.2f}"],
+                            ["Directional edge", f"{float(_r.get('projection_gap', 0)):+.2f}"],
+                            ["Observed volatility", f"{float(_r.get('sigma', 0)):.2f}"],
+                            ["Minutes path", f"L3 {float(_r.get('l3_min', 0)):.1f} / avg {float(_r.get('avg_min', 0)):.1f}"],
+                            ["Opponent history", (
+                                f"{float(_r['h2h_avg']):.2f} in {_r.get('h2h_n', 0)} games"
+                                if _r.get("h2h_avg") is not None else "Insufficient"
+                            )],
+                            ["Opponent defense", (
+                                f"{_r.get('defense_label')} · {float(_r['defense_allowed']):.2f} allowed "
+                                f"in {_r.get('defense_games', 0)} games"
+                                if _r.get("defense_allowed") is not None else "Unavailable"
+                            )],
+                            ["Availability", _r.get("injury_status", "Active/Unlisted")],
+                            ["Log freshness", f"{_r.get('stale_days', 0)} day(s) since latest game"],
+                            ["Evidence reliability", f"{float(_r.get('reliability', 0)):.1f}%"],
+                            ["Quality flags", " | ".join(_r.get("model_flags") or []) or "None"],
+                        ]
+                        st.dataframe(
+                            pd.DataFrame(_debug_checks, columns=["Check", "Result"]),
+                            hide_index=True,
+                            use_container_width=True,
+                        )
+                        _confidence_max = {
+                            "Sample": 20, "Role stability": 20, "Freshness": 12,
+                            "Model agreement": 20, "Matchup coverage": 18,
+                            "Data completeness": 10,
+                        }
+                        _confidence_rows = [
+                            {
+                                "Confidence component": name,
+                                "Points earned": round(float(points), 1),
+                                "Maximum": _confidence_max.get(name, "—"),
+                            }
+                            for name, points in (_r.get("confidence_parts") or {}).items()
+                        ]
+                        if _confidence_rows:
+                            st.dataframe(
+                                pd.DataFrame(_confidence_rows),
+                                hide_index=True,
+                                use_container_width=True,
+                            )
 
                 # Action buttons row
                 _btn_key_safe = _re_edge.sub(r'[^a-zA-Z0-9]', '_', f"{_r['player']}_{_r['stat']}_{_r['line']}_{_r['sport']}")
