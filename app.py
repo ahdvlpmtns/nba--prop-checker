@@ -13925,8 +13925,161 @@ def _wnba_calendar_date(value):
         return None
 
 
+def _wnba_numeric_stat(statistics: list, *names: str) -> Optional[float]:
+    """Read a numeric ESPN team-box statistic across schema variants."""
+    wanted = {str(name).lower() for name in names}
+    for stat in statistics or []:
+        keys = {
+            str(stat.get("name", "")).lower(),
+            str(stat.get("abbreviation", "")).lower(),
+            str(stat.get("label", "")).lower(),
+        }
+        if not keys.intersection(wanted):
+            continue
+        raw = stat.get("value", stat.get("displayValue"))
+        try:
+            return float(str(raw).split("-")[0].replace("%", ""))
+        except Exception:
+            continue
+    return None
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def wnba_get_team_defense_context(team_id: str, team_abbr: str, n: int = 8) -> dict:
+    """Recent market-specific production allowed by the upcoming opponent."""
+    empty = {
+        "games": 0, "PTS": None, "REB": None, "AST": None, "3PM": None,
+        "PRA": None, "PR": None, "PA": None, "RA": None,
+        "game_total": None, "label": "Unavailable",
+    }
+    if not team_id or not team_abbr:
+        return empty
+    try:
+        schedule = espn_get(f"{WNBA_ANALYZER_SITE}/teams/{team_id}/schedule")
+        completed = []
+        for event in schedule.get("events", []) or []:
+            competition_status = ((event.get("competitions") or [{}])[0].get("status", {}) or {})
+            status_type = event.get("status", {}).get("type", {}) or competition_status.get("type", {}) or {}
+            status_name = str(status_type.get("name", "")).lower()
+            if not status_type.get("completed") and "final" not in status_name and "complete" not in status_name:
+                continue
+            event_id = str(event.get("id", "") or "")
+            if event_id:
+                completed.append((pd.to_datetime(event.get("date", ""), errors="coerce"), event_id, event))
+        completed.sort(key=lambda row: row[0] if pd.notna(row[0]) else pd.Timestamp.min, reverse=True)
+
+        allowed_rows = []
+        target = _wnba_norm_team(team_abbr)
+        for _, event_id, schedule_event in completed[:max(n + 3, 10)]:
+            summary = espn_get(f"{WNBA_ANALYZER_SITE}/summary?event={event_id}")
+            box_teams = summary.get("boxscore", {}).get("teams", []) or []
+            offense_box = next(
+                (
+                    item for item in box_teams
+                    if _wnba_norm_team(item.get("team", {}).get("abbreviation", "")) != target
+                ),
+                None,
+            )
+            stats = (offense_box or {}).get("statistics", []) or []
+            reb = _wnba_numeric_stat(stats, "rebounds", "totalrebounds", "reb")
+            ast = _wnba_numeric_stat(stats, "assists", "ast")
+            threes = _wnba_numeric_stat(
+                stats,
+                "threepointfieldgoalsmade-threepointfieldgoalsattempted",
+                "threepointfieldgoalsmade",
+                "3pm",
+            )
+
+            competition = ((summary.get("header", {}).get("competitions") or [None])[0]
+                           or ((schedule_event.get("competitions") or [None])[0]) or {})
+            competitors = competition.get("competitors", []) or []
+            target_comp = next(
+                (c for c in competitors if _wnba_norm_team(c.get("team", {}).get("abbreviation", "")) == target),
+                None,
+            )
+            offense_comp = next((c for c in competitors if c is not target_comp), None)
+            try:
+                allowed_pts = float((offense_comp or {}).get("score"))
+            except Exception:
+                allowed_pts = _wnba_numeric_stat(stats, "points", "pts")
+            try:
+                target_pts = float((target_comp or {}).get("score"))
+            except Exception:
+                target_pts = None
+            if allowed_pts is None:
+                continue
+            allowed_rows.append({
+                "PTS": allowed_pts,
+                "REB": reb,
+                "AST": ast,
+                "3PM": threes,
+                "game_total": allowed_pts + target_pts if target_pts is not None else None,
+            })
+            if len(allowed_rows) >= n:
+                break
+
+        if not allowed_rows:
+            return empty
+        frame = pd.DataFrame(allowed_rows)
+        result = {"games": len(frame)}
+        for key in ("PTS", "REB", "AST", "3PM", "game_total"):
+            values = pd.to_numeric(frame.get(key), errors="coerce").dropna()
+            result[key] = float(values.mean()) if len(values) >= max(3, len(frame) // 2) else None
+        if all(result.get(key) is not None for key in ("PTS", "REB", "AST")):
+            result["PRA"] = result["PTS"] + result["REB"] + result["AST"]
+            result["PR"] = result["PTS"] + result["REB"]
+            result["PA"] = result["PTS"] + result["AST"]
+            result["RA"] = result["REB"] + result["AST"]
+        else:
+            for key in ("PRA", "PR", "PA", "RA"):
+                result[key] = None
+        result["label"] = "Loaded" if result["games"] >= 5 else "Small sample"
+        return {**empty, **result}
+    except Exception as err:
+        record_debug_error("wnba.defense_context", err)
+        return empty
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def wnba_get_injury_status(team_id: str, player_name: str) -> dict:
+    """Return a tolerant ESPN injury designation for the selected player."""
+    result = {"status": "Active/Unlisted", "detail": "", "found": False}
+    if not team_id or not player_name:
+        return result
+    try:
+        data = espn_get(f"{WNBA_ANALYZER_SITE}/teams/{team_id}/injuries")
+        target = normalize_name(player_name)
+
+        def walk(value):
+            if isinstance(value, dict):
+                athlete = value.get("athlete", {}) or {}
+                name = athlete.get("displayName") or value.get("displayName") or value.get("name") or ""
+                if normalize_name(str(name)) == target:
+                    status_value = value.get("status") or value.get("type") or value.get("designation") or "Unknown"
+                    if isinstance(status_value, dict):
+                        status_value = status_value.get("description") or status_value.get("name") or status_value.get("type") or "Unknown"
+                    detail = value.get("details") or value.get("description") or value.get("comment") or ""
+                    return {"status": str(status_value), "detail": str(detail), "found": True}
+                for child in value.values():
+                    found = walk(child)
+                    if found:
+                        return found
+            elif isinstance(value, list):
+                for child in value:
+                    found = walk(child)
+                    if found:
+                        return found
+            return None
+
+        return walk(data) or result
+    except Exception as err:
+        record_debug_error("wnba.injury_status", err)
+        return result
+
+
 def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
-                      game: dict) -> dict:
+                      game: dict, defense: Optional[dict] = None,
+                      injury: Optional[dict] = None) -> dict:
     """Calibrated WNBA model: history, projection, minutes, venue, H2H, and data quality."""
     import numpy as np
     col = WNBA_STAT_COLUMNS[stat]
@@ -14025,6 +14178,47 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
         probability += venue_adj
         trace.append({"Signal": "Venue split", "Value": f"{venue_avg:.1f} avg · {len(venue_rows)} {venue.lower()} games", "Adjustment": f"{venue_adj:+.1%}" if venue_adj else "No change", "Notes": "Only active with at least four same-venue games"})
 
+    # Team defense and pace share one capped cluster because they are correlated.
+    defense = defense or {}
+    defense_games = int(defense.get("games", 0) or 0)
+    defense_allowed = defense.get(col)
+    defense_label = "Unavailable"
+    defense_adj = 0.0
+    pace_adj = 0.0
+    defense_baselines = {
+        "PTS": 84.0, "REB": 34.0, "AST": 20.0, "3PM": 8.5,
+        "PRA": 138.0, "PR": 118.0, "PA": 104.0, "RA": 54.0,
+    }
+    if defense_games >= 3 and defense_allowed is not None:
+        baseline = defense_baselines[col]
+        sample_reliability = min(defense_games / 8.0, 1.0)
+        defense_adj = max(-0.032, min(0.032, (float(defense_allowed) / baseline - 1.0) * 0.22))
+        defense_adj *= sample_reliability
+        total_environment = defense.get("game_total")
+        if col in ("PTS", "PRA", "PR", "PA") and total_environment is not None:
+            pace_adj = max(-0.016, min(0.016, (float(total_environment) / 168.0 - 1.0) * 0.12))
+            pace_adj *= sample_reliability
+        matchup_adj = max(-0.04, min(0.04, defense_adj + pace_adj))
+        if side == "Under":
+            matchup_adj *= -1
+        probability += matchup_adj
+        relative = float(defense_allowed) / baseline - 1.0
+        defense_label = "Soft" if relative >= 0.045 else "Tough" if relative <= -0.045 else "Neutral"
+        trace.append({
+            "Signal": "Team defense + pace",
+            "Value": f"{float(defense_allowed):.1f} {col} allowed · {defense_games}G · {defense_label}",
+            "Adjustment": f"{matchup_adj:+.1%}" if matchup_adj else "No change",
+            "Notes": f"Market-specific allowance vs league environment; correlated cluster capped at ±4%"
+                     + (f" · {float(total_environment):.1f} avg game total" if total_environment is not None else ""),
+        })
+    else:
+        trace.append({
+            "Signal": "Team defense + pace",
+            "Value": "Insufficient recent boxscores",
+            "Adjustment": "No change",
+            "Notes": "At least three completed opponent games are required",
+        })
+
     rest_adj = 0.0
     rest_days = None
     if game.get("game_date") and not work.empty:
@@ -14043,6 +14237,28 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
         else:
             trace.append({"Signal": "Rest", "Value": "Unavailable", "Adjustment": "No change", "Notes": "Schedule or last-game date could not be normalized"})
 
+    injury = injury or {"status": "Active/Unlisted", "detail": "", "found": False}
+    injury_status = str(injury.get("status", "Active/Unlisted") or "Active/Unlisted")
+    injury_text = injury_status.lower()
+    injury_penalty = 0
+    force_pass = False
+    if "out" in injury_text or "doubt" in injury_text:
+        probability = 0.50 + (probability - 0.50) * 0.35
+        injury_penalty = 30
+        force_pass = True
+    elif "question" in injury_text or "game-time" in injury_text or "gtd" in injury_text:
+        probability = 0.50 + (probability - 0.50) * 0.78
+        injury_penalty = 12
+    elif "probable" in injury_text:
+        probability = 0.50 + (probability - 0.50) * 0.94
+        injury_penalty = 3
+    trace.append({
+        "Signal": "Availability",
+        "Value": injury_status,
+        "Adjustment": "Pass gate" if force_pass else f"-{injury_penalty} confidence" if injury_penalty else "No change",
+        "Notes": injury.get("detail") or "No active ESPN injury designation",
+    })
+
     minute_std = float(minutes.std(ddof=1) or 0) if minutes.notna().any() else 8.0
     consistency = max(0.0, min(1.0, 1.0 - sigma / max(abs(avg) + sigma_floor, 1.0)))
     agreement = 1.0 - min(abs(calibrated - projection_prob) / 0.35, 1.0)
@@ -14051,6 +14267,8 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
         reliability += 0.04
     if h2h_n >= 2:
         reliability += 0.03
+    if defense_games >= 5 and defense_allowed is not None:
+        reliability += 0.03
     reliability = max(0.60, min(0.92, reliability))
     pre_reliability = max(0.05, min(0.95, probability))
     probability = 0.50 + (pre_reliability - 0.50) * reliability
@@ -14058,15 +14276,27 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
     trace.append({"Signal": "Evidence reliability", "Value": f"{reliability:.0%}", "Adjustment": f"{pre_reliability:.1%} → {probability:.1%}", "Notes": "Shrinks incomplete or disagreeing evidence toward neutral"})
 
     directional_edge = (projection - line) if side == "Over" else (line - projection)
-    confidence = int(round(
-        24 * min(n / 12, 1.0)
-        + 20 * max(0.0, 1.0 - minute_std / 9.0)
-        + 18 * agreement
-        + 14 * consistency
-        + 12 * min(abs(probability - 0.5) / 0.25, 1.0)
-        + (7 if game.get("opp") not in (None, "", "TBD") else 0)
-        + (5 if h2h_n >= 2 else 0)
-    ))
+    last_log_date = _wnba_calendar_date(work.iloc[0]["DATE"])
+    today_et = _wnba_calendar_date(pd.Timestamp.now(tz="America/New_York"))
+    stale_days = max(0, (today_et - last_log_date).days) if today_et and last_log_date else 14
+    freshness_score = 1.0 if stale_days <= 4 else 0.78 if stale_days <= 7 else 0.42 if stale_days <= 14 else 0.12
+    sample_score = min(n / 12.0, 1.0)
+    role_score = max(0.0, min(1.0, 1.0 - minute_std / 9.0))
+    matchup_score = (
+        (0.30 if game.get("opp") not in (None, "", "TBD") else 0.0)
+        + (0.45 * min(defense_games / 6.0, 1.0) if defense_allowed is not None else 0.0)
+        + (0.25 if h2h_n >= 2 else 0.0)
+    )
+    data_score = min(1.0, float(minutes.notna().mean()) * 0.65 + (0.35 if avg_min >= 8 else 0.0))
+    confidence_parts = {
+        "Sample": 20.0 * sample_score,
+        "Role stability": 20.0 * role_score,
+        "Freshness": 12.0 * freshness_score,
+        "Model agreement": 20.0 * agreement,
+        "Matchup coverage": 18.0 * matchup_score,
+        "Data completeness": 10.0 * data_score,
+    }
+    confidence = int(round(sum(confidence_parts.values()) - injury_penalty))
     confidence = max(25, min(96, confidence))
     cushion = {"PTS": 1.5, "REB": 0.8, "AST": 0.7, "3PM": 0.35, "PRA": 2.2, "PR": 1.8, "PA": 1.7, "RA": 1.1}.get(col, 1.0)
     flags = []
@@ -14082,8 +14312,16 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
         flags.append("Thin projection cushion")
     if game.get("opp") in (None, "", "TBD"):
         flags.append("Next opponent unavailable")
+    if defense_games < 3 or defense_allowed is None:
+        flags.append("Team defense sample unavailable")
+    if stale_days > 7:
+        flags.append(f"Game logs are {stale_days} days old")
+    if injury_penalty:
+        flags.append(f"Availability: {injury_status}")
 
-    if probability >= 0.70 and confidence >= 72 and directional_edge >= cushion:
+    if force_pass:
+        tier = "Pass"
+    elif probability >= 0.70 and confidence >= 72 and directional_edge >= cushion:
         tier = f"Strong {side}"
     elif probability >= 0.56 and confidence >= 55 and directional_edge > 0:
         tier = f"Lean {side}"
@@ -14098,6 +14336,10 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
         "avg_min": avg_min, "l3_min": l3_min, "minute_std": minute_std,
         "h2h_avg": h2h_avg, "h2h_n": h2h_n, "rest_days": rest_days,
         "reliability": reliability, "flags": flags, "trace": trace,
+        "defense": defense, "defense_allowed": defense_allowed,
+        "defense_games": defense_games, "defense_label": defense_label,
+        "injury": injury, "stale_days": stale_days,
+        "confidence_parts": confidence_parts,
         "logs": work,
     }
 
@@ -14162,11 +14404,29 @@ if st.session_state.active_sport == "wnba":
         with st.spinner("Loading WNBA game logs and matchup context..."):
             logs = wnba_get_game_logs(player.get("id"), datetime.now().year, n=24)
             game = wnba_get_next_game(player.get("team", ""))
+            opp_abbr = _wnba_norm_team(game.get("opp", ""))
+            opp_team_id = next(
+                (p.get("team_id") for p in players if _wnba_norm_team(p.get("team", "")) == opp_abbr),
+                "",
+            )
+            import concurrent.futures as _wnba_futures
+            with _wnba_futures.ThreadPoolExecutor(max_workers=2) as executor:
+                defense_future = executor.submit(
+                    wnba_get_team_defense_context, opp_team_id, opp_abbr, 8
+                )
+                injury_future = executor.submit(
+                    wnba_get_injury_status, player.get("team_id", ""), selected_name
+                )
+                defense = defense_future.result()
+                injury = injury_future.result()
         if logs.empty:
             st.error("No current-season game logs were returned for this player.")
             st.stop()
         try:
-            result = wnba_analyze_prop(logs, selected_stat, float(line), side, game)
+            result = wnba_analyze_prop(
+                logs, selected_stat, float(line), side, game,
+                defense=defense, injury=injury,
+            )
         except ValueError as err:
             st.warning(str(err))
             st.stop()
@@ -14190,6 +14450,29 @@ if st.session_state.active_sport == "wnba":
             with column:
                 st.markdown(f"<div class='stat-card'><div class='stat-label'>{label}</div><div class='stat-value' style='color:{color};font-size:1.65rem;'>{value}</div><div class='stat-hint'>{hint}</div></div>", unsafe_allow_html=True)
 
+        confidence_color = "#00e896" if result["confidence"] >= 80 else "#ffc107" if result["confidence"] >= 65 else "#ff7043"
+        confidence_max = {
+            "Sample": 20, "Role stability": 20, "Freshness": 12,
+            "Model agreement": 20, "Matchup coverage": 18,
+            "Data completeness": 10,
+        }
+        confidence_parts_html = "".join(
+            f"<span class='flag-pill flat'>{name} {points:.0f}/{confidence_max[name]}</span>"
+            for name, points in result["confidence_parts"].items()
+        )
+        st.markdown(
+            f"<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;"
+            f"padding:0.85rem 1rem;margin:0.25rem 0 0.75rem;'>"
+            f"<div style='display:flex;justify-content:space-between;align-items:center;gap:10px;'>"
+            f"<div class='stat-label' style='margin:0;'>EVIDENCE CONFIDENCE</div>"
+            f"<div style='font-family:var(--font-display);font-size:1rem;font-weight:900;color:{confidence_color};'>"
+            f"{result['confidence']}/100</div></div>"
+            f"<div class='conf-meter-track' style='margin-top:8px;'>"
+            f"<div class='conf-meter-fill' style='width:{result['confidence']}%;background:{confidence_color};'></div></div>"
+            f"<div class='flag-row' style='margin-top:10px;'>{confidence_parts_html}</div></div>",
+            unsafe_allow_html=True,
+        )
+
         flags_html = "".join(f"<span class='flag-pill down'>{flag}</span>" for flag in result["flags"])
         if not flags_html:
             flags_html = "<span class='flag-pill up'>No major model traps</span>"
@@ -14203,7 +14486,32 @@ if st.session_state.active_sport == "wnba":
             f"L{result['sample']} avg {result['avg']:.1f}<br>L5 avg {result['l5']:.1f}<br>Reliability {result['reliability']:.0%}</div></div></div>",
             unsafe_allow_html=True,
         )
-        st.caption("Model probability estimates the selected side. Confidence measures sample quality, role stability, matchup completeness, and agreement between independent model paths.")
+        defense_value = (
+            f"{result['defense_allowed']:.1f} allowed"
+            if result.get("defense_allowed") is not None else "Unavailable"
+        )
+        game_total_value = result.get("defense", {}).get("game_total")
+        h2h_value = (
+            f"{result['h2h_avg']:.1f} avg · {result['h2h_n']}G"
+            if result.get("h2h_avg") is not None else "Insufficient"
+        )
+        availability_value = result.get("injury", {}).get("status", "Active/Unlisted")
+        cx1, cx2, cx3, cx4 = st.columns(4)
+        context_metrics = [
+            (cx1, "OPPONENT DEFENSE", result.get("defense_label", "Unavailable"), f"{defense_value} · {result.get('defense_games', 0)} games"),
+            (cx2, "GAME ENVIRONMENT", f"{game_total_value:.1f}" if game_total_value is not None else "Unavailable", "Recent opponent game total"),
+            (cx3, "HEAD TO HEAD", h2h_value, "Player-specific history"),
+            (cx4, "AVAILABILITY", availability_value, result.get("injury", {}).get("detail") or "ESPN injury report"),
+        ]
+        for column, label, value, hint in context_metrics:
+            with column:
+                st.markdown(
+                    f"<div class='stat-card'><div class='stat-label'>{label}</div>"
+                    f"<div style='font-size:0.95rem;font-weight:800;color:#f0f4f8;margin-top:5px;'>{value}</div>"
+                    f"<div class='stat-hint'>{hint}</div></div>",
+                    unsafe_allow_html=True,
+                )
+        st.caption("Model probability estimates the selected side. Confidence is evidence quality only: sample size, freshness, role stability, projection agreement, matchup coverage, and data completeness.")
 
         add_leg = {
             "player": selected_name, "prop": selected_stat, "line": float(line), "side": side,
@@ -14246,10 +14554,18 @@ if st.session_state.active_sport == "wnba":
                 ["Projection / edge", f"{result['projection']:.2f} / {result['edge']:+.2f}"],
                 ["Observed volatility", f"{result['sigma']:.2f}"],
                 ["Opponent history", f"{result['h2h_avg']:.2f} in {result['h2h_n']} games" if result['h2h_avg'] is not None else "Insufficient"],
+                ["Opponent defense", f"{result['defense_label']} · {result['defense_allowed']:.2f} allowed in {result['defense_games']} games" if result['defense_allowed'] is not None else "Unavailable"],
+                ["Availability", result.get("injury", {}).get("status", "Active/Unlisted")],
+                ["Log freshness", f"{result['stale_days']} day(s) since latest game"],
                 ["Evidence reliability", f"{result['reliability']:.1%}"],
                 ["Quality flags", " | ".join(result["flags"]) or "None"],
             ], columns=["Check", "Result"])
             st.dataframe(debug_summary, hide_index=True, use_container_width=True)
+            confidence_debug = pd.DataFrame([
+                {"Confidence component": name, "Points earned": round(points, 1), "Maximum": confidence_max[name]}
+                for name, points in result["confidence_parts"].items()
+            ])
+            st.dataframe(confidence_debug, hide_index=True, use_container_width=True)
     else:
         st.markdown("<div class='explainer'><strong>Select a player and line, then analyze.</strong> The searchable player list includes active ESPN WNBA rosters and supports eight common PrizePicks markets.</div>", unsafe_allow_html=True)
     st.stop()
