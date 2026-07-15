@@ -14672,14 +14672,94 @@ if st.session_state.active_sport == "wnba":
             args=(add_leg, tracker_entry),
         )
 
-        st.markdown("<div class='section-header'>Recent Game Log</div>", unsafe_allow_html=True)
         display_logs = result["logs"][["DATE", "OPP", "VENUE", "MIN", result["column"]]].copy()
         display_logs["DATE"] = pd.to_datetime(display_logs["DATE"]).dt.strftime("%b %d")
         display_logs["HIT"] = display_logs[result["column"]].apply(lambda v: "Yes" if (v > line if side == "Over" else v < line) else "No")
         display_logs = display_logs.rename(columns={result["column"]: selected_stat})
-        st.dataframe(display_logs, hide_index=True, use_container_width=True)
+        with st.expander(
+            f"Recent Game Log · L{result['sample']} · {result['avg']:.1f} average",
+            expanded=False,
+        ):
+            st.dataframe(display_logs, hide_index=True, use_container_width=True)
 
-        with st.expander("Full model debugger"):
+        with st.expander("Full model debugger · tap to copy", expanded=False):
+            trace_lines = []
+            for trace_row in result["trace"]:
+                trace_lines.append(
+                    f"{trace_row.get('Signal', 'Signal')} | "
+                    f"{trace_row.get('Value', 'N/A')} | "
+                    f"{trace_row.get('Adjustment', 'No change')} | "
+                    f"{trace_row.get('Notes', '')}"
+                )
+            confidence_lines = [
+                f"{name}: {points:.1f}/{confidence_max[name]}"
+                for name, points in result["confidence_parts"].items()
+            ]
+            defense_debug = (
+                f"{result['defense_label']} · {result['defense_allowed']:.2f} allowed "
+                f"in {result['defense_games']} games"
+                if result.get("defense_allowed") is not None else "Unavailable"
+            )
+            h2h_debug = (
+                f"{result['h2h_avg']:.2f} average in {result['h2h_n']} games"
+                if result.get("h2h_avg") is not None else "Insufficient"
+            )
+            rest_debug = (
+                f"{result['rest_days']} calendar day(s) since last game"
+                if result.get("rest_days") is not None else "Unavailable"
+            )
+            game_total_debug = (
+                f"{game_total_value:.1f} recent opponent game total"
+                if game_total_value is not None else "Unavailable"
+            )
+            copyable_debug = "\n".join([
+                "WNBA MODEL DEBUGGER",
+                "",
+                "INPUT",
+                f"Player: {selected_name}",
+                f"Prop: {selected_stat} · {side} {line:.1f}",
+                f"Sample: L{result['sample']}",
+                f"Matchup: {matchup}",
+                f"Game date: {game.get('game_date') or 'TBD'}",
+                "",
+                "CORE MODEL",
+                f"Raw weighted hit rate: {result['raw']:.1%}",
+                f"Calibrated hit rate: {result['calibrated']:.1%}",
+                f"Historical average: {result['avg']:.2f}",
+                f"L3 / L5: {result['l3']:.2f} / {result['l5']:.2f}",
+                f"Projection: {result['projection']:.2f}",
+                f"Projection edge: {result['edge']:+.2f}",
+                f"Projection probability: {result['projection_prob']:.1%}",
+                f"Observed volatility: {result['sigma']:.2f}",
+                f"Consistency: {result['consistency']:.1%}",
+                f"Average minutes: {result['avg_min']:.1f}",
+                f"L3 minutes: {result['l3_min']:.1f}",
+                "",
+                "MATCHUP + AVAILABILITY",
+                f"Opponent defense: {defense_debug}",
+                f"Game environment: {game_total_debug}",
+                f"Opponent history: {h2h_debug}",
+                f"Rest: {rest_debug}",
+                f"Availability: {result.get('injury', {}).get('status', 'Active/Unlisted')}",
+                f"Availability detail: {result.get('injury', {}).get('detail') or 'None'}",
+                f"Latest log age: {result['stale_days']} day(s)",
+                f"Evidence reliability: {result['reliability']:.1%}",
+                "",
+                "SIGNAL TRACE",
+                "SIGNAL | VALUE | ADJUSTMENT | NOTES",
+                *trace_lines,
+                "",
+                "CONFIDENCE BREAKDOWN",
+                *confidence_lines,
+                "",
+                "FINAL DECISION",
+                f"Model probability: {result['probability']:.1%}",
+                f"Confidence: {result['confidence']}/100",
+                f"Quality flags: {' | '.join(result['flags']) or 'None'}",
+                f"Verdict: {tier}",
+            ])
+            st.caption("Use the copy button in the top-right corner of this report, then paste it into the chat.")
+            st.code(copyable_debug, language=None)
             st.markdown(
                 f"**Input:** {selected_name} · {selected_stat} {side} {line:.1f} · L{result['sample']} · {matchup}  \n"
                 f"**Final:** {result['probability']:.1%} probability · {result['confidence']}/100 confidence · **{tier}**"
