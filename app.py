@@ -14218,6 +14218,7 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
     """Calibrated WNBA model: history, projection, minutes, venue, H2H, and data quality."""
     import numpy as np
     col = WNBA_STAT_COLUMNS[stat]
+    history = logs.copy().head(24).reset_index(drop=True)
     work = logs.copy().head(15).reset_index(drop=True)
     values = pd.to_numeric(work[col], errors="coerce")
     minutes = pd.to_numeric(work["MIN"], errors="coerce")
@@ -14234,25 +14235,85 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
     avg = float(values.mean())
     l3 = float(values.head(min(3, n)).mean())
     l5 = float(values.head(min(5, n)).mean())
-    recent_projection = 0.58 * l5 + 0.27 * avg + 0.15 * float(values.median())
     avg_min = float(minutes.mean()) if minutes.notna().any() else 0.0
     l3_min = float(minutes.head(min(3, n)).mean()) if minutes.notna().any() else avg_min
-    min_ratio = max(0.88, min(1.12, l3_min / avg_min)) if avg_min >= 8 else 1.0
-    projection = recent_projection * min_ratio
+    l5_min = float(minutes.head(min(5, n)).mean()) if minutes.notna().any() else avg_min
     sigma_floor = {"PTS": 4.5, "REB": 2.4, "AST": 1.9, "3PM": 1.15, "PRA": 6.0, "PR": 5.2, "PA": 5.0, "RA": 3.3}.get(col, 3.0)
-    sigma = max(float(values.std(ddof=1) or 0), sigma_floor)
+
+    # Use up to 24 games for the stable anchor while preserving L15 for the
+    # displayed hit rate. Projection-only winsorization prevents one eruption
+    # game from dominating the next forecast without erasing the real result.
+    history_values = pd.to_numeric(history[col], errors="coerce")
+    history_minutes = pd.to_numeric(history["MIN"], errors="coerce")
+    history_valid = history_values.notna()
+    history_values = history_values[history_valid].reset_index(drop=True)
+    history_minutes = history_minutes[history_valid].reset_index(drop=True)
+    history_avg = float(history_values.mean()) if len(history_values) else avg
+    history_median = float(history_values.median()) if len(history_values) else float(values.median())
+    mad = float((history_values - history_median).abs().median()) if len(history_values) else 0.0
+    robust_scale = max(1.4826 * mad, sigma_floor * 0.70)
+    projection_values = values.clip(
+        lower=history_median - 2.25 * robust_scale,
+        upper=history_median + 2.25 * robust_scale,
+    )
+    history_projection_values = history_values.clip(
+        lower=history_median - 2.25 * robust_scale,
+        upper=history_median + 2.25 * robust_scale,
+    )
+    projection_l5 = float(projection_values.head(min(5, n)).mean())
+    robust_box_projection = (
+        0.30 * projection_l5
+        + 0.45 * float(history_projection_values.mean())
+        + 0.25 * history_median
+    )
+
+    rate_mask = history_minutes.notna() & (history_minutes >= 8)
+    per_minute = (history_values[rate_mask] / history_minutes[rate_mask]).replace([np.inf, -np.inf], np.nan).dropna()
+    if len(per_minute) >= 5:
+        low_rate = float(per_minute.quantile(0.10))
+        high_rate = float(per_minute.quantile(0.90))
+        per_minute = per_minute.clip(lower=low_rate, upper=high_rate)
+        recent_rate = float(per_minute.head(min(5, len(per_minute))).mean())
+        projected_rate = 0.30 * recent_rate + 0.45 * float(per_minute.mean()) + 0.25 * float(per_minute.median())
+        median_minutes = float(history_minutes[rate_mask].median())
+        expected_minutes = 0.30 * l3_min + 0.30 * l5_min + 0.40 * median_minutes
+        minute_floor = max(8.0, float(history_minutes[rate_mask].quantile(0.10)))
+        minute_ceiling = min(40.0, float(history_minutes[rate_mask].quantile(0.90)) + 2.0)
+        expected_minutes = max(minute_floor, min(minute_ceiling, expected_minutes))
+        volume_projection = projected_rate * expected_minutes
+        projection = 0.58 * volume_projection + 0.42 * robust_box_projection
+    else:
+        expected_minutes = 0.45 * l3_min + 0.55 * avg_min if avg_min else 0.0
+        volume_projection = robust_box_projection
+        projection = robust_box_projection
+
+    sigma = max(
+        float(values.std(ddof=1) or 0),
+        float(history_values.std(ddof=1) or 0) * 0.85 if len(history_values) > 1 else 0.0,
+        sigma_floor,
+    )
     projection_prob = _wnba_normal_probability(projection, sigma, line, side)
-    probability = 0.48 * calibrated + 0.52 * projection_prob
+    blended_probability = 0.42 * calibrated + 0.58 * projection_prob
+    evidence_overlap_factor = 0.86
+    probability = 0.50 + (blended_probability - 0.50) * evidence_overlap_factor
     trace = [{
         "Signal": "Calibrated recent hit rate",
         "Value": f"{raw:.1%} raw → {calibrated:.1%}",
         "Adjustment": "Starting point",
         "Notes": f"Recency-weighted L{n}, shrunk toward 50% to control small samples",
     }, {
-        "Signal": "Recent projection",
+        "Signal": "Robust role projection",
         "Value": f"{projection:.1f} {stat}",
         "Adjustment": f"Blend → {projection_prob:.1%}",
-        "Notes": f"L5 {l5:.1f} · L{n} {avg:.1f} · volatility {sigma:.1f}",
+        "Notes": (
+            f"L5 {projection_l5:.1f} · L{len(history_values)} {history_avg:.1f} · "
+            f"per-minute path {volume_projection:.1f} at {expected_minutes:.1f} projected min · volatility {sigma:.1f}"
+        ),
+    }, {
+        "Signal": "Correlated evidence guardrail",
+        "Value": f"{blended_probability:.1%} pre-overlap",
+        "Adjustment": f"→ {probability:.1%}",
+        "Notes": "Recent hit rate and projection share the same game sample, so agreement is discounted",
     }]
 
     # Minutes/role adjustment is deliberately bounded because it is correlated with recent production.
@@ -14260,11 +14321,11 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
     if avg_min >= 8:
         minute_change = l3_min - avg_min
         if minute_change >= 4:
-            minute_adj = 0.025
+            minute_adj = 0.008
         elif minute_change <= -5:
-            minute_adj = -0.04
+            minute_adj = -0.018
         elif minute_change <= -3:
-            minute_adj = -0.02
+            minute_adj = -0.010
         if side == "Under":
             minute_adj *= -1
         probability += minute_adj
@@ -14272,7 +14333,7 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
             "Signal": "Minutes trend",
             "Value": f"L3 {l3_min:.1f} vs L{n} {avg_min:.1f}",
             "Adjustment": f"{minute_adj:+.1%}" if minute_adj else "No change",
-            "Notes": "Bounded role adjustment; projection already scales for recent minutes",
+            "Notes": "Small residual role adjustment; projected minutes already carry most of this signal",
         })
 
     opp = _wnba_norm_team(game.get("opp", ""))
@@ -14327,31 +14388,31 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
     if defense_games >= 3 and defense_allowed is not None:
         baseline = defense_baselines[col]
         sample_reliability = min(defense_games / 8.0, 1.0)
-        defense_adj = max(-0.032, min(0.032, (float(defense_allowed) / baseline - 1.0) * 0.22))
+        defense_adj = max(-0.014, min(0.014, (float(defense_allowed) / baseline - 1.0) * 0.10))
         defense_adj *= sample_reliability
         total_environment = defense.get("game_total")
         if col in ("PTS", "PRA", "PR", "PA") and total_environment is not None:
-            pace_adj = max(-0.016, min(0.016, (float(total_environment) / 168.0 - 1.0) * 0.12))
+            pace_adj = max(-0.006, min(0.006, (float(total_environment) / 168.0 - 1.0) * 0.06))
             pace_adj *= sample_reliability
-        matchup_adj = max(-0.04, min(0.04, defense_adj + pace_adj))
+        matchup_adj = max(-0.018, min(0.018, defense_adj + pace_adj))
         if side == "Under":
             matchup_adj *= -1
         probability += matchup_adj
         relative = float(defense_allowed) / baseline - 1.0
         defense_label = "Soft" if relative >= 0.045 else "Tough" if relative <= -0.045 else "Neutral"
         trace.append({
-            "Signal": "Team defense + pace",
+            "Signal": "Team scoring environment",
             "Value": f"{float(defense_allowed):.1f} {col} allowed · {defense_games}G · {defense_label}",
             "Adjustment": f"{matchup_adj:+.1%}" if matchup_adj else "No change",
-            "Notes": f"Market-specific allowance vs league environment; correlated cluster capped at ±4%"
+            "Notes": f"Broad team environment only; capped at ±1.8% until role-specific defense is available"
                      + (f" · {float(total_environment):.1f} avg game total" if total_environment is not None else ""),
         })
     else:
         trace.append({
-            "Signal": "Team defense + pace",
+            "Signal": "Team scoring environment",
             "Value": "Insufficient recent boxscores",
             "Adjustment": "No change",
-            "Notes": "At least three completed opponent games are required",
+            "Notes": "At least three completed opponent games are required; no generic matchup adjustment applied",
         })
 
     rest_adj = 0.0
@@ -14394,6 +14455,33 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
         "Notes": injury.get("detail") or "No active ESPN injury designation",
     })
 
+    # A line far away from both the longer baseline and the model projection
+    # may be an alternate/discounted market, stale input, or a role change the
+    # historical model cannot see. Preserve the direction, but require the
+    # user to verify the exact full-game market before showing extreme odds.
+    anomaly_threshold = {
+        "PTS": 5.5, "REB": 2.6, "AST": 2.3, "3PM": 1.25,
+        "PRA": 8.0, "PR": 6.5, "PA": 6.0, "RA": 4.0,
+    }.get(col, 4.0)
+    historical_line_gap = abs(history_avg - float(line))
+    relative_line_gap = historical_line_gap / max(abs(history_avg), 1.0)
+    projection_z_gap = abs(projection - float(line)) / max(sigma, sigma_floor)
+    line_anomaly = bool(
+        historical_line_gap >= anomaly_threshold
+        and (relative_line_gap >= 0.30 or projection_z_gap >= 1.60)
+    )
+    line_anomaly_note = (
+        f"Line {line:.1f} is {historical_line_gap:.1f} from the L{len(history_values)} baseline "
+        f"({projection_z_gap:.1f} volatility units from projection); verify standard full-game market"
+        if line_anomaly else "Line is within the model's normal verification range"
+    )
+    trace.append({
+        "Signal": "Line verification",
+        "Value": f"{line:.1f} vs L{len(history_values)} avg {history_avg:.1f}",
+        "Adjustment": "Extreme-probability gate" if line_anomaly else "No change",
+        "Notes": line_anomaly_note,
+    })
+
     minute_std = float(minutes.std(ddof=1) or 0) if minutes.notna().any() else 8.0
     consistency = max(0.0, min(1.0, 1.0 - sigma / max(abs(avg) + sigma_floor, 1.0)))
     agreement = 1.0 - min(abs(calibrated - projection_prob) / 0.35, 1.0)
@@ -14409,6 +14497,15 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
     probability = 0.50 + (pre_reliability - 0.50) * reliability
     probability = max(0.05, min(0.95, probability))
     trace.append({"Signal": "Evidence reliability", "Value": f"{reliability:.0%}", "Adjustment": f"{pre_reliability:.1%} → {probability:.1%}", "Notes": "Shrinks incomplete or disagreeing evidence toward neutral"})
+    if line_anomaly and probability > 0.86:
+        before_line_gate = probability
+        probability = 0.86
+        trace.append({
+            "Signal": "Line anomaly ceiling",
+            "Value": line_anomaly_note,
+            "Adjustment": f"{before_line_gate:.1%} → {probability:.1%}",
+            "Notes": "Probability is capped until the exact market and expected role are independently verified",
+        })
 
     directional_edge = (projection - line) if side == "Over" else (line - projection)
     last_log_date = _wnba_calendar_date(work.iloc[0]["DATE"])
@@ -14431,7 +14528,8 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
         "Matchup coverage": 18.0 * matchup_score,
         "Data completeness": 10.0 * data_score,
     }
-    confidence = int(round(sum(confidence_parts.values()) - injury_penalty))
+    line_anomaly_penalty = 5 if line_anomaly else 0
+    confidence = int(round(sum(confidence_parts.values()) - injury_penalty - line_anomaly_penalty))
     confidence = max(25, min(96, confidence))
     cushion = {"PTS": 1.5, "REB": 0.8, "AST": 0.7, "3PM": 0.35, "PRA": 2.2, "PR": 1.8, "PA": 1.7, "RA": 1.1}.get(col, 1.0)
     flags = []
@@ -14443,8 +14541,12 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
         flags.append(f"Small sample (L{n})")
     if consistency < 0.35:
         flags.append("High game-to-game volatility")
+    if minute_std >= 5.0:
+        flags.append(f"Minutes volatility ({minute_std:.1f} min SD)")
     if directional_edge < cushion:
         flags.append("Thin projection cushion")
+    if line_anomaly:
+        flags.append("Verify line: unusually far from historical baseline")
     if game.get("opp") in (None, "", "TBD"):
         flags.append("Next opponent unavailable")
     if defense_games < 3 or defense_allowed is None:
@@ -14466,8 +14568,14 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
         "stat": stat, "column": col, "line": float(line), "side": side,
         "sample": n, "raw": raw, "calibrated": calibrated,
         "probability": probability, "confidence": confidence, "tier": tier,
-        "avg": avg, "l3": l3, "l5": l5, "projection": projection,
+        "avg": avg, "history_avg": history_avg, "history_sample": len(history_values),
+        "l3": l3, "l5": l5, "projection": projection,
         "projection_prob": projection_prob,
+        "robust_box_projection": robust_box_projection,
+        "volume_projection": volume_projection,
+        "expected_minutes": expected_minutes,
+        "blended_probability": blended_probability,
+        "evidence_overlap_factor": evidence_overlap_factor,
         "edge": directional_edge, "sigma": sigma, "consistency": consistency,
         "avg_min": avg_min, "l3_min": l3_min, "minute_std": minute_std,
         "h2h_avg": h2h_avg, "h2h_n": h2h_n, "rest_days": rest_days,
@@ -14475,6 +14583,9 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
         "defense": defense, "defense_allowed": defense_allowed,
         "defense_games": defense_games, "defense_label": defense_label,
         "injury": injury, "stale_days": stale_days,
+        "line_anomaly": line_anomaly,
+        "line_anomaly_note": line_anomaly_note,
+        "line_anomaly_penalty": line_anomaly_penalty,
         "confidence_parts": confidence_parts,
         "logs": work,
     }
@@ -14597,6 +14708,11 @@ if st.session_state.active_sport == "wnba":
             f"<span class='flag-pill flat'>{name} {points:.0f}/{confidence_max[name]}</span>"
             for name, points in result["confidence_parts"].items()
         )
+        if result.get("line_anomaly_penalty"):
+            confidence_parts_html += (
+                f"<span class='flag-pill down'>Line verification "
+                f"-{result['line_anomaly_penalty']}</span>"
+            )
         st.markdown(
             f"<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;"
             f"padding:0.85rem 1rem;margin:0.25rem 0 0.75rem;'>"
@@ -14635,7 +14751,7 @@ if st.session_state.active_sport == "wnba":
         availability_value = result.get("injury", {}).get("status", "Active/Unlisted")
         cx1, cx2, cx3, cx4 = st.columns(4)
         context_metrics = [
-            (cx1, "OPPONENT DEFENSE", result.get("defense_label", "Unavailable"), f"{defense_value} · {result.get('defense_games', 0)} games"),
+            (cx1, "TEAM ENVIRONMENT", result.get("defense_label", "Unavailable"), f"{defense_value} · {result.get('defense_games', 0)} games"),
             (cx2, "GAME ENVIRONMENT", f"{game_total_value:.1f}" if game_total_value is not None else "Unavailable", "Recent opponent game total"),
             (cx3, "HEAD TO HEAD", h2h_value, "Player-specific history"),
             (cx4, "AVAILABILITY", availability_value, result.get("injury", {}).get("detail") or "ESPN injury report"),
@@ -14726,10 +14842,15 @@ if st.session_state.active_sport == "wnba":
                 f"Raw weighted hit rate: {result['raw']:.1%}",
                 f"Calibrated hit rate: {result['calibrated']:.1%}",
                 f"Historical average: {result['avg']:.2f}",
+                f"Long baseline: L{result['history_sample']} · {result['history_avg']:.2f}",
                 f"L3 / L5: {result['l3']:.2f} / {result['l5']:.2f}",
                 f"Projection: {result['projection']:.2f}",
+                f"Robust box-score projection: {result['robust_box_projection']:.2f}",
+                f"Per-minute projection: {result['volume_projection']:.2f} at {result['expected_minutes']:.1f} projected minutes",
                 f"Projection edge: {result['edge']:+.2f}",
                 f"Projection probability: {result['projection_prob']:.1%}",
+                f"Pre-overlap probability: {result['blended_probability']:.1%}",
+                f"Shared-evidence factor: {result['evidence_overlap_factor']:.0%}",
                 f"Observed volatility: {result['sigma']:.2f}",
                 f"Consistency: {result['consistency']:.1%}",
                 f"Average minutes: {result['avg_min']:.1f}",
@@ -14744,6 +14865,7 @@ if st.session_state.active_sport == "wnba":
                 f"Availability detail: {result.get('injury', {}).get('detail') or 'None'}",
                 f"Latest log age: {result['stale_days']} day(s)",
                 f"Evidence reliability: {result['reliability']:.1%}",
+                f"Line verification: {result['line_anomaly_note']}",
                 "",
                 "SIGNAL TRACE",
                 "SIGNAL | VALUE | ADJUSTMENT | NOTES",
@@ -14755,6 +14877,7 @@ if st.session_state.active_sport == "wnba":
                 "FINAL DECISION",
                 f"Model probability: {result['probability']:.1%}",
                 f"Confidence: {result['confidence']}/100",
+                f"Line-verification confidence penalty: -{result['line_anomaly_penalty']}",
                 f"Quality flags: {' | '.join(result['flags']) or 'None'}",
                 f"Verdict: {tier}",
             ])
@@ -14767,14 +14890,18 @@ if st.session_state.active_sport == "wnba":
             st.dataframe(pd.DataFrame(result["trace"]), hide_index=True, use_container_width=True)
             debug_summary = pd.DataFrame([
                 ["Historical average", f"{result['avg']:.2f}"],
+                ["Long baseline", f"L{result['history_sample']} · {result['history_avg']:.2f}"],
                 ["L3 / L5", f"{result['l3']:.2f} / {result['l5']:.2f}"],
                 ["Projection / edge", f"{result['projection']:.2f} / {result['edge']:+.2f}"],
+                ["Projection components", f"Box {result['robust_box_projection']:.2f} · Per-minute {result['volume_projection']:.2f} at {result['expected_minutes']:.1f} min"],
+                ["Shared-evidence guardrail", f"{result['blended_probability']:.1%} × {result['evidence_overlap_factor']:.0%} distance from neutral"],
                 ["Observed volatility", f"{result['sigma']:.2f}"],
                 ["Opponent history", f"{result['h2h_avg']:.2f} in {result['h2h_n']} games" if result['h2h_avg'] is not None else "Insufficient"],
                 ["Opponent defense", f"{result['defense_label']} · {result['defense_allowed']:.2f} allowed in {result['defense_games']} games" if result['defense_allowed'] is not None else "Unavailable"],
                 ["Availability", result.get("injury", {}).get("status", "Active/Unlisted")],
                 ["Log freshness", f"{result['stale_days']} day(s) since latest game"],
                 ["Evidence reliability", f"{result['reliability']:.1%}"],
+                ["Line verification", result["line_anomaly_note"]],
                 ["Quality flags", " | ".join(result["flags"]) or "None"],
             ], columns=["Check", "Result"])
             st.dataframe(debug_summary, hide_index=True, use_container_width=True)
