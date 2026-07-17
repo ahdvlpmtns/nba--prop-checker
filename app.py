@@ -8462,7 +8462,7 @@ if st.session_state.active_sport == "mlb":
         Tries multiple player lookup strategies and multiple game type params.
         Never returns empty if the player exists in MLB.
         """
-        _COLS = ["DATE","OPP","IP","OUTS","K","BB","ER","RESULT"]
+        _COLS = ["DATE","OPP","HOME","IP","OUTS","K","BB","ER","RESULT"]
         empty = pd.DataFrame(columns=_COLS)
         if not player_name or not player_name.strip():
             return empty
@@ -8681,6 +8681,7 @@ if st.session_state.active_sport == "mlb":
                 rows.append({
                     "DATE":   date,
                     "OPP":    _opp_abbr_from_split(s),
+                    "HOME":   bool(s.get("isHome", False)),
                     "IP":     ip_str,
                     "OUTS":   outs,
                     "K":      int(stat.get("strikeOuts", 0) or 0),
@@ -8794,8 +8795,11 @@ if st.session_state.active_sport == "mlb":
                 params={"stats":"season","group":"hitting","season":season}, timeout=8)
             if not stats_r.ok: return None
             stat = stats_r.json().get("stats",[{}])[0].get("splits",[{}])[0].get("stat",{})
-            ab = int(stat.get("atBats",0)); k = int(stat.get("strikeOuts",0))
-            return round(k/ab,3) if ab>0 else None
+            pa = int(stat.get("plateAppearances", 0) or 0)
+            ab = int(stat.get("atBats", 0) or 0)
+            denom = pa if pa > 0 else ab
+            k = int(stat.get("strikeOuts", 0) or 0)
+            return round(k / denom, 3) if denom > 0 else None
         except Exception: return None
 
     @st.cache_data(ttl=900, show_spinner=False)
@@ -9024,10 +9028,12 @@ if st.session_state.active_sport == "mlb":
                         st_data = sr.json().get("stats",[{}])[0].get("splits",[{}])
                         for sp in st_data:
                             s = sp.get("stat",{})
-                            ab = int(s.get("atBats",0))
-                            k  = int(s.get("strikeOuts",0))
-                            if ab > 0:
-                                result[key] = round(k/ab, 3)
+                            pa = int(s.get("plateAppearances", 0) or 0)
+                            ab = int(s.get("atBats", 0) or 0)
+                            denom = pa if pa > 0 else ab
+                            k = int(s.get("strikeOuts", 0) or 0)
+                            if denom > 0:
+                                result[key] = round(k / denom, 3)
                 except Exception:
                     pass
 
@@ -9039,8 +9045,11 @@ if st.session_state.active_sport == "mlb":
                 )
                 if overall_r.ok:
                     s = overall_r.json().get("stats",[{}])[0].get("splits",[{}])[0].get("stat",{})
-                    ab = int(s.get("atBats",0)); k = int(s.get("strikeOuts",0))
-                    result["overall"] = round(k/ab,3) if ab > 0 else None
+                    pa = int(s.get("plateAppearances", 0) or 0)
+                    ab = int(s.get("atBats", 0) or 0)
+                    denom = pa if pa > 0 else ab
+                    k = int(s.get("strikeOuts", 0) or 0)
+                    result["overall"] = round(k / denom, 3) if denom > 0 else None
             except Exception:
                 pass
 
@@ -9265,41 +9274,10 @@ if st.session_state.active_sport == "mlb":
     @st.cache_data(ttl=3600, show_spinner=False)
     def mlb_get_umpire_k_tendency(home_team: str) -> dict:
         """
-        Get today's home plate umpire and their K tendency.
-        Uses MLB schedule API for umpire assignment.
-        Falls back to known umpire K tendency averages.
-        Returns {"name": str, "k_per_game": float, "tendency": "High"/"Avg"/"Low"}
+        Get today's home plate umpire assignment.
+        The assignment is displayed, but remains model-neutral until a
+        current-season called-strike data source is available.
         """
-        # Known umpire K tendencies (Ks per game, league avg ~15.5 per game combined)
-        # Based on historical data — umpires who call high/low strike zones
-        _UMP_KNOWN = {
-            # High K umpires (16.5+ K/game) — tight zone = more Ks
-            "Angel Hernandez":   {"k_pg": 17.2, "tend": "High"},
-            "CB Bucknor":        {"k_pg": 16.9, "tend": "High"},
-            "Laz Diaz":          {"k_pg": 16.8, "tend": "High"},
-            "Stu Scheurwater":   {"k_pg": 17.1, "tend": "High"},
-            "Ron Kulpa":         {"k_pg": 16.6, "tend": "High"},
-            "Doug Eddings":      {"k_pg": 16.4, "tend": "High"},
-            "Marvin Hudson":     {"k_pg": 16.3, "tend": "High"},
-            "Ted Barrett":       {"k_pg": 16.2, "tend": "High"},
-            "Kerwin Danley":     {"k_pg": 16.5, "tend": "High"},
-            "Lance Barksdale":   {"k_pg": 16.1, "tend": "High"},
-            # Low K umpires (<14.5 K/game) — wide zone = more contact
-            "Joe West":          {"k_pg": 14.2, "tend": "Low"},
-            "Bill Miller":       {"k_pg": 14.3, "tend": "Low"},
-            "Jerry Layne":       {"k_pg": 14.1, "tend": "Low"},
-            "Eric Cooper":       {"k_pg": 14.4, "tend": "Low"},
-            "Phil Cuzzi":        {"k_pg": 14.6, "tend": "Low"},
-            "Jim Reynolds":      {"k_pg": 14.5, "tend": "Low"},
-            "Tom Hallion":       {"k_pg": 14.8, "tend": "Low"},
-            "Paul Emmel":        {"k_pg": 14.7, "tend": "Low"},
-            # Average umpires
-            "Dan Iassogna":      {"k_pg": 15.4, "tend": "Avg"},
-            "Mark Carlson":      {"k_pg": 15.6, "tend": "Avg"},
-            "Brian Gorman":      {"k_pg": 15.3, "tend": "Avg"},
-            "Andy Fletcher":     {"k_pg": 15.5, "tend": "Avg"},
-            "Mike Winters":      {"k_pg": 15.2, "tend": "Avg"},
-        }
         try:
             import requests as _req, datetime, pytz
             et    = pytz.timezone("America/New_York")
@@ -9321,9 +9299,12 @@ if st.session_state.active_sport == "mlb":
                                    for o in officials
                                    if o.get("officialType","").lower() in ("home plate","hp")), None)
                     if hp_ump:
-                        data = _UMP_KNOWN.get(hp_ump, {"k_pg": 15.5, "tend": "Avg"})
-                        return {"name": hp_ump, "k_per_game": data["k_pg"],
-                                "tendency": data["tend"]}
+                        # The assignment is authoritative, but the static
+                        # historical tendency list is not a current-season
+                        # tracking source. Keep it informational until a live
+                        # called-strike sample is available.
+                        return {"name": hp_ump, "k_per_game": 15.5,
+                                "tendency": "Avg", "source": "assignment_only"}
         except Exception:
             pass
         return {"name": None, "k_per_game": 15.5, "tendency": "Avg"}
@@ -9733,10 +9714,12 @@ if st.session_state.active_sport == "mlb":
                 if not splits:
                     continue
                 stt = splits[0].get("stat", {})
+                pa = int(stt.get("plateAppearances", 0) or 0)
                 ab = int(stt.get("atBats", 0) or 0)
+                denom = pa if pa > 0 else ab
                 k = int(stt.get("strikeOuts", 0) or 0)
-                if ab >= 30:
-                    return round(k / ab, 3)
+                if denom >= 30:
+                    return round(k / denom, 3)
         except Exception:
             pass
         return None
@@ -9989,10 +9972,12 @@ if st.session_state.active_sport == "mlb":
                 for sp in splits:
                     _desc = sp.get("split", {}).get("description", "").lower()
                     _st   = sp.get("stat", {})
-                    _ab   = int(_st.get("atBats", 0) or 0)
-                    _k    = int(_st.get("strikeOuts", 0) or 0)
-                    if _ab >= 20:
-                        _kr = round(_k / _ab, 3)
+                    _bf = int(_st.get("battersFaced", 0) or 0)
+                    _ab = int(_st.get("atBats", 0) or 0)
+                    _denom = _bf if _bf > 0 else _ab
+                    _k = int(_st.get("strikeOuts", 0) or 0)
+                    if _denom >= 20:
+                        _kr = round(_k / _denom, 3)
                         if "left" in _desc:
                             result["vs_l"] = _kr
                         elif "right" in _desc:
@@ -11916,11 +11901,37 @@ if st.session_state.active_sport == "mlb":
             # ── Signal 6: Rest days
             _rest_adj  = 0.0
             _rest_days = 0
+            _rest_note = "Normal rotation rest"
+            _post_break_monitor = False
+            _extended_layoff = False
             try:
                 _last_start = pd.to_datetime(mlb_logs.iloc[0]["DATE"])
-                _rest_days  = (pd.Timestamp.now() - _last_start).days
-                if _rest_days <= 3:   _rest_adj = -0.04   # short rest — fatigue risk
-                elif _rest_days >= 8: _rest_adj = +0.03   # extra rest — fresh arm
+                _target_start = pd.to_datetime(
+                    _game_date_ctx or pd.Timestamp.now().strftime("%Y-%m-%d")
+                )
+                _rest_days = max(0, (_target_start.normalize() - _last_start.normalize()).days)
+                _post_break_monitor = (
+                    _target_start.month == 7 and
+                    15 <= _target_start.day <= 24 and
+                    7 <= _rest_days <= 12
+                )
+                if _rest_days <= 3:
+                    _rest_adj = -0.04
+                    _rest_note = "Short rest — fatigue and reduced leash risk"
+                elif _post_break_monitor:
+                    # Nearly every starter has extra rest after the break. It
+                    # is uncertainty, not a pitcher-specific positive signal.
+                    _rest_note = "First post-break start — neutral, monitor command and leash"
+                elif _rest_days >= 16:
+                    _rest_adj = -0.07
+                    _extended_layoff = True
+                    _rest_note = "Long layoff — IL/ramp-up risk"
+                elif _rest_days >= 11:
+                    _rest_adj = -0.04
+                    _extended_layoff = True
+                    _rest_note = "Extended layoff — workload uncertainty"
+                elif _rest_days >= 8:
+                    _rest_note = "Extra rest — no automatic K boost"
             except Exception:
                 pass
 
@@ -12444,6 +12455,10 @@ if st.session_state.active_sport == "mlb":
                     _projection_reliability -= 0.12
                 elif _n_starts < 6:
                     _projection_reliability -= 0.06
+                if _post_break_monitor:
+                    _projection_reliability -= 0.03
+                elif _extended_layoff:
+                    _projection_reliability -= 0.10 if _rest_days >= 16 else 0.06
                 _role_severity = int(_role.get("severity", 0) or 0)
                 if _role_severity >= 3:
                     _projection_reliability -= 0.12
@@ -12671,6 +12686,13 @@ if st.session_state.active_sport == "mlb":
                 if not _ump_name:
                     _conf_penalty += 1
                     _quality_notes.append("umpire TBD")
+                if _post_break_monitor:
+                    _conf_penalty += 3
+                    _quality_notes.append("first post-break start")
+                elif _extended_layoff:
+                    _layoff_penalty = 10 if _rest_days >= 16 else 6
+                    _conf_penalty += _layoff_penalty
+                    _quality_notes.append(f"extended layoff ({_rest_days} days)")
                 if not (_weather and (_weather.get("temp_f") or _weather.get("condition") == "Dome/Retractable")):
                     _conf_penalty += 1
                     _quality_notes.append("weather limited")
@@ -12719,6 +12741,9 @@ if st.session_state.active_sport == "mlb":
                         if _pc_cushion < 1.0:
                             _downgrade = True
                             _dq.append("run-friendly park with thin pitch-count cushion")
+                    if _extended_layoff:
+                        _downgrade = True
+                        _dq.append(f"extended layoff ({_rest_days} days)")
                 if _downgrade:
                     tier = "Lean Over" if tier == "Strong Over" else "Lean Under"
                     _tier_quality_note = "Strong label downgraded: " + ", ".join(_dq[:3])
@@ -12761,6 +12786,23 @@ if st.session_state.active_sport == "mlb":
                 _wx_impact,
                 bool(_role.get("confirmed", False)),
             )
+            if _post_break_monitor:
+                _post_break_text = f"First post-break start ({_rest_days}d gap)"
+                if _post_break_text not in _trap.get("summary", []):
+                    _trap.setdefault("cautions", []).append(_post_break_text)
+                    _trap.setdefault("summary", []).insert(0, _post_break_text)
+                    _trap["summary"] = _trap["summary"][:5]
+                if _trap.get("label") == "Clean":
+                    _trap.update({"label": "Watchlist", "css": "yellow", "icon": "👀"})
+            elif _extended_layoff:
+                _layoff_text = f"Extended layoff ({_rest_days}d)"
+                _trap.setdefault("risks", []).append({
+                    "label": _layoff_text,
+                    "severity": 2 if _rest_days < 16 else 3,
+                })
+                _trap.setdefault("summary", []).insert(0, _layoff_text)
+                _trap["summary"] = _trap["summary"][:5]
+                _trap.update({"label": "Trap Risk", "css": "orange", "icon": "⚠️"})
 
             _mlb_ph.empty()
 
@@ -12824,8 +12866,12 @@ if st.session_state.active_sport == "mlb":
             if _form_adj < 0:  _pills.append("<span class='flag-pill down'>📉 Form trending down</span>")
 
             # Rest
-            if _rest_adj < 0:  _pills.append(f"<span class='flag-pill down'>⚡ Short rest ({_rest_days}d)</span>")
-            if _rest_adj > 0:  _pills.append(f"<span class='flag-pill up'>💤 Extra rest ({_rest_days}d)</span>")
+            if _post_break_monitor:
+                _pills.append(f"<span class='flag-pill flat'>Post-break start · {_rest_days}d gap</span>")
+            elif _extended_layoff:
+                _pills.append(f"<span class='flag-pill down'>Extended layoff · {_rest_days}d</span>")
+            elif _rest_adj < 0:
+                _pills.append(f"<span class='flag-pill down'>Short rest ({_rest_days}d)</span>")
 
             # Home/Away + handedness
             _side_txt = _tonight.get("pitcher_side","")
@@ -13496,7 +13542,7 @@ if st.session_state.active_sport == "mlb":
                                                   f"{'Trending up' if _form_adj>0 else 'Trending down' if _form_adj<0 else 'Stable'} — L3 vs season avg {avg_val:.1f}"),
                     ("Rest days",                 f"{_rest_days}d" if _rest_days else "Unknown",
                                                   _rest_adj,
-                                                  "Short rest (<4d) = fatigue risk · Extra rest (8d+) = fresh arm"),
+                                                  _rest_note),
                     (f"K/9 rate ({_k9_source})",   f"{_k9:.1f}" if _k9>0 else "N/A",
                                                   _k9_adj,
                                                   (f"{'Elite' if _k9>=10.5 else 'Above avg' if _k9>=9.0 else 'Average' if _k9>=7.5 else 'Below avg'} — league avg 8.3" + (f" · using {_k9_source} fallback" if _k9_source not in (str(_current_mlb_year),"no data") else "")) if _k9>0 else "No prior season data — rookie or debut season · no adjustment applied"),
@@ -13581,7 +13627,7 @@ if st.session_state.active_sport == "mlb":
                         ("Park factor", psig, None, f"{mlb_home or 'N/A'} · {'pitcher-friendly' if psig=='Boost' else 'run-friendly' if psig=='Penalty' else 'neutral'} park"),
                         ("Home/Away split", f"{_ha_adj:+.0%}" if _ha_adj != 0 else "Neutral", _ha_adj, "Based on pitcher's home/away outs splits"),
                         ("Recent form (L3 vs avg)", f"L3 avg {_l3_avg:.1f}" if not pd.isna(_l3_avg) else "N/A", _form_adj, f"L3 vs season avg {avg_val:.1f}"),
-                        ("Rest days", f"{_rest_days}d" if _rest_days else "Unknown", _rest_adj, "Short rest can shorten leash; extra rest can help workload"),
+                        ("Rest days", f"{_rest_days}d" if _rest_days else "Unknown", _rest_adj, _rest_note),
                         ("Avg IP/start", f"{_avg_ip:.1f}" if _avg_ip>0 else "N/A", _ip_adj, "Core outs workload signal"),
                         ("Pitch count", f"~{_pc_avg}p" if _pc_avg else "N/A", _pc_adj, f"Expected {_pc_expected_outs:.1f} outs / ceiling {_pc_outs_ceiling:.1f}" if _pc_avg else "No pitch count estimate"),
                         ("Opponent BB%", f"{_opp_plate.get('bb_rate'):.1%}" if _opp_plate.get("bb_rate") is not None else "N/A", None, f"{_opp_plate.get('profile','Neutral')} plate profile"),
