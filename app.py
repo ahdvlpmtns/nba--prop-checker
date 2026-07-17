@@ -14591,6 +14591,62 @@ if st.session_state.active_sport == "mlb":
                 </div>
                 """, unsafe_allow_html=True)
 
+            # Presentation-only summary of the completed model; it does not alter the analysis.
+            _entry_probability_strength = max(0.0, min(1.0, (adj - 0.50) / 0.22)) * 100
+            _entry_score = int(round(
+                0.60 * _entry_probability_strength + 0.40 * float(_sc)
+            ))
+            if not _is_avail:
+                _entry_score = 0
+            elif _pitcher_status == "Pass":
+                _entry_score = min(_entry_score, 64)
+            elif _pitcher_status == "Watchlist":
+                _entry_score = min(_entry_score, 79)
+            _entry_score = max(0, min(100, _entry_score))
+
+            if _entry_score >= 80:
+                _entry_action = "PLAY"
+                _entry_color = "#18f3a2"
+                _entry_border = "rgba(24,243,162,0.32)"
+                _entry_bg = "rgba(24,243,162,0.07)"
+                _entry_note = "Model strength and evidence quality cleared every action gate."
+            elif _entry_score >= 65:
+                _entry_action = "WATCH"
+                _entry_color = "#ffd166"
+                _entry_border = "rgba(255,209,102,0.32)"
+                _entry_bg = "rgba(255,209,102,0.07)"
+                _entry_note = "Promising direction; wait for stronger confirmation before entering."
+            else:
+                _entry_action = "PASS"
+                _entry_color = "#8da2b8"
+                _entry_border = "rgba(141,162,184,0.25)"
+                _entry_bg = "rgba(141,162,184,0.055)"
+                _entry_note = "The combined edge is not reliable enough for an entry."
+
+            st.markdown(
+                f"<div style='position:relative;overflow:hidden;display:flex;align-items:center;"
+                f"justify-content:space-between;flex-wrap:wrap;gap:14px;margin:1rem 0 1.25rem;"
+                f"padding:1rem 1.15rem;background:{_entry_bg};border:1px solid {_entry_border};"
+                f"border-left:4px solid {_entry_color};border-radius:12px;'>"
+                f"<div>"
+                f"<div style='font-family:JetBrains Mono,monospace;font-size:0.52rem;font-weight:800;"
+                f"letter-spacing:0.16em;color:#6b7f96;text-transform:uppercase;'>Entry Score</div>"
+                f"<div style='font-family:Plus Jakarta Sans,sans-serif;font-size:2rem;font-weight:900;"
+                f"line-height:1.05;color:{_entry_color};margin-top:4px;'>{_entry_score}"
+                f"<span style='font-size:0.72rem;font-weight:700;color:#6b7f96;'> / 100</span></div>"
+                f"</div>"
+                f"<div style='flex:1;min-width:190px;'>"
+                f"<div style='font-family:Plus Jakarta Sans,sans-serif;font-size:1.15rem;font-weight:900;"
+                f"color:{_entry_color};'>{_entry_action}</div>"
+                f"<div style='font-family:DM Sans,sans-serif;font-size:0.72rem;line-height:1.45;"
+                f"color:#9aaec4;margin-top:3px;'>{_entry_note}</div>"
+                f"</div>"
+                f"<div style='font-family:JetBrains Mono,monospace;font-size:0.5rem;line-height:1.6;"
+                f"color:#6b7f96;text-align:right;'>80+ PLAY<br>65-79 WATCH<br>&lt;65 PASS</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
     # Old MLB slate scanner removed. Use Edge for slate-wide MLB scanning.
 
 
