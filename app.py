@@ -14823,6 +14823,35 @@ if st.session_state.active_sport == "wnba":
                     unsafe_allow_html=True,
                 )
 
+        consistency_pct = int(round(result["consistency"] * 100))
+        consistency_color = (
+            "#00e896" if consistency_pct >= 70 else
+            "#ffc107" if consistency_pct >= 55 else
+            "#ff7043"
+        )
+        st.markdown(
+            f"<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;"
+            f"padding:0.85rem 1rem;margin:0.2rem 0 0.55rem;'>"
+            f"<div class='stat-label' style='margin-bottom:10px;'>DECISION QUALITY</div>"
+            f"<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:18px;'>"
+            f"<div><div style='display:flex;justify-content:space-between;align-items:center;gap:8px;'>"
+            f"<span style='font-size:0.7rem;color:var(--text2);font-weight:700;'>Consistency</span>"
+            f"<span style='font-family:var(--font-display);font-size:1rem;font-weight:900;color:{consistency_color};'>"
+            f"{consistency_pct}%</span></div>"
+            f"<div class='conf-meter-track' style='margin-top:7px;'>"
+            f"<div class='conf-meter-fill' style='width:{consistency_pct}%;background:{consistency_color};'></div></div>"
+            f"<div style='font-size:0.6rem;color:var(--text3);margin-top:5px;'>How repeatable recent production has been</div></div>"
+            f"<div><div style='display:flex;justify-content:space-between;align-items:center;gap:8px;'>"
+            f"<span style='font-size:0.7rem;color:var(--text2);font-weight:700;'>Evidence confidence</span>"
+            f"<span style='font-family:var(--font-display);font-size:1rem;font-weight:900;color:{confidence_color};'>"
+            f"{result['confidence']}/100</span></div>"
+            f"<div class='conf-meter-track' style='margin-top:7px;'>"
+            f"<div class='conf-meter-fill' style='width:{result['confidence']}%;background:{confidence_color};'></div></div>"
+            f"<div style='font-size:0.6rem;color:var(--text3);margin-top:5px;'>How trustworthy and complete the model evidence is</div></div>"
+            f"</div></div>",
+            unsafe_allow_html=True,
+        )
+
         flags_html = "".join(f"<span class='flag-pill down'>{flag}</span>" for flag in result["flags"])
         if not flags_html:
             flags_html = "<span class='flag-pill up'>No major model traps</span>"
