@@ -10392,26 +10392,112 @@ if st.session_state.active_sport == "mlb":
     @st.cache_data(ttl=3600, show_spinner=False)
     def mlb_get_velocity_trend(pitcher_name: str, n_recent: int = 4) -> dict:
         """
-        Detect velocity trend from recent game logs vs season avg.
-        A pitcher losing 2+ mph is a red flag regardless of K/9.
-        Returns: {avg_velo, recent_velo, trend_mph, trend: "Up"/"Down"/"Stable", source}
+        Compare current-season and prior-season velocity for the same pitcher
+        and the same fastball type. Never fall back to a surname-only prior
+        match: rookies and players without a valid baseline stay neutral.
         """
-        empty = {"avg_velo": None, "recent_velo": None, "trend_mph": 0.0,
-                 "trend": "Stable", "source": "none"}
+        empty = {
+            "avg_velo": None, "prior_velo": None, "trend_mph": 0.0,
+            "trend": "No baseline", "source": "none", "pitch_type": None,
+            "reliable": False, "current_pitches": None, "prior_pitches": None,
+        }
         try:
             import requests as _req, io, datetime as _dtx
-            _norm  = lambda s: s.lower().strip().replace(".", "").replace("-", " ")
+            import unicodedata as _ud
+
+            def _norm(value):
+                value = _ud.normalize("NFD", str(value or ""))
+                value = "".join(ch for ch in value if _ud.category(ch) != "Mn")
+                value = value.lower().strip().replace(".", "").replace("-", " ")
+                return re.sub(r"\s+", " ", value)
+
             _target = _norm(pitcher_name)
-            _parts  = [p for p in _target.split() if len(p) > 2]
-            _last   = _target.split()[-1]
             season  = _dtx.datetime.now().year
             _HDRS   = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                                      "AppleWebKit/537.36 Chrome/124.0 Safari/537.36",
                        "Referer": "https://baseballsavant.mlb.com/"}
 
-            # Fetch pitch-movement data — has per-start velocity
-            # We'll fetch all pitch types and get avg_speed across starts
-            all_speeds = []
+            # Resolve the MLB player ID once so common surnames cannot cross-match.
+            _pitcher_id = None
+            try:
+                _people_r = _req.get(
+                    "https://statsapi.mlb.com/api/v1/sports/1/players",
+                    params={"season": season, "gameType": "R"}, timeout=8,
+                )
+                if _people_r.ok:
+                    _person = next(
+                        (p for p in _people_r.json().get("people", [])
+                         if _norm(p.get("fullName")) == _target),
+                        None,
+                    )
+                    if _person:
+                        _pitcher_id = int(_person.get("id"))
+            except Exception:
+                _pitcher_id = None
+
+            def _player_rows(df):
+                if df is None or df.empty:
+                    return df.iloc[0:0] if df is not None else pd.DataFrame()
+
+                # Prefer an exact numeric identity when Savant exposes one.
+                if _pitcher_id is not None:
+                    for candidate in ("pitcher_id", "player_id", "pitcher", "playerid"):
+                        col = next((c for c in df.columns if c.lower() == candidate), None)
+                        if col:
+                            ids = pd.to_numeric(df[col], errors="coerce")
+                            matched = df[ids == _pitcher_id]
+                            if not matched.empty:
+                                return matched
+
+                # Exact full-name matching is the only text fallback allowed.
+                preferred = (
+                    "player_name", "pitcher_name", "name", "last_name, first_name",
+                )
+                name_col = next(
+                    (c for wanted in preferred for c in df.columns
+                     if c.lower().strip() == wanted),
+                    None,
+                )
+                if name_col is None:
+                    name_col = next(
+                        (c for c in df.columns
+                         if "name" in c.lower() and "pitch" not in c.lower()),
+                        None,
+                    )
+                if name_col is None:
+                    return df.iloc[0:0]
+
+                normalized = df[name_col].astype(str).apply(
+                    lambda value: _norm(
+                        " ".join(reversed(value.split(", ")))
+                        if ", " in value else value
+                    )
+                )
+                return df[normalized == _target]
+
+            def _weighted_velocity(rows):
+                if rows is None or rows.empty or "avg_speed" not in rows.columns:
+                    return None, None
+                speeds = pd.to_numeric(rows["avg_speed"], errors="coerce")
+                valid = speeds.between(75, 103, inclusive="both")
+                rows = rows.loc[valid].copy()
+                speeds = speeds.loc[valid]
+                if speeds.empty:
+                    return None, None
+                volume_col = next(
+                    (c for c in rows.columns
+                     if c.lower() in ("pitches", "pitch_count", "num_pitches", "total_pitches")),
+                    None,
+                )
+                if volume_col:
+                    volumes = pd.to_numeric(rows[volume_col], errors="coerce").fillna(0)
+                    if float(volumes.sum()) > 0:
+                        return float((speeds * volumes).sum() / volumes.sum()), int(volumes.sum())
+                return float(speeds.mean()), None
+
+            current_velo = None
+            current_pitches = None
+            selected_pitch_type = None
             for _pt in ["FF", "SI", "FC"]:  # fastball pitch types only
                 try:
                     r = _req.get(
@@ -10422,66 +10508,62 @@ if st.session_state.active_sport == "mlb":
                     )
                     if not r.ok or len(r.text) < 200: continue
                     df = pd.read_csv(io.StringIO(r.text), low_memory=False)
-                    nc = next((c for c in df.columns if "name" in c.lower()), None)
-                    if nc is None: continue
-                    df["_n"] = df[nc].astype(str).apply(
-                        lambda n: _norm(" ".join(reversed(n.split(", ")))
-                                  if ", " in n else n))
-                    rows = df[df["_n"].apply(lambda n: all(p in n for p in _parts))]
-                    if rows.empty:
-                        rows = df[df["_n"].apply(lambda n: _last in n)]
-                    if rows.empty: continue
-                    for _, row in rows.iterrows():
-                        spd = row.get("avg_speed")
-                        try:
-                            v = float(spd)
-                            if 75 < v < 103: all_speeds.append(v)
-                        except: pass
-                    if all_speeds: break
+                    rows = _player_rows(df)
+                    current_velo, current_pitches = _weighted_velocity(rows)
+                    if current_velo is not None:
+                        selected_pitch_type = _pt
+                        break
                 except Exception: continue
 
-            if not all_speeds: return empty
+            if current_velo is None or selected_pitch_type is None:
+                return empty
 
-            avg_v = round(sum(all_speeds) / len(all_speeds), 1)
-
-            # Compare to prior season for trend
+            avg_v = round(current_velo, 1)
             prior_v = None
-            for _pt in ["FF", "SI"]:
-                try:
-                    r2 = _req.get(
-                        "https://baseballsavant.mlb.com/leaderboard/pitch-movement",
-                        params={"year": season - 1, "team": "", "min": 1,
-                                "pitch_type": _pt, "hand": "", "csv": "true"},
-                        headers=_HDRS, timeout=10
-                    )
-                    if not r2.ok: continue
+            prior_pitches = None
+            try:
+                r2 = _req.get(
+                    "https://baseballsavant.mlb.com/leaderboard/pitch-movement",
+                    params={"year": season - 1, "team": "", "min": 1,
+                            "pitch_type": selected_pitch_type, "hand": "", "csv": "true"},
+                    headers=_HDRS, timeout=10,
+                )
+                if r2.ok and len(r2.text) >= 200:
                     df2 = pd.read_csv(io.StringIO(r2.text), low_memory=False)
-                    nc2 = next((c for c in df2.columns if "name" in c.lower()), None)
-                    if nc2 is None: continue
-                    df2["_n"] = df2[nc2].astype(str).apply(
-                        lambda n: _norm(" ".join(reversed(n.split(", ")))
-                                  if ", " in n else n))
-                    rows2 = df2[df2["_n"].apply(lambda n: all(p in n for p in _parts))]
-                    if rows2.empty:
-                        rows2 = df2[df2["_n"].apply(lambda n: _last in n)]
-                    if not rows2.empty:
-                        v2 = float(rows2.iloc[0].get("avg_speed", 0) or 0)
-                        if 75 < v2 < 103:
-                            prior_v = v2
-                            break
-                except Exception: continue
+                    rows2 = _player_rows(df2)
+                    prior_v, prior_pitches = _weighted_velocity(rows2)
+            except Exception:
+                prior_v = None
+                prior_pitches = None
 
-            trend_mph = round(avg_v - prior_v, 1) if prior_v else 0.0
+            if prior_v is None:
+                return {
+                    **empty,
+                    "avg_velo": avg_v,
+                    "source": f"{season} {selected_pitch_type} only · no exact {season-1} baseline",
+                    "pitch_type": selected_pitch_type,
+                    "current_pitches": current_pitches,
+                }
+
+            volume_reliable = (
+                (current_pitches is None or current_pitches >= 50) and
+                (prior_pitches is None or prior_pitches >= 50)
+            )
+            trend_mph = round(avg_v - float(prior_v), 1)
             if trend_mph >= 1.0:      trend = "Up"
             elif trend_mph <= -1.0:   trend = "Down"
             else:                     trend = "Stable"
 
             return {
                 "avg_velo":    avg_v,
-                "prior_velo":  prior_v,
+                "prior_velo":  round(float(prior_v), 1),
                 "trend_mph":   trend_mph,
-                "trend":       trend,
-                "source":      f"{season} vs {season-1}" if prior_v else str(season),
+                "trend":       trend if volume_reliable else "Low sample",
+                "source":      f"{season} vs {season-1} · {selected_pitch_type} only",
+                "pitch_type":  selected_pitch_type,
+                "reliable":    volume_reliable,
+                "current_pitches": current_pitches,
+                "prior_pitches": prior_pitches,
             }
         except Exception:
             return empty
@@ -10583,6 +10665,18 @@ if st.session_state.active_sport == "mlb":
         if pf<=0.95: return "Boost"
         elif pf>=1.06: return "Penalty"
         return "Neutral"
+
+    def mlb_opp_k_label(rate: Optional[float]) -> str:
+        """Use the same opponent K-rate bands in the model and debugger."""
+        if rate is None:
+            return "Unavailable"
+        if rate >= 0.285: return "Elite K lineup"
+        if rate >= 0.260: return "High K lineup"
+        if rate >= 0.245: return "Slightly high K lineup"
+        if rate <= 0.175: return "Very low K lineup"
+        if rate <= 0.195: return "Low K lineup"
+        if rate <= 0.210: return "Slightly low K lineup"
+        return "Average K lineup"
 
     def mlb_apply_adj(weighted, opp_k, park, side):
         adj = weighted
@@ -12119,7 +12213,9 @@ if st.session_state.active_sport == "mlb":
             if _vtrender and _vtrender.get("avg_velo"):
                 _vtrend_mph = float(_vtrender.get("trend_mph") or 0.0)
                 _vtrend_dir = _vtrender.get("trend", "Stable") or "Stable"
-                if _vtrend_dir == "Up":
+                if not _vtrender.get("reliable", False):
+                    _vtrend_dir = "No baseline"
+                elif _vtrend_dir == "Up":
                     _vtrend_adj = 0.02 if mlb_side == "Over" else -0.02
                 elif _vtrend_dir == "Down":
                     _vtrend_adj = -0.04 if mlb_side == "Over" else 0.04
@@ -12223,16 +12319,37 @@ if st.session_state.active_sport == "mlb":
 
             # ── Signal 4: Home/Away K split from logs
             _ha_adj = 0.0
+            _home_avg = None
+            _away_avg = None
+            _home_n = 0
+            _away_n = 0
+            _ha_note = "Home/away split unavailable"
             if "HOME" in mlb_logs.columns:
                 _home_logs = mlb_logs[mlb_logs["HOME"].astype(bool)]
                 _away_logs = mlb_logs[~mlb_logs["HOME"].astype(bool)]
-                if len(_home_logs) >= 3 and len(_away_logs) >= 3:
-                    _home_avg = pd.to_numeric(_home_logs[_stat], errors="coerce").dropna().mean()
-                    _away_avg = pd.to_numeric(_away_logs[_stat], errors="coerce").dropna().mean()
+                _home_vals = pd.to_numeric(_home_logs[_stat], errors="coerce").dropna()
+                _away_vals = pd.to_numeric(_away_logs[_stat], errors="coerce").dropna()
+                _home_n = len(_home_vals)
+                _away_n = len(_away_vals)
+                if _home_n >= 3 and _away_n >= 3:
+                    _home_avg = float(_home_vals.mean())
+                    _away_avg = float(_away_vals.mean())
                     _ha_diff  = _home_avg - _away_avg
                     _is_home  = _tonight.get("pitcher_side","") == "home"
+                    _ha_weight = 0.04 if min(_home_n, _away_n) >= 5 else 0.02
                     if abs(_ha_diff) >= 1.0:
-                        _ha_adj = 0.04 if (_is_home and _ha_diff > 0) or (not _is_home and _ha_diff < 0) else -0.04
+                        _ha_adj = (
+                            _ha_weight
+                            if (_is_home and _ha_diff > 0) or (not _is_home and _ha_diff < 0)
+                            else -_ha_weight
+                        )
+                    _ha_note = (
+                        f"Home {_home_avg:.1f} ({_home_n} starts) vs away "
+                        f"{_away_avg:.1f} ({_away_n} starts)"
+                        + (" · half weight for small split" if _ha_weight < 0.04 else "")
+                    )
+                else:
+                    _ha_note = f"Home {_home_n} starts · away {_away_n} starts · minimum 3 each"
 
             # ── Signal 5: Recent form — L3 vs season avg
             _l3_avg    = pd.to_numeric(mlb_logs.head(3)[_stat], errors="coerce").dropna().mean()
@@ -12625,6 +12742,16 @@ if st.session_state.active_sport == "mlb":
                     # probability until the workload is established.
                     if _pc_limit and _pc_adj > 0:
                         _pc_adj = 0.0
+
+            _pc_status_label = (
+                "Pitch restriction detected"
+                if _pc_limit else
+                "No formal limit · low observed workload"
+                if _pc_avg and _pc_avg < 85 else
+                "No formal limit detected"
+                if _pc_avg else
+                "Workload unavailable"
+            )
 
             # Partial lineup penalty
             if _lineup_order and len(_lineup_order) < 7:
@@ -13334,6 +13461,11 @@ if st.session_state.active_sport == "mlb":
                 _pc_expected_k if _pc_expected_k is not None else avg_val
             )
             _pitcher_directional_edge = edge if mlb_side == "Over" else -edge
+            _pitcher_projected_edge = (
+                _pitcher_projection - mlb_line
+                if mlb_side == "Over" else
+                mlb_line - _pitcher_projection
+            )
             _pitcher_status = (
                 "Pass" if tier == "Pass" or not _is_avail else
                 "Actionable" if (
@@ -13451,9 +13583,10 @@ if st.session_state.active_sport == "mlb":
                 f"<div class='mlb-decision-copy'>{_pitcher_copy}</div>"
                 f"<div class='mlb-decision-metrics'>"
                 f"<div class='mlb-decision-metric'><span>Model probability</span><strong>{adj:.0%}</strong></div>"
-                f"<div class='mlb-decision-metric'><span>Evidence confidence</span><strong>{_sc}/100</strong></div>"
+                f"<div class='mlb-decision-metric'><span>Pick confidence</span><strong>{_sc}/100</strong></div>"
                 f"<div class='mlb-decision-metric'><span>Projected K</span><strong>{_pitcher_projection:.1f}</strong></div>"
-                f"<div class='mlb-decision-metric'><span>Edge vs line</span><strong>{_pitcher_directional_edge:+.1f}</strong></div>"
+                f"<div class='mlb-decision-metric'><span>Projected edge</span><strong>{_pitcher_projected_edge:+.1f}</strong></div>"
+                f"<div class='mlb-decision-metric'><span>Historical avg edge</span><strong>{_pitcher_directional_edge:+.1f}</strong></div>"
                 f"<div class='mlb-decision-metric'><span>Consistency</span><strong>{cons:.0%}</strong></div>"
                 f"</div>"
                 f"<div class='mlb-driver-grid'>"
@@ -13519,7 +13652,7 @@ if st.session_state.active_sport == "mlb":
                 hc = "green" if whr>=0.64 else ("yellow" if whr>=0.55 else "red")
                 st.markdown(f"<div class='stat-card'><div class='stat-label'>Hit Rate</div>"
                             f"<div class='stat-value {hc}'>{whr:.0%}</div>"
-                            f"<div class='stat-hint'>Weighted L10 starts</div></div>",unsafe_allow_html=True)
+                            f"<div class='stat-hint'>Weighted L{len(vals)} starts</div></div>",unsafe_allow_html=True)
             with _c3:
                 if _is_outs_prop:
                     _outc = "green" if (_outs_expected or 0) >= mlb_line + 1.5 else ("yellow" if (_outs_expected or 0) >= mlb_line else "red")
@@ -13576,7 +13709,7 @@ if st.session_state.active_sport == "mlb":
                     _hand_lbl = f"vs {'R' if _phand=='R' else 'L'}HP"
                     st.markdown(f"<div class='stat-card'><div class='stat-label'>Opp K% {_hand_lbl}</div>"
                                 f"<div class='stat-value {_opp_kc}'>{_opp_kd}</div>"
-                                f"<div class='stat-hint'>{'High K lineup' if (okpct or 0)>=0.26 else 'Low K lineup' if (okpct or 0)<=0.18 else 'Average'} · {mlb_opp or 'TBD'}</div></div>",unsafe_allow_html=True)
+                                f"<div class='stat-hint'>{mlb_opp_k_label(okpct)} · {mlb_opp or 'TBD'}</div></div>",unsafe_allow_html=True)
             with _c8:
                 if _is_outs_prop:
                     _pcd = f"{_pc_expected_outs:.1f}" if _pc_expected_outs is not None else "—"
@@ -13819,7 +13952,12 @@ if st.session_state.active_sport == "mlb":
                 )
 
             tier_emoji={"Strong Over":"🟢","Lean Over":"🟡","Strong Under":"🔴","Lean Under":"🟠","Pass":"⚪"}
-            _cl="Predictable" if cons>=0.5 else ("Variable" if cons>=0.35 else "Volatile")
+            _cl = (
+                "Predictable" if cons >= 0.70 else
+                "Stable" if cons >= 0.58 else
+                "Moderate variance" if cons >= 0.45 else
+                "Volatile"
+            )
             # ── Share text ────────────────────────────────────────────
             _share_emoji = {"Strong Over":"🟢","Lean Over":"🟡","Strong Under":"🔴","Lean Under":"🟠","Pass":"⚪"}.get(tier,"⚪")
             _share_lines = [
@@ -13914,14 +14052,14 @@ if st.session_state.active_sport == "mlb":
                     <tr>
                         <td style='padding:3px 8px 3px 0;color:#6b7f96;'>Starts (sample)</td>
                         <td style='color:#e2e8f0;'>L{len(vals)} · avg {avg_val:.1f} {_lbl}</td>
-                        <td style='padding:3px 8px;color:#6b7f96;'>Edge vs line</td>
+                        <td style='padding:3px 8px;color:#6b7f96;'>Historical avg edge</td>
                         <td style='color:{"#22c55e" if edge > 0 else "#ef4444"};'>{edge:+.2f}</td>
                     </tr>
                     <tr>
                         <td style='padding:3px 8px 3px 0;color:#6b7f96;'>Raw hit rate</td>
-                        <td style='color:#e2e8f0;'>{whr:.1%} (weighted L10)</td>
+                        <td style='color:#e2e8f0;'>{whr:.1%} (weighted L{len(vals)})</td>
                         <td style='padding:3px 8px;color:#6b7f96;'>Consistency</td>
-                        <td style='color:{"#22c55e" if cons>=0.5 else "#ffc107" if cons>=0.35 else "#ef4444"};'>{cons:.1%} · {"Predictable" if cons>=0.5 else "Variable" if cons>=0.35 else "Volatile"}</td>
+                        <td style='color:{"#22c55e" if cons>=0.70 else "#ffc107" if cons>=0.55 else "#ef4444"};'>{cons:.1%} · {_cl}</td>
                     </tr>
                     <tr>
                         <td style='padding:3px 8px 3px 0;color:#6b7f96;'>Pitcher hand</td>
@@ -13950,16 +14088,16 @@ if st.session_state.active_sport == "mlb":
                 )
                 _mlb_signals = [
                     # (label, value, adj_applied, description)
-                    ("Weighted hit rate (base)",  f"{whr:.1%}",           None,        "Starting point — recency-weighted L10 starts"),
-                    ("Hit-rate calibration",      f"{_calibrated_whr:.1%}", None,      "Raw L10 shrunk toward neutral before context to avoid overconfidence"),
+                    ("Weighted hit rate (base)",  f"{whr:.1%}",           None,        f"Starting point — recency-weighted L{len(vals)} starts"),
+                    ("Hit-rate calibration",      f"{_calibrated_whr:.1%}", None,      f"Raw L{len(vals)} shrunk toward neutral before context to avoid overconfidence"),
                     ("Opp K% " + _okpct_source,
                                                   f"{okpct:.1%}" if okpct else "N/A",
                                                   None,
-                                                  f"{'High K lineup' if (okpct or 0)>=0.26 else 'Low K lineup' if (okpct or 0)<=0.18 else 'Average K lineup'}" if okpct else "No opponent data"),
+                                                  mlb_opp_k_label(okpct) if okpct else "No opponent data"),
                     ("Park factor",               psig,                    None,        f"{mlb_home or 'N/A'} · {'pitcher-friendly park' if psig=='Boost' else 'run-friendly park' if psig=='Penalty' else 'neutral park'}"),
                     ("Home/Away split",            f"{_ha_adj:+.0%}" if _ha_adj != 0 else "Neutral",
                                                   _ha_adj,
-                                                  "Based on pitcher's H/A K splits from logs"),
+                                                  _ha_note),
                     ("Recent form (L3 vs avg)",   f"L3 avg {_l3_avg:.1f}" if not pd.isna(_l3_avg) else "N/A",
                                                   _form_adj,
                                                   f"{'Trending up' if _form_adj>0 else 'Trending down' if _form_adj<0 else 'Stable'} — L3 vs season avg {avg_val:.1f}"),
@@ -14013,6 +14151,10 @@ if st.session_state.active_sport == "mlb":
                     ("Pitcher role",             _role.get("label", "Role TBD"),
                                                   _role_adj,
                                                   " | ".join(_role.get("summary", [])) or "No role risk detected"),
+                    ("Pitch count est",          f"~{_pc_avg}p" if _pc_avg else "N/A",
+                                                  _pc_adj,
+                                                  (f"Exp {_pc_expected_k:.1f}K · ceiling {_pc_k_ceiling:.1f}K · {_pc_status_label}"
+                                                   if _pc_avg and _pc_expected_k is not None else "Workload projection unavailable")),
                     ("Workload cluster cap",     f"{_workload_cluster_raw:+.1%} raw → {_workload_cluster_adj:+.1%}",
                                                   _workload_cluster_correction,
                                                   "Caps correlated avg-IP, pitcher-role, and pitch-count signals at -12% / +5%"),
@@ -14045,14 +14187,14 @@ if st.session_state.active_sport == "mlb":
                 ]
                 if _is_outs_prop:
                     _mlb_signals = [
-                        ("Weighted hit rate (base)", f"{whr:.1%}", None, "Starting point — recency-weighted L10 starts"),
-                        ("Hit-rate calibration", f"{_calibrated_whr:.1%}", None, "Raw L10 shrunk toward neutral before outs context"),
+                        ("Weighted hit rate (base)", f"{whr:.1%}", None, f"Starting point — recency-weighted L{len(vals)} starts"),
+                        ("Hit-rate calibration", f"{_calibrated_whr:.1%}", None, f"Raw L{len(vals)} shrunk toward neutral before outs context"),
                         ("Park factor", psig, None, f"{mlb_home or 'N/A'} · {'pitcher-friendly' if psig=='Boost' else 'run-friendly' if psig=='Penalty' else 'neutral'} park"),
-                        ("Home/Away split", f"{_ha_adj:+.0%}" if _ha_adj != 0 else "Neutral", _ha_adj, "Based on pitcher's home/away outs splits"),
+                        ("Home/Away split", f"{_ha_adj:+.0%}" if _ha_adj != 0 else "Neutral", _ha_adj, _ha_note),
                         ("Recent form (L3 vs avg)", f"L3 avg {_l3_avg:.1f}" if not pd.isna(_l3_avg) else "N/A", _form_adj, f"L3 vs season avg {avg_val:.1f}"),
                         ("Rest days", f"{_rest_days}d" if _rest_days else "Unknown", _rest_adj, _rest_note),
                         ("Avg IP/start", f"{_avg_ip:.1f}" if _avg_ip>0 else "N/A", _ip_adj, "Core outs workload signal"),
-                        ("Pitch count", f"~{_pc_avg}p" if _pc_avg else "N/A", _pc_adj, f"Expected {_pc_expected_outs:.1f} outs / ceiling {_pc_outs_ceiling:.1f}" if _pc_avg else "No pitch count estimate"),
+                        ("Pitch count", f"~{_pc_avg}p" if _pc_avg else "N/A", _pc_adj, f"Expected {_pc_expected_outs:.1f} outs / ceiling {_pc_outs_ceiling:.1f} · {_pc_status_label}" if _pc_avg else "No pitch count estimate"),
                         ("Opponent BB%", f"{_opp_plate.get('bb_rate'):.1%}" if _opp_plate.get("bb_rate") is not None else "N/A", None, f"{_opp_plate.get('profile','Neutral')} plate profile"),
                         ("Bullpen leash", _bullpen.get("signal", "Neutral"), None, f"L2 relief outs {_bullpen.get('relief_outs_l2','N/A')}"),
                         ("Weather", _weather_condition_label, _wx_adj, _wx_note if _wx_note else "No weather data"),
@@ -14139,7 +14281,10 @@ if st.session_state.active_sport == "mlb":
 
                 # Map signal names to their actual values for the trace
                 _sig_vals_map = {
-                    "Home/Away split":  f"{'Home' if _tonight.get('pitcher_side')=='home' else 'Away'}",
+                    "Home/Away split":  (
+                        f"{'Home' if _tonight.get('pitcher_side')=='home' else 'Away'} · "
+                        f"{_home_n}H/{_away_n}A starts"
+                    ),
                     "Recent form":      f"L3: {_l3_avg:.1f} vs avg {avg_val:.1f}" if not pd.isna(_l3_avg) else "N/A",
                     "Rest days":        f"{_rest_days}d" if _rest_days else "N/A",
                     "K/9 rate":         f"{_k9:.1f} ({_k9_source})" if _k9 > 0 else "N/A",
@@ -14154,9 +14299,9 @@ if st.session_state.active_sport == "mlb":
                                          f"{f' · K% {_lineup_avg_k:.1%}' if _lineup_avg_k is not None else ''}") if _order_hands else (f"{len(_lineup_order)}/9" if _lineup_order else "Not posted"),
                     "Platoon matchup":  f"vsL:{_platoon_vs_l:.1%} vsR:{_platoon_vs_r:.1%} · {_lhb_count}L/{_rhb_count}R {'projected' if _lineup_projected else 'tonight'}" if (_platoon_vs_l and _platoon_vs_r) else "Lineup TBD",
                     "Contact profile":  f"{okpct:.1%} · {_okpct_source}" if okpct else "N/A",
-                    "Pitch count est":  (f"~{_pc_avg}p → exp {_pc_expected_outs:.1f} outs / ceil {_pc_outs_ceiling:.1f} outs · {'⚠️ On limit' if _pc_limit else 'No limit detected'}"
+                    "Pitch count est":  (f"~{_pc_avg}p → exp {_pc_expected_outs:.1f} outs / ceil {_pc_outs_ceiling:.1f} outs · {_pc_status_label}"
                                          if (_is_outs_prop and _pc_avg) else
-                                         f"~{_pc_avg}p → exp {_pc_expected_k:.1f}K / ceil {_pc_k_ceiling:.1f}K · {'⚠️ On limit' if _pc_limit else 'No limit detected'}{f' · park leash {_park_leash_adj:+.1%}' if abs(_park_leash_adj) > 0.001 else ''}" if _pc_avg else "N/A"),
+                                         f"~{_pc_avg}p → exp {_pc_expected_k:.1f}K / ceil {_pc_k_ceiling:.1f}K · {_pc_status_label}{f' · park leash {_park_leash_adj:+.1%}' if abs(_park_leash_adj) > 0.001 else ''}" if _pc_avg else "N/A"),
                     "Recent opponent difficulty": (
                         f"{_opp_context.get('label', 'Neutral')} · "
                         f"{_opp_context.get('tonight_k'):.1%} tonight vs "
@@ -14309,7 +14454,11 @@ if st.session_state.active_sport == "mlb":
                     "#f97316" if "Lean Under" in tier else
                     "#ef4444" if "Strong Under" in tier else "#6b7f96"
                 )
-                _mlb_strong_thresh = "≥ 72% + quality gate" if mlb_side=="Over" else "≥ 72% + quality gate"
+                _mlb_strong_thresh = (
+                    "≥72% + hist edge ≥+0.75 OR ≥64% + hist edge ≥+1.75 · quality gate"
+                    if mlb_side == "Over" else
+                    "≥72% + hist edge ≤-0.75 OR ≥64% + hist edge ≤-1.75 · quality gate"
+                )
                 _mlb_lean_thresh = (
                     "≥ 52% · edge > 0 · confidence ≥ 55"
                     if mlb_side == "Over" else
@@ -14368,7 +14517,7 @@ if st.session_state.active_sport == "mlb":
                 _calibration_final_row = (
                     "<tr>"
                     "<td style='padding:3px 8px 3px 0;color:#6b7f96;'>Calibration</td>"
-                    f"<td colspan='3' style='color:#9aaec4;'>Raw L10 {whr:.1%} → "
+                    f"<td colspan='3' style='color:#9aaec4;'>Raw L{len(vals)} {whr:.1%} → "
                     f"calibrated base {_calibrated_whr:.1%} · consistency {cons:.1%}</td>"
                     "</tr>"
                 )
@@ -14405,10 +14554,16 @@ if st.session_state.active_sport == "mlb":
                         <td style='color:#9aaec4;'>{_mlb_strong_thresh}</td>
                     </tr>
                     <tr>
-                        <td style='padding:3px 8px 3px 0;color:#6b7f96;'>Edge vs line</td>
+                        <td style='padding:3px 8px 3px 0;color:#6b7f96;'>Historical avg edge</td>
                         <td style='color:{"#22c55e" if _edge_ok_mlb else "#ef4444"};'>{edge:+.2f} {"✓" if _edge_ok_mlb else "✗ tight"}</td>
                         <td style='padding:3px 8px;color:#6b7f96;'>Lean threshold</td>
                         <td style='color:#9aaec4;'>{_mlb_lean_thresh}</td>
+                    </tr>
+                    <tr>
+                        <td style='padding:3px 8px 3px 0;color:#6b7f96;'>Projected edge</td>
+                        <td style='color:{"#22c55e" if _pitcher_projected_edge > 0 else "#ef4444"};'>{_pitcher_projected_edge:+.2f}</td>
+                        <td style='padding:3px 8px;color:#6b7f96;'>Consensus projection</td>
+                        <td style='color:#9aaec4;'>{_pitcher_projection:.1f} K vs {mlb_line:.1f}</td>
                     </tr>
                     <tr>
                         <td style='padding:3px 8px 3px 0;color:#6b7f96;'>Confidence score</td>
