@@ -5534,6 +5534,9 @@ def delete_from_supabase(row_id: str) -> bool:
 def normalize_mlb_pitcher_prop_stat(stat: str) -> str:
     """Normalize MLB prop names used by PropIQ's MLB models."""
     s = re.sub(r"[^a-z0-9]+", " ", str(stat or "").lower()).strip()
+    # Do not let the hitter strikeout market leak into the pitcher model.
+    if ("hitter" in s or "batter" in s) and ("strikeout" in s or "strike out" in s):
+        return "Hitter Strikeouts"
     if any(token in s for token in (
         "hitter fantasy score", "batter fantasy score", "fantasy score",
         "fantasy points", "fantasy pts", "hitter fantasy", "batter fantasy"
@@ -15304,72 +15307,187 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
     elif sport_filter == "MLB": _all_leagues = [("2", "MLB")]
     elif sport_filter == "WNBA": _all_leagues = [("3", "WNBA")]
 
-    def _parse(data: dict, sport: str, expected_league_id: str) -> list:
-        result = []
+    def _parse(data: dict, sport: str, expected_league_id: str) -> Tuple[list, dict]:
+        """Parse only verified, supported PrizePicks player markets."""
+        expected_league_id = str(expected_league_id)
+        expected_sport = str(sport or "").upper()
+        included = data.get("included", []) or []
+        projections = data.get("data", []) or []
+
+        # PrizePicks can ignore league_id and return a large response. Validate
+        # the payload using its relationship metadata instead of raw row count.
+        payload_league_ids = set()
+        payload_league_names = set()
+        for item in included:
+            attrs = item.get("attributes", {}) or {}
+            if item.get("type") == "league":
+                payload_league_ids.add(str(item.get("id", "") or ""))
+                league_name = attrs.get("name") or attrs.get("display_name")
+                if league_name:
+                    payload_league_names.add(str(league_name).upper())
+            rel = item.get("relationships", {}) or {}
+            rel_league_id = str(
+                ((rel.get("league", {}) or {}).get("data", {}) or {}).get("id", "")
+                or attrs.get("league_id", "")
+            )
+            if rel_league_id:
+                payload_league_ids.add(rel_league_id)
+            if attrs.get("league"):
+                payload_league_names.add(str(attrs.get("league")).upper())
+        for proj in projections:
+            attrs = proj.get("attributes", {}) or {}
+            rel = proj.get("relationships", {}) or {}
+            rel_league_id = str(
+                ((rel.get("league", {}) or {}).get("data", {}) or {}).get("id", "")
+                or attrs.get("league_id", "")
+            )
+            if rel_league_id:
+                payload_league_ids.add(rel_league_id)
+
+        payload_verified = (
+            expected_league_id in payload_league_ids
+            or expected_sport in payload_league_names
+        )
+        payload_exclusive = (
+            payload_verified
+            and not {league_id for league_id in payload_league_ids if league_id != expected_league_id}
+            and not {name for name in payload_league_names if name != expected_sport}
+        )
+
         pmap = {}
-        for item in data.get("included", []):
-            if item.get("type") == "new_player":
-                a = item.get("attributes", {})
-                rel = item.get("relationships", {}) or {}
-                player_league_id = str(
-                    ((rel.get("league", {}) or {}).get("data", {}) or {}).get("id", "")
-                    or a.get("league_id", "")
-                )
-                pmap[item["id"]] = {
-                    "name": a.get("display_name") or a.get("name", ""),
-                    "team": a.get("team_abbreviation", ""),
-                    "pos":  a.get("position", ""),
-                    "league_id": player_league_id,
-                }
-        seen = {}
-        for proj in data.get("data", []):
-            a         = proj.get("attributes", {})
-            stat      = a.get("stat_type", "")
-            line      = a.get("line_score")
-            odds_type = a.get("odds_type", "standard")
-            if not line or not stat:
+        for item in included:
+            if item.get("type") not in ("new_player", "player"):
                 continue
+            a = item.get("attributes", {}) or {}
+            rel = item.get("relationships", {}) or {}
+            player_league_id = str(
+                ((rel.get("league", {}) or {}).get("data", {}) or {}).get("id", "")
+                or a.get("league_id", "")
+            )
+            pmap[str(item.get("id", ""))] = {
+                "name": a.get("display_name") or a.get("name", ""),
+                "team": a.get("team_abbreviation") or a.get("team", ""),
+                "pos": a.get("position", ""),
+                "league_id": player_league_id,
+                "league_name": str(a.get("league", "") or "").upper(),
+            }
+
+        def _canonical_market(stat_name: str) -> Optional[str]:
+            if expected_sport == "MLB":
+                market = normalize_mlb_pitcher_prop_stat(stat_name)
+                return market if market in ("Strikeouts", "Hitter Fantasy Score") else None
+            if expected_sport == "WNBA":
+                market = normalize_wnba_prop_stat(stat_name)
+                return market if is_wnba_supported_prop(market) else None
+            return str(stat_name or "") or None
+
+        buckets = {}
+        skipped_league = 0
+        skipped_unsupported = 0
+        skipped_alternate = 0
+        for proj in projections:
+            a = proj.get("attributes", {}) or {}
+            stat = a.get("stat_type", "")
+            line = a.get("line_score")
+            odds_type = str(a.get("odds_type", "standard") or "standard").lower()
+            if line is None or not stat:
+                continue
+
+            market = _canonical_market(stat)
+            if not market:
+                skipped_unsupported += 1
+                continue
+            # Demon lines are deliberately harder alternate markets. The Edge
+            # Scanner exposes standard and optional goblin lines only.
+            if odds_type not in ("standard", "goblin"):
+                skipped_alternate += 1
+                continue
+
             rel = proj.get("relationships", {}) or {}
             proj_league_id = str(
                 ((rel.get("league", {}) or {}).get("data", {}) or {}).get("id", "")
                 or a.get("league_id", "")
             )
-            pid = (proj.get("relationships", {})
-                      .get("new_player", {})
-                      .get("data", {}).get("id"))
+            player_rel = rel.get("new_player", {}) or rel.get("player", {}) or {}
+            pid = str((player_rel.get("data", {}) or {}).get("id", ""))
             pi = pmap.get(pid, {})
             player_league_id = str(pi.get("league_id", "") or "")
-            # Some PrizePicks endpoints can return a mixed slate even when a
-            # league_id param is supplied. Trust relationship metadata over the
-            # request URL and discard anything outside the requested league.
-            if proj_league_id and proj_league_id != str(expected_league_id):
+            player_league_name = str(pi.get("league_name", "") or "").upper()
+
+            explicit_ids = {value for value in (proj_league_id, player_league_id) if value}
+            explicit_names = {player_league_name} if player_league_name else set()
+            if (
+                any(value != expected_league_id for value in explicit_ids)
+                or any(value != expected_sport for value in explicit_names)
+                or (not explicit_ids and not explicit_names and not payload_exclusive)
+            ):
+                skipped_league += 1
                 continue
-            if player_league_id and player_league_id != str(expected_league_id):
-                continue
+
             name = pi.get("name", "")
             if not name:
                 continue
-            key = f"{name}|{stat}"
+            if (
+                expected_sport == "MLB"
+                and market == "Strikeouts"
+                and str(pi.get("pos", "") or "").upper() not in ("P", "SP", "RP", "LHP", "RHP")
+            ):
+                skipped_unsupported += 1
+                continue
+            try:
+                line_value = float(line)
+            except (TypeError, ValueError):
+                continue
             entry = {
-                "sport": sport, "player": name,
-                "team": pi.get("team", ""), "stat": stat,
-                "pos":  pi.get("pos", ""),
-                "line": float(line),
+                "sport": sport,
+                "player": name,
+                "team": pi.get("team", ""),
+                "stat": market,
+                "pos": pi.get("pos", ""),
+                "line": line_value,
                 "projection_id": str(proj.get("id", "") or ""),
                 "start_time": a.get("start_time") or a.get("end_time") or "",
                 "board_time": a.get("board_time") or "",
                 "updated_at": a.get("updated_at") or "",
                 "status": a.get("status") or "pre_game",
                 "is_goblin": odds_type == "goblin",
-                "is_demon":  odds_type == "demon",
+                "is_demon": False,
                 "odds_type": odds_type,
             }
-            if key not in seen:
-                seen[key] = entry
-                result.append(entry)
-            elif odds_type == "goblin" and not seen[key]["is_goblin"]:
-                result.append(entry)
-        return result
+            key = (expected_sport, normalize_name(name), market)
+            buckets.setdefault(key, {"standard": [], "goblin": []})[odds_type].append(entry)
+
+        result = []
+        for variants in buckets.values():
+            standard = None
+            if variants["standard"]:
+                standard = max(
+                    variants["standard"],
+                    key=lambda row: (str(row.get("updated_at", "")), str(row.get("projection_id", ""))),
+                )
+                result.append(standard)
+            if variants["goblin"]:
+                # Keep one actionable goblin line per player/market. Prefer the
+                # closest easier line below standard; without a standard line,
+                # use the highest goblin to avoid manufacturing giant edges.
+                goblins = variants["goblin"]
+                if standard:
+                    below_standard = [row for row in goblins if row["line"] < standard["line"]]
+                    goblin = max(below_standard or goblins, key=lambda row: row["line"])
+                else:
+                    goblin = max(goblins, key=lambda row: row["line"])
+                result.append(goblin)
+
+        meta = {
+            "verified": payload_verified,
+            "exclusive": payload_exclusive,
+            "league_ids": sorted(payload_league_ids),
+            "skipped_league": skipped_league,
+            "skipped_unsupported": skipped_unsupported,
+            "skipped_alternate": skipped_alternate,
+            "markets": len(buckets),
+        }
+        return result, meta
 
     _endpoints = [
         ("https://partner-api.prizepicks.com/projections", "partner-api.prizepicks.com"),
@@ -15435,18 +15553,17 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
                     data = r.json()
                     row_count = len(data.get("data", []) or [])
                     if row_count:
-                        parsed = _parse(data, _sport, _league_id)
-                        if (
-                            (_sport == "MLB" and len(parsed) > 700)
-                            or (_sport == "WNBA" and len(parsed) > 1500)
-                            or (_sport == "NBA" and len(parsed) > 900)
-                        ):
+                        parsed, parse_meta = _parse(data, _sport, _league_id)
+                        if not parse_meta.get("verified"):
                             fetch_notes.append(
-                                f"{_sport} {_url_label} {_per_page}: mixed slate ignored ({len(parsed)} parsed)"
+                                f"{_sport} {_url_label} {_per_page}: league metadata could not be verified"
                             )
                             continue
                         props.extend(parsed)
-                        fetch_notes.append(f"{_sport} {_url_label} {_per_page}: {row_count} rows, {len(parsed)} parsed")
+                        fetch_notes.append(
+                            f"{_sport} {_url_label} {_per_page}: {row_count} rows, "
+                            f"{len(parsed)} supported props · league {_league_id} verified"
+                        )
                         _fetched = True
                         break
                     fetch_notes.append(f"{_sport} {_url_label} {_per_page}: empty data")
@@ -18210,11 +18327,18 @@ if st.session_state.active_sport == "edge":
                 and is_sane_wnba_prop_line(p.get("stat", ""), p.get("line"))
             ]
 
+        # The scanner has no demon-market mode. Exclude those harder alternate
+        # lines explicitly, including when reading a slate saved by older code.
+        _filtered = [p for p in _filtered if not p.get("is_demon", False)]
+
         # Goblin filter
         if not _include_goblin:
             _filtered = [p for p in _filtered if not p["is_goblin"]]
 
-        # Deduplicate: keep best line per player+stat+sport
+        # Deduplicate deterministically: preserve one standard and one optional
+        # goblin per player/market. For multiple goblins, keep the highest line
+        # so the scanner does not manufacture an oversized edge from a deep
+        # promotional alternate.
         _deduped = {}
         for p in _filtered:
             _norm_stat = (
@@ -18222,11 +18346,16 @@ if st.session_state.active_sport == "edge":
                 if _edge_sport == "MLB" else normalize_wnba_prop_stat(p.get("stat", ""))
             )
             p["stat"] = _norm_stat
-            _k = f"{p['sport']}|{p['player']}|{_norm_stat}"
-            if _k not in _deduped:
+            _variant = "goblin" if p.get("is_goblin") else "standard"
+            _k = f"{p['sport']}|{p['player']}|{_norm_stat}|{_variant}"
+            existing = _deduped.get(_k)
+            if existing is None:
                 _deduped[_k] = p
-            elif p["is_goblin"] and not _deduped[_k]["is_goblin"]:
-                _deduped[f"{_k}|goblin"] = p
+            elif _variant == "goblin":
+                if float(p.get("line", 0) or 0) > float(existing.get("line", 0) or 0):
+                    _deduped[_k] = p
+            elif str(p.get("updated_at", "")) > str(existing.get("updated_at", "")):
+                _deduped[_k] = p
         _filtered = list(_deduped.values())
         _mlb_k_count = sum(1 for p in _filtered if p.get("sport") == "MLB" and is_mlb_strikeout_prop(p.get("stat", "")))
         _mlb_hfs_count = sum(1 for p in _filtered if p.get("sport") == "MLB" and is_mlb_hitter_fantasy_prop(p.get("stat", "")))
