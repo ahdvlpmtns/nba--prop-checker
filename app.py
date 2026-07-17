@@ -8455,7 +8455,6 @@ if st.session_state.active_sport == "mlb":
 
     # ── MLB Data Functions ─────────────────────────────
 
-    @st.cache_data(ttl=14400, show_spinner=False)
     @st.cache_data(ttl=3600, show_spinner=False)
     def mlb_get_pitcher_logs(player_name: str, n: int = 10) -> pd.DataFrame:
         """
@@ -8560,11 +8559,10 @@ if st.session_state.active_sport == "mlb":
 
             # ── Step 2: Fetch game logs — try multiple gameType combos ──
             splits = []
-            _game_type_tries = [
-                "R,S,W,F,D,L",   # All types
-                "R",              # Regular season only
-                "S",              # Spring training
-            ]
+            # Regular-season starts are the only valid sample for a regular-
+            # season prop. Mixing relief work or spring games can badly skew a
+            # converted starter's hit rate and workload baseline.
+            _game_type_tries = ["R"]
             for _gt_str in _game_type_tries:
                 try:
                     _lr = _req.get(
@@ -8664,6 +8662,8 @@ if st.session_state.active_sport == "mlb":
             seen_dates = set()
             for s in splits:
                 stat = s.get("stat", {})
+                if int(stat.get("gamesStarted", 0) or 0) < 1:
+                    continue
                 date = s.get("date", "")[:10]
                 if not date or date in seen_dates:
                     continue
@@ -10103,7 +10103,17 @@ if st.session_state.active_sport == "mlb":
                 timeout=10
             )
             if not _lr.ok: return empty
-            splits = _lr.json().get("stats", [{}])[0].get("splits", [])[:n]
+            splits = _lr.json().get("stats", [{}])[0].get("splits", [])
+            if not splits: return empty
+
+            # MLB returns game-log splits oldest first. Keep actual starts,
+            # order them newest first, and only then take the requested sample.
+            splits = [
+                sp for sp in splits
+                if int((sp.get("stat") or {}).get("gamesStarted", 0) or 0) >= 1
+            ]
+            splits.sort(key=lambda sp: str(sp.get("date", "")), reverse=True)
+            splits = splits[:n]
             if not splits: return empty
 
             pitch_counts = []
@@ -10114,17 +10124,9 @@ if st.session_state.active_sport == "mlb":
                 np   = int(st.get("numberOfPitches", 0) or 0)
                 bf   = int(st.get("battersFaced", 0) or 0)
                 date = sp.get("date", "")[:10]
-                # Exclude spring training (before March 27) and relief appearances
-                # Spring Training pitchers throw 40-65 pitches intentionally — not real data
-                is_spring = False
-                try:
-                    import datetime as _dt3
-                    _gdate = _dt3.date.fromisoformat(date)
-                    # Spring Training ends ~March 26 every year
-                    is_spring = _gdate.month < 4 and _gdate.day < 27
-                except Exception:
-                    pass
-                if np > 65 and not is_spring:  # real starts only (65+ pitches, not spring)
+                # Do not discard short starts. They are often the strongest
+                # evidence of an opener, ramp-up, injury return, or quick hook.
+                if np > 0:
                     pitch_counts.append(np)
                     if bf > 0:
                         total_valid_pitches += np
@@ -10146,7 +10148,7 @@ if st.session_state.active_sport == "mlb":
             on_limit = (
                 avg_p < 80 or          # clearly limited
                 (n_starts <= 4 and avg_p < 90) or  # early season small sample
-                min_p < 65             # had at least one very short outing
+                min_p < 65             # had at least one very short start
             )
             limit_est = avg_p if on_limit else None
 
@@ -10367,7 +10369,10 @@ if st.session_state.active_sport == "mlb":
             elif opp_k <= 0.175: adj += -0.08 if side=="Over" else 0.08
             elif opp_k <= 0.195: adj += -0.05 if side=="Over" else 0.05
             elif opp_k <= 0.210: adj += -0.02 if side=="Over" else 0.02
-        adj += {"Boost":+0.04,"Neutral":0.0,"Penalty":-0.04}.get(park,0.0)*(1 if side=="Over" else -1)
+        # `_MLB_PARK_FACTORS` measures run scoring, not strikeout frequency.
+        # Run environment is handled later as a small pitch-count/leash signal;
+        # applying it directly here would double count it and imply that a
+        # hitter-friendly park automatically suppresses strikeouts.
         # Pre-anchor cap: projection anchors can still finish higher, but the
         # raw signal stack should not pin at 95% before realism checks run.
         return max(0.05,min(0.92,adj))
@@ -12226,7 +12231,14 @@ if st.session_state.active_sport == "mlb":
                             _pc_adj = min(_pc_adj, -0.12)
                         elif _expected_gap <= -0.25:
                             _pc_adj = min(_pc_adj, -0.08)
-                        elif _expected_gap >= 1.5:
+                        elif (
+                            _expected_gap >= 1.5 and
+                            _pc_avg >= 85 and
+                            not _pc_limit
+                        ):
+                            # A healthy cushion is positive evidence only when
+                            # the workload itself is established. It must not
+                            # erase a short-leash or pitch-limit penalty.
                             _pc_adj = max(_pc_adj, +0.03)
                         elif _expected_gap < 0.5 and _pc_adj > 0:
                             # A workload projection that barely clears the
@@ -12343,13 +12355,29 @@ if st.session_state.active_sport == "mlb":
                     _matchup_cluster_adj - _matchup_cluster_raw
                 )
 
+            # Average innings, role classification, and pitch count are three
+            # views of the same workload. Preserve a real short-leash penalty,
+            # but cap the correlated stack so it is not counted three times.
+            _workload_cluster_raw = 0.0
+            _workload_cluster_adj = 0.0
+            _workload_cluster_correction = 0.0
+            if not _is_outs_prop:
+                _workload_cluster_raw = _ip_adj + _role_adj + _pc_adj
+                _workload_cluster_adj = max(
+                    -0.12, min(0.05, _workload_cluster_raw)
+                )
+                _workload_cluster_correction = (
+                    _workload_cluster_adj - _workload_cluster_raw
+                )
+
             adj = max(0.05, min(_pre_anchor_cap, adj
                       + _ha_adj + _form_adj + _rest_adj
                       + _k9_adj + _swstr_adj + _velo_adj + _vtrend_adj + _ip_adj
                       + _ump_adj + _wx_adj + _lineup_adj
                       + _platoon_adj + _contact_adj + _opp_context_adj
                       + _matchup_cluster_correction
-                      + _role_adj + _pc_adj + _variance_adj))
+                      + _role_adj + _pc_adj + _workload_cluster_correction
+                      + _variance_adj))
 
             # Consensus projection anchor. Pitch-count expected K and the
             # lineup/BF projection estimate overlapping outcomes, so combine
@@ -12416,6 +12444,13 @@ if st.session_state.active_sport == "mlb":
                     _projection_reliability -= 0.12
                 elif _n_starts < 6:
                     _projection_reliability -= 0.06
+                _role_severity = int(_role.get("severity", 0) or 0)
+                if _role_severity >= 3:
+                    _projection_reliability -= 0.12
+                elif _role_severity >= 2:
+                    _projection_reliability -= 0.07
+                elif _role_severity == 1:
+                    _projection_reliability -= 0.03
                 _projection_favors_side = _combined_proj_prob > 0.50
                 _recent_form_conflicts = (
                     (_projection_favors_side and _form_adj < 0) or
@@ -12646,6 +12681,13 @@ if st.session_state.active_sport == "mlb":
                     _conf_penalty += 2
                     _quality_notes.append("low BF projection confidence")
             _sc = max(0, _sc - _conf_penalty)
+            _role_severity = int(_role.get("severity", 0) or 0)
+            if _role_severity >= 3:
+                _sc = min(_sc, 64)
+            elif _role_severity >= 2:
+                _sc = min(_sc, 79)
+            elif _role_severity == 1:
+                _sc = min(_sc, 89)
             if _n_starts < 4:
                 _sc = min(_sc, 69)
             elif _n_starts < 6:
@@ -13502,6 +13544,9 @@ if st.session_state.active_sport == "mlb":
                     ("Pitcher role",             _role.get("label", "Role TBD"),
                                                   _role_adj,
                                                   " | ".join(_role.get("summary", [])) or "No role risk detected"),
+                    ("Workload cluster cap",     f"{_workload_cluster_raw:+.1%} raw → {_workload_cluster_adj:+.1%}",
+                                                  _workload_cluster_correction,
+                                                  "Caps correlated avg-IP, pitcher-role, and pitch-count signals at -12% / +5%"),
                     ("Pitcher variance",           f"{cons:.1%} consistency",
                                                   _variance_adj,
                                                   _variance_note),
@@ -13565,10 +13610,6 @@ if st.session_state.active_sport == "mlb":
                         _base_context_notes.append("low opponent K%")
                     elif _base_opp_k_for_model <= 0.210:
                         _base_context_notes.append("slight opponent K% penalty")
-                if psig == "Boost":
-                    _base_context_notes.append("pitcher-friendly park")
-                elif psig == "Penalty":
-                    _base_context_notes.append("run-friendly park")
                 _base_context_note = (
                     "calibrated base + " + " + ".join(_base_context_notes)
                     if _base_context_notes else
@@ -13587,21 +13628,25 @@ if st.session_state.active_sport == "mlb":
                                  _swstr_adj, _velo_adj, _vtrend_adj, _ip_adj, _ump_adj, _wx_adj,
                                  _lineup_adj, _platoon_adj, _contact_adj,
                                  _opp_context_adj, _matchup_cluster_correction,
-                                 _role_adj, _pc_adj, _variance_adj]
+                                 _role_adj, _pc_adj, _workload_cluster_correction,
+                                 _variance_adj]
                     _mlb_adj_labels = [
                         "Home/Away split", "Recent form", "Rest days", "K/9 rate",
                         "Whiff%/K%", "Velocity", "Velocity trend", "Avg IP/start", "Umpire zone",
                         "Weather", "Batting order", "Platoon matchup", "Contact profile",
                         "Recent opponent difficulty", "Matchup cluster cap",
-                        "Pitcher role", "Pitch count est", "Pitcher variance"
+                        "Pitcher role", "Pitch count est", "Workload cluster cap",
+                        "Pitcher variance"
                     ]
                 _mlb_running = _mlb_base_adj
                 _mlb_steps = []
                 for _lbl2, _a in zip(_mlb_adj_labels, _mlb_adjs):
                     _before = _mlb_running
                     _mlb_running += _a
-                    _after_clamped = max(0.05, min(_pre_anchor_cap, _mlb_running))
-                    _mlb_steps.append((_lbl2, _a, max(0.05,min(_pre_anchor_cap,_before)), _after_clamped))
+                    # The model clips once after all additive signals. Showing
+                    # unclipped intermediate values makes every adjustment
+                    # visible instead of displaying real penalties as 0.0%.
+                    _mlb_steps.append((_lbl2, _a, _before, _mlb_running))
 
                 trace_rows = f"""
                 <div style='font-family:JetBrains Mono,monospace;font-size:0.7rem;color:#9aaec4;'>
@@ -13658,6 +13703,11 @@ if st.session_state.active_sport == "mlb":
                         f"{_role.get('label', 'Role TBD')} · "
                         f"{_role.get('status', 'Unknown')}"
                     ),
+                    "Workload cluster cap": (
+                        f"{_workload_cluster_raw:+.1%} raw → "
+                        f"{_workload_cluster_adj:+.1%} capped "
+                        "(limit -12% / +5%)"
+                    ),
                     "Pitcher variance": f"{cons:.1%} consistency · {_variance_note}",
                 }
 
@@ -13674,6 +13724,21 @@ if st.session_state.active_sport == "mlb":
                     <td style='color:#7d93ab;'>{_bef:.1%}</td>
                     <td style='color:#e2e8f0;'>{_aft:.1%}</td>
                     <td style='color:{_ic};'>{_aft-_bef:+.1%}</td>
+                </tr>"""
+
+                _pre_anchor_clamped = max(
+                    0.05, min(_pre_anchor_cap, _mlb_running)
+                )
+                if abs(_pre_anchor_clamped - _mlb_running) > 0.0005:
+                    _cap_impact = _pre_anchor_clamped - _mlb_running
+                    trace_rows += f"""
+                <tr style='border-bottom:1px solid #0d1520;'>
+                    <td style='padding:4px 0;color:#9aaec4;'>Pre-anchor cap</td>
+                    <td style='color:#e2e8f0;font-weight:600;'>Model range 5%–{_pre_anchor_cap:.0%}</td>
+                    <td style='color:#ffc107;'>cap</td>
+                    <td style='color:#7d93ab;'>{_mlb_running:.1%}</td>
+                    <td style='color:#e2e8f0;'>{_pre_anchor_clamped:.1%}</td>
+                    <td style='color:#ffc107;'>{_cap_impact:+.1%}</td>
                 </tr>"""
 
                 if _combined_proj_prob is not None:
