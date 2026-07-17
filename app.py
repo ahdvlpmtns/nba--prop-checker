@@ -5628,6 +5628,40 @@ def is_sane_mlb_pitcher_prop_line(stat: str, line) -> bool:
     return False
 
 
+def filter_usable_pp_cached_props(props: list, sport_filter: str) -> list:
+    """Keep the requested sport and discard cached projections that already started."""
+    if not isinstance(props, list):
+        return []
+    requested = str(sport_filter or "").upper()
+    sport_rows = [
+        row for row in props
+        if not requested or requested == "BOTH" or str(row.get("sport", "")).upper() == requested
+    ]
+    now_utc = pd.Timestamp.now(tz="UTC")
+    parsed_starts = []
+    for row in sport_rows:
+        start = pd.to_datetime(row.get("start_time"), utc=True, errors="coerce")
+        parsed_starts.append(start)
+    # Old cache versions did not retain event time. They remain eligible only
+    # through the caller's conservative age limit.
+    if not any(pd.notna(start) for start in parsed_starts):
+        return sport_rows
+    return [
+        row for row, start in zip(sport_rows, parsed_starts)
+        if pd.notna(start) and start >= now_utc - pd.Timedelta(minutes=20)
+    ]
+
+
+def pp_cache_has_upcoming_event(props: list) -> bool:
+    """True when a cached slate contains a timestamped game that has not started."""
+    now_utc = pd.Timestamp.now(tz="UTC")
+    for row in props or []:
+        start = pd.to_datetime(row.get("start_time"), utc=True, errors="coerce")
+        if pd.notna(start) and start >= now_utc - pd.Timedelta(minutes=20):
+            return True
+    return False
+
+
 def get_cached_pp_props_from_supabase(sport_filter: str, max_age_minutes: int = 720) -> Optional[list]:
     """
     Load the last successful PrizePicks slate from Supabase.
@@ -5670,7 +5704,9 @@ def get_cached_pp_props_from_supabase(sport_filter: str, max_age_minutes: int = 
                 source="supabase", fetched_at=str(fetched_at),
             )
             return None
-        props = _json.loads(rows[0].get("props_json", "[]"))
+        raw_props = rows[0].get("props_json", "[]")
+        props = _json.loads(raw_props) if isinstance(raw_props, str) else raw_props
+        props = filter_usable_pp_cached_props(props, sport_filter)
         if isinstance(props, list) and props:
             st.session_state["edge_fetch_debug"] = [
                 f"Using Supabase cached PrizePicks slate ({age_minutes:.0f} min old)"
@@ -5934,6 +5970,7 @@ def get_cached_pp_props_from_local(sport_filter: str, max_age_minutes: int = 720
         with open(path, "r", encoding="utf-8") as f:
             payload = _json.load(f)
         props = payload if isinstance(payload, list) else payload.get("props", [])
+        props = filter_usable_pp_cached_props(props, sport_filter)
         if isinstance(props, list) and props:
             st.session_state["edge_fetch_debug"] = [
                 f"Using local cached PrizePicks slate ({age_minutes:.0f} min old)"
@@ -15086,19 +15123,6 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
             record_debug_error("prizepicks.league_status", e)
         return None
 
-    # Check availability before reading stale caches or touching projections.
-    # This avoids a burst of requests when PrizePicks itself reports no slate.
-    if sport_filter in ("MLB", "WNBA", "NBA"):
-        current_projection_count = _league_projection_count(sport_filter)
-        if current_projection_count == 0:
-            detail = f"PrizePicks league catalog · {sport_filter} · 0 projections currently posted"
-            set_runtime_metric("prizepicks", "info", detail)
-            st.session_state["edge_fetch_debug"] = [detail]
-            raise RuntimeError(
-                f"PrizePicks currently lists 0 {sport_filter} projections. "
-                "The next slate has not been posted yet; try again after PrizePicks publishes new lines."
-            )
-
     # PrizePicks rate-limits server IPs unpredictably. Use a reasonably fresh
     # last-good slate first so repeated scans do not hammer their API.
     def _cache_slate_looks_valid(cached: list) -> bool:
@@ -15110,10 +15134,11 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
                 mlb_rows = [p for p in cached if p.get("sport") == "MLB"]
                 k_rows = [p for p in mlb_rows if is_mlb_strikeout_prop(p.get("stat", ""))]
                 hfs_rows = [p for p in mlb_rows if is_mlb_hitter_fantasy_prop(p.get("stat", ""))]
-                # A normal PrizePicks MLB single-stat slate should not contain
-                # hundreds of pitcher K props. That indicates an older bad cache
-                # where every sport was stamped as MLB.
-                return len(mlb_rows) <= 700 and len(k_rows) <= 120 and len(hfs_rows) <= 180
+                k_pitchers = {normalize_name(p.get("player", "")) for p in k_rows if p.get("player")}
+                # Validate the number of actual MLB athletes instead of raw
+                # projection rows; standard/goblin/demon variants can make a
+                # legitimate slate much larger than old fixed row caps allowed.
+                return bool(k_rows or hfs_rows) and len(mlb_rows) <= 2500 and len(k_pitchers) <= 100
             if sport_filter == "WNBA":
                 rows = [p for p in cached if p.get("sport") == "WNBA"]
                 supported_rows = [p for p in rows if is_wnba_supported_prop(p.get("stat", ""))]
@@ -15127,7 +15152,6 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
         return cached_props
     cached_props = get_cached_pp_props_from_local(sport_filter, max_age_minutes=60)
     if cached_props and _cache_slate_looks_valid(cached_props):
-        save_pp_props_to_supabase(sport_filter, cached_props)
         return cached_props
 
     def _stale_cache() -> Optional[list]:
@@ -15136,6 +15160,14 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
             return stale
         stale = get_cached_pp_props_from_local(sport_filter, max_age_minutes=1440)
         if stale and _cache_slate_looks_valid(stale):
+            return stale
+        # A slate can be posted several days before play. Permit an older cache
+        # only when its own event timestamps prove that games are still upcoming.
+        stale = get_cached_pp_props_from_supabase(sport_filter, max_age_minutes=4320)
+        if stale and pp_cache_has_upcoming_event(stale) and _cache_slate_looks_valid(stale):
+            return stale
+        stale = get_cached_pp_props_from_local(sport_filter, max_age_minutes=4320)
+        if stale and pp_cache_has_upcoming_event(stale) and _cache_slate_looks_valid(stale):
             return stale
         return None
 
@@ -15150,7 +15182,6 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
                 st.session_state.get("edge_fetch_debug", [])
                 + [f"PrizePicks cooldown active ({wait_min} min left); using cached slate."]
             )
-            save_pp_props_to_supabase(sport_filter, cached_props)
             return cached_props
         raise RuntimeError(
             f"PrizePicks is rate-limiting this Railway instance. Wait about {wait_min} minutes, "
@@ -15213,6 +15244,11 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
                 "team": pi.get("team", ""), "stat": stat,
                 "pos":  pi.get("pos", ""),
                 "line": float(line),
+                "projection_id": str(proj.get("id", "") or ""),
+                "start_time": a.get("start_time") or a.get("end_time") or "",
+                "board_time": a.get("board_time") or "",
+                "updated_at": a.get("updated_at") or "",
+                "status": a.get("status") or "pre_game",
                 "is_goblin": odds_type == "goblin",
                 "is_demon":  odds_type == "demon",
                 "odds_type": odds_type,
@@ -15254,20 +15290,28 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
                     "league_id": _league_id,
                     "per_page": _per_page,
                     "single_stat": "true",
-                    "projection_type": "Single Stat",
+                    "is_live": "false",
                 }
+                _state_code = get_config_value("PRIZEPICKS_STATE_CODE")
+                if _state_code:
+                    _params["state_code"] = _state_code.upper()
                 try:
                     r = _req.get(_endpoint, params=_params, headers=_base_headers, timeout=15)
                     if r.status_code == 429:
-                        fetch_notes.append(f"{_sport} {_url_label} {_per_page}: 429 rate-limited")
-                        st.session_state[cooldown_key] = _time.time() + (10 * 60)
-                        # Do not let one throttled endpoint/page size kill the
-                        # whole fetch. Try the alternate endpoint and smaller
-                        # page sizes before falling back to cache.
-                        if _per_page != _page_sizes[-1]:
-                            continue
-                        if _url_label == "api.prizepicks.com":
-                            _blocked = True
+                        retry_raw = str(r.headers.get("Retry-After", "") or "").strip()
+                        try:
+                            cooldown_seconds = max(600, min(int(float(retry_raw)), 3600))
+                        except Exception:
+                            cooldown_seconds = 10 * 60
+                        fetch_notes.append(
+                            f"{_sport} {_url_label} {_per_page}: 429 rate-limited"
+                            + (f" · retry after {cooldown_seconds // 60} min" if cooldown_seconds else "")
+                        )
+                        st.session_state[cooldown_key] = _time.time() + cooldown_seconds
+                        # A 429 is normally IP-wide. Hitting the alternate host
+                        # immediately only deepens the block and cannot improve
+                        # the current scan, so move directly to the cache path.
+                        _blocked = True
                         break
                     if r.status_code == 403:
                         fetch_notes.append(f"{_sport} {_url_label} {_per_page}: HTTP 403 blocked")
@@ -15325,11 +15369,16 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
                 st.session_state.get("edge_fetch_debug", [])
                 + ["Live PrizePicks fetch failed; using last successful cached slate."]
             )
-            save_pp_props_to_supabase(sport_filter, cached_props)
             return cached_props
         detail = " | ".join(fetch_notes[-8:]) if fetch_notes else "No attempts completed"
         set_runtime_metric("prizepicks", "error", detail)
         record_debug_error("prizepicks.fetch", detail)
+        if any("429 rate-limited" in note for note in fetch_notes):
+            raise RuntimeError(
+                f"PrizePicks is rate-limiting this Railway instance and no valid upcoming {sport_filter} "
+                "slate is cached yet. The scanner paused further requests for the cooldown window; retry once after "
+                "the cooldown so a successful response can seed the durable cache."
+            )
         raise RuntimeError(f"PrizePicks returned no props. {detail}")
 
     st.session_state["edge_fetch_debug"] = fetch_notes[-12:]
