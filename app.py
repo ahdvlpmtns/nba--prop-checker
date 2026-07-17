@@ -3116,6 +3116,242 @@ div[data-testid="stExpander"] {
     .edge-score-item-v55 span { font-size: 0.43rem !important; }
     .edge-score-item-v55 strong { font-size: 0.78rem !important; }
 }
+
+/* MLB analyzer: decision-first workspace */
+.mlb-selection-context {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 0.72rem 0.9rem;
+    margin: 0.2rem 0 0.65rem;
+    background: rgba(255,255,255,0.035);
+    border: 1px solid rgba(255,255,255,0.09);
+    border-left: 3px solid var(--accent);
+    border-radius: 0 12px 12px 0;
+}
+.mlb-selection-context strong {
+    color: var(--text);
+    font-family: var(--font-display);
+    font-size: 0.92rem;
+}
+.mlb-selection-context span {
+    color: var(--text3);
+    font-family: var(--font-mono);
+    font-size: 0.6rem;
+}
+.mlb-decision-card {
+    position: relative;
+    overflow: hidden;
+    padding: 1.15rem;
+    margin: 0.55rem 0 0.8rem;
+    background:
+        linear-gradient(135deg, rgba(0,213,223,0.10), rgba(255,255,255,0.025) 48%),
+        var(--surface2);
+    border: 1px solid rgba(0,213,223,0.22);
+    border-radius: 16px;
+    box-shadow: var(--shadow-lg);
+}
+.mlb-decision-card::before {
+    content: '';
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 2px;
+    background: linear-gradient(90deg, var(--accent), var(--green), transparent 78%);
+}
+.mlb-decision-card.watchlist::before {
+    background: linear-gradient(90deg, var(--yellow), var(--orange), transparent 78%);
+}
+.mlb-decision-card.pass::before {
+    background: linear-gradient(90deg, var(--text3), transparent 78%);
+}
+.mlb-decision-top {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 16px;
+    align-items: start;
+}
+.mlb-decision-kicker {
+    color: var(--text3);
+    font-family: var(--font-mono);
+    font-size: 0.54rem;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+}
+.mlb-decision-name {
+    color: var(--text);
+    font-family: var(--font-display);
+    font-size: 1.18rem;
+    font-weight: 900;
+    line-height: 1.15;
+    margin-top: 4px;
+}
+.mlb-decision-matchup {
+    color: var(--text2);
+    font-family: var(--font-mono);
+    font-size: 0.62rem;
+    line-height: 1.55;
+    margin-top: 5px;
+}
+.mlb-decision-verdict {
+    text-align: right;
+}
+.mlb-decision-verdict strong {
+    display: block;
+    color: var(--green);
+    font-family: var(--font-display);
+    font-size: 1.35rem;
+    font-weight: 900;
+    white-space: nowrap;
+}
+.mlb-decision-card.watchlist .mlb-decision-verdict strong { color: var(--yellow); }
+.mlb-decision-card.pass .mlb-decision-verdict strong { color: var(--text3); }
+.mlb-decision-status {
+    display: inline-flex;
+    align-items: center;
+    margin-top: 5px;
+    padding: 3px 9px;
+    border: 1px solid rgba(24,243,162,0.25);
+    border-radius: 999px;
+    color: var(--green);
+    background: rgba(24,243,162,0.08);
+    font-family: var(--font-mono);
+    font-size: 0.52rem;
+    font-weight: 800;
+    text-transform: uppercase;
+}
+.mlb-decision-card.watchlist .mlb-decision-status {
+    color: var(--yellow);
+    border-color: rgba(255,209,102,0.28);
+    background: rgba(255,209,102,0.08);
+}
+.mlb-decision-card.pass .mlb-decision-status {
+    color: var(--text3);
+    border-color: var(--border);
+    background: rgba(255,255,255,0.035);
+}
+.mlb-decision-copy {
+    color: var(--text2);
+    font-size: 0.78rem;
+    line-height: 1.55;
+    margin-top: 0.8rem;
+}
+.mlb-decision-metrics {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 7px;
+    margin-top: 0.9rem;
+}
+.mlb-decision-metric {
+    min-width: 0;
+    padding: 0.62rem 0.65rem;
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.075);
+    border-radius: 9px;
+}
+.mlb-decision-metric span {
+    display: block;
+    color: var(--text3);
+    font-family: var(--font-mono);
+    font-size: 0.48rem;
+    line-height: 1.3;
+    text-transform: uppercase;
+}
+.mlb-decision-metric strong {
+    display: block;
+    color: var(--text);
+    font-family: var(--font-display);
+    font-size: 1rem;
+    font-weight: 900;
+    margin-top: 4px;
+}
+.mlb-driver-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin-top: 0.8rem;
+}
+.mlb-driver-panel {
+    padding: 0.7rem 0.75rem;
+    background: rgba(255,255,255,0.028);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 9px;
+}
+.mlb-driver-panel h4 {
+    color: var(--text3);
+    font-family: var(--font-mono);
+    font-size: 0.5rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    margin: 0 0 6px;
+}
+.mlb-driver-item {
+    color: var(--text2);
+    font-family: var(--font-mono);
+    font-size: 0.58rem;
+    line-height: 1.5;
+    padding: 3px 0;
+}
+.mlb-driver-item b { color: var(--text); }
+.mlb-result-nav {
+    display: flex;
+    gap: 5px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    margin: 0 0 0.6rem;
+    padding: 3px 0;
+}
+.mlb-result-nav::-webkit-scrollbar { display: none; }
+.mlb-result-nav a {
+    flex: 0 0 auto;
+    color: var(--text2);
+    background: rgba(255,255,255,0.035);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-family: var(--font-mono);
+    font-size: 0.54rem;
+    font-weight: 700;
+    text-decoration: none;
+}
+.mlb-result-nav a:hover {
+    color: var(--accent3);
+    border-color: rgba(0,213,223,0.28);
+}
+.mlb-section-anchor {
+    height: 1px;
+    scroll-margin-top: 90px;
+}
+
+@media (max-width: 768px) {
+    .mlb-decision-card {
+        padding: 0.9rem;
+        border-radius: 13px;
+    }
+    .mlb-decision-top { grid-template-columns: 1fr; gap: 9px; }
+    .mlb-decision-verdict { text-align: left; }
+    .mlb-decision-verdict strong { font-size: 1.2rem; white-space: normal; }
+    .mlb-decision-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .mlb-driver-grid { grid-template-columns: 1fr; }
+    .mlb-result-nav {
+        position: sticky;
+        top: 67px;
+        z-index: 85;
+        margin-left: -0.2rem;
+        margin-right: -0.2rem;
+        padding: 6px 0.2rem;
+        background: rgba(7,10,15,0.94);
+        backdrop-filter: blur(14px);
+    }
+    button[key="mlb_analyze"] {
+        position: sticky !important;
+        bottom: calc(68px + env(safe-area-inset-bottom)) !important;
+        z-index: 90 !important;
+        box-shadow: 0 12px 32px rgba(0,0,0,0.5), 0 0 24px rgba(0,213,223,0.20) !important;
+    }
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -11005,7 +11241,7 @@ if st.session_state.active_sport == "mlb":
     # ── MLB UI ────────────────────────────────────────────────
     st.markdown("<div id='mlb-analyzer-controls' class='analyzer-scroll-anchor'></div>", unsafe_allow_html=True)
     render_navigation_scroll_target("mlb-analyzer-controls")
-    st.markdown("<div class='section-header'>⚾ MLB Pitcher Prop Analyzer</div>", unsafe_allow_html=True)
+    st.markdown("<div class='section-header'>⚾ MLB Player Prop Analyzer</div>", unsafe_allow_html=True)
 
     # ── Dynamic pitcher list from MLB Stats API ──────────────────────────────
     @st.cache_data(ttl=86400, show_spinner=False)  # refresh once a day
@@ -11524,8 +11760,114 @@ if st.session_state.active_sport == "mlb":
         col = "#00e896" if score >= 80 else "#ffc107" if score >= 65 else "#f97316"
 
         opp_txt = f"vs {ctx.get('opp')} · {ctx.get('opp_pitcher') or 'probable TBD'} ({ctx.get('opp_pitcher_hand','R')}HP)" if ctx.get("opp") else "Next game not found"
-        st.markdown(f"<div class='section-header'>{player_name} · Hitter Fantasy Score {side} {line}</div>", unsafe_allow_html=True)
-        st.markdown(f"<div style='background:#111;border:1px solid #1e2a3a;border-left:3px solid #00c4cc;padding:0.55rem 1rem;margin-bottom:0.65rem;font-family:JetBrains Mono,monospace;font-size:0.66rem;color:#9aaec4;'>🎯 {opp_txt}</div>", unsafe_allow_html=True)
+        _hitter_directional_edge = edge if side == "Over" else -edge
+        _hitter_status = (
+            "Pass" if tier == "Pass" else
+            "Actionable" if tier.startswith("Strong") and score >= 75 else
+            "Watchlist"
+        )
+        _hitter_decision_class = (
+            "pass" if _hitter_status == "Pass" else
+            "watchlist" if _hitter_status == "Watchlist" else "actionable"
+        )
+        _hitter_side_mult = 1.0 if side == "Over" else -1.0
+        _hitter_driver_candidates = [
+            ("Recent form", recent_adj * _hitter_side_mult, f"L3 {l3:.1f} vs L{len(vals)} {avg_fs:.1f}"),
+            ("Plate appearances", pa_adj * _hitter_side_mult, f"Expected {expected_pa:.1f} PA"),
+            ("Projection", projection_adj * _hitter_side_mult, f"Expected {expected_fs:.1f} fantasy points"),
+            ("Platoon", platoon_adj * _hitter_side_mult, f"{split_ops:.3f} OPS in {split_pa} PA" if split_ops is not None else "Split unavailable"),
+            ("Opposing pitcher", pitcher_adj * _hitter_side_mult, pitcher_profile.get("quality", "TBD")),
+            ("Park", park_adj * _hitter_side_mult, f"{home_team or 'TBD'} factor {park_factor:.2f}"),
+        ]
+        _hitter_supports = sorted(
+            [row for row in _hitter_driver_candidates if row[1] > 0.001],
+            key=lambda row: abs(row[1]), reverse=True,
+        )[:3]
+        _hitter_risks = sorted(
+            [row for row in _hitter_driver_candidates if row[1] < -0.001],
+            key=lambda row: abs(row[1]), reverse=True,
+        )[:3]
+        if not _hitter_risks and not ctx.get("opp_pitcher"):
+            _hitter_risks = [("Probable pitcher", -0.001, "Not confirmed")]
+
+        _html = __import__("html")
+        def _hitter_driver_html(rows, empty_text):
+            if not rows:
+                return f"<div class='mlb-driver-item'>{empty_text}</div>"
+            return "".join(
+                f"<div class='mlb-driver-item'><b>{_html.escape(str(label))}</b> · "
+                f"{_html.escape(str(note))}</div>"
+                for label, _, note in rows
+            )
+
+        _hitter_copy = (
+            f"The {side} has support from the recent sample and matchup model. Confirm the line and probable pitcher before entry."
+            if _hitter_status == "Actionable" else
+            f"The model leans {side}, but at least one evidence-quality check keeps this on the watchlist."
+            if _hitter_status == "Watchlist" else
+            "The model does not find enough separation from the line to recommend an entry."
+        )
+        _hitter_matchup_meta = (
+            f"{basic.get('team') or 'MLB'} · {opp_txt} · "
+            f"{ctx.get('game_date') or 'date TBD'}"
+        )
+        st.markdown(
+            f"<div class='mlb-decision-card {_hitter_decision_class}'>"
+            f"<div class='mlb-decision-top'>"
+            f"<div><div class='mlb-decision-kicker'>MLB Hitter Fantasy Score</div>"
+            f"<div class='mlb-decision-name'>{_html.escape(player_name)}</div>"
+            f"<div class='mlb-decision-matchup'>{_html.escape(_hitter_matchup_meta)}</div></div>"
+            f"<div class='mlb-decision-verdict'><strong>{tier}</strong>"
+            f"<span class='mlb-decision-status'>{_hitter_status}</span></div></div>"
+            f"<div class='mlb-decision-copy'>{_hitter_copy}</div>"
+            f"<div class='mlb-decision-metrics'>"
+            f"<div class='mlb-decision-metric'><span>Model probability</span><strong>{adj:.0%}</strong></div>"
+            f"<div class='mlb-decision-metric'><span>Evidence confidence</span><strong>{score}/100</strong></div>"
+            f"<div class='mlb-decision-metric'><span>Projected FS</span><strong>{expected_fs:.1f}</strong></div>"
+            f"<div class='mlb-decision-metric'><span>Edge vs line</span><strong>{_hitter_directional_edge:+.1f}</strong></div>"
+            f"<div class='mlb-decision-metric'><span>Consistency</span><strong>{cons:.0%}</strong></div>"
+            f"</div>"
+            f"<div class='mlb-driver-grid'>"
+            f"<div class='mlb-driver-panel'><h4>Why it works</h4>"
+            f"{_hitter_driver_html(_hitter_supports, 'No major positive adjustment')}</div>"
+            f"<div class='mlb-driver-panel'><h4>What can break it</h4>"
+            f"{_hitter_driver_html(_hitter_risks, 'No major model risk detected')}</div>"
+            f"</div></div>",
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            "<nav class='mlb-result-nav'>"
+            "<a href='#mlb-overview'>Overview</a>"
+            "<a href='#mlb-matchup'>Matchup</a>"
+            "<a href='#mlb-recent'>Recent games</a>"
+            "<a href='#mlb-advanced'>Advanced</a>"
+            "</nav><div id='mlb-overview' class='mlb-section-anchor'></div>",
+            unsafe_allow_html=True,
+        )
+
+        if tier != "Pass":
+            _hitter_leg = {
+                "player": player_name, "prop": f"Hitter Fantasy Score {side}",
+                "line": float(line), "side": side, "verdict": tier,
+                "confidence": score, "adj": round(adj * 100, 1),
+                "sport": "MLB", "added": __import__("datetime").datetime.now().strftime("%I:%M %p"),
+            }
+            _hitter_tracker = {
+                "Player": player_name, "Line": f"{line} {side}",
+                "Opponent": ctx.get("opp") or "—", "Matchup": "Hitter Fantasy Score",
+                "Venue": f"{ctx.get('side') or '?'} · {ctx.get('home_team') or '?'} · date:{ctx.get('game_date') or ''}",
+                "Avg PTS": round(avg_fs, 1), "Hit Rate": f"{whr:.1%}",
+                "Adjusted": f"{adj:.1%}", "Consistency": f"{cons:.1%}",
+                "Confidence": score, "Edge": round(edge, 2), "Sample": len(vals),
+                "Risk Flags": "Probable pitcher TBD" if not ctx.get("opp_pitcher") else "",
+                "Trap": _hitter_status, "Role": "Hitter", "Verdict": tier,
+                "Result": "Pending", "Sport": "MLB",
+            }
+            st.button(
+                "➕ Add & Track", key=f"mlb_hitter_track_{player_name}_{line}_{side}",
+                use_container_width=True, on_click=add_to_pick_list_and_tracker,
+                args=(_hitter_leg, _hitter_tracker),
+            )
 
         c1, c2, c3, c4 = st.columns(4)
         with c1:
@@ -11550,6 +11892,7 @@ if st.session_state.active_sport == "mlb":
             "Hitter friendly" if park_adj > 0 else
             "Pitcher friendly" if park_adj < 0 else "Neutral"
         )
+        st.markdown("<div id='mlb-matchup' class='mlb-section-anchor'></div>", unsafe_allow_html=True)
         m1, m2, m3 = st.columns(3)
         with m1:
             st.markdown(f"<div class='stat-card'><div class='stat-label'>Opposing Pitcher</div><div style='font-size:1rem;font-weight:800;color:#f0f4f8;'>{pitcher_quality}</div><div class='stat-hint'>{pitcher_stats}</div></div>", unsafe_allow_html=True)
@@ -11558,14 +11901,14 @@ if st.session_state.active_sport == "mlb":
         with m3:
             st.markdown(f"<div class='stat-card'><div class='stat-label'>Park & Opportunity</div><div style='font-size:1rem;font-weight:800;color:#f0f4f8;'>{park_label} · {expected_pa:.1f} PA</div><div class='stat-hint'>{home_team or 'TBD'} factor {park_factor:.2f} · L5 PA {l5_pa:.1f}</div></div>", unsafe_allow_html=True)
 
-        st.markdown(f"<div class='verdict-banner {css}'><div><div class='verdict-label'>{player_name} · Hitter Fantasy Score · {side}</div><div class='verdict-tier {css}'>{tier}</div></div><div style='display:flex;gap:1.5rem;flex-wrap:wrap;'><div><div class='verdict-label'>Adjusted HR</div><div style='font-size:1.4rem;font-weight:800;color:#f0f0f0;'>{adj:.0%}</div></div><div><div class='verdict-label'>Expected FS</div><div style='font-size:1.4rem;font-weight:800;color:#f0f0f0;'>{expected_fs:.1f}</div></div><div><div class='verdict-label'>Consistency</div><div style='font-size:1.4rem;font-weight:800;color:#f0f0f0;'>{cons:.0%}</div></div></div></div>", unsafe_allow_html=True)
-
+        st.markdown("<div id='mlb-recent' class='mlb-section-anchor'></div>", unsafe_allow_html=True)
         with st.expander(f"📋 Last {len(logs)} Hitter Logs — avg {avg_fs:.1f} FS", expanded=False):
             view = logs.copy()
             view["DATE"] = pd.to_datetime(view["DATE"]).dt.strftime("%b %d")
             view["HIT"] = view["FS"].apply(lambda x: "✅" if (x >= line if side == "Over" else x <= line) else "❌")
             st.dataframe(view, use_container_width=True)
 
+        st.markdown("<div id='mlb-advanced' class='mlb-section-anchor'></div>", unsafe_allow_html=True)
         with st.expander("🔬 Show hitter fantasy score debug", expanded=False):
             st.markdown(f"""
             <div style='font-family:JetBrains Mono,monospace;font-size:0.72rem;color:#9aaec4;line-height:1.8;'>
@@ -11598,30 +11941,27 @@ if st.session_state.active_sport == "mlb":
         st.session_state.pop("mlb_line", None)
         st.session_state.pop("mlb_side", None)
     _mlb_prop_default = "Hitter Fantasy Score" if _mlb_jump_prop == "Hitter Fantasy Score" else "Strikeouts"
-    _mlb_top1, _mlb_top2 = st.columns([1.1, 2.9])
-    with _mlb_top1:
-        _mlb_prop_options = ["Strikeouts", "Hitter Fantasy Score"]
-        mlb_prop = st.selectbox(
-            "Prop", _mlb_prop_options,
-            index=_mlb_prop_options.index(_mlb_prop_default),
-            key="mlb_prop_type",
-        )
-    with _mlb_top2:
-        _mlb_options = _mlb_hitters if mlb_prop == "Hitter Fantasy Score" else _mlb_pitchers
-        _mlb_pf_name = st.session_state.get("_mlb_prefill_name", "")
-        _mlb_pf_idx  = (_mlb_options.index(_mlb_pf_name) + 1
-                        if _mlb_pf_name and _mlb_pf_name in _mlb_options else 0)
-        mlb_pitcher = player_typeahead(
-            "Player search",
-            _mlb_options,
-            key=f"mlb_player_sel_{mlb_prop}_{st.session_state.get('mlb_pitcher_key', 0)}",
-            prefill=_mlb_pf_name if _mlb_pf_idx else None,
-            aliases={
-                "Shohei Othani": "Shohei Ohtani",
-                "Othani": "Shohei Ohtani",
-            },
-            noun="hitter" if mlb_prop == "Hitter Fantasy Score" else "pitcher",
-        )
+    _mlb_prop_options = ["Strikeouts", "Hitter Fantasy Score"]
+    mlb_prop = st.selectbox(
+        "Prop market", _mlb_prop_options,
+        index=_mlb_prop_options.index(_mlb_prop_default),
+        key="mlb_prop_type",
+    )
+    _mlb_options = _mlb_hitters if mlb_prop == "Hitter Fantasy Score" else _mlb_pitchers
+    _mlb_pf_name = st.session_state.get("_mlb_prefill_name", "")
+    _mlb_pf_idx  = (_mlb_options.index(_mlb_pf_name) + 1
+                    if _mlb_pf_name and _mlb_pf_name in _mlb_options else 0)
+    mlb_pitcher = player_typeahead(
+        "Player search",
+        _mlb_options,
+        key=f"mlb_player_sel_{mlb_prop}_{st.session_state.get('mlb_pitcher_key', 0)}",
+        prefill=_mlb_pf_name if _mlb_pf_idx else None,
+        aliases={
+            "Shohei Othani": "Shohei Ohtani",
+            "Othani": "Shohei Ohtani",
+        },
+        noun="hitter" if mlb_prop == "Hitter Fantasy Score" else "pitcher",
+    )
     _mlb_bottom1, _mlb_bottom2 = st.columns(2)
     with _mlb_bottom1:
         _mlb_line_default = float(_mlb_jump_line) if _mlb_jump_line is not None else 5.5
@@ -11639,8 +11979,8 @@ if st.session_state.active_sport == "mlb":
 
     # Clear button
     if mlb_pitcher:
-        if st.button("✕ Clear", key="mlb_clear_pitcher",
-                     help="Clear pitcher selection"):
+        if st.button("✕", key="mlb_clear_pitcher",
+                     help="Clear player selection"):
             st.session_state.mlb_pitcher_key = st.session_state.get("mlb_pitcher_key", 0) + 1
             st.session_state.pop("_mlb_prefill_name", None)
             st.rerun()
@@ -11661,9 +12001,13 @@ if st.session_state.active_sport == "mlb":
                 _od += f" · Opp SP: {_tonight.get('opp_pitcher')}"
         else:
             _od = f"vs {mlb_opp} · {_tonight.get('venue','')} · {'Home' if _tonight.get('pitcher_side')=='home' else 'Away'}"
-        st.markdown(f"<div style='background:#111;border:1px solid #1e2a3a;border-left:3px solid #00c4cc;"
-                    f"padding:0.5rem 1rem;margin-bottom:0.5rem;font-family:JetBrains Mono,monospace;"
-                    f"font-size:0.68rem;color:#00c4cc;'>🎯 TONIGHT: {_od}</div>",unsafe_allow_html=True)
+        st.markdown(
+            f"<div class='mlb-selection-context'>"
+            f"<strong>{mlb_pitcher}</strong>"
+            f"<span>{_tonight.get('game_date','')} · {_od}</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
     elif mlb_pitcher:
         # Try to figure out next start from recent logs
         _last_date = None
@@ -12982,6 +13326,188 @@ if st.session_state.active_sport == "mlb":
                     unsafe_allow_html=True
                 )
 
+            # Decision-first overview. The detailed model sections remain below.
+            _pitcher_projection = (
+                _combined_proj_expected_k
+                if _combined_proj_expected_k is not None else
+                _bf_expected_k if _bf_expected_k is not None else
+                _pc_expected_k if _pc_expected_k is not None else avg_val
+            )
+            _pitcher_directional_edge = edge if mlb_side == "Over" else -edge
+            _pitcher_status = (
+                "Pass" if tier == "Pass" or not _is_avail else
+                "Actionable" if (
+                    tier in ("Strong Over", "Strong Under")
+                    and _sc >= 80
+                    and _trap.get("label") == "Clean"
+                    and int(_role.get("severity", 0) or 0) <= 1
+                ) else
+                "Watchlist"
+            )
+            _pitcher_decision_class = (
+                "pass" if _pitcher_status == "Pass" else
+                "watchlist" if _pitcher_status == "Watchlist" else "actionable"
+            )
+
+            _opp_model_adj = 0.0
+            if _base_opp_k_for_model is not None:
+                if _base_opp_k_for_model >= 0.285: _opp_model_adj = 0.08
+                elif _base_opp_k_for_model >= 0.260: _opp_model_adj = 0.06
+                elif _base_opp_k_for_model >= 0.245: _opp_model_adj = 0.03
+                elif _base_opp_k_for_model <= 0.175: _opp_model_adj = -0.08
+                elif _base_opp_k_for_model <= 0.195: _opp_model_adj = -0.05
+                elif _base_opp_k_for_model <= 0.210: _opp_model_adj = -0.02
+                if mlb_side == "Under":
+                    _opp_model_adj = -_opp_model_adj
+
+            _pitcher_driver_candidates = [
+                ("Opponent K profile", _opp_model_adj,
+                 f"{_base_opp_k_for_model:.1%} {_okpct_source}" if _base_opp_k_for_model is not None else "Unavailable"),
+                ("Recent form", _form_adj,
+                 f"L3 {_l3_avg:.1f} vs L{len(vals)} {avg_val:.1f}" if not pd.isna(_l3_avg) else "Unavailable"),
+                ("K/9", _k9_adj, f"{_k9:.1f} ({_k9_source})" if _k9 else "Unavailable"),
+                ("Whiff profile", _swstr_adj, f"{_swstr:.1%} {_swstr_src}" if _swstr is not None else "Unavailable"),
+                ("Velocity", _velo_adj, f"{_velo:.1f} mph" if _velo else "Unavailable"),
+                ("Velocity trend", _vtrend_adj,
+                 f"{_vtrend_mph:+.1f} mph · {_vtrend_dir}" if _vtrender.get("avg_velo") else "Unavailable"),
+                ("Workload depth", _ip_adj, f"{_avg_ip:.1f} IP/start" if _avg_ip else "Unavailable"),
+                ("Umpire", _ump_adj, f"{_ump_name or 'TBD'} · {_ump_tend}"),
+                ("Weather", _wx_adj, _wx_note or _weather.get("condition", "Unavailable")),
+                ("Batting order", _lineup_adj,
+                 f"{'Confirmed' if _lineup_confirmed else 'Projected' if _lineup_projected else 'TBD'} · {len(_lineup_order)}/9"),
+                ("Platoon", _platoon_adj,
+                 f"{_lhb_count}L/{_rhb_count}R" if _order_hands else "Lineup handedness TBD"),
+                ("Recent opponents", _opp_context_adj, _opp_context.get("label", "Neutral")),
+                ("Pitcher role", _role_adj, _role.get("label", "Role TBD")),
+                ("Pitch-count path", _pc_adj,
+                 f"~{_pc_avg} pitches · exp {_pc_expected_k:.1f} K" if _pc_avg and _pc_expected_k is not None else "Unavailable"),
+                ("Variance", _variance_adj, f"{cons:.0%} consistency"),
+            ]
+            _pitcher_supports = sorted(
+                [row for row in _pitcher_driver_candidates if row[1] > 0.001],
+                key=lambda row: abs(row[1]), reverse=True,
+            )[:3]
+            _pitcher_risks = sorted(
+                [row for row in _pitcher_driver_candidates if row[1] < -0.001],
+                key=lambda row: abs(row[1]), reverse=True,
+            )[:3]
+            _existing_risk_labels = {row[0].lower() for row in _pitcher_risks}
+            for _trap_note in _trap.get("summary", []):
+                if len(_pitcher_risks) >= 3:
+                    break
+                if str(_trap_note).lower() not in _existing_risk_labels:
+                    _pitcher_risks.append(("Risk check", -0.001, str(_trap_note)))
+
+            _mlb_core_inputs = [
+                bool(len(vals)), okpct is not None, _k9 > 0,
+                _swstr is not None, bool(_velo), _avg_ip > 0,
+                bool(_weather), bool(_lineup_confirmed or _lineup_projected),
+                bool(_platoon_vs_l and _platoon_vs_r), bool(_pc_avg),
+                bool(_role.get("status")), _combined_proj_prob is not None,
+                _opp_context.get("avg_recent_k") is not None, bool(_ump_name),
+            ]
+            _mlb_core_loaded = sum(1 for loaded in _mlb_core_inputs if loaded)
+            _mlb_core_total = len(_mlb_core_inputs)
+            _lineup_status_short = (
+                "confirmed lineup" if _lineup_confirmed else
+                "projected lineup" if _lineup_projected else "lineup TBD"
+            )
+            _pitcher_copy = (
+                f"The {mlb_side} is supported by the calibrated model with clean role and risk checks."
+                if _pitcher_status == "Actionable" else
+                f"The model leans {mlb_side}, but the evidence or risk checks call for confirmation before entry."
+                if _pitcher_status == "Watchlist" else
+                "The model does not find enough reliable separation from the line to recommend this entry."
+            )
+            _pitcher_game_meta = (
+                f"{_tonight.get('pitcher_team') or 'MLB'} · vs {mlb_opp or 'TBD'} · "
+                f"{_tonight.get('game_date') or 'date TBD'} · "
+                f"{'Home' if _tonight.get('pitcher_side') == 'home' else 'Away'} · "
+                f"{_role.get('label', 'Role TBD')}"
+            )
+            _pitcher_data_meta = (
+                f"{_mlb_core_loaded}/{_mlb_core_total} core inputs · "
+                f"{_lineup_status_short} · umpire {'loaded' if _ump_name else 'TBD'}"
+            )
+            _mlb_html = __import__("html")
+            def _pitcher_driver_html(rows, empty_text):
+                if not rows:
+                    return f"<div class='mlb-driver-item'>{empty_text}</div>"
+                return "".join(
+                    f"<div class='mlb-driver-item'><b>{_mlb_html.escape(str(label))}</b> · "
+                    f"{_mlb_html.escape(str(note))}</div>"
+                    for label, _, note in rows
+                )
+
+            st.markdown(
+                f"<div class='mlb-decision-card {_pitcher_decision_class}'>"
+                f"<div class='mlb-decision-top'>"
+                f"<div><div class='mlb-decision-kicker'>MLB Strikeout Decision</div>"
+                f"<div class='mlb-decision-name'>{_mlb_html.escape(mlb_pitcher)}</div>"
+                f"<div class='mlb-decision-matchup'>{_mlb_html.escape(_pitcher_game_meta)}<br>"
+                f"{_mlb_html.escape(_pitcher_data_meta)}</div></div>"
+                f"<div class='mlb-decision-verdict'><strong>{tier}</strong>"
+                f"<span class='mlb-decision-status'>{_pitcher_status}</span></div></div>"
+                f"<div class='mlb-decision-copy'>{_pitcher_copy}</div>"
+                f"<div class='mlb-decision-metrics'>"
+                f"<div class='mlb-decision-metric'><span>Model probability</span><strong>{adj:.0%}</strong></div>"
+                f"<div class='mlb-decision-metric'><span>Evidence confidence</span><strong>{_sc}/100</strong></div>"
+                f"<div class='mlb-decision-metric'><span>Projected K</span><strong>{_pitcher_projection:.1f}</strong></div>"
+                f"<div class='mlb-decision-metric'><span>Edge vs line</span><strong>{_pitcher_directional_edge:+.1f}</strong></div>"
+                f"<div class='mlb-decision-metric'><span>Consistency</span><strong>{cons:.0%}</strong></div>"
+                f"</div>"
+                f"<div class='mlb-driver-grid'>"
+                f"<div class='mlb-driver-panel'><h4>Why it works</h4>"
+                f"{_pitcher_driver_html(_pitcher_supports, 'No major positive adjustment')}</div>"
+                f"<div class='mlb-driver-panel'><h4>What can break it</h4>"
+                f"{_pitcher_driver_html(_pitcher_risks, 'No major model risk detected')}</div>"
+                f"</div></div>",
+                unsafe_allow_html=True,
+            )
+
+            if tier != "Pass":
+                _new_mlb_leg = {
+                    "player": mlb_pitcher, "prop": f"{mlb_prop} {mlb_side}",
+                    "line": mlb_line, "side": mlb_side, "verdict": tier,
+                    "confidence": _sc, "adj": round(adj * 100, 1),
+                    "sport": "MLB", "added": __import__("datetime").datetime.now().strftime("%I:%M %p"),
+                }
+                _new_mlb_tracker = {
+                    "Player": mlb_pitcher, "Line": f"{mlb_line} {mlb_side}",
+                    "Opponent": mlb_opp or "—", "Matchup": mlb_prop,
+                    "Venue": (
+                        f"{'Home' if _tonight.get('pitcher_side') == 'home' else 'Away'} · "
+                        f"{mlb_home or '?'} · date:{_tonight.get('game_date', '')}"
+                    ),
+                    "Avg PTS": round(avg_val, 1), "Hit Rate": f"{whr:.1%}",
+                    "Adjusted": f"{adj:.1%}", "Consistency": f"{cons:.1%}",
+                    "Confidence": _sc, "Edge": round(edge, 2), "Sample": _n_starts,
+                    "Risk Flags": " | ".join(
+                        (_role.get("summary", []) or []) +
+                        (_trap.get("summary", []) if _trap else [])
+                    ),
+                    "Trap": _trap.get("label", "") if _trap else "",
+                    "Role": _role.get("label", ""), "Verdict": tier,
+                    "Result": "Pending", "Sport": "MLB",
+                }
+                st.button(
+                    "➕ Add & Track",
+                    key=f"mlb_parlay_{mlb_pitcher}_{mlb_prop}_{mlb_line}_{mlb_side}",
+                    use_container_width=True,
+                    on_click=add_to_pick_list_and_tracker,
+                    args=(_new_mlb_leg, _new_mlb_tracker),
+                )
+
+            st.markdown(
+                "<nav class='mlb-result-nav'>"
+                "<a href='#mlb-overview'>Overview</a>"
+                "<a href='#mlb-matchup'>Matchup</a>"
+                "<a href='#mlb-recent'>Recent starts</a>"
+                "<a href='#mlb-advanced'>Advanced</a>"
+                "</nav><div id='mlb-overview' class='mlb-section-anchor'></div>",
+                unsafe_allow_html=True,
+            )
+
             st.markdown("<div class='section-header'>Key Stats</div>", unsafe_allow_html=True)
             _c1,_c2,_c3,_c4 = st.columns(4)
             with _c1:
@@ -13013,7 +13539,7 @@ if st.session_state.active_sport == "mlb":
             with _c4:
                 st.markdown(f"<div class='stat-card'><div class='stat-label'>Confidence</div>"
                             f"<div class='stat-value' style='color:{_cc};'>{_sc}</div>"
-                            f"<div class='stat-hint'>12 signals · {len(vals)} starts</div></div>",unsafe_allow_html=True)
+                            f"<div class='stat-hint'>{_mlb_core_loaded}/{_mlb_core_total} core inputs · {len(vals)} starts</div></div>",unsafe_allow_html=True)
 
             # Row 2 — new signals
             _c5,_c6,_c7,_c8 = st.columns(4)
@@ -13171,6 +13697,7 @@ if st.session_state.active_sport == "mlb":
                 st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
 
             # ── Game Context: Weather + Lineup ─────────────────────
+            st.markdown("<div id='mlb-matchup' class='mlb-section-anchor'></div>", unsafe_allow_html=True)
             st.markdown("<div class='section-header'>Game Context</div>", unsafe_allow_html=True)
             _gctx_cols = st.columns(2)
 
@@ -13252,6 +13779,7 @@ if st.session_state.active_sport == "mlb":
                                 f"⚠️ {_cur_starts} start{'s' if _cur_starts!=1 else ''} in {_cur_year} · "
                                 f"{_prev_starts} from prior season (marked ✦) — early season, small sample</div>")
             # ── Minimized game log — collapsed by default ─────────────
+            st.markdown("<div id='mlb-recent' class='mlb-section-anchor'></div>", unsafe_allow_html=True)
             _hit_count  = _d["HIT"].eq("✅").sum() if "HIT" in _d.columns else 0
             _total_g    = len(_d)
             _log_label  = f"📋 Last {_total_g} Starts — {_hit_count}/{_total_g} hit · avg {avg_val:.1f} {_lbl}"
@@ -13347,118 +13875,10 @@ if st.session_state.active_sport == "mlb":
                 unsafe_allow_html=True,
             )
 
-            # ── Probability bar + confidence meter ──────────────
-            _mlb_bar_pct = min(100, int(adj * 100))
-            _mlb_bar_col = ("#00e896" if tier in ("Strong Over","Lean Over")
-                            else "#ff3d5c" if tier in ("Strong Under","Lean Under")
-                            else "#6b7f96")
             st.markdown(
-                f"<div style='margin-bottom:0.75rem;'>"
-                f"<div style='display:flex;justify-content:space-between;"
-                f"font-family:JetBrains Mono,monospace;font-size:0.56rem;color:#6b7f96;margin-bottom:5px;'>"
-                f"<span>Model probability</span>"
-                f"<span style='color:{_mlb_bar_col};font-weight:700;'>{_mlb_bar_pct}%</span></div>"
-                f"<div class='prob-bar-wrap' style='height:8px;'>"
-                f"<div class='prob-bar-fill' style='width:{_mlb_bar_pct}%;"
-                f"background:linear-gradient(90deg,{_mlb_bar_col}99,{_mlb_bar_col});'></div>"
-                f"</div>"
-                f"<div class='conf-meter-wrap' style='margin-top:8px;'>"
-                f"<div style='font-family:JetBrains Mono,monospace;font-size:0.52rem;color:#6b7f96;'>CONF</div>"
-                f"<div class='conf-meter-track'><div class='conf-meter-fill' style='width:{_sc}%;'></div></div>"
-                f"<div class='conf-meter-val' style='color:{{"#00c4cc" if _sc>=80 else "#ffc107" if _sc>=65 else "#f97316"}};'>"
-                f"{_sc}</div></div></div>",
-                unsafe_allow_html=True
-            )
-            st.markdown("<div class='section-header'>Trap Check</div>", unsafe_allow_html=True)
-            _trap_colors = {
-                "green":  ("#00e896", "rgba(0,232,150,0.08)", "rgba(0,232,150,0.28)"),
-                "yellow": ("#ffc107", "rgba(255,193,7,0.08)", "rgba(255,193,7,0.28)"),
-                "orange": ("#ff7043", "rgba(255,112,67,0.08)", "rgba(255,112,67,0.28)"),
-                "red":    ("#ff3d5c", "rgba(255,61,92,0.10)", "rgba(255,61,92,0.32)"),
-            }
-            _tc, _tbg, _tbdr = _trap_colors.get(_trap["css"], _trap_colors["yellow"])
-            _trap_items = "".join(
-                f"<span style='font-family:JetBrains Mono,monospace;font-size:0.62rem;"
-                f"color:#9aaec4;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.07);"
-                f"padding:4px 9px;border-radius:999px;'>{item}</span>"
-                for item in _trap["summary"]
-            )
-            st.markdown(
-                f"<div style='background:{_tbg};border:1px solid {_tbdr};border-left:4px solid {_tc};"
-                f"border-radius:0 12px 12px 0;padding:0.85rem 1.1rem;margin-bottom:0.75rem;'>"
-                f"<div style='display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;'>"
-                f"<div style='font-family:Plus Jakarta Sans,sans-serif;font-size:1rem;font-weight:900;color:{_tc};'>"
-                f"{_trap['icon']} {_trap['label']}</div>"
-                f"<div style='font-family:JetBrains Mono,monospace;font-size:0.58rem;color:#6b7f96;'>"
-                f"Hidden-risk audit · severity {_trap['severity']}</div></div>"
-                f"<div style='display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;'>{_trap_items}</div>"
-                f"</div>",
+                "<div id='mlb-advanced' class='mlb-section-anchor'></div>",
                 unsafe_allow_html=True,
             )
-
-            st.markdown("<div class='section-header'>Verdict</div>",unsafe_allow_html=True)
-            st.markdown(
-                f"<div class='verdict-banner {css}'>"
-                f"<div><div class='verdict-label'>{mlb_pitcher} · {mlb_line} {_lbl} · {mlb_side}</div>"
-                f"<div class='verdict-tier {css}'>{tier_emoji.get(tier,'⚪')} {tier}</div></div>"
-                f"<div style='display:flex;gap:2rem;flex-wrap:wrap;align-items:flex-start;'>"
-                f"<div><div class='verdict-label'>Confidence</div>"
-                f"<div style='font-family:Barlow Condensed,sans-serif;font-size:1.8rem;font-weight:900;color:{_cc};'>{_sc}</div>"
-                f"<div style='font-family:JetBrains Mono,monospace;font-size:0.55rem;color:#555;'>/100</div></div>"
-                f"<div><div class='verdict-label'>Adjusted HR</div><div style='font-size:1.4rem;font-weight:800;color:#f0f0f0;'>{adj:.0%}</div></div>"
-                f"<div><div class='verdict-label'>Edge</div><div style='font-size:1.4rem;font-weight:800;color:#f0f0f0;'>{edge:+.1f}</div></div>"
-                f"<div><div class='verdict-label'>Consistency</div><div style='font-size:1.4rem;font-weight:800;color:#f0f0f0;'>{cons:.0%}</div>"
-                f"<div style='font-family:JetBrains Mono,monospace;font-size:0.6rem;color:#555;'>{_cl}</div></div>"
-                f"</div></div>",unsafe_allow_html=True)
-
-            # ── Add to Parlay button ────────────────────────────────
-            if tier not in ("Pass",):
-                _mpc1, _mpc2 = st.columns([3,1])
-                with _mpc2:
-                    _new_mlb_leg = {
-                        "player":     mlb_pitcher,
-                        "prop":       f"{mlb_prop} {mlb_side}",
-                        "line":       mlb_line,
-                        "side":       mlb_side,
-                        "verdict":    tier,
-                        "confidence": _sc,
-                        "adj":        round(adj * 100, 1),
-                        "sport":      "MLB",
-                        "added":      __import__("datetime").datetime.now().strftime("%I:%M %p"),
-                    }
-                    _new_mlb_tracker = {
-                        "Player":      mlb_pitcher,
-                        "Line":        f"{mlb_line} {mlb_side}",
-                        "Opponent":    mlb_opp or "—",
-                        "Matchup":     mlb_prop,
-                        "Venue":       (
-                            f"{'Home' if _tonight.get('pitcher_side') == 'home' else 'Away'} · "
-                            f"{mlb_home or '?'} · date:{_tonight.get('game_date', '')}"
-                        ),
-                        "Avg PTS":     round(avg_val, 1),
-                        "Hit Rate":    f"{whr:.1%}",
-                        "Adjusted":    f"{adj:.1%}",
-                        "Consistency": f"{cons:.1%}",
-                        "Confidence":  _sc,
-                        "Edge":        round(edge, 2),
-                        "Sample":      _n_starts,
-                        "Risk Flags":  " | ".join(
-                            (_role.get("summary", []) or []) +
-                            (_trap.get("summary", []) if _trap else [])
-                        ),
-                        "Trap":        _trap.get("label", "") if _trap else "",
-                        "Role":        _role.get("label", ""),
-                        "Verdict":     tier,
-                        "Result":      "Pending",
-                        "Sport":       "MLB",
-                    }
-                    st.button(
-                        "➕ Add & Track",
-                        key=f"mlb_parlay_{mlb_pitcher}_{mlb_prop}_{mlb_line}_{mlb_side}",
-                        use_container_width=True,
-                        on_click=add_to_pick_list_and_tracker,
-                        args=(_new_mlb_leg, _new_mlb_tracker),
-                    )
 
             # Share button
             with st.expander("📤 Share this pick", expanded=False):
