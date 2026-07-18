@@ -10294,7 +10294,7 @@ if st.session_state.active_sport == "mlb":
         """
         empty = {"avg_pitches": None, "min_pitches": None,
                  "starts_analyzed": 0, "on_limit": False, "limit_est": None,
-                 "pitches_per_bf": None}
+                 "limit_reason": "", "pitches_per_bf": None}
         try:
             import requests as _req, datetime as _dtx
             _norm   = lambda s: s.lower().strip().replace(".", "").replace("-", " ")
@@ -10366,14 +10366,32 @@ if st.session_state.active_sport == "mlb":
                 if total_valid_bf >= 20 else None
             )
 
-            # Detect if pitcher is on a soft limit
-            # Indicators: recent starts trending down, early season, or avg < 85 pitches
+            # Detect a current soft limit from sustained workload evidence. One
+            # isolated short start can be an injury, weather, or performance hook
+            # and should not label an otherwise established starter as restricted.
             _recent_trend = (pitch_counts[0] - pitch_counts[-1]) if len(pitch_counts) >= 3 else 0
-            on_limit = (
-                avg_p < 80 or          # clearly limited
-                (n_starts <= 4 and avg_p < 90) or  # early season small sample
-                min_p < 65             # had at least one very short start
+            _recent_three = pitch_counts[:min(3, len(pitch_counts))]
+            _recent_two = pitch_counts[:min(2, len(pitch_counts))]
+            _short_recent = sum(1 for p in _recent_three if p < 72)
+            _recent_two_avg = (
+                sum(_recent_two) / len(_recent_two) if _recent_two else avg_p
             )
+            _limit_reasons = []
+            if avg_p < 78:
+                _limit_reasons.append(f"recent average only {avg_p} pitches")
+            if n_starts <= 4 and avg_p < 84:
+                _limit_reasons.append(f"small sample averaging {avg_p} pitches")
+            if _short_recent >= 2:
+                _limit_reasons.append(f"{_short_recent} of last 3 starts below 72 pitches")
+            if (
+                len(pitch_counts) >= 3 and
+                _recent_two_avg <= avg_p - 8 and
+                pitch_counts[0] < 82
+            ):
+                _limit_reasons.append(
+                    f"recent workload trending down ({_recent_two_avg:.0f} vs {avg_p})"
+                )
+            on_limit = bool(_limit_reasons)
             limit_est = avg_p if on_limit else None
 
             return {
@@ -10382,6 +10400,7 @@ if st.session_state.active_sport == "mlb":
                 "starts_analyzed": n_starts,
                 "on_limit":        on_limit,
                 "limit_est":       limit_est,
+                "limit_reason":    "; ".join(_limit_reasons),
                 "pitch_trend":     _recent_trend,
                 "pitches_per_bf":  pitches_per_bf,
             }
@@ -10907,6 +10926,7 @@ if st.session_state.active_sport == "mlb":
             pc_avg = pitchcnt.get("avg_pitches") if pitchcnt else None
             pc_starts = int(pitchcnt.get("starts_analyzed", 0) or 0) if pitchcnt else 0
             on_limit = bool(pitchcnt.get("on_limit", False)) if pitchcnt else False
+            limit_reason = str(pitchcnt.get("limit_reason", "") or "") if pitchcnt else ""
             avg_ip = float(pstats.get("avg_ip", 0) or 0) if pstats else 0.0
             if (not avg_ip) and logs is not None and not logs.empty and "IP" in logs.columns:
                 ip_vals = [_ip_to_float(x) for x in logs["IP"].head(5).tolist()]
@@ -10938,7 +10958,10 @@ if st.session_state.active_sport == "mlb":
                     adj -= 0.12
                     conf_penalty += 14
                 elif pc_avg < 82 or on_limit:
-                    role_notes.append(f"Short leash / ramp risk (~{pc_avg} pitches)")
+                    role_notes.append(
+                        f"Short leash / ramp risk (~{pc_avg} pitches)"
+                        + (f" · {limit_reason}" if on_limit and limit_reason else "")
+                    )
                     severity = max(severity, 2)
                     adj -= 0.06
                     conf_penalty += 8
@@ -16773,6 +16796,30 @@ if st.session_state.active_sport == "edge":
         except Exception:
             return None
 
+    @st.cache_data(ttl=21600, show_spinner=False)
+    def _scanner_get_mlb_pitcher_directory() -> list:
+        """Load the MLB player directory once instead of once per prop."""
+        import requests as _req, datetime as _dtx
+        season = _dtx.datetime.now().year
+        last_error = None
+        for attempt in range(3):
+            try:
+                response = _req.get(
+                    "https://statsapi.mlb.com/api/v1/sports/1/players",
+                    params={"season": season, "gameType": "R"},
+                    timeout=8,
+                )
+                response.raise_for_status()
+                people = response.json().get("people", [])
+                if people:
+                    return people
+                last_error = RuntimeError("MLB player directory returned no players")
+            except Exception as err:
+                last_error = err
+                if attempt < 2:
+                    time.sleep(0.4 * (attempt + 1))
+        raise RuntimeError(f"MLB player directory unavailable: {last_error}")
+
 
     @st.cache_data(ttl=3600, show_spinner=False)
     def _scanner_get_pitcher_data(pitcher_name: str) -> dict:
@@ -16795,16 +16842,8 @@ if st.session_state.active_sport == "edge":
         season  = _dtx.datetime.now().year
 
         try:
-            # Step 1: find player ID
-            r = _req.get(
-                "https://statsapi.mlb.com/api/v1/sports/1/players",
-                params={"season": season, "gameType": "R"},
-                timeout=5
-            )
-            if not r.ok:
-                return empty
-
-            _ppl = r.json().get("people", [])
+            # Step 1: find player ID from the shared directory cache.
+            _ppl = _scanner_get_mlb_pitcher_directory()
             _pp  = next((p for p in _ppl
                          if all(pt in _norm(p.get("fullName","")) for pt in _parts)), None)
             if not _pp:
@@ -16818,14 +16857,22 @@ if st.session_state.active_sport == "edge":
             pitcher_hand = str(_pp.get("pitchHand", {}).get("code", "") or "").upper()
 
             # Step 2: game logs — get K, IP, pitch count per start
-            r2 = _req.get(
-                f"https://statsapi.mlb.com/api/v1/people/{pid}/stats",
-                params={"stats": "gameLog", "group": "pitching",
-                        "season": season, "gameType": "R", "limit": 12},
-                timeout=5
-            )
-            if not r2.ok:
-                return empty
+            r2 = None
+            for attempt in range(2):
+                try:
+                    r2 = _req.get(
+                        f"https://statsapi.mlb.com/api/v1/people/{pid}/stats",
+                        params={"stats": "gameLog", "group": "pitching",
+                                "season": season, "gameType": "R", "limit": 12},
+                        timeout=7,
+                    )
+                    r2.raise_for_status()
+                    break
+                except Exception:
+                    if attempt == 0:
+                        time.sleep(0.35)
+                    else:
+                        raise
 
             splits = r2.json().get("stats", [{}])[0].get("splits", [])
 
@@ -16904,8 +16951,9 @@ if st.session_state.active_sport == "edge":
                 "start_dates": [d.isoformat() for d in start_dates],
             }
 
-        except Exception:
-            return empty
+        except Exception as err:
+            record_debug_error(f"mlb.edge.pitcher_data.{pitcher_name}", err)
+            raise
 
 
     def _scanner_norm_mlb_team(abbr: str) -> str:
@@ -16925,7 +16973,50 @@ if st.session_state.active_sport == "edge":
         }.get(a, a)
 
 
-    @st.cache_data(ttl=900, show_spinner=False)
+    @st.cache_data(ttl=300, show_spinner=False)
+    def _scanner_get_mlb_schedule_board() -> list:
+        """Load today's and tomorrow's probable-pitcher board once per scan window."""
+        import requests as _req, datetime as _dtx, pytz as _ptz
+        et = _ptz.timezone("America/New_York")
+        board = []
+        successful_dates = 0
+        last_error = None
+        for offset in (0, 1):
+            date_str = (
+                _dtx.datetime.now(et) + _dtx.timedelta(days=offset)
+            ).strftime("%Y-%m-%d")
+            try:
+                response = _req.get(
+                    "https://statsapi.mlb.com/api/v1/schedule",
+                    params={"sportId": 1, "date": date_str, "hydrate": "team,venue,probablePitcher"},
+                    timeout=8,
+                )
+                response.raise_for_status()
+                successful_dates += 1
+                for day in response.json().get("dates", []):
+                    for game in day.get("games", []):
+                        status = game.get("status", {})
+                        abstract_state = str(status.get("abstractGameState", "")).lower()
+                        detailed_state = str(status.get("detailedState", "")).lower()
+                        if abstract_state in ("live", "final") or "postponed" in detailed_state:
+                            continue
+                        teams = game.get("teams", {})
+                        board.append({
+                            "date": date_str,
+                            "home": teams.get("home", {}).get("team", {}).get("abbreviation", ""),
+                            "away": teams.get("away", {}).get("team", {}).get("abbreviation", ""),
+                            "venue": game.get("venue", {}).get("name", ""),
+                            "home_probable": teams.get("home", {}).get("probablePitcher", {}),
+                            "away_probable": teams.get("away", {}).get("probablePitcher", {}),
+                        })
+            except Exception as err:
+                last_error = err
+        if successful_dates == 0:
+            raise RuntimeError(f"MLB schedule board unavailable: {last_error}")
+        return board
+
+
+    @st.cache_data(ttl=300, show_spinner=False)
     def _scanner_get_mlb_game_context(team_abbr: str, pitcher_name: str = "") -> dict:
         """Fast team-based MLB game lookup for Edge Scanner matchup context."""
         empty = {
@@ -16936,8 +17027,6 @@ if st.session_state.active_sport == "edge":
         if not team_abbr and not pitcher_name:
             return empty
         try:
-            import requests as _req, datetime as _dtx, pytz as _ptz
-            et = _ptz.timezone("America/New_York")
             target_team = _scanner_norm_mlb_team(team_abbr)
             _norm_name = lambda s: str(s or "").lower().replace("-", " ").replace(".", "").strip()
             target_last = _norm_name(pitcher_name).split()[-1] if pitcher_name else ""
@@ -16958,86 +17047,72 @@ if st.session_state.active_sport == "edge":
                 )
                 return last_ok and first_ok
 
-            for offset in (0, 1):
-                date_str = (
-                    _dtx.datetime.now(et) + _dtx.timedelta(days=offset)
-                ).strftime("%Y-%m-%d")
-                fallback_team_game = None
-                r = _req.get(
-                    "https://statsapi.mlb.com/api/v1/schedule",
-                    params={"sportId": 1, "date": date_str, "hydrate": "team,venue,probablePitcher"},
-                    timeout=6,
-                )
-                if not r.ok:
-                    continue
-                for day in r.json().get("dates", []):
-                    for game in day.get("games", []):
-                        status = game.get("status", {})
-                        abstract_state = str(status.get("abstractGameState", "")).lower()
-                        detailed_state = str(status.get("detailedState", "")).lower()
-                        if abstract_state in ("live", "final") or "postponed" in detailed_state:
+            fallback_team_game = None
+            for game in _scanner_get_mlb_schedule_board():
+                home = game.get("home", "")
+                away = game.get("away", "")
+                venue = game.get("venue", "")
+                date_str = game.get("date", "")
+                probables = {
+                    "home": game.get("home_probable", {}),
+                    "away": game.get("away_probable", {}),
+                }
+
+                # Pitcher props must match the listed probable starter.
+                for side in ("home", "away"):
+                    team_abbr_side = home if side == "home" else away
+                    if target_team and _scanner_norm_mlb_team(team_abbr_side) != target_team:
+                        continue
+                    prob = probables.get(side, {})
+                    prob_name = prob.get("fullName", "") or prob.get("lastName", "")
+                    if fallback_team_game is None:
+                        fallback_team_game = {
+                            "opp": away if side == "home" else home,
+                            "home_team": home,
+                            "away_team": away,
+                            "venue": venue,
+                            "side": side,
+                            "game_date": date_str,
+                            "pitcher_matched": False,
+                            "probable_name": prob_name,
+                        }
+                    if _probable_matches(prob):
+                        return {
+                            "opp": away if side == "home" else home,
+                            "home_team": home,
+                            "away_team": away,
+                            "venue": venue,
+                            "side": side,
+                            "game_date": date_str,
+                            "pitcher_matched": True,
+                            "probable_name": prob_name,
+                        }
+
+                # Fallback: PrizePicks team metadata can lag, so match the
+                # probable pitcher by name across the board before rejecting it.
+                if target_last:
+                    for side in ("home", "away"):
+                        prob = probables.get(side, {})
+                        if not _probable_matches(prob):
                             continue
-                        home = game.get("teams", {}).get("home", {}).get("team", {}).get("abbreviation", "")
-                        away = game.get("teams", {}).get("away", {}).get("team", {}).get("abbreviation", "")
-                        venue = game.get("venue", {}).get("name", "")
-                        teams = game.get("teams", {})
+                        return {
+                            "opp": away if side == "home" else home,
+                            "home_team": home,
+                            "away_team": away,
+                            "venue": venue,
+                            "side": side,
+                            "game_date": date_str,
+                            "pitcher_matched": True,
+                            "probable_name": prob.get("fullName", "") or prob.get("lastName", ""),
+                        }
 
-                        # Pitcher props must match the listed probable starter.
-                        # Team-only matching lets non-starting pitchers through.
-                        for side in ("home", "away"):
-                            team_abbr_side = home if side == "home" else away
-                            if target_team and _scanner_norm_mlb_team(team_abbr_side) != target_team:
-                                continue
-                            prob = teams.get(side, {}).get("probablePitcher", {})
-                            prob_name = prob.get("fullName", "") or prob.get("lastName", "")
-                            if fallback_team_game is None:
-                                fallback_team_game = {
-                                    "opp": away if side == "home" else home,
-                                    "home_team": home,
-                                    "away_team": away,
-                                    "venue": venue,
-                                    "side": side,
-                                    "game_date": date_str,
-                                    "pitcher_matched": False,
-                                    "probable_name": prob_name,
-                                }
-                            if not _probable_matches(prob):
-                                continue
-                            return {
-                                "opp": away if side == "home" else home,
-                                "home_team": home,
-                                "away_team": away,
-                                "venue": venue,
-                                "side": side,
-                                "game_date": date_str,
-                                "pitcher_matched": True,
-                                "probable_name": prob.get("fullName", "") or prob.get("lastName", ""),
-                            }
-
-                        # Fallback: if PrizePicks team is missing/wrong, search
-                        # all probable pitchers by name.
-                        if target_last:
-                            for side in ("home", "away"):
-                                prob = teams.get(side, {}).get("probablePitcher", {})
-                                if not _probable_matches(prob):
-                                    continue
-                                return {
-                                    "opp": away if side == "home" else home,
-                                    "home_team": home,
-                                    "away_team": away,
-                                    "venue": venue,
-                                    "side": side,
-                                    "game_date": date_str,
-                                    "pitcher_matched": True,
-                                    "probable_name": prob.get("fullName", "") or prob.get("lastName", ""),
-                                }
-                # If the schedule has the team game but MLB probable data is
-                # missing/lagging, return matchup context as a watchlist signal
-                # instead of making the entire scanner show zero results.
-                if fallback_team_game is not None:
-                    return fallback_team_game
+            # If probable data is lagging, retain team matchup as a watchlist
+            # candidate instead of silently deleting the prop.
+            if fallback_team_game is not None:
+                return fallback_team_game
         except Exception as e:
             record_debug_error("mlb.edge.game_context", e)
+            raise
         return empty
 
 
@@ -17368,7 +17443,8 @@ if st.session_state.active_sport == "edge":
             import numpy as _np
             _vals = _np.array(_raw_vals, dtype=float)
             _n    = len(_vals)
-            _avg  = round(float(_vals.mean()), 1)
+            _avg_exact = float(_vals.mean())
+            _avg  = round(_avg_exact, 1)
             _k9   = _data.get("k9")
             _avg_ip  = _data.get("avg_ip")
             _avg_pc  = _data.get("avg_pitches")
@@ -17416,7 +17492,7 @@ if st.session_state.active_sport == "edge":
                             and 7 <= _days_since_last <= 12
                         )
                         if _post_break_monitor:
-                            _readiness_penalty += 4
+                            _readiness_penalty += 2
                             _readiness_notes.append(f"first post-break start ({_days_since_last}d gap)")
                         elif _days_since_last >= 16:
                             _readiness_penalty += 16
@@ -17470,18 +17546,25 @@ if st.session_state.active_sport == "edge":
             _park_sig = _scanner_mlb_park_signal(_home) if _home else "Neutral"
 
             # ── Signal 1: Weighted hit rate (base) ───────────────────
-            _wts  = _np.array([1.5 if i < 3 else 1.0 for i in range(_n)])
+            _wts = _np.arange(_n, 0, -1, dtype=float)
             if side == "Over":
                 _hit_scores = _np.where(_vals > line, 1.0, _np.where(_vals == line, 0.5, 0.0))
             else:
                 _hit_scores = _np.where(_vals < line, 1.0, _np.where(_vals == line, 0.5, 0.0))
             _weighted_hits = float((_hit_scores * _wts).sum())
             _whr  = round(_weighted_hits / float(_wts.sum()), 3)
-            _cons = round(float(_hit_scores.mean()), 3)
+            _value_std = float(_np.std(_vals, ddof=1)) if _n > 1 else 0.0
+            _value_cv = (_value_std / _avg_exact) if _avg_exact > 0 else 1.0
+            _cons = round(max(0.10, min(0.95, 1.0 - (_value_cv * 0.8))), 3)
             _pushes = int((_vals == line).sum())
-            # Beta(2,2) shrinkage prevents an 8/8 or 10/10 sample from
-            # entering the context layer as a near-certain outcome.
-            _calibrated_whr = (_weighted_hits + 2.0) / (float(_wts.sum()) + 4.0)
+            # Match the individual analyzer's sample- and variance-aware
+            # shrinkage so the scanner and deep dive start from the same base.
+            _sample_strength = min(_n / 10.0, 1.0)
+            _base_trust = 0.56 + (0.22 * _sample_strength)
+            _base_trust += 0.10 * max(0.0, _cons - 0.50) / 0.50
+            _base_trust = max(0.50, min(0.88, _base_trust))
+            _calibrated_whr = 0.50 + ((_whr - 0.50) * _base_trust)
+            _calibrated_whr = max(0.08, min(0.92, _calibrated_whr))
             _adj  = _calibrated_whr
 
             # ── Signal 2: L3 form (trending up/down?) ────────────────
@@ -17529,7 +17612,7 @@ if st.session_state.active_sport == "edge":
                     elif _projected_pc < 85:   _adj -= 0.03
 
             # ── Signal 5: Edge vs line (avg above/below line) ─────────
-            _edge = _avg - line
+            _edge = _avg_exact - line
             _edge_big = 4.0 if _is_outs else 2.5
             _edge_med = 2.0 if _is_outs else 1.5
             _edge_min = 1.0 if _is_outs else 0.5
@@ -17744,7 +17827,7 @@ if st.session_state.active_sport == "edge":
             if _days_since_last is not None and _days_since_last >= 16:
                 _edge_trap(f"long layoff ({_days_since_last}d)", 3)
             elif _post_break_monitor:
-                _edge_trap("first post-break workload", 1)
+                _trap_reasons.append("first post-break workload monitor")
             if _l3_avg_pc and _avg_pc and float(_l3_avg_pc) <= float(_avg_pc) - 10:
                 _edge_trap("recent pitch-count decline", 2)
             if _trap_severity >= 5:
@@ -17872,7 +17955,7 @@ if st.session_state.active_sport == "edge":
             if _days_since_last is not None and _days_since_last >= 16:
                 _block(f"long layoff requires workload confirmation ({_days_since_last}d)")
             elif _post_break_monitor:
-                _watch("first post-break workload is not yet confirmed", 2)
+                _watch("first post-break workload monitor", 0)
             if _l3_avg_pc and _avg_pc and float(_l3_avg_pc) <= float(_avg_pc) - 10:
                 _watch(f"recent pitch count down ({_l3_avg_pc:.0f} vs {_avg_pc:.0f})", 6)
             if _scanner_conf < 55:
@@ -17899,7 +17982,7 @@ if st.session_state.active_sport == "edge":
                     "Signal": "Recent hit rate",
                     "Value": f"{_whr:.1%} raw → {_calibrated_whr:.1%} calibrated",
                     "Adjustment": "Starting point",
-                    "Notes": f"Recency-weighted L{_n} with Beta shrinkage"
+                    "Notes": f"Descending recency-weighted L{_n} with analyzer-matched shrinkage"
                              + (f" · {_pushes} push(es) scored neutral" if _pushes else ""),
                 },
                 {
@@ -19049,6 +19132,13 @@ if st.session_state.active_sport == "edge":
 
         import concurrent.futures as _cfe
 
+        if _edge_sport == "MLB":
+            try:
+                _scanner_get_mlb_pitcher_directory()
+                _scanner_get_mlb_schedule_board()
+            except Exception as _directory_err:
+                record_debug_error("mlb.edge.shared_context", _directory_err)
+
         def _check_prop(prop):
             """Run the appropriate model. Filter already applied — every prop here is relevant."""
             try:
@@ -19079,7 +19169,11 @@ if st.session_state.active_sport == "edge":
                         ]
                         _sides = [result for result in _sides if result]
                         return max(_sides, key=lambda result: (result["adj"], result["confidence"])) if _sides else None
-            except Exception:
+            except Exception as _model_err:
+                record_debug_error(
+                    f"{str(prop.get('sport', 'edge')).lower()}.edge.model.{prop.get('player', 'unknown')}",
+                    _model_err,
+                )
                 return None
 
         _total = max(len(_filtered), 1)
@@ -19107,8 +19201,11 @@ if st.session_state.active_sport == "edge":
                         _res["is_goblin"] = _prop_ref.get("is_goblin", False)
                         _res["is_demon"]  = _prop_ref.get("is_demon", False)
                         _results.append(_res)
-                except Exception:
-                    pass
+                except Exception as _future_err:
+                    record_debug_error(
+                        f"edge.future.{_prop_ref.get('player', 'unknown')}",
+                        _future_err,
+                    )
 
         _prog.empty()
         _status.empty()
