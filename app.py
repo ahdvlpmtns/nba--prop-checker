@@ -14824,6 +14824,25 @@ def _wnba_norm_team(abbr: str) -> str:
     return re.sub(r"[^A-Z]", "", str(abbr or "").upper().strip())
 
 
+def _wnba_position_group(position: str) -> str:
+    """Normalize ESPN positions into stable matchup groups."""
+    position = str(position or "").upper().strip()
+    return "Backcourt" if position in ("G", "PG", "SG") or position.startswith("G-") else "Frontcourt" if position else "Unknown"
+
+
+def _wnba_box_value(labels: list, stats: list, *names: str) -> Optional[float]:
+    """Read one player box-score value across ESPN label variants."""
+    wanted = {str(name).upper() for name in names}
+    for index, label in enumerate(labels or []):
+        if str(label).upper() not in wanted or index >= len(stats or []):
+            continue
+        try:
+            return float(str(stats[index]).split("-")[0])
+        except Exception:
+            return None
+    return None
+
+
 @st.cache_data(ttl=21600, show_spinner=False)
 def wnba_get_players() -> list:
     """Load active WNBA rosters from ESPN."""
@@ -14847,11 +14866,16 @@ def wnba_get_players() -> list:
                     player_id = str(athlete.get("id", "") or "")
                     name = athlete.get("displayName") or athlete.get("fullName") or ""
                     if player_id and name:
+                        position = str(
+                            (athlete.get("position", {}) or {}).get("abbreviation", "") or ""
+                        ).upper()
                         found.append({
                             "id": player_id,
                             "name": name,
                             "team": team_abbr,
                             "team_id": team_id,
+                            "position": position,
+                            "position_group": _wnba_position_group(position),
                         })
     except Exception as err:
         record_debug_error("wnba.players", err)
@@ -14866,7 +14890,10 @@ def wnba_find_player(player_name: str) -> dict:
     if exact:
         return exact
     partial = [p for p in players if target and target in normalize_name(p["name"])]
-    return partial[0] if partial else {"id": None, "name": player_name, "team": "", "team_id": ""}
+    return partial[0] if partial else {
+        "id": None, "name": player_name, "team": "", "team_id": "",
+        "position": "", "position_group": "Unknown",
+    }
 
 
 @st.cache_data(ttl=1200, show_spinner=False)
@@ -15014,12 +15041,19 @@ def _wnba_numeric_stat(statistics: list, *names: str) -> Optional[float]:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def wnba_get_team_defense_context(team_id: str, team_abbr: str, n: int = 8) -> dict:
-    """Recent market-specific production allowed by the upcoming opponent."""
+def wnba_get_team_defense_context(team_id: str, team_abbr: str, n: int = 8,
+                                  position_group: str = "Unknown") -> dict:
+    """Recent team and position-group production allowed by the opponent."""
     empty = {
         "games": 0, "PTS": None, "REB": None, "AST": None, "3PM": None,
         "PRA": None, "PR": None, "PA": None, "RA": None,
         "game_total": None, "label": "Unavailable",
+        "role": {
+            "group": position_group, "games": 0,
+            "PTS": None, "REB": None, "AST": None, "3PM": None,
+            "PRA": None, "PR": None, "PA": None, "RA": None,
+            "expected": {}, "relative": {},
+        },
     }
     if not team_id or not team_abbr:
         return empty
@@ -15059,6 +15093,48 @@ def wnba_get_team_defense_context(team_id: str, team_abbr: str, n: int = 8) -> d
                 "3pm",
             )
 
+            # Position-group production is read from the same opponent box
+            # score as the broad team totals. This measures whether the
+            # defense has recently funneled production toward guards or
+            # frontcourt players without pretending it is a direct matchup.
+            role_totals = {"PTS": 0.0, "REB": 0.0, "AST": 0.0, "3PM": 0.0}
+            role_players = 0
+            if position_group in ("Backcourt", "Frontcourt"):
+                player_boxes = summary.get("boxscore", {}).get("players", []) or []
+                offense_players = next(
+                    (
+                        item for item in player_boxes
+                        if _wnba_norm_team(item.get("team", {}).get("abbreviation", "")) != target
+                    ),
+                    None,
+                )
+                for stat_group in (offense_players or {}).get("statistics", []) or []:
+                    labels = stat_group.get("labels", []) or []
+                    for row in stat_group.get("athletes", []) or []:
+                        if row.get("didNotPlay"):
+                            continue
+                        athlete = row.get("athlete", {}) or {}
+                        athlete_position = str(
+                            (athlete.get("position", {}) or {}).get("abbreviation", "") or ""
+                        )
+                        if _wnba_position_group(athlete_position) != position_group:
+                            continue
+                        row_stats = row.get("stats", []) or []
+                        row_minutes = _wnba_box_value(labels, row_stats, "MIN", "MINUTES")
+                        if row_minutes is not None and row_minutes <= 0:
+                            continue
+                        parsed = {
+                            "PTS": _wnba_box_value(labels, row_stats, "PTS", "POINTS"),
+                            "REB": _wnba_box_value(labels, row_stats, "REB", "TOTAL REBOUNDS"),
+                            "AST": _wnba_box_value(labels, row_stats, "AST", "ASSISTS"),
+                            "3PM": _wnba_box_value(labels, row_stats, "3PT", "3PM"),
+                        }
+                        if any(value is not None for value in parsed.values()):
+                            role_players += 1
+                            for key, value in parsed.items():
+                                if value is not None:
+                                    role_totals[key] += float(value)
+
             competition = ((summary.get("header", {}).get("competitions") or [None])[0]
                            or ((schedule_event.get("competitions") or [None])[0]) or {})
             competitors = competition.get("competitors", []) or []
@@ -15083,6 +15159,10 @@ def wnba_get_team_defense_context(team_id: str, team_abbr: str, n: int = 8) -> d
                 "AST": ast,
                 "3PM": threes,
                 "game_total": allowed_pts + target_pts if target_pts is not None else None,
+                "role_PTS": role_totals["PTS"] if role_players else None,
+                "role_REB": role_totals["REB"] if role_players else None,
+                "role_AST": role_totals["AST"] if role_players else None,
+                "role_3PM": role_totals["3PM"] if role_players else None,
             })
             if len(allowed_rows) >= n:
                 break
@@ -15102,10 +15182,229 @@ def wnba_get_team_defense_context(team_id: str, team_abbr: str, n: int = 8) -> d
         else:
             for key in ("PRA", "PR", "PA", "RA"):
                 result[key] = None
+        role_result = {
+            "group": position_group, "games": 0,
+            "PTS": None, "REB": None, "AST": None, "3PM": None,
+            "PRA": None, "PR": None, "PA": None, "RA": None,
+            "expected": {}, "relative": {},
+        }
+        if position_group in ("Backcourt", "Frontcourt"):
+            role_games = int(pd.to_numeric(frame.get("role_PTS"), errors="coerce").notna().sum())
+            role_result["games"] = role_games
+            if role_games >= 3:
+                for key in ("PTS", "REB", "AST", "3PM"):
+                    role_values = pd.to_numeric(frame.get(f"role_{key}"), errors="coerce").dropna()
+                    role_result[key] = float(role_values.mean()) if len(role_values) >= 3 else None
+                if all(role_result.get(key) is not None for key in ("PTS", "REB", "AST")):
+                    role_result["PRA"] = role_result["PTS"] + role_result["REB"] + role_result["AST"]
+                    role_result["PR"] = role_result["PTS"] + role_result["REB"]
+                    role_result["PA"] = role_result["PTS"] + role_result["AST"]
+                    role_result["RA"] = role_result["REB"] + role_result["AST"]
+
+                # These are expected shares of total team production by broad
+                # position group. Only deviations from the broad team context
+                # are used, and the eventual probability adjustment is small.
+                backcourt_shares = {"PTS": 0.56, "REB": 0.34, "AST": 0.72, "3PM": 0.72}
+                shares = (
+                    backcourt_shares if position_group == "Backcourt"
+                    else {key: 1.0 - value for key, value in backcourt_shares.items()}
+                )
+                for key in ("PTS", "REB", "AST", "3PM"):
+                    if result.get(key) is not None and role_result.get(key) is not None:
+                        expected = float(result[key]) * shares[key]
+                        role_result["expected"][key] = expected
+                        if expected > 0:
+                            role_result["relative"][key] = role_result[key] / expected - 1.0
+                combo_parts = {
+                    "PRA": ("PTS", "REB", "AST"),
+                    "PR": ("PTS", "REB"),
+                    "PA": ("PTS", "AST"),
+                    "RA": ("REB", "AST"),
+                }
+                for combo, parts in combo_parts.items():
+                    expected_parts = [role_result["expected"].get(part) for part in parts]
+                    if role_result.get(combo) is not None and all(value is not None for value in expected_parts):
+                        expected = float(sum(expected_parts))
+                        role_result["expected"][combo] = expected
+                        if expected > 0:
+                            role_result["relative"][combo] = role_result[combo] / expected - 1.0
+        result["role"] = role_result
         result["label"] = "Loaded" if result["games"] >= 5 else "Small sample"
         return {**empty, **result}
     except Exception as err:
         record_debug_error("wnba.defense_context", err)
+        return empty
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def wnba_get_player_role_context(team_id: str, team_abbr: str,
+                                 player_id: str, player_name: str,
+                                 n: int = 5) -> dict:
+    """Recent starter role plus material teammate availability."""
+    empty = {
+        "games": 0, "starts": 0, "start_rate": None,
+        "latest_start": None, "recent_avg_minutes": None,
+        "position": "", "position_group": "Unknown",
+        "role": "Unavailable", "transition": "Stable",
+        "stability": None, "unavailable_starters": [],
+        "questionable_starters": [], "same_group_out": 0,
+        "coverage": False,
+    }
+    if not team_id or not team_abbr or not player_id:
+        return empty
+    try:
+        target_team = _wnba_norm_team(team_abbr)
+        target_player = str(player_id)
+        schedule = espn_get(f"{WNBA_ANALYZER_SITE}/teams/{team_id}/schedule")
+        completed = []
+        for event in schedule.get("events", []) or []:
+            season_type = event.get("seasonType", {}) or {}
+            if season_type and int(season_type.get("type", 2) or 2) != 2:
+                continue
+            competition = (event.get("competitions") or [{}])[0]
+            status_type = (competition.get("status", {}) or {}).get("type", {}) or {}
+            status_name = str(status_type.get("name", "")).lower()
+            if not status_type.get("completed") and "final" not in status_name and "complete" not in status_name:
+                continue
+            event_id = str(event.get("id", "") or "")
+            if event_id:
+                completed.append((pd.to_datetime(event.get("date", ""), errors="coerce"), event_id))
+        completed.sort(key=lambda row: row[0] if pd.notna(row[0]) else pd.Timestamp.min, reverse=True)
+
+        appearances = []
+        starter_counts = {}
+        starter_positions = {}
+        for _, event_id in completed[:max(n + 3, 8)]:
+            summary = espn_get(f"{WNBA_ANALYZER_SITE}/summary?event={event_id}")
+            team_box = next(
+                (
+                    item for item in summary.get("boxscore", {}).get("players", []) or []
+                    if _wnba_norm_team(item.get("team", {}).get("abbreviation", "")) == target_team
+                ),
+                None,
+            )
+            selected_row = None
+            selected_labels = []
+            for stat_group in (team_box or {}).get("statistics", []) or []:
+                labels = stat_group.get("labels", []) or []
+                for row in stat_group.get("athletes", []) or []:
+                    athlete = row.get("athlete", {}) or {}
+                    athlete_id = str(athlete.get("id", "") or "")
+                    athlete_name = str(athlete.get("displayName", "") or athlete.get("fullName", "") or "")
+                    position = str((athlete.get("position", {}) or {}).get("abbreviation", "") or "")
+                    if row.get("starter") and not row.get("didNotPlay"):
+                        name_key = normalize_name(athlete_name)
+                        starter_counts[name_key] = starter_counts.get(name_key, 0) + 1
+                        starter_positions[name_key] = position
+                    if athlete_id == target_player:
+                        selected_row = row
+                        selected_labels = labels
+                        if position:
+                            empty["position"] = position.upper()
+                            empty["position_group"] = _wnba_position_group(position)
+                if selected_row is not None:
+                    break
+            if selected_row is not None:
+                player_minutes = _wnba_box_value(
+                    selected_labels, selected_row.get("stats", []) or [], "MIN", "MINUTES"
+                )
+                appearances.append({
+                    "starter": bool(selected_row.get("starter")),
+                    "dnp": bool(selected_row.get("didNotPlay")),
+                    "minutes": player_minutes,
+                })
+            if len(appearances) >= n:
+                break
+
+        played = [row for row in appearances if not row["dnp"]]
+        games = len(played)
+        starts = sum(1 for row in played if row["starter"])
+        start_rate = starts / games if games else None
+        recent_minutes = [row["minutes"] for row in played if row.get("minutes") is not None]
+        latest_start = played[0]["starter"] if played else None
+        transition = "Stable"
+        if games >= 4:
+            recent_two = [row["starter"] for row in played[:2]]
+            older = [row["starter"] for row in played[2:]]
+            if len(recent_two) == 2 and all(recent_two) and older and sum(older) / len(older) <= 0.34:
+                transition = "Promoted to starter"
+            elif len(recent_two) == 2 and not any(recent_two) and older and sum(older) / len(older) >= 0.66:
+                transition = "Moved to bench"
+
+        if transition != "Stable":
+            role_label = transition
+            stability = 0.45
+        elif games >= 3 and start_rate is not None and start_rate >= 0.70:
+            role_label = "Established starter"
+            stability = start_rate
+        elif games >= 3 and start_rate is not None and start_rate <= 0.30:
+            role_label = "Bench rotation"
+            stability = 1.0 - start_rate
+        elif games:
+            role_label = "Variable starting role"
+            stability = max(start_rate or 0.0, 1.0 - (start_rate or 0.0))
+        else:
+            role_label = "Unavailable"
+            stability = None
+
+        roster = espn_get(f"{WNBA_ANALYZER_SITE}/teams/{team_id}/roster")
+        unavailable_starters = []
+        questionable_starters = []
+        selected_group = empty["position_group"]
+        for group in roster.get("athletes", []) or []:
+            for athlete in (group.get("items") or [group]):
+                teammate_name = str(athlete.get("displayName") or athlete.get("fullName") or "")
+                if not teammate_name or normalize_name(teammate_name) == normalize_name(player_name):
+                    continue
+                name_key = normalize_name(teammate_name)
+                if starter_counts.get(name_key, 0) < 1:
+                    continue
+                statuses = []
+                for injury_item in athlete.get("injuries", []) or []:
+                    status = injury_item.get("status") or injury_item.get("type") or ""
+                    if isinstance(status, dict):
+                        status = status.get("description") or status.get("name") or status.get("type") or ""
+                    if status:
+                        statuses.append(str(status))
+                status_text = " / ".join(statuses)
+                status_lower = status_text.lower()
+                teammate_position = str(
+                    (athlete.get("position", {}) or {}).get("abbreviation", "")
+                    or starter_positions.get(name_key, "")
+                )
+                teammate = {
+                    "name": teammate_name,
+                    "status": status_text,
+                    "position": teammate_position,
+                    "position_group": _wnba_position_group(teammate_position),
+                    "recent_starts": starter_counts.get(name_key, 0),
+                }
+                if "out" in status_lower or "doubt" in status_lower:
+                    unavailable_starters.append(teammate)
+                elif "question" in status_lower or "game-time" in status_lower or "gtd" in status_lower:
+                    questionable_starters.append(teammate)
+
+        same_group_out = sum(
+            1 for teammate in unavailable_starters
+            if teammate.get("position_group") == selected_group and selected_group != "Unknown"
+        )
+        return {
+            **empty,
+            "games": games,
+            "starts": starts,
+            "start_rate": start_rate,
+            "latest_start": latest_start,
+            "recent_avg_minutes": float(sum(recent_minutes) / len(recent_minutes)) if recent_minutes else None,
+            "role": role_label,
+            "transition": transition,
+            "stability": stability,
+            "unavailable_starters": unavailable_starters,
+            "questionable_starters": questionable_starters,
+            "same_group_out": same_group_out,
+            "coverage": games >= 3,
+        }
+    except Exception as err:
+        record_debug_error("wnba.role_context", err)
         return empty
 
 
@@ -15148,7 +15447,8 @@ def wnba_get_injury_status(team_id: str, player_name: str) -> dict:
 
 def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
                       game: dict, defense: Optional[dict] = None,
-                      injury: Optional[dict] = None) -> dict:
+                      injury: Optional[dict] = None,
+                      role_context: Optional[dict] = None) -> dict:
     """Calibrated WNBA model: history, projection, minutes, venue, H2H, and data quality."""
     import numpy as np
     col = WNBA_STAT_COLUMNS[stat]
@@ -15215,6 +15515,7 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
 
     rate_mask = season_minutes.notna() & (season_minutes >= 8)
     per_minute = (season_values[rate_mask] / season_minutes[rate_mask]).replace([np.inf, -np.inf], np.nan).dropna()
+    projected_rate = None
     if len(per_minute) >= 5:
         low_rate = float(per_minute.quantile(0.10))
         high_rate = float(per_minute.quantile(0.90))
@@ -15240,6 +15541,21 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
         volume_projection = robust_box_projection
         projection = robust_box_projection
 
+    role_context = role_context or {}
+    role_label = str(role_context.get("role", "Unavailable") or "Unavailable")
+    role_transition = str(role_context.get("transition", "Stable") or "Stable")
+    role_minutes_anchor = role_context.get("recent_avg_minutes")
+    role_minutes_shift = 0.0
+    if (
+        projected_rate is not None
+        and role_transition in ("Promoted to starter", "Moved to bench")
+        and role_minutes_anchor is not None
+    ):
+        role_minutes_shift = max(-2.5, min(2.5, (float(role_minutes_anchor) - expected_minutes) * 0.45))
+        expected_minutes = max(8.0, min(40.0, expected_minutes + role_minutes_shift))
+        volume_projection = projected_rate * expected_minutes
+        projection = 0.55 * volume_projection + 0.45 * robust_box_projection
+
     sigma = max(
         float(values.std(ddof=1) or 0),
         float(season_values.std(ddof=1) or 0) * 0.85 if len(season_values) > 1 else 0.0,
@@ -15259,7 +15575,7 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
         "Value": f"{projection:.1f} {stat}",
         "Adjustment": f"Blend → {projection_prob:.1%}",
         "Notes": (
-            f"L5 {projection_l5:.1f} · L{len(recent_values)} {recent_anchor_avg:.1f} · "
+            f"robust L5 {projection_l5:.1f} · L{len(recent_values)} {recent_anchor_avg:.1f} · "
             f"season L{len(season_values)} {season_avg:.1f} · "
             f"per-minute path {volume_projection:.1f} at {expected_minutes:.1f} projected min · volatility {sigma:.1f}"
         ),
@@ -15269,6 +15585,67 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
         "Adjustment": f"→ {probability:.1%}",
         "Notes": "Recent hit rate and projection share the same game sample, so agreement is discounted",
     }]
+
+    role_games = int(role_context.get("games", 0) or 0)
+    role_starts = int(role_context.get("starts", 0) or 0)
+    trace.append({
+        "Signal": "Starting role",
+        "Value": (
+            f"{role_label} · {role_starts}/{role_games} recent starts"
+            if role_games else role_label
+        ),
+        "Adjustment": (
+            f"projected minutes {role_minutes_shift:+.1f}"
+            if abs(role_minutes_shift) >= 0.05 else "No probability change"
+        ),
+        "Notes": (
+            f"Recent lineup role from ESPN box scores · {expected_minutes:.1f} projected minutes"
+            if role_games else "Recent starter data unavailable; game-log minutes remain the role anchor"
+        ),
+    })
+
+    unavailable_starters = role_context.get("unavailable_starters", []) or []
+    questionable_starters = role_context.get("questionable_starters", []) or []
+    same_group_out = int(role_context.get("same_group_out", 0) or 0)
+    teammate_adj = 0.0
+    if same_group_out > 0:
+        role_group = role_context.get("position_group", "Unknown")
+        if col == "AST":
+            teammate_adj = 0.010 if role_group == "Backcourt" else 0.006
+        elif col == "REB":
+            teammate_adj = 0.010 if role_group == "Frontcourt" else 0.005
+        elif col == "3PM":
+            teammate_adj = 0.008 if role_group == "Backcourt" else 0.005
+        elif col in ("PRA", "PR", "PA", "RA"):
+            teammate_adj = 0.010
+        else:
+            teammate_adj = 0.008
+        teammate_adj = min(0.010, teammate_adj + 0.001 * max(0, same_group_out - 1))
+        if side == "Under":
+            teammate_adj *= -1
+        probability += teammate_adj
+    teammate_names = ", ".join(
+        f"{item.get('name')} ({item.get('status')})" for item in unavailable_starters[:3]
+    )
+    questionable_names = ", ".join(
+        f"{item.get('name')} ({item.get('status')})" for item in questionable_starters[:3]
+    )
+    trace.append({
+        "Signal": "Teammate availability",
+        "Value": (
+            teammate_names if teammate_names else
+            f"Questionable: {questionable_names}" if questionable_names else
+            "No material recent-starter absences"
+        ),
+        "Adjustment": f"{teammate_adj:+.1%}" if teammate_adj else "No change",
+        "Notes": (
+            "Small market-specific opportunity adjustment for a confirmed same-role starter absence"
+            if teammate_adj else
+            "Questionable teammates reduce evidence confidence but do not create a directional edge"
+            if questionable_names else
+            "No teammate opportunity adjustment applied"
+        ),
+    })
 
     # Minutes/role adjustment is deliberately bounded because it is correlated with recent production.
     minute_adj = 0.0
@@ -15335,6 +15712,11 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
     defense_label = "Unavailable"
     defense_adj = 0.0
     pace_adj = 0.0
+    role_matchup_adj = 0.0
+    role_matchup_label = "Unavailable"
+    role_allowed = None
+    role_expected = None
+    role_defense_games = 0
     defense_baselines = {
         "PTS": 84.0, "REB": 34.0, "AST": 20.0, "3PM": 8.5,
         "PRA": 138.0, "PR": 118.0, "PA": 104.0, "RA": 54.0,
@@ -15348,7 +15730,25 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
         if col in ("PTS", "PRA", "PR", "PA") and total_environment is not None:
             pace_adj = max(-0.006, min(0.006, (float(total_environment) / 168.0 - 1.0) * 0.06))
             pace_adj *= sample_reliability
-        matchup_adj = max(-0.018, min(0.018, defense_adj + pace_adj))
+        broad_matchup_adj = defense_adj + pace_adj
+        role_defense = defense.get("role", {}) or {}
+        role_defense_games = int(role_defense.get("games", 0) or 0)
+        role_allowed = role_defense.get(col)
+        role_expected = (role_defense.get("expected", {}) or {}).get(col)
+        role_relative = (role_defense.get("relative", {}) or {}).get(col)
+        if role_defense_games >= 3 and role_relative is not None:
+            role_sample_reliability = min(role_defense_games / 8.0, 1.0)
+            role_matchup_adj = max(-0.012, min(0.012, float(role_relative) * 0.055))
+            role_matchup_adj *= role_sample_reliability
+            role_matchup_label = (
+                "Soft" if float(role_relative) >= 0.08 else
+                "Tough" if float(role_relative) <= -0.08 else "Neutral"
+            )
+        raw_matchup_adj = broad_matchup_adj + role_matchup_adj
+        matchup_adj = max(-0.024, min(0.024, raw_matchup_adj))
+        side_multiplier = -1.0 if side == "Under" else 1.0
+        broad_display_adj = broad_matchup_adj * side_multiplier
+        role_display_adj = role_matchup_adj * side_multiplier
         if side == "Under":
             matchup_adj *= -1
         probability += matchup_adj
@@ -15357,16 +15757,46 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
         trace.append({
             "Signal": "Team scoring environment",
             "Value": f"{float(defense_allowed):.1f} {col} allowed · {defense_games}G · {defense_label}",
-            "Adjustment": f"{matchup_adj:+.1%}" if matchup_adj else "No change",
-            "Notes": f"Broad team environment only; capped at ±1.8% until role-specific defense is available"
+            "Adjustment": f"{broad_display_adj:+.1%}" if broad_display_adj else "No change",
+            "Notes": f"Broad team allowance and scoring environment"
                      + (f" · {float(total_environment):.1f} avg game total" if total_environment is not None else ""),
         })
+        role_group = str(role_defense.get("group", "Unknown") or "Unknown")
+        trace.append({
+            "Signal": "Position-group matchup",
+            "Value": (
+                f"{role_group} · {float(role_allowed):.1f} {col} allowed vs {float(role_expected):.1f} expected · "
+                f"{role_defense_games}G · {role_matchup_label}"
+                if role_allowed is not None and role_expected is not None else
+                f"{role_group} sample unavailable"
+            ),
+            "Adjustment": f"{role_display_adj:+.1%}" if role_display_adj else "No change",
+            "Notes": (
+                "Opponent production allowed to the player's broad position group; bounded at ±1.2%"
+                if role_allowed is not None else
+                "At least three opponent box scores with player positions are required"
+            ),
+        })
+        cluster_delta = matchup_adj - (broad_display_adj + role_display_adj)
+        if abs(cluster_delta) >= 0.0005:
+            trace.append({
+                "Signal": "Matchup cluster cap",
+                "Value": f"{(broad_display_adj + role_display_adj):+.1%} raw → {matchup_adj:+.1%}",
+                "Adjustment": f"{cluster_delta:+.1%}",
+                "Notes": "Caps correlated team, environment, and position-group matchup evidence at ±2.4%",
+            })
     else:
         trace.append({
             "Signal": "Team scoring environment",
             "Value": "Insufficient recent boxscores",
             "Adjustment": "No change",
             "Notes": "At least three completed opponent games are required; no generic matchup adjustment applied",
+        })
+        trace.append({
+            "Signal": "Position-group matchup",
+            "Value": "Unavailable",
+            "Adjustment": "No change",
+            "Notes": "Position-group context requires the same completed opponent box-score sample",
         })
 
     rest_adj = 0.0
@@ -15451,6 +15881,12 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
         reliability += 0.03
     if defense_games >= 5 and defense_allowed is not None:
         reliability += 0.03
+    if role_context.get("coverage"):
+        reliability += 0.02
+    if role_transition != "Stable" or role_label == "Variable starting role":
+        reliability -= 0.035
+    if questionable_starters:
+        reliability -= min(0.04, 0.02 * len(questionable_starters))
     reliability = max(0.60, min(0.92, reliability))
     pre_reliability = max(0.05, min(0.95, probability))
     probability = 0.50 + (pre_reliability - 0.50) * reliability
@@ -15472,11 +15908,18 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
     stale_days = max(0, (today_et - last_log_date).days) if today_et and last_log_date else 14
     freshness_score = 1.0 if stale_days <= 4 else 0.78 if stale_days <= 7 else 0.42 if stale_days <= 14 else 0.12
     sample_score = 0.55 * min(n / 12.0, 1.0) + 0.45 * season_coverage
-    role_score = max(0.0, min(1.0, 1.0 - minute_std / 9.0))
+    minute_role_score = max(0.0, min(1.0, 1.0 - minute_std / 9.0))
+    starter_stability = role_context.get("stability")
+    role_score = (
+        0.65 * minute_role_score + 0.35 * float(starter_stability)
+        if starter_stability is not None and role_context.get("coverage")
+        else minute_role_score
+    )
     matchup_score = (
-        (0.30 if game.get("opp") not in (None, "", "TBD") else 0.0)
-        + (0.45 * min(defense_games / 6.0, 1.0) if defense_allowed is not None else 0.0)
-        + (0.25 if h2h_n >= 2 else 0.0)
+        (0.20 if game.get("opp") not in (None, "", "TBD") else 0.0)
+        + (0.35 * min(defense_games / 6.0, 1.0) if defense_allowed is not None else 0.0)
+        + (0.25 * min(role_defense_games / 6.0, 1.0) if role_allowed is not None else 0.0)
+        + (0.20 if h2h_n >= 2 else 0.0)
     )
     data_score = min(1.0, float(minutes.notna().mean()) * 0.65 + (0.35 if avg_min >= 8 else 0.0))
     confidence_parts = {
@@ -15488,7 +15931,11 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
         "Data completeness": 10.0 * data_score,
     }
     line_anomaly_penalty = 5 if line_anomaly else 0
-    confidence = int(round(sum(confidence_parts.values()) - injury_penalty - line_anomaly_penalty))
+    teammate_uncertainty_penalty = min(6, 3 * len(questionable_starters))
+    confidence = int(round(
+        sum(confidence_parts.values()) - injury_penalty
+        - line_anomaly_penalty - teammate_uncertainty_penalty
+    ))
     confidence = max(25, min(96, confidence))
     cushion = {"PTS": 1.5, "REB": 0.8, "AST": 0.7, "3PM": 0.35, "PRA": 2.2, "PR": 1.8, "PA": 1.7, "RA": 1.1}.get(col, 1.0)
     flags = []
@@ -15502,6 +15949,20 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
         flags.append("High game-to-game volatility")
     if minute_std >= 5.0:
         flags.append(f"Minutes volatility ({minute_std:.1f} min SD)")
+    if role_transition != "Stable":
+        flags.append(role_transition)
+    elif role_label == "Variable starting role":
+        flags.append("Variable starting role")
+    if unavailable_starters:
+        flags.append(
+            "Unavailable recent starter: "
+            + ", ".join(item.get("name", "") for item in unavailable_starters[:2])
+        )
+    if questionable_starters:
+        flags.append(
+            "Questionable recent starter: "
+            + ", ".join(item.get("name", "") for item in questionable_starters[:2])
+        )
     if directional_edge < cushion:
         flags.append("Thin projection cushion")
     if line_anomaly:
@@ -15550,6 +16011,17 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
         "line_anomaly": line_anomaly,
         "line_anomaly_note": line_anomaly_note,
         "line_anomaly_penalty": line_anomaly_penalty,
+        "teammate_uncertainty_penalty": teammate_uncertainty_penalty,
+        "role_context": role_context,
+        "role_label": role_label,
+        "role_transition": role_transition,
+        "role_minutes_shift": role_minutes_shift,
+        "role_matchup_label": role_matchup_label,
+        "role_allowed": role_allowed,
+        "role_expected": role_expected,
+        "role_defense_games": role_defense_games,
+        "role_matchup_adj": role_matchup_adj,
+        "teammate_adj": teammate_adj,
         "confidence_parts": confidence_parts,
         "logs": work,
     }
@@ -15635,22 +16107,35 @@ if st.session_state.active_sport == "wnba":
                 "",
             )
             import concurrent.futures as _wnba_futures
-            with _wnba_futures.ThreadPoolExecutor(max_workers=2) as executor:
+            position_group = player.get("position_group") or _wnba_position_group(player.get("position", ""))
+            with _wnba_futures.ThreadPoolExecutor(max_workers=3) as executor:
                 defense_future = executor.submit(
-                    wnba_get_team_defense_context, opp_team_id, opp_abbr, 8
+                    wnba_get_team_defense_context, opp_team_id, opp_abbr, 8, position_group
                 )
                 injury_future = executor.submit(
                     wnba_get_injury_status, player.get("team_id", ""), selected_name
                 )
+                role_future = executor.submit(
+                    wnba_get_player_role_context,
+                    player.get("team_id", ""), player.get("team", ""),
+                    player.get("id", ""), selected_name, 5,
+                )
                 defense = defense_future.result()
                 injury = injury_future.result()
+                role_context = role_future.result()
+                if role_context.get("position_group") == "Unknown" and position_group != "Unknown":
+                    role_context = {
+                        **role_context,
+                        "position": player.get("position", ""),
+                        "position_group": position_group,
+                    }
         if logs.empty:
             st.error("No current-season game logs were returned for this player.")
             st.stop()
         try:
             result = wnba_analyze_prop(
                 logs, selected_stat, float(line), side, game,
-                defense=defense, injury=injury,
+                defense=defense, injury=injury, role_context=role_context,
             )
         except ValueError as err:
             st.warning(str(err))
@@ -15737,6 +16222,11 @@ if st.session_state.active_sport == "wnba":
                 f"<span class='flag-pill down'>Line verification "
                 f"-{result['line_anomaly_penalty']}</span>"
             )
+        if result.get("teammate_uncertainty_penalty"):
+            confidence_parts_html += (
+                f"<span class='flag-pill down'>Teammate status "
+                f"-{result['teammate_uncertainty_penalty']}</span>"
+            )
         st.markdown(
             f"<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;"
             f"padding:0.85rem 1rem;margin:0.25rem 0 0.75rem;'>"
@@ -15755,10 +16245,15 @@ if st.session_state.active_sport == "wnba":
         form_label = "Running above baseline" if form_delta >= 1.0 else "Running below baseline" if form_delta <= -1.0 else "Near season baseline"
         projection_gap = abs(result["robust_box_projection"] - result["volume_projection"])
         agreement_label = "Tight agreement" if projection_gap <= max(0.75, result["sigma"] * 0.20) else "Model paths differ"
+        role_ctx = result.get("role_context", {}) or {}
+        role_start_text = (
+            f"{role_ctx.get('starts', 0)}/{role_ctx.get('games', 0)} recent starts"
+            if role_ctx.get("games") else "Starter history unavailable"
+        )
         fr1, fr2, fr3 = st.columns(3)
         form_role_metrics = [
             (fr1, "RECENT VS SEASON", form_label, f"L{result['sample']} {result['avg']:.1f} · season {result['season_avg']:.1f} · {form_delta:+.1f}"),
-            (fr2, "EXPECTED ROLE", f"{result['expected_minutes']:.1f} min", f"L3 {result['l3_min']:.1f} · season {result['season_avg_min']:.1f} min"),
+            (fr2, "EXPECTED ROLE", result.get("role_label", "Unavailable"), f"{role_start_text} · {result['expected_minutes']:.1f} projected min"),
             (fr3, "PROJECTION AGREEMENT", agreement_label, f"Box {result['robust_box_projection']:.1f} · per-minute {result['volume_projection']:.1f}"),
         ]
         for column, label, value, hint in form_role_metrics:
@@ -15822,12 +16317,34 @@ if st.session_state.active_sport == "wnba":
             if result.get("h2h_avg") is not None else "Insufficient"
         )
         availability_value = result.get("injury", {}).get("status", "Active/Unlisted")
+        unavailable_teammates = role_ctx.get("unavailable_starters", []) or []
+        questionable_teammates = role_ctx.get("questionable_starters", []) or []
+        teammate_hint = (
+            "Out: " + ", ".join(item.get("name", "") for item in unavailable_teammates[:2])
+            if unavailable_teammates else
+            "Questionable: " + ", ".join(item.get("name", "") for item in questionable_teammates[:2])
+            if questionable_teammates else
+            "No material recent-starter absences"
+        )
+        selected_availability_detail = (
+            result.get("injury", {}).get("detail") or "No active ESPN designation"
+        )
+        role_matchup_value = (
+            f"{result.get('role_matchup_label', 'Unavailable')} · {role_ctx.get('position_group', 'Unknown')}"
+            if result.get("role_allowed") is not None else "Unavailable"
+        )
+        role_matchup_hint = (
+            f"{result['role_allowed']:.1f} allowed vs {result['role_expected']:.1f} expected · "
+            f"{result.get('role_defense_games', 0)} games"
+            if result.get("role_allowed") is not None and result.get("role_expected") is not None
+            else "Position-specific opponent sample unavailable"
+        )
         cx1, cx2, cx3, cx4 = st.columns(4)
         context_metrics = [
-            (cx1, "TEAM ENVIRONMENT", result.get("defense_label", "Unavailable"), f"{defense_value} · {result.get('defense_games', 0)} games"),
-            (cx2, "GAME ENVIRONMENT", f"{game_total_value:.1f}" if game_total_value is not None else "Unavailable", "Recent opponent game total"),
+            (cx1, "TEAM ENVIRONMENT", result.get("defense_label", "Unavailable"), f"{defense_value} · {result.get('defense_games', 0)} games · total {game_total_value:.1f}" if game_total_value is not None else f"{defense_value} · {result.get('defense_games', 0)} games"),
+            (cx2, "POSITION MATCHUP", role_matchup_value, role_matchup_hint),
             (cx3, "HEAD TO HEAD", h2h_value, "Player-specific history"),
-            (cx4, "AVAILABILITY", availability_value, result.get("injury", {}).get("detail") or "ESPN injury report"),
+            (cx4, "AVAILABILITY", availability_value, f"{selected_availability_detail} · {teammate_hint}"),
         ]
         for column, label, value, hint in context_metrics:
             with column:
@@ -15901,6 +16418,21 @@ if st.session_state.active_sport == "wnba":
                 f"{game_total_value:.1f} recent opponent game total"
                 if game_total_value is not None else "Unavailable"
             )
+            role_debug = (
+                f"{result.get('role_label', 'Unavailable')} · "
+                f"{role_ctx.get('starts', 0)}/{role_ctx.get('games', 0)} recent starts · "
+                f"{result['expected_minutes']:.1f} projected minutes"
+                if role_ctx.get("games") else "Unavailable"
+            )
+            role_matchup_debug = (
+                f"{role_ctx.get('position_group', 'Unknown')} · "
+                f"{result.get('role_matchup_label', 'Unavailable')} · "
+                f"{result['role_allowed']:.2f} allowed vs {result['role_expected']:.2f} expected "
+                f"in {result.get('role_defense_games', 0)} games"
+                if result.get("role_allowed") is not None and result.get("role_expected") is not None
+                else "Unavailable"
+            )
+            teammate_debug = teammate_hint
             copyable_debug = "\n".join([
                 "WNBA MODEL DEBUGGER",
                 "",
@@ -15933,8 +16465,11 @@ if st.session_state.active_sport == "wnba":
                 "",
                 "MATCHUP + AVAILABILITY",
                 f"Opponent defense: {defense_debug}",
+                f"Position-group matchup: {role_matchup_debug}",
                 f"Game environment: {game_total_debug}",
                 f"Opponent history: {h2h_debug}",
+                f"Starting role: {role_debug}",
+                f"Teammate availability: {teammate_debug}",
                 f"Rest: {rest_debug}",
                 f"Availability: {result.get('injury', {}).get('status', 'Active/Unlisted')}",
                 f"Availability detail: {result.get('injury', {}).get('detail') or 'None'}",
@@ -15954,6 +16489,7 @@ if st.session_state.active_sport == "wnba":
                 f"Confidence: {result['confidence']}/100",
                 f"How to read: probability selects the direction; confidence grades the evidence; verdict requires both",
                 f"Line-verification confidence penalty: -{result['line_anomaly_penalty']}",
+                f"Teammate-status confidence penalty: -{result.get('teammate_uncertainty_penalty', 0)}",
                 f"Quality flags: {' | '.join(result['flags']) or 'None'}",
                 f"Verdict: {tier}",
             ])
@@ -15975,6 +16511,9 @@ if st.session_state.active_sport == "wnba":
                 ["Observed volatility", f"{result['sigma']:.2f}"],
                 ["Opponent history", f"{result['h2h_avg']:.2f} in {result['h2h_n']} games" if result['h2h_avg'] is not None else "Insufficient"],
                 ["Opponent defense", f"{result['defense_label']} · {result['defense_allowed']:.2f} allowed in {result['defense_games']} games" if result['defense_allowed'] is not None else "Unavailable"],
+                ["Position-group matchup", role_matchup_debug],
+                ["Starting role", role_debug],
+                ["Teammate availability", teammate_debug],
                 ["Availability", result.get("injury", {}).get("status", "Active/Unlisted")],
                 ["Log freshness", f"{result['stale_days']} day(s) since latest game"],
                 ["Evidence reliability", f"{result['reliability']:.1%}"],
@@ -18911,9 +19450,25 @@ if st.session_state.active_sport == "edge":
                 return None
 
             opponent = next((p for p in wnba_get_players() if _wnba_norm_team(p.get("team")) == opp), {})
-            defense = wnba_get_team_defense_context(opponent.get("team_id", ""), opp, n=8)
+            position_group = player.get("position_group") or _wnba_position_group(player.get("position", ""))
+            defense = wnba_get_team_defense_context(
+                opponent.get("team_id", ""), opp, n=8,
+                position_group=position_group,
+            )
             injury = wnba_get_injury_status(player.get("team_id", ""), player.get("name") or player_name)
-            model = wnba_analyze_prop(logs, market, line, side, game, defense, injury)
+            role_context = wnba_get_player_role_context(
+                player.get("team_id", ""), player.get("team", ""),
+                player.get("id", ""), player.get("name") or player_name, 5,
+            )
+            if role_context.get("position_group") == "Unknown" and position_group != "Unknown":
+                role_context = {
+                    **role_context,
+                    "position": player.get("position", ""),
+                    "position_group": position_group,
+                }
+            model = wnba_analyze_prop(
+                logs, market, line, side, game, defense, injury, role_context
+            )
             if model["tier"] == "Pass" or model["confidence"] < 55:
                 return None
 
@@ -18959,6 +19514,12 @@ if st.session_state.active_sport == "edge":
                 "defense_label": model.get("defense_label", "Unavailable"),
                 "defense_games": int(model.get("defense_games", 0) or 0),
                 "defense_allowed": model.get("defense_allowed"),
+                "role_label": model.get("role_label", "Unavailable"),
+                "position_group": (model.get("role_context") or {}).get("position_group", "Unknown"),
+                "role_matchup_label": model.get("role_matchup_label", "Unavailable"),
+                "role_allowed": model.get("role_allowed"),
+                "role_expected": model.get("role_expected"),
+                "teammate_adjustment": round(float(model.get("teammate_adj", 0) or 0) * 100, 1),
                 "injury_status": (model.get("injury") or {}).get("status", "Active/Unlisted"),
                 "confidence_parts": model.get("confidence_parts", {}),
                 "model_trace": model.get("trace", []),
