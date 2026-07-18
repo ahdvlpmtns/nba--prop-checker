@@ -13266,8 +13266,6 @@ if st.session_state.active_sport == "mlb":
                     _trap.setdefault("cautions", []).append(_post_break_text)
                     _trap.setdefault("summary", []).insert(0, _post_break_text)
                     _trap["summary"] = _trap["summary"][:5]
-                if _trap.get("label") == "Clean":
-                    _trap.update({"label": "Watchlist", "css": "yellow", "icon": "👀"})
             elif _extended_layoff:
                 _layoff_text = f"Extended layoff ({_rest_days}d)"
                 _trap.setdefault("risks", []).append({
@@ -13277,6 +13275,47 @@ if st.session_state.active_sport == "mlb":
                 _trap.setdefault("summary", []).insert(0, _layoff_text)
                 _trap["summary"] = _trap["summary"][:5]
                 _trap.update({"label": "Trap Risk", "css": "orange", "icon": "⚠️"})
+
+            # Entry Score is a decision index, not another probability. Start with
+            # the hit estimate and evidence quality, then apply only material gates.
+            _entry_base_score = int(round((adj * 100 * 0.70) + (_sc * 0.30)))
+            _entry_score = _entry_base_score
+            _entry_gate_reason = "No blocking gate"
+            _trap_severity = int(_trap.get("severity", 0) or 0)
+            _role_severity_for_entry = int(_role.get("severity", 0) or 0)
+            _entry_is_available = bool(_injury.get("is_available", True))
+
+            if not _entry_is_available:
+                _entry_score = 0
+                _entry_gate_reason = "Pitcher unavailable"
+            elif tier == "Pass":
+                _entry_score = min(_entry_score, 64)
+                _entry_gate_reason = "Model verdict is Pass"
+            elif _role_severity_for_entry >= 3 or _trap_severity >= 3:
+                _entry_score = min(_entry_score, 64)
+                _entry_gate_reason = (
+                    _role.get("label", "High role risk")
+                    if _role_severity_for_entry >= 3 else
+                    (_trap.get("summary") or ["High trap risk"])[0]
+                )
+            elif (
+                _role_severity_for_entry >= 2 or
+                _trap_severity >= 1 or
+                _trap.get("label") in ("Watchlist", "Trap Risk", "Do Not Force")
+            ):
+                _entry_score = min(_entry_score, 79)
+                _entry_gate_reason = (
+                    _role.get("label", "Role watch")
+                    if _role_severity_for_entry >= 2 else
+                    (_trap.get("summary") or ["Risk confirmation needed"])[0]
+                )
+
+            _entry_score = max(0, min(100, _entry_score))
+            _entry_gate_adjustment = _entry_score - _entry_base_score
+            _entry_action = (
+                "PLAY" if _entry_score >= 80 else
+                "WATCH" if _entry_score >= 65 else "PASS"
+            )
 
             _mlb_ph.empty()
 
@@ -13466,16 +13505,11 @@ if st.session_state.active_sport == "mlb":
                 if mlb_side == "Over" else
                 mlb_line - _pitcher_projection
             )
-            _pitcher_status = (
-                "Pass" if tier == "Pass" or not _is_avail else
-                "Actionable" if (
-                    tier in ("Strong Over", "Strong Under")
-                    and _sc >= 80
-                    and _trap.get("label") == "Clean"
-                    and int(_role.get("severity", 0) or 0) <= 1
-                ) else
-                "Watchlist"
-            )
+            _pitcher_status = {
+                "PLAY": "Actionable",
+                "WATCH": "Watchlist",
+                "PASS": "Pass",
+            }[_entry_action]
             _pitcher_decision_class = (
                 "pass" if _pitcher_status == "Pass" else
                 "watchlist" if _pitcher_status == "Watchlist" else "actionable"
@@ -13582,8 +13616,8 @@ if st.session_state.active_sport == "mlb":
                 f"<span class='mlb-decision-status'>{_pitcher_status}</span></div></div>"
                 f"<div class='mlb-decision-copy'>{_pitcher_copy}</div>"
                 f"<div class='mlb-decision-metrics'>"
-                f"<div class='mlb-decision-metric'><span>Model probability</span><strong>{adj:.0%}</strong></div>"
-                f"<div class='mlb-decision-metric'><span>Pick confidence</span><strong>{_sc}/100</strong></div>"
+                f"<div class='mlb-decision-metric'><span>Estimated hit chance</span><strong>{adj:.0%}</strong></div>"
+                f"<div class='mlb-decision-metric'><span>Evidence quality</span><strong>{_sc}/100</strong></div>"
                 f"<div class='mlb-decision-metric'><span>Projected K</span><strong>{_pitcher_projection:.1f}</strong></div>"
                 f"<div class='mlb-decision-metric'><span>Projected edge</span><strong>{_pitcher_projected_edge:+.1f}</strong></div>"
                 f"<div class='mlb-decision-metric'><span>Historical avg edge</span><strong>{_pitcher_directional_edge:+.1f}</strong></div>"
@@ -14592,36 +14626,28 @@ if st.session_state.active_sport == "mlb":
                 """, unsafe_allow_html=True)
 
             # Presentation-only summary of the completed model; it does not alter the analysis.
-            _entry_probability_strength = max(0.0, min(1.0, (adj - 0.50) / 0.22)) * 100
-            _entry_score = int(round(
-                0.60 * _entry_probability_strength + 0.40 * float(_sc)
-            ))
-            if not _is_avail:
-                _entry_score = 0
-            elif _pitcher_status == "Pass":
-                _entry_score = min(_entry_score, 64)
-            elif _pitcher_status == "Watchlist":
-                _entry_score = min(_entry_score, 79)
-            _entry_score = max(0, min(100, _entry_score))
-
-            if _entry_score >= 80:
-                _entry_action = "PLAY"
+            if _entry_action == "PLAY":
                 _entry_color = "#18f3a2"
                 _entry_border = "rgba(24,243,162,0.32)"
                 _entry_bg = "rgba(24,243,162,0.07)"
                 _entry_note = "Model strength and evidence quality cleared every action gate."
-            elif _entry_score >= 65:
-                _entry_action = "WATCH"
+            elif _entry_action == "WATCH":
                 _entry_color = "#ffd166"
                 _entry_border = "rgba(255,209,102,0.32)"
                 _entry_bg = "rgba(255,209,102,0.07)"
                 _entry_note = "Promising direction; wait for stronger confirmation before entering."
             else:
-                _entry_action = "PASS"
                 _entry_color = "#8da2b8"
                 _entry_border = "rgba(141,162,184,0.25)"
                 _entry_bg = "rgba(141,162,184,0.055)"
                 _entry_note = "The combined edge is not reliable enough for an entry."
+
+            _entry_gate_text = (
+                f" · Gate: {_mlb_html.escape(str(_entry_gate_reason))} "
+                f"({_entry_gate_adjustment:+d})"
+                if _entry_gate_adjustment < 0 else
+                " · No blocking gate"
+            )
 
             st.markdown(
                 f"<div style='position:relative;overflow:hidden;display:flex;align-items:center;"
@@ -14640,6 +14666,9 @@ if st.session_state.active_sport == "mlb":
                 f"color:{_entry_color};'>{_entry_action}</div>"
                 f"<div style='font-family:DM Sans,sans-serif;font-size:0.72rem;line-height:1.45;"
                 f"color:#9aaec4;margin-top:3px;'>{_entry_note}</div>"
+                f"<div style='font-family:JetBrains Mono,monospace;font-size:0.5rem;line-height:1.5;"
+                f"color:#6b7f96;margin-top:5px;'>70% hit chance ({adj:.0%}) + 30% evidence "
+                f"({_sc}/100) = {_entry_base_score}{_entry_gate_text}</div>"
                 f"</div>"
                 f"<div style='font-family:JetBrains Mono,monospace;font-size:0.5rem;line-height:1.6;"
                 f"color:#6b7f96;text-align:right;'>80+ PLAY<br>65-79 WATCH<br>&lt;65 PASS</div>"
