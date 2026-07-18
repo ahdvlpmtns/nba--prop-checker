@@ -3364,17 +3364,48 @@ if "session_id" not in st.session_state:
     import uuid
     st.session_state.session_id = str(uuid.uuid4())
 
+_VALID_SPORTS = {"nba", "mlb", "wnba", "edge"}
+try:
+    _url_sport = st.query_params.get("sport", "")
+    if isinstance(_url_sport, list):
+        _url_sport = _url_sport[0] if _url_sport else ""
+    _url_sport = str(_url_sport).strip().lower()
+except Exception:
+    _url_sport = ""
+_default_active_sport = _url_sport if _url_sport in _VALID_SPORTS else "mlb"
+
 for key, default in [
     ("logs", None), ("ai_analysis", None), ("ai_error", None),
     ("defense_data", None), ("tracker", []), ("active_tab", "player"),
     ("recent_players", []), ("supabase_loaded", False), ("show_share", False),
-    ("active_sport", "mlb"), ("edge_results", []), ("edge_running", False), ("edge_manual_props", []), ("edge_manual_props", []), ("edge_jump_player", None), ("edge_jump_pitcher", None), ("edge_jump_line", None), ("edge_jump_side", "Over"), ("edge_jump_prop", "Strikeouts"),
+    ("active_sport", _default_active_sport), ("edge_results", []), ("edge_running", False), ("edge_manual_props", []), ("edge_manual_props", []), ("edge_jump_player", None), ("edge_jump_pitcher", None), ("edge_jump_line", None), ("edge_jump_side", "Over"), ("edge_jump_prop", "Strikeouts"),
     ("wnba_jump_player", None), ("wnba_jump_line", None),
     ("wnba_jump_side", "Over"), ("wnba_jump_stat", "Points"),
     ("runtime_debug_errors", []), ("runtime_metrics", {}),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
+
+
+def persist_active_sport(sport: str) -> None:
+    """Keep navigation stable across widget reruns and mobile reconnects."""
+    sport = str(sport or "").strip().lower()
+    if sport not in _VALID_SPORTS:
+        return
+    st.session_state.active_sport = sport
+    try:
+        current = st.query_params.get("sport", "")
+        if isinstance(current, list):
+            current = current[0] if current else ""
+        if str(current).strip().lower() != sport:
+            st.query_params["sport"] = sport
+    except Exception:
+        pass
+
+
+# Older open sessions may not have a sport in the URL yet. Add it once so a
+# mobile browser reconnect restores the current analyzer instead of MLB.
+persist_active_sport(st.session_state.active_sport)
 
 
 def record_debug_error(area: str, err) -> None:
@@ -3482,6 +3513,19 @@ def player_typeahead(label: str, options: list, key: str,
     }
     canonical_prefill = alias_map.get(normalize_name(prefill or ""), prefill)
     index = choices.index(canonical_prefill) if canonical_prefill in choices else None
+
+    def _commit_search_change() -> None:
+        # Callbacks run before Streamlit redraws the page. Pinning the active
+        # sport here prevents a mobile selection from landing on the default
+        # MLB view if the browser reconnects while the keyboard closes.
+        persist_active_sport(st.session_state.get("active_sport", "mlb"))
+        st.session_state[f"{key}__committed"] = st.session_state.get(key)
+        if st.session_state.get("active_sport") == "wnba":
+            st.session_state.pop("wnba_last_analysis", None)
+        elif st.session_state.get("active_sport") == "nba":
+            st.session_state.logs = None
+            st.session_state.ai_analysis = None
+
     raw = st.selectbox(
         label,
         options=choices,
@@ -3489,8 +3533,13 @@ def player_typeahead(label: str, options: list, key: str,
         key=key,
         placeholder=f"Type a {noun} name...",
         accept_new_options=True,
+        on_change=_commit_search_change,
         help=f"Start typing any part of the {noun}'s name; matching suggestions filter instantly.",
     )
+    if raw:
+        st.session_state[f"{key}__committed"] = raw
+    else:
+        raw = st.session_state.get(f"{key}__committed")
     if not raw:
         return None
     raw_text = str(raw).strip()
@@ -3537,6 +3586,52 @@ def player_typeahead(label: str, options: list, key: str,
 def set_navigation_scroll_target(target: str) -> None:
     """Request a one-time scroll after switching analyzer views."""
     st.session_state["_navigation_scroll_target"] = target
+
+
+def navigate_to_sport(sport: str, target: str) -> None:
+    """Single-pass navigation callback used by tabs and analyzer links."""
+    persist_active_sport(sport)
+    st.session_state.active_tab = "player"
+    set_navigation_scroll_target(target)
+
+
+def open_edge_analyzer(sport: str, player: str, line: float,
+                       side: str, stat: str) -> None:
+    """Open an Edge result in its analyzer without an extra rerun."""
+    sport_key = str(sport or "").strip().lower()
+    target = f"{sport_key}-analyzer-controls"
+    navigate_to_sport(sport_key, target)
+    if sport_key == "nba":
+        st.session_state.edge_jump_player = player
+        st.session_state.edge_jump_line = line
+        st.session_state.edge_jump_side = side
+    elif sport_key == "mlb":
+        st.session_state.edge_jump_pitcher = player
+        st.session_state.edge_jump_line = line
+        st.session_state.edge_jump_side = side
+        st.session_state.edge_jump_prop = stat
+    elif sport_key == "wnba":
+        st.session_state.wnba_jump_player = player
+        st.session_state.wnba_jump_line = line
+        st.session_state.wnba_jump_side = side
+        st.session_state.wnba_jump_stat = stat
+
+
+def clear_player_search(widget_key: str, sport: str,
+                        extra_keys: tuple = ()) -> None:
+    """Clear one analyzer search without disturbing navigation or other sports."""
+    st.session_state.pop(widget_key, None)
+    st.session_state.pop(f"{widget_key}__committed", None)
+    for extra_key in extra_keys:
+        st.session_state.pop(extra_key, None)
+    persist_active_sport(sport)
+
+
+def select_recent_nba_player(player: str) -> None:
+    """Commit a recent-player shortcut before the analyzer redraws."""
+    st.session_state.player_key = st.session_state.get("player_key", 0) + 1
+    st.session_state._recent_pick = player
+    persist_active_sport("nba")
 
 
 def render_navigation_scroll_target(target: str) -> None:
@@ -8355,45 +8450,41 @@ if _all_scores:
 # ─────────────────────────────────────────────
 _sp1, _sp2, _sp3, _sp4 = st.columns(4)
 with _sp1:
-    if st.button(
+    st.button(
         "🏀  NBA",
         key="sport_nba",
         use_container_width=True,
-        type="primary" if st.session_state.active_sport == "nba" else "secondary"
-    ):
-        st.session_state.active_sport = "nba"
-        set_navigation_scroll_target("nba-analyzer-controls")
-        st.rerun()
+        type="primary" if st.session_state.active_sport == "nba" else "secondary",
+        on_click=navigate_to_sport,
+        args=("nba", "nba-analyzer-controls"),
+    )
 with _sp2:
-    if st.button(
+    st.button(
         "⚾  MLB",
         key="sport_mlb",
         use_container_width=True,
-        type="primary" if st.session_state.active_sport == "mlb" else "secondary"
-    ):
-        st.session_state.active_sport = "mlb"
-        set_navigation_scroll_target("mlb-analyzer-controls")
-        st.rerun()
+        type="primary" if st.session_state.active_sport == "mlb" else "secondary",
+        on_click=navigate_to_sport,
+        args=("mlb", "mlb-analyzer-controls"),
+    )
 with _sp3:
-    if st.button(
+    st.button(
         "🏀  WNBA",
         key="sport_wnba",
         use_container_width=True,
-        type="primary" if st.session_state.active_sport == "wnba" else "secondary"
-    ):
-        st.session_state.active_sport = "wnba"
-        set_navigation_scroll_target("wnba-analyzer-controls")
-        st.rerun()
+        type="primary" if st.session_state.active_sport == "wnba" else "secondary",
+        on_click=navigate_to_sport,
+        args=("wnba", "wnba-analyzer-controls"),
+    )
 with _sp4:
-    if st.button(
+    st.button(
         "🎯  EDGE",
         key="sport_edge",
         use_container_width=True,
-        type="primary" if st.session_state.active_sport == "edge" else "secondary"
-    ):
-        st.session_state.active_sport = "edge"
-        set_navigation_scroll_target("edge-scanner-controls")
-        st.rerun()
+        type="primary" if st.session_state.active_sport == "edge" else "secondary",
+        on_click=navigate_to_sport,
+        args=("edge", "edge-scanner-controls"),
+    )
 
 render_pick_list()
 render_sticky_pick_tray()
@@ -12096,11 +12187,20 @@ if st.session_state.active_sport == "mlb":
 
     # Clear button
     if mlb_pitcher:
-        if st.button("✕", key="mlb_clear_pitcher",
-                     help="Clear player selection"):
-            st.session_state.mlb_pitcher_key = st.session_state.get("mlb_pitcher_key", 0) + 1
-            st.session_state.pop("_mlb_prefill_name", None)
-            st.rerun()
+        _mlb_player_widget_key = (
+            f"mlb_player_sel_{mlb_prop}_{st.session_state.get('mlb_pitcher_key', 0)}"
+        )
+        st.button(
+            "✕",
+            key="mlb_clear_pitcher",
+            help="Clear player selection",
+            on_click=clear_player_search,
+            args=(
+                _mlb_player_widget_key,
+                "mlb",
+                ("_mlb_prefill_name",),
+            ),
+        )
 
     if mlb_pitcher and mlb_prop == "Hitter Fantasy Score":
         _mlb_basic = mlb_find_player_basic(mlb_pitcher, hitter_only=True)
@@ -15477,6 +15577,7 @@ if st.session_state.active_sport == "wnba":
     if jump_player is not None:
         for widget_key in ("wnba_player_select", "wnba_stat_select", "wnba_line_input", "wnba_side_select"):
             st.session_state.pop(widget_key, None)
+            st.session_state.pop(f"{widget_key}__committed", None)
     default_player = jump_player if jump_player in names else None
     stat_options = list(WNBA_STAT_COLUMNS.keys())
     default_stat = jump_stat if jump_stat in stat_options else "Points"
@@ -15490,6 +15591,18 @@ if st.session_state.active_sport == "wnba":
         prefill=default_player,
         noun="WNBA player",
     )
+    if selected_name:
+        st.button(
+            "✕ Clear player",
+            key="wnba_clear_player",
+            help="Choose a different WNBA player",
+            on_click=clear_player_search,
+            args=(
+                "wnba_player_select",
+                "wnba",
+                ("wnba_last_analysis",),
+            ),
+        )
     wc2, wc3 = st.columns(2)
     with wc2:
         selected_stat = st.selectbox("Prop", stat_options, index=stat_options.index(default_stat), key="wnba_stat_select")
@@ -19763,34 +19876,16 @@ if st.session_state.active_sport == "edge":
 
                 with _act_c3:
                     # ── Deep Dive — jump to full individual analyzer ──────
-                    if st.button("🔍 Analyze", key=f"ea_{_btn_key_safe}",
-                                 use_container_width=True):
-                        # Store jump target in session state
-                        # then switch to the correct sport tab
-                        if _r["sport"] == "NBA":
-                            st.session_state.active_sport    = "nba"
-                            st.session_state.active_tab      = "player"
-                            st.session_state.edge_jump_player = _r["player"]
-                            st.session_state.edge_jump_line   = _r["line"]
-                            st.session_state.edge_jump_side   = _result_side
-                            set_navigation_scroll_target("nba-analyzer-controls")
-                            st.rerun()
-                        elif _r["sport"] == "MLB":
-                            st.session_state.active_sport     = "mlb"
-                            st.session_state.edge_jump_pitcher = _r["player"]
-                            st.session_state.edge_jump_line    = _r["line"]
-                            st.session_state.edge_jump_side    = _result_side
-                            st.session_state.edge_jump_prop    = _r["stat"]
-                            set_navigation_scroll_target("mlb-analyzer-controls")
-                            st.rerun()
-                        else:
-                            st.session_state.active_sport = "wnba"
-                            st.session_state.wnba_jump_player = _r["player"]
-                            st.session_state.wnba_jump_line = _r["line"]
-                            st.session_state.wnba_jump_side = _r.get("side", "Over")
-                            st.session_state.wnba_jump_stat = _r["stat"]
-                            set_navigation_scroll_target("wnba-analyzer-controls")
-                            st.rerun()
+                    st.button(
+                        "🔍 Analyze",
+                        key=f"ea_{_btn_key_safe}",
+                        use_container_width=True,
+                        on_click=open_edge_analyzer,
+                        args=(
+                            _r["sport"], _r["player"], _r["line"],
+                            _result_side, _r["stat"],
+                        ),
+                    )
 
     elif st.session_state.get("edge_has_scanned"):
         _scan_summary = st.session_state.get("edge_scan_summary", "No model candidates returned.")
@@ -20483,6 +20578,7 @@ with col_a:
     _pick_target   = _edge_jump_nba or _recent_pick
     if _pick_target:
         st.session_state.pop(f"player_sel_{st.session_state.player_key}", None)
+        st.session_state.pop(f"player_sel_{st.session_state.player_key}__committed", None)
     # Carry the complete Edge selection and auto-run the destination once.
     if _edge_jump_nba:
         st.session_state["_drilldown_line"] = st.session_state.pop("edge_jump_line", None)
@@ -20506,11 +20602,17 @@ with col_a:
 
     # Overlay ✕ button — only visible when a player is selected
     if player_query:
-        if st.button("✕", key="clear_player_x", help="Clear player"):
-            st.session_state.player_key += 1
-            st.session_state.logs = None
-            st.session_state.ai_analysis = None
-            st.rerun()
+        st.button(
+            "✕",
+            key="clear_player_x",
+            help="Clear player",
+            on_click=clear_player_search,
+            args=(
+                f"player_sel_{st.session_state.player_key}",
+                "nba",
+                ("logs", "ai_analysis", "_recent_pick"),
+            ),
+        )
 
     # Recent players — quick tap chips
     if st.session_state.recent_players and not player_query:
@@ -20521,10 +20623,13 @@ with col_a:
             unsafe_allow_html=True
         )
         for _rp in st.session_state.recent_players:
-            if st.button(_rp, key=f"recent_{_rp}", use_container_width=True):
-                st.session_state.player_key += 1
-                st.session_state._recent_pick = _rp
-                st.rerun()
+            st.button(
+                _rp,
+                key=f"recent_{_rp}",
+                use_container_width=True,
+                on_click=select_recent_nba_player,
+                args=(_rp,),
+            )
 
 col_b, col_c, col_d, col_e = st.columns([1, 1, 1, 0.8])
 
