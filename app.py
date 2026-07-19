@@ -6394,6 +6394,95 @@ def delete_from_supabase(row_id: str) -> bool:
 
 # ── PrizePicks slate cache ───────────────────────────────────
 
+PP_FRESH_SLATE_MINUTES = 5
+PP_VERIFY_LINE_AFTER_MINUTES = 15
+
+
+def get_pp_displayed_line(attributes: dict) -> dict:
+    """Return the line PrizePicks displays, including active promo overrides."""
+    attrs = attributes or {}
+    try:
+        base_line = float(attrs.get("line_score"))
+    except (TypeError, ValueError):
+        return {
+            "line": None,
+            "base_line": None,
+            "is_promo": False,
+            "line_source": "missing",
+        }
+
+    # PrizePicks can keep the regular line in line_score while the app shows a
+    # discounted flash-sale line. Ignoring that override makes the scanner
+    # analyze a harder line than the user can actually select.
+    promo_fields = (
+        "flash_sale_line_score",
+        "discounted_line_score",
+        "promo_line_score",
+    )
+    for field in promo_fields:
+        try:
+            promo_line = float(attrs.get(field))
+        except (TypeError, ValueError):
+            continue
+        if promo_line >= 0 and abs(promo_line - base_line) >= 0.01:
+            return {
+                "line": promo_line,
+                "base_line": base_line,
+                "is_promo": True,
+                "line_source": field,
+            }
+
+    return {
+        "line": base_line,
+        "base_line": base_line,
+        "is_promo": False,
+        "line_source": "line_score",
+    }
+
+
+def pp_projection_recency_key(row: dict) -> tuple:
+    """Rank duplicate projection rows without relying on lexical ID order."""
+    updated = pd.to_datetime(row.get("updated_at"), utc=True, errors="coerce")
+    board = pd.to_datetime(row.get("board_time"), utc=True, errors="coerce")
+    updated_ns = int(updated.value) if pd.notna(updated) else 0
+    board_ns = int(board.value) if pd.notna(board) else 0
+    projection_id = str(row.get("projection_id", "") or "")
+    try:
+        numeric_id = int(projection_id)
+    except (TypeError, ValueError):
+        numeric_id = 0
+    # At equal timestamps, prefer the displayed promo and then its easier line.
+    return (
+        updated_ns,
+        board_ns,
+        1 if row.get("is_promo") else 0,
+        -float(row.get("line", 0) or 0),
+        numeric_id,
+        projection_id,
+    )
+
+
+def stamp_pp_slate_metadata(props: list, source: str, age_minutes: float = 0.0) -> list:
+    """Attach freshness metadata used by ranking and line-verification gates."""
+    stamped = []
+    for prop in props or []:
+        if not isinstance(prop, dict):
+            continue
+        row = dict(prop)
+        legacy_line = "line_source" not in row
+        row["slate_source"] = source
+        row["slate_age_minutes"] = max(0.0, float(age_minutes or 0.0))
+        row["line_verification_required"] = (
+            legacy_line
+            or (
+                source != "live"
+                and row["slate_age_minutes"] > PP_VERIFY_LINE_AFTER_MINUTES
+            )
+        )
+        row.setdefault("line_source", "legacy_cache" if legacy_line else "line_score")
+        stamped.append(row)
+    return stamped
+
 def normalize_mlb_pitcher_prop_stat(stat: str) -> str:
     """Normalize MLB prop names used by PropIQ's MLB models."""
     s = re.sub(r"[^a-z0-9]+", " ", str(stat or "").lower()).strip()
@@ -6422,6 +6511,31 @@ def normalize_mlb_pitcher_prop_stat(stat: str) -> str:
 
 def is_mlb_strikeout_prop(stat: str) -> bool:
     return normalize_mlb_pitcher_prop_stat(stat) == "Strikeouts"
+
+
+def select_safest_mlb_strikeout_rows(props: list) -> list:
+    """Keep the lowest selectable strikeout line per pitcher plus other markets."""
+    safest = {}
+    other_rows = []
+    for prop in props or []:
+        if not is_mlb_strikeout_prop(prop.get("stat", "")):
+            other_rows.append(prop)
+            continue
+        key = f"{prop.get('sport', 'MLB')}|{normalize_name(prop.get('player', ''))}|Strikeouts"
+        current = safest.get(key)
+        candidate_rank = (
+            float(prop.get("line", 999) or 999),
+            0 if prop.get("is_promo") else 1,
+            0 if not prop.get("is_goblin") else 1,
+        )
+        current_rank = (
+            float(current.get("line", 999) or 999),
+            0 if current.get("is_promo") else 1,
+            0 if not current.get("is_goblin") else 1,
+        ) if current else None
+        if current is None or candidate_rank < current_rank:
+            safest[key] = prop
+    return other_rows + list(safest.values())
 
 
 def is_mlb_pitcher_outs_prop(stat: str) -> bool:
@@ -6573,6 +6687,7 @@ def get_cached_pp_props_from_supabase(sport_filter: str, max_age_minutes: int = 
         raw_props = rows[0].get("props_json", "[]")
         props = _json.loads(raw_props) if isinstance(raw_props, str) else raw_props
         props = filter_usable_pp_cached_props(props, sport_filter)
+        props = stamp_pp_slate_metadata(props, "supabase", age_minutes)
         if isinstance(props, list) and props:
             st.session_state["edge_fetch_debug"] = [
                 f"Using Supabase cached PrizePicks slate ({age_minutes:.0f} min old)"
@@ -6837,6 +6952,7 @@ def get_cached_pp_props_from_local(sport_filter: str, max_age_minutes: int = 720
             payload = _json.load(f)
         props = payload if isinstance(payload, list) else payload.get("props", [])
         props = filter_usable_pp_cached_props(props, sport_filter)
+        props = stamp_pp_slate_metadata(props, "local", age_minutes)
         if isinstance(props, list) and props:
             st.session_state["edge_fetch_debug"] = [
                 f"Using local cached PrizePicks slate ({age_minutes:.0f} min old)"
@@ -6871,6 +6987,45 @@ def save_pp_props_to_local(sport_filter: str, props: list) -> bool:
     except Exception as e:
         record_debug_error("pp_cache.local_save", e)
         return False
+
+
+def clear_pp_slate_cache(sport_filter: str) -> None:
+    """Clear Streamlit, local, durable, and cooldown state for one PP slate."""
+    safe_sport = str(sport_filter or "").strip().lower()
+    try:
+        path = _pp_local_cache_path(sport_filter)
+        if os.path.exists(path):
+            os.remove(path)
+    except Exception as e:
+        record_debug_error("pp_cache.local_clear", e)
+
+    try:
+        sb = get_supabase_client()
+        if sb:
+            import requests as _req
+            cache_key = f"edge_slate_{safe_sport}"
+            hdrs = {
+                "apikey": sb.key,
+                "Authorization": f"Bearer {sb.key}",
+                "Content-Type": "application/json",
+            }
+            r = _req.delete(
+                f"{sb.url}/rest/v1/pp_slate_cache?cache_key=eq.{cache_key}",
+                headers=hdrs,
+                timeout=6,
+            )
+            if not r.ok:
+                record_debug_error(
+                    "pp_cache.supabase_clear",
+                    f"HTTP {r.status_code}: {r.text[:200]}",
+                )
+    except Exception as e:
+        record_debug_error("pp_cache.supabase_clear", e)
+
+    st.session_state.pop(f"pp_rate_limit_until_{safe_sport}", None)
+    st.session_state[f"pp_force_live_{safe_sport}"] = True
+    st.session_state.pop("edge_fetch_debug", None)
+    st.session_state.pop("edge_cache_save_status", None)
 
 
 # ── Auto prop result detection ───────────────────────────────
@@ -17176,14 +17331,23 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
         except Exception:
             return False
 
-    cached_props = get_cached_pp_props_from_supabase(sport_filter, max_age_minutes=60)
-    if cached_props and _cache_slate_looks_valid(cached_props):
-        return cached_props
-    cached_props = get_cached_pp_props_from_local(sport_filter, max_age_minutes=60)
-    if cached_props and _cache_slate_looks_valid(cached_props):
-        return cached_props
+    force_live_key = f"pp_force_live_{sport_filter.lower()}"
+    force_live = bool(st.session_state.pop(force_live_key, False))
+    if not force_live:
+        cached_props = get_cached_pp_props_from_supabase(
+            sport_filter, max_age_minutes=PP_FRESH_SLATE_MINUTES
+        )
+        if cached_props and _cache_slate_looks_valid(cached_props):
+            return cached_props
+        cached_props = get_cached_pp_props_from_local(
+            sport_filter, max_age_minutes=PP_FRESH_SLATE_MINUTES
+        )
+        if cached_props and _cache_slate_looks_valid(cached_props):
+            return cached_props
 
     def _stale_cache() -> Optional[list]:
+        if force_live:
+            return None
         stale = get_cached_pp_props_from_supabase(sport_filter, max_age_minutes=1440)
         if stale and _cache_slate_looks_valid(stale):
             return stale
@@ -17303,7 +17467,8 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
         for proj in projections:
             a = proj.get("attributes", {}) or {}
             stat = a.get("stat_type", "")
-            line = a.get("line_score")
+            displayed_line = get_pp_displayed_line(a)
+            line = displayed_line.get("line")
             odds_type = str(a.get("odds_type", "standard") or "standard").lower()
             if line is None or not stat:
                 continue
@@ -17360,7 +17525,11 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
                 "stat": market,
                 "pos": pi.get("pos", ""),
                 "line": line_value,
+                "base_line": displayed_line.get("base_line"),
+                "is_promo": bool(displayed_line.get("is_promo")),
+                "line_source": displayed_line.get("line_source", "line_score"),
                 "projection_id": str(proj.get("id", "") or ""),
+                "game_id": str(a.get("game_id", "") or ""),
                 "start_time": a.get("start_time") or a.get("end_time") or "",
                 "board_time": a.get("board_time") or "",
                 "updated_at": a.get("updated_at") or "",
@@ -17376,10 +17545,7 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
         for variants in buckets.values():
             standard = None
             if variants["standard"]:
-                standard = max(
-                    variants["standard"],
-                    key=lambda row: (str(row.get("updated_at", "")), str(row.get("projection_id", ""))),
-                )
+                standard = max(variants["standard"], key=pp_projection_recency_key)
                 result.append(standard)
             if variants["goblin"]:
                 # Keep one actionable goblin line per player/market. Prefer the
@@ -17402,7 +17568,7 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
             "skipped_alternate": skipped_alternate,
             "markets": len(buckets),
         }
-        return result, meta
+        return stamp_pp_slate_metadata(result, "live", 0.0), meta
 
     _endpoints = [
         ("https://partner-api.prizepicks.com/projections", "partner-api.prizepicks.com"),
@@ -17683,7 +17849,9 @@ if st.session_state.active_sport == "edge":
         validation_label = str(result.get("validation_label", "") or "")
         validation_reasons = result.get("validation_reasons", []) or []
 
-        if "Watchlist" in validation_label:
+        if result.get("line_verification_required"):
+            grade, color = "Verify Line", "#f97316"
+        elif "Watchlist" in validation_label:
             grade, color = "Watchlist", "#ffc107"
         elif adj >= 78 and edge >= 2 and cons >= 60:
             grade, color = "A+ Edge", "#00e896"
@@ -17729,6 +17897,8 @@ if st.session_state.active_sport == "edge":
                 reasons.append(result["opp_profile"])
             if result.get("market_note"):
                 reasons.append(result["market_note"])
+            if result.get("line_verification_required"):
+                reasons.append("Cached line needs PrizePicks verification")
             if result.get("park") and result.get("park") != "Neutral":
                 reasons.append(f"Park {result['park'].lower()}")
             if result.get("post_break_monitor"):
@@ -17763,6 +17933,8 @@ if st.session_state.active_sport == "edge":
         eligible = []
         for r in candidates:
             if r.get("sport") != "MLB":
+                continue
+            if r.get("line_verification_required"):
                 continue
             if r.get("is_goblin"):
                 continue
@@ -20189,7 +20361,12 @@ if st.session_state.active_sport == "edge":
             label_visibility="collapsed"
         )
     with _ec4:
-        _include_goblin = st.checkbox("Include goblins", value=True, key="edge_goblins")
+        _include_goblin = st.checkbox(
+            "Use safest promo lines",
+            value=True,
+            key="edge_goblins",
+            help="For MLB strikeout Overs, use the lowest selectable standard, promo, or goblin line for each pitcher.",
+        )
 
     _min_edge_val = {
         "Any edge": 0, "+3%": 3, "+5%": 5, "+7%": 7, "+10%": 10
@@ -20214,6 +20391,7 @@ if st.session_state.active_sport == "edge":
                 fetch_all_pp_props.clear()
             except Exception:
                 st.cache_data.clear()
+            clear_pp_slate_cache(_edge_sport)
             st.session_state.edge_results = []
             st.session_state["edge_has_scanned"] = False
             st.session_state["edge_scan_summary"] = ""
@@ -20351,9 +20529,16 @@ if st.session_state.active_sport == "edge":
             elif _variant == "goblin":
                 if float(p.get("line", 0) or 0) > float(existing.get("line", 0) or 0):
                     _deduped[_k] = p
-            elif str(p.get("updated_at", "")) > str(existing.get("updated_at", "")):
+            elif pp_projection_recency_key(p) > pp_projection_recency_key(existing):
                 _deduped[_k] = p
         _filtered = list(_deduped.values())
+
+        # For MLB strikeout Overs, analyze the easiest currently selectable line
+        # per pitcher. This prevents a 3.5 standard row from hiding a live 2.5
+        # promo/goblin row when the user asks the scanner for the safest board.
+        if _edge_sport == "MLB" and _include_goblin:
+            _filtered = select_safest_mlb_strikeout_rows(_filtered)
+
         _mlb_k_count = sum(1 for p in _filtered if p.get("sport") == "MLB" and is_mlb_strikeout_prop(p.get("stat", "")))
         _mlb_hfs_count = sum(1 for p in _filtered if p.get("sport") == "MLB" and is_mlb_hitter_fantasy_prop(p.get("stat", "")))
         _wnba_market_counts = {}
@@ -20454,6 +20639,16 @@ if st.session_state.active_sport == "edge":
                     if _res:
                         _res["is_goblin"] = _prop_ref.get("is_goblin", False)
                         _res["is_demon"]  = _prop_ref.get("is_demon", False)
+                        _res["is_promo"] = bool(_prop_ref.get("is_promo", False))
+                        _res["base_line"] = _prop_ref.get("base_line", _prop_ref.get("line"))
+                        _res["line_source"] = _prop_ref.get("line_source", "line_score")
+                        _res["slate_source"] = _prop_ref.get("slate_source", "live")
+                        _res["slate_age_minutes"] = float(
+                            _prop_ref.get("slate_age_minutes", 0) or 0
+                        )
+                        _res["line_verification_required"] = bool(
+                            _prop_ref.get("line_verification_required", False)
+                        )
                         _results.append(_res)
                 except Exception as _future_err:
                     record_debug_error(
@@ -20527,8 +20722,9 @@ if st.session_state.active_sport == "edge":
                 r["edge_pct"] = round(_edge_pct, 1)
                 _with_edge.append(r)
 
-        # Sort by calibrated edge, then model probability.
+        # Current verified lines rank ahead of stale fallback lines.
         _with_edge.sort(key=lambda r: (
+            1 if r.get("line_verification_required") else 0,
             -r["edge_pct"],
             -r["adj"],
             0 if r.get("is_goblin") else 1
@@ -20548,10 +20744,13 @@ if st.session_state.active_sport == "edge":
                 if r["adj"] >= 67 and r["edge_pct"] >= 7
                 and int(r.get("confidence", 0) or 0) >= 75
                 and "Watchlist" not in str(r.get("validation_label", ""))
+                and not r.get("line_verification_required")
             ]
             _lean    = [
                 r for r in _with_edge
-                if r not in _strong and (r["adj"] >= 60 or r["edge_pct"] >= 3)
+                if r not in _strong
+                and not r.get("line_verification_required")
+                and (r["adj"] >= 60 or r["edge_pct"] >= 3)
             ]
             _goblins = [r for r in _with_edge if r.get("is_goblin")]
             st.markdown(
@@ -20575,7 +20774,11 @@ if st.session_state.active_sport == "edge":
 
             # ── Best Entry Builder: MLB-only recommended combo ────────────
             if _edge_sport == "MLB":
-                _best_entry = build_mlb_best_entry(_with_edge, target_size=3)
+                _verified_entry_pool = [
+                    result for result in _with_edge
+                    if not result.get("line_verification_required")
+                ]
+                _best_entry = build_mlb_best_entry(_verified_entry_pool, target_size=3)
                 _best_legs = _best_entry.get("legs", [])
                 if len(_best_legs) >= 2:
                     _best_combined = _best_entry.get("combined", 0.0)
@@ -20690,20 +20893,25 @@ if st.session_state.active_sport == "edge":
                     f"<div class='edge-reasons-v55'>{_reason_html}</div>"
                     if _reason_html else ""
                 )
+                _line_needs_verify = bool(_r.get("line_verification_required"))
                 _is_strong  = (
                     _r["adj"] >= 67 and _r["edge_pct"] >= 7
                     and int(_r.get("confidence", 0) or 0) >= 75
                     and "Watchlist" not in str(_r.get("validation_label", ""))
+                    and not _r.get("line_verification_required")
                 )
-                _is_lean    = (not _is_strong) and (
+                _is_lean    = (not _line_needs_verify) and (not _is_strong) and (
                     _r["adj"] >= 60 or _r["edge_pct"] >= 3
                 )
                 _result_side = _r.get("side", "Over")
-                _tier_lbl   = (f"Strong {_result_side}" if _is_strong else
+                _tier_lbl   = ("Verify Line" if _line_needs_verify else
+                               f"Strong {_result_side}" if _is_strong else
                                f"Lean {_result_side}" if _is_lean else "Edge Play")
-                _tier_col   = ("#00e896" if _is_strong else
+                _tier_col   = ("#f97316" if _line_needs_verify else
+                               "#00e896" if _is_strong else
                                "#ffc107" if _is_lean  else "#9aaec4")
-                _tier_bg    = ("rgba(0,232,150,0.06)" if _is_strong else
+                _tier_bg    = ("rgba(249,115,22,0.06)" if _line_needs_verify else
+                               "rgba(0,232,150,0.06)" if _is_strong else
                                "rgba(255,193,7,0.05)" if _is_lean  else
                                "rgba(255,255,255,0.02)")
                 _border_col = (_tier_col + "33")
@@ -20711,6 +20919,14 @@ if st.session_state.active_sport == "edge":
                     "<span class='edge-pill-v55 warn'>Goblin</span>"
                     if _r.get("is_goblin") else ""
                 )
+                _promo_tag = ""
+                if _r.get("is_promo"):
+                    _base_line = _r.get("base_line")
+                    _promo_text = (
+                        f"Promo {float(_base_line):g} → {float(_r['line']):g}"
+                        if _base_line is not None else "PrizePicks promo line"
+                    )
+                    _promo_tag = f"<span class='edge-pill-v55 accent'>{_promo_text}</span>"
                 _bar_w = min(100, int(_r["adj"]))
                 _edge_raw_col = "#00e896" if _r["edge_raw"] > 0 else "#ff3d5c"
                 _card_class = "strong" if _is_strong else ("lean" if _is_lean else "")
@@ -20741,6 +20957,17 @@ if st.session_state.active_sport == "edge":
                     _risk_pills += f"<span class='edge-pill-v55 warn'>{_vr}</span>"
                 if _r.get("stat") == "Strikeouts" and _r.get("pc_ceiling") is not None and _r.get("pc_ceiling") <= _r["line"] + 0.5:
                     _risk_pills += "<span class='edge-pill-v55 warn'>Ceiling tight</span>"
+                if _r.get("line_verification_required"):
+                    _cache_age = float(_r.get("slate_age_minutes", 0) or 0)
+                    _risk_pills += (
+                        "<span class='edge-pill-v55 warn'>"
+                        f"Verify PP line · cached {_cache_age:.0f}m ago</span>"
+                    )
+                elif _r.get("slate_source") in ("supabase", "local"):
+                    _cache_age = float(_r.get("slate_age_minutes", 0) or 0)
+                    _risk_pills += (
+                        f"<span class='edge-pill-v55'>Fresh cache {_cache_age:.0f}m</span>"
+                    )
                 _game_pill = f"<span class='edge-pill-v55'>Game {_r.get('game_date')}</span>" if _r.get("game_date") else ""
                 _opp_k_pill = f"<span class='edge-pill-v55'>Opp K% {_r.get('opp_k')}</span>" if _r.get("opp_k") is not None else ""
                 _opp_bb_pill = f"<span class='edge-pill-v55'>Opp BB% {_r.get('opp_bb')}</span>" if _r.get("opp_bb") is not None else ""
@@ -20797,7 +21024,7 @@ if st.session_state.active_sport == "edge":
                     f"{_projection_prob_pill}"
                     f"{_recent_k_pill}{_readiness_pill}"
                     f"{_defense_pill}{_injury_pill}"
-                    f"{_goblin_tag}{_risk_pills}"
+                    f"{_promo_tag}{_goblin_tag}{_risk_pills}"
                 )
                 if _r.get("market_snapshots"):
                     _move = float(_r.get("market_open_move") or _r.get("market_move") or 0)
@@ -20931,6 +21158,16 @@ if st.session_state.active_sport == "edge":
                             ["Post-break readiness", " | ".join(_r.get("readiness_notes") or []) or "Normal rotation"],
                             ["Days since last start", str(_r.get("days_since_last", "Unavailable"))],
                             ["Evidence reliability", f"{float(_r.get('reliability', 0)):.1f}%"],
+                            ["PrizePicks line source", (
+                                f"Promo override {float(_r.get('base_line')):g} → {float(_r.get('line')):g}"
+                                if _r.get("is_promo") and _r.get("base_line") is not None
+                                else f"{_r.get('slate_source', 'live')} · {_r.get('line_source', 'line_score')}"
+                            )],
+                            ["PrizePicks line freshness", (
+                                f"Verify required · cached {float(_r.get('slate_age_minutes', 0) or 0):.0f}m ago"
+                                if _r.get("line_verification_required")
+                                else "Current/fresh"
+                            )],
                             ["Confidence quality gate", (
                                 f"{int(_r.get('confidence_before_validation', _conf_val))} raw quality · "
                                 f"-{int(_r.get('validation_penalty', 0) or 0)} validation penalty · {_conf_val} final"
@@ -21006,11 +21243,16 @@ if st.session_state.active_sport == "edge":
                         "Sport":       _r["sport"],
                     }
                     st.button(
-                        "➕ Add & Track",
+                        "Verify PP line first" if _line_needs_verify else "➕ Add & Track",
                         key=f"ep_{_btn_key_safe}",
                         use_container_width=True,
                         on_click=add_to_pick_list_and_tracker,
                         args=(_new_leg, _edge_tracker_entry),
+                        disabled=_line_needs_verify,
+                        help=(
+                            "This result came from an older fallback slate. Confirm the current PrizePicks line or refresh the slate first."
+                            if _line_needs_verify else None
+                        ),
                     )
 
                 with _act_c3:
