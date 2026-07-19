@@ -6648,6 +6648,7 @@ def delete_from_supabase(row_id: str) -> bool:
 
 PP_FRESH_SLATE_MINUTES = 5
 PP_VERIFY_LINE_AFTER_MINUTES = 15
+PP_LINE_SELECTION_VERSION = 2
 
 
 def get_pp_displayed_line(attributes: dict) -> dict:
@@ -6714,6 +6715,26 @@ def pp_projection_recency_key(row: dict) -> tuple:
     )
 
 
+def select_lowest_pp_goblin_row(goblins: list, standard: Optional[dict] = None) -> Optional[dict]:
+    """Return the freshest row at the lowest valid goblin line."""
+    rows = [row for row in (goblins or []) if row.get("line") is not None]
+    if not rows:
+        return None
+    if standard and standard.get("line") is not None:
+        below_standard = [
+            row for row in rows
+            if float(row["line"]) < float(standard["line"])
+        ]
+        if below_standard:
+            rows = below_standard
+    lowest_line = min(float(row["line"]) for row in rows)
+    lowest_rows = [
+        row for row in rows
+        if abs(float(row["line"]) - lowest_line) < 0.01
+    ]
+    return max(lowest_rows, key=pp_projection_recency_key)
+
+
 def stamp_pp_slate_metadata(props: list, source: str, age_minutes: float = 0.0) -> list:
     """Attach freshness metadata used by ranking and line-verification gates."""
     stamped = []
@@ -6765,29 +6786,44 @@ def is_mlb_strikeout_prop(stat: str) -> bool:
     return normalize_mlb_pitcher_prop_stat(stat) == "Strikeouts"
 
 
-def select_safest_mlb_strikeout_rows(props: list) -> list:
-    """Keep the lowest selectable strikeout line per pitcher plus other markets."""
+def select_safest_pp_over_rows(props: list) -> list:
+    """Keep the lowest selectable Over line for each player and market."""
     safest = {}
-    other_rows = []
     for prop in props or []:
-        if not is_mlb_strikeout_prop(prop.get("stat", "")):
-            other_rows.append(prop)
+        if prop.get("is_demon"):
             continue
-        key = f"{prop.get('sport', 'MLB')}|{normalize_name(prop.get('player', ''))}|Strikeouts"
-        current = safest.get(key)
-        candidate_rank = (
-            float(prop.get("line", 999) or 999),
-            0 if prop.get("is_promo") else 1,
-            0 if not prop.get("is_goblin") else 1,
+        try:
+            candidate_line = float(prop.get("line"))
+        except (TypeError, ValueError):
+            continue
+        event_key = prop.get("game_id") or prop.get("start_time") or "upcoming"
+        key = (
+            str(prop.get("sport", "")),
+            normalize_name(prop.get("player", "")),
+            str(prop.get("stat", "")),
+            str(event_key),
         )
-        current_rank = (
-            float(current.get("line", 999) or 999),
-            0 if current.get("is_promo") else 1,
-            0 if not current.get("is_goblin") else 1,
-        ) if current else None
-        if current is None or candidate_rank < current_rank:
+        current = safest.get(key)
+        if current is None:
             safest[key] = prop
-    return other_rows + list(safest.values())
+            continue
+        current_line = float(current.get("line", 999) or 999)
+        if (
+            candidate_line < current_line
+            or (
+                abs(candidate_line - current_line) < 0.01
+                and pp_projection_recency_key(prop) > pp_projection_recency_key(current)
+            )
+        ):
+            safest[key] = prop
+    return list(safest.values())
+
+
+def select_safest_mlb_strikeout_rows(props: list) -> list:
+    """Backward-compatible strikeout selector used by older cached flows."""
+    strikeouts = [p for p in props or [] if is_mlb_strikeout_prop(p.get("stat", ""))]
+    other_rows = [p for p in props or [] if not is_mlb_strikeout_prop(p.get("stat", ""))]
+    return other_rows + select_safest_pp_over_rows(strikeouts)
 
 
 def is_mlb_pitcher_outs_prop(stat: str) -> bool:
@@ -17575,6 +17611,11 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
         try:
             if sport_filter == "MLB":
                 mlb_rows = [p for p in cached if p.get("sport") == "MLB"]
+                if mlb_rows and any(
+                    int(p.get("line_selection_version", 0) or 0) < PP_LINE_SELECTION_VERSION
+                    for p in mlb_rows
+                ):
+                    return False
                 k_rows = [p for p in mlb_rows if is_mlb_strikeout_prop(p.get("stat", ""))]
                 hfs_rows = [p for p in mlb_rows if is_mlb_hitter_fantasy_prop(p.get("stat", ""))]
                 k_pitchers = {normalize_name(p.get("player", "")) for p in k_rows if p.get("player")}
@@ -17584,6 +17625,11 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
                 return bool(k_rows or hfs_rows) and len(mlb_rows) <= 2500 and len(k_pitchers) <= 100
             if sport_filter == "WNBA":
                 rows = [p for p in cached if p.get("sport") == "WNBA"]
+                if rows and any(
+                    int(p.get("line_selection_version", 0) or 0) < PP_LINE_SELECTION_VERSION
+                    for p in rows
+                ):
+                    return False
                 supported_rows = [p for p in rows if is_wnba_supported_prop(p.get("stat", ""))]
                 return len(rows) <= 1500 and len(supported_rows) <= 900
             return len(cached) <= 1500
@@ -17796,6 +17842,10 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
                 "is_goblin": odds_type == "goblin",
                 "is_demon": False,
                 "odds_type": odds_type,
+                "adjusted_odds": bool(a.get("adjusted_odds", False)),
+                "projection_type": a.get("projection_type") or "",
+                "group_key": a.get("group_key") or "",
+                "line_selection_version": PP_LINE_SELECTION_VERSION,
             }
             key = (expected_sport, normalize_name(name), market)
             buckets.setdefault(key, {"standard": [], "goblin": []})[odds_type].append(entry)
@@ -17807,16 +17857,12 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
                 standard = max(variants["standard"], key=pp_projection_recency_key)
                 result.append(standard)
             if variants["goblin"]:
-                # Keep one actionable goblin line per player/market. Prefer the
-                # closest easier line below standard; without a standard line,
-                # use the highest goblin to avoid manufacturing giant edges.
-                goblins = variants["goblin"]
-                if standard:
-                    below_standard = [row for row in goblins if row["line"] < standard["line"]]
-                    goblin = max(below_standard or goblins, key=lambda row: row["line"])
-                else:
-                    goblin = max(goblins, key=lambda row: row["line"])
-                result.append(goblin)
+                # PrizePicks may publish several reduced-payout goblin lines for
+                # one market. The scanner's "safest" mode means the actual
+                # lowest selectable Over line, not the goblin nearest standard.
+                goblin = select_lowest_pp_goblin_row(variants["goblin"], standard)
+                if goblin:
+                    result.append(goblin)
 
         meta = {
             "verified": payload_verified,
@@ -20621,10 +20667,13 @@ if st.session_state.active_sport == "edge":
         )
     with _ec4:
         _include_goblin = st.checkbox(
-            "Use safest promo lines",
+            "Use lowest promo lines",
             value=True,
             key="edge_goblins",
-            help="For MLB strikeout Overs, use the lowest selectable standard, promo, or goblin line for each pitcher.",
+            help=(
+                "For Overs, use the lowest live standard, promo, or goblin line for each player and market. "
+                "Goblin lines have adjusted payouts and remain clearly labeled. Unders use the standard line."
+            ),
         )
 
     _min_edge_val = {
@@ -20770,9 +20819,8 @@ if st.session_state.active_sport == "edge":
             _filtered = [p for p in _filtered if not p["is_goblin"]]
 
         # Deduplicate deterministically: preserve one standard and one optional
-        # goblin per player/market. For multiple goblins, keep the highest line
-        # so the scanner does not manufacture an oversized edge from a deep
-        # promotional alternate.
+        # goblin per player/market. For multiple goblins, keep the lowest live
+        # line because the control explicitly requests the safest Over line.
         _deduped = {}
         for p in _filtered:
             _norm_stat = (
@@ -20786,17 +20834,31 @@ if st.session_state.active_sport == "edge":
             if existing is None:
                 _deduped[_k] = p
             elif _variant == "goblin":
-                if float(p.get("line", 0) or 0) > float(existing.get("line", 0) or 0):
+                _new_line = float(p.get("line", 999) or 999)
+                _old_line = float(existing.get("line", 999) or 999)
+                if (
+                    _new_line < _old_line
+                    or (
+                        abs(_new_line - _old_line) < 0.01
+                        and pp_projection_recency_key(p) > pp_projection_recency_key(existing)
+                    )
+                ):
                     _deduped[_k] = p
             elif pp_projection_recency_key(p) > pp_projection_recency_key(existing):
                 _deduped[_k] = p
         _filtered = list(_deduped.values())
 
-        # For MLB strikeout Overs, analyze the easiest currently selectable line
-        # per pitcher. This prevents a 3.5 standard row from hiding a live 2.5
-        # promo/goblin row when the user asks the scanner for the safest board.
-        if _edge_sport == "MLB" and _include_goblin:
-            _filtered = select_safest_mlb_strikeout_rows(_filtered)
+        # Apply line selection after filters so the model receives the line the
+        # user can actually act on. Overs use the lowest selectable line. WNBA
+        # Unders stay on standard lines; in All-sides mode both candidates are
+        # modeled and the stronger direction is selected after analysis.
+        if _include_goblin and (
+            _edge_sport == "MLB"
+            or (_edge_sport == "WNBA" and _edge_side == "Overs")
+        ):
+            _filtered = select_safest_pp_over_rows(_filtered)
+        elif _edge_sport == "WNBA" and _edge_side == "Unders":
+            _filtered = [p for p in _filtered if not p.get("is_goblin")]
 
         _mlb_k_count = sum(1 for p in _filtered if p.get("sport") == "MLB" and is_mlb_strikeout_prop(p.get("stat", "")))
         _mlb_hfs_count = sum(1 for p in _filtered if p.get("sport") == "MLB" and is_mlb_hitter_fantasy_prop(p.get("stat", "")))
@@ -20856,11 +20918,16 @@ if st.session_state.active_sport == "edge":
                 if prop["sport"] == "WNBA":
                     _market = normalize_wnba_prop_stat(prop.get("stat", ""))
                     if is_wnba_supported_prop(_market):
-                        _requested_sides = (
-                            ("Over",) if _edge_side == "Overs" else
-                            ("Under",) if _edge_side == "Unders" else
-                            ("Over", "Under")
-                        )
+                        if prop.get("is_goblin"):
+                            # Lower goblin lines are favorable only to the Over.
+                            # Standard lines still evaluate both directions.
+                            _requested_sides = ("Over",)
+                        else:
+                            _requested_sides = (
+                                ("Over",) if _edge_side == "Overs" else
+                                ("Under",) if _edge_side == "Unders" else
+                                ("Over", "Under")
+                            )
                         _sides = [
                             run_wnba_edge_check(prop["player"], prop["line"], _market, _side, prop.get("team", ""))
                             for _side in _requested_sides
@@ -20899,6 +20966,8 @@ if st.session_state.active_sport == "edge":
                         _res["is_goblin"] = _prop_ref.get("is_goblin", False)
                         _res["is_demon"]  = _prop_ref.get("is_demon", False)
                         _res["is_promo"] = bool(_prop_ref.get("is_promo", False))
+                        _res["adjusted_odds"] = bool(_prop_ref.get("adjusted_odds", False))
+                        _res["odds_type"] = _prop_ref.get("odds_type", "standard")
                         _res["base_line"] = _prop_ref.get("base_line", _prop_ref.get("line"))
                         _res["line_source"] = _prop_ref.get("line_source", "line_score")
                         _res["slate_source"] = _prop_ref.get("slate_source", "live")
@@ -20914,6 +20983,32 @@ if st.session_state.active_sport == "edge":
                         f"edge.future.{_prop_ref.get('player', 'unknown')}",
                         _future_err,
                     )
+
+        # All-sides WNBA scans can produce a standard-line direction and a
+        # lowest-goblin Over for the same market. Keep the stronger actionable
+        # result so a middle line cannot crowd the favorable line off the board.
+        if _edge_sport == "WNBA" and _include_goblin and _edge_side == "All sides":
+            _best_wnba_results = {}
+            for result in _results:
+                result_key = (
+                    normalize_name(result.get("player", "")),
+                    normalize_wnba_prop_stat(result.get("stat", "")),
+                    str(result.get("game_date", "")),
+                )
+                current = _best_wnba_results.get(result_key)
+                result_rank = (
+                    float(result.get("adj", 0) or 0),
+                    int(result.get("confidence", 0) or 0),
+                    1 if result.get("is_goblin") else 0,
+                )
+                current_rank = (
+                    float(current.get("adj", 0) or 0),
+                    int(current.get("confidence", 0) or 0),
+                    1 if current.get("is_goblin") else 0,
+                ) if current else None
+                if current is None or result_rank > current_rank:
+                    _best_wnba_results[result_key] = result
+            _results = list(_best_wnba_results.values())
 
         _prog.empty()
         _status.empty()
@@ -21175,7 +21270,7 @@ if st.session_state.active_sport == "edge":
                                "rgba(255,255,255,0.02)")
                 _border_col = (_tier_col + "33")
                 _goblin_tag = (
-                    "<span class='edge-pill-v55 warn'>Goblin</span>"
+                    "<span class='edge-pill-v55 warn'>Lowest Goblin · adjusted payout</span>"
                     if _r.get("is_goblin") else ""
                 )
                 _promo_tag = ""
@@ -21354,6 +21449,13 @@ if st.session_state.active_sport == "edge":
                             ["Availability", _r.get("injury_status", "Active/Unlisted")],
                             ["Log freshness", f"{_r.get('stale_days', 0)} day(s) since latest game"],
                             ["Evidence reliability", f"{float(_r.get('reliability', 0)):.1f}%"],
+                            ["PrizePicks line variant", (
+                                "Lowest Goblin · adjusted payout"
+                                if _r.get("is_goblin") else
+                                f"Promo override {float(_r.get('base_line')):g} → {float(_r.get('line')):g}"
+                                if _r.get("is_promo") and _r.get("base_line") is not None else
+                                "Standard line"
+                            )],
                             ["Quality flags", " | ".join(_r.get("model_flags") or []) or "None"],
                         ]
                         st.dataframe(
@@ -21418,9 +21520,11 @@ if st.session_state.active_sport == "edge":
                             ["Days since last start", str(_r.get("days_since_last", "Unavailable"))],
                             ["Evidence reliability", f"{float(_r.get('reliability', 0)):.1f}%"],
                             ["PrizePicks line source", (
+                                "Lowest Goblin · adjusted payout"
+                                if _r.get("is_goblin") else
                                 f"Promo override {float(_r.get('base_line')):g} → {float(_r.get('line')):g}"
                                 if _r.get("is_promo") and _r.get("base_line") is not None
-                                else f"{_r.get('slate_source', 'live')} · {_r.get('line_source', 'line_score')}"
+                                else f"Standard · {_r.get('slate_source', 'live')} · {_r.get('line_source', 'line_score')}"
                             )],
                             ["PrizePicks line freshness", (
                                 f"Verify required · cached {float(_r.get('slate_age_minutes', 0) or 0):.0f}m ago"
