@@ -4104,6 +4104,242 @@ div[data-testid="stAlert"] {
     .edge-score-v55 { gap: 5px !important; }
 }
 
+/* Unified decision language across every individual analyzer. */
+.unified-decision-card {
+    --decision-color: #8da2b8;
+    display: grid;
+    grid-template-columns: minmax(108px, 0.72fr) minmax(190px, 1.65fr) minmax(230px, 1fr);
+    align-items: stretch;
+    gap: 0;
+    overflow: hidden;
+    margin: 0.55rem 0 0.85rem;
+    background: #0e151c;
+    border: 1px solid rgba(141,162,184,0.23);
+    border-left: 4px solid var(--decision-color);
+    border-radius: 8px;
+    box-shadow: 0 9px 26px rgba(0,0,0,0.25);
+}
+.unified-decision-card.play {
+    --decision-color: #18f3a2;
+    border-color: rgba(24,243,162,0.22);
+    border-left-color: var(--decision-color);
+}
+.unified-decision-card.watch {
+    --decision-color: #ffd166;
+    border-color: rgba(255,209,102,0.22);
+    border-left-color: var(--decision-color);
+}
+.unified-decision-score,
+.unified-decision-call,
+.unified-decision-evidence { padding: 0.9rem 1rem; }
+.unified-decision-score {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    background: color-mix(in srgb, var(--decision-color) 7%, transparent);
+    border-right: 1px solid var(--line-soft);
+}
+.unified-decision-label {
+    color: #71869b;
+    font-family: var(--font-mono);
+    font-size: 0.48rem;
+    font-weight: 800;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+}
+.unified-decision-number {
+    margin-top: 4px;
+    color: var(--decision-color);
+    font-family: var(--font-display);
+    font-size: 2.2rem;
+    font-weight: 900;
+    line-height: 1;
+}
+.unified-decision-number small {
+    color: #6f8296;
+    font-size: 0.64rem;
+    font-weight: 700;
+}
+.unified-decision-call {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+.unified-decision-action {
+    color: var(--decision-color);
+    font-family: var(--font-display);
+    font-size: 1.18rem;
+    font-weight: 900;
+    line-height: 1.1;
+}
+.unified-decision-direction {
+    margin-top: 4px;
+    color: #edf3f8;
+    font-family: var(--font-display);
+    font-size: 0.82rem;
+    font-weight: 750;
+}
+.unified-decision-note {
+    margin-top: 5px;
+    color: #899caf;
+    font-size: 0.68rem;
+    line-height: 1.45;
+}
+.unified-decision-evidence {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    align-content: center;
+    gap: 5px;
+    background: rgba(255,255,255,0.015);
+    border-left: 1px solid var(--line-soft);
+}
+.unified-decision-metric {
+    min-width: 0;
+    padding: 0.52rem 0.48rem;
+    background: rgba(255,255,255,0.025);
+    border: 1px solid var(--line-soft);
+    border-radius: 5px;
+}
+.unified-decision-metric span {
+    display: block;
+    overflow: hidden;
+    color: #708398;
+    font-family: var(--font-mono);
+    font-size: 0.43rem;
+    letter-spacing: 0.04em;
+    text-overflow: ellipsis;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+.unified-decision-metric strong {
+    display: block;
+    margin-top: 4px;
+    color: #edf3f8;
+    font-family: var(--font-display);
+    font-size: 0.88rem;
+}
+.unified-score-details {
+    grid-column: 1 / -1;
+    border-top: 1px solid var(--line-soft);
+}
+.unified-score-details summary {
+    padding: 0.5rem 0.9rem;
+    color: #71869b;
+    cursor: pointer;
+    font-family: var(--font-mono);
+    font-size: 0.5rem;
+    list-style: none;
+}
+.unified-score-details summary::-webkit-details-marker { display: none; }
+.unified-score-details summary::after { content: ' +'; color: var(--decision-color); }
+.unified-score-details[open] summary::after { content: ' −'; }
+.unified-score-detail-copy {
+    padding: 0 0.9rem 0.65rem;
+    color: #7f92a6;
+    font-family: var(--font-mono);
+    font-size: 0.5rem;
+    line-height: 1.55;
+}
+
+/* Edge cards: selected market and decision score lead the hierarchy. */
+.edge-card-head-v72 {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 0.65rem;
+}
+.edge-market-v72 {
+    margin-top: 4px;
+    color: #879aaf;
+    font-family: var(--font-mono);
+    font-size: 0.57rem;
+}
+.edge-call-v72 {
+    display: flex;
+    align-items: stretch;
+    flex: 0 0 auto;
+    overflow: hidden;
+    border: 1px solid var(--line-soft);
+    border-radius: 6px;
+}
+.edge-line-v72,
+.edge-entry-v72 {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    min-width: 72px;
+    padding: 0.48rem 0.58rem;
+    text-align: center;
+}
+.edge-line-v72 {
+    color: #071316;
+    background: #21c4cd;
+}
+.edge-entry-v72 { background: #151d25; }
+.edge-call-v72 span {
+    font-family: var(--font-mono);
+    font-size: 0.42rem;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+.edge-call-v72 strong {
+    margin-top: 2px;
+    font-family: var(--font-display);
+    font-size: 0.86rem;
+    font-weight: 900;
+}
+.edge-entry-v72 span { color: #71869b; }
+.edge-entry-v72 strong { color: #edf3f8; }
+div[class*="st-key-ep_"] button {
+    min-height: 44px !important;
+    color: #062015 !important;
+    background: #20d598 !important;
+    border: 1px solid #46e7b0 !important;
+    border-radius: 6px !important;
+}
+div[class*="st-key-ea_"] button {
+    min-height: 44px !important;
+    color: #a9f5f7 !important;
+    background: #122127 !important;
+    border: 1px solid rgba(64,217,224,0.26) !important;
+    border-radius: 6px !important;
+}
+
+@media (max-width: 768px) {
+    .unified-decision-card {
+        grid-template-columns: 92px minmax(0, 1fr);
+    }
+    .unified-decision-score,
+    .unified-decision-call { padding: 0.76rem 0.72rem; }
+    .unified-decision-number { font-size: 1.85rem; }
+    .unified-decision-action { font-size: 1rem; }
+    .unified-decision-evidence {
+        grid-column: 1 / -1;
+        padding: 0.55rem;
+        border-top: 1px solid var(--line-soft);
+        border-left: 0;
+    }
+    .unified-score-details { grid-column: 1 / -1; }
+    .edge-card-head-v72 { align-items: stretch; }
+    .edge-player-v55 { font-size: 1rem !important; }
+    .edge-call-v72 { min-width: 146px; }
+    .edge-line-v72,
+    .edge-entry-v72 {
+        min-width: 0;
+        flex: 1 1 50%;
+        padding: 0.42rem 0.35rem;
+    }
+}
+
+@media (max-width: 390px) {
+    .edge-card-head-v72 { flex-direction: column; }
+    .edge-call-v72 { width: 100%; }
+    .edge-line-v72,
+    .edge-entry-v72 { min-height: 48px; }
+}
+
 @media (prefers-reduced-motion: reduce) {
     .analyzer-hero,
     .mlb-decision-card,
@@ -4111,6 +4347,51 @@ div[data-testid="stAlert"] {
 }
 </style>
 """, unsafe_allow_html=True)
+
+
+def render_entry_decision(
+    score: int,
+    action: str,
+    direction: str,
+    probability: float,
+    evidence: int,
+    consistency: float,
+    note: str,
+    detail: str,
+) -> None:
+    """Render one presentation-only decision index without changing model output."""
+    import html as _html
+
+    score = max(0, min(100, int(round(score))))
+    action = str(action or "PASS").upper()
+    action_class = "play" if action == "PLAY" else "watch" if action == "WATCH" else "pass"
+    probability_pct = float(probability) * 100 if float(probability) <= 1 else float(probability)
+    consistency_pct = float(consistency) * 100 if float(consistency) <= 1 else float(consistency)
+    safe_direction = _html.escape(str(direction or "Model decision"))
+    safe_note = _html.escape(str(note or ""))
+    safe_detail = _html.escape(str(detail or ""))
+
+    st.markdown(
+        f"<div class='unified-decision-card {action_class}'>"
+        f"<div class='unified-decision-score'>"
+        f"<div class='unified-decision-label'>Entry Score</div>"
+        f"<div class='unified-decision-number'>{score}<small> / 100</small></div>"
+        f"</div>"
+        f"<div class='unified-decision-call'>"
+        f"<div class='unified-decision-action'>{_html.escape(action)}</div>"
+        f"<div class='unified-decision-direction'>{safe_direction}</div>"
+        f"<div class='unified-decision-note'>{safe_note}</div>"
+        f"</div>"
+        f"<div class='unified-decision-evidence'>"
+        f"<div class='unified-decision-metric'><span>Hit chance</span><strong>{probability_pct:.0f}%</strong></div>"
+        f"<div class='unified-decision-metric'><span>Evidence</span><strong>{int(evidence)}/100</strong></div>"
+        f"<div class='unified-decision-metric'><span>Consistency</span><strong>{consistency_pct:.0f}%</strong></div>"
+        f"</div>"
+        f"<details class='unified-score-details'><summary>How this decision is built</summary>"
+        f"<div class='unified-score-detail-copy'>{safe_detail}</div></details>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
 
 # ─────────────────────────────────────────────
 # Session state
@@ -13408,6 +13689,38 @@ if st.session_state.active_sport == "mlb":
             f"</div></div>",
             unsafe_allow_html=True,
         )
+        _hitter_entry_base = int(round((adj * 100 * 0.70) + (score * 0.30)))
+        _hitter_entry_score = _hitter_entry_base
+        _hitter_entry_gate = "No blocking gate"
+        if tier == "Pass":
+            _hitter_entry_score = min(_hitter_entry_score, 64)
+            _hitter_entry_gate = "Model verdict is Pass"
+        elif _hitter_status == "Watchlist":
+            _hitter_entry_score = min(_hitter_entry_score, 79)
+            _hitter_entry_gate = "Matchup confirmation is incomplete"
+        _hitter_entry_action = (
+            "PLAY" if _hitter_entry_score >= 80 else
+            "WATCH" if _hitter_entry_score >= 65 else "PASS"
+        )
+        render_entry_decision(
+            score=_hitter_entry_score,
+            action=_hitter_entry_action,
+            direction=f"{tier} · Hitter fantasy {side} {line:g}",
+            probability=adj,
+            evidence=score,
+            consistency=cons,
+            note=(
+                "Direction and matchup evidence both support an entry."
+                if _hitter_entry_action == "PLAY" else
+                "The projection is promising, but confirm the probable pitcher and line."
+                if _hitter_entry_action == "WATCH" else
+                "The combined signal is not strong enough to enter."
+            ),
+            detail=(
+                f"70% hit chance ({adj:.0%}) + 30% evidence ({score}/100) = "
+                f"{_hitter_entry_base}. Gate: {_hitter_entry_gate}."
+            ),
+        )
         st.markdown(
             "<nav class='mlb-result-nav'>"
             "<a href='#mlb-overview'>Overview</a>"
@@ -15120,6 +15433,32 @@ if st.session_state.active_sport == "mlb":
                 unsafe_allow_html=True,
             )
 
+            _entry_note = (
+                "Model strength and evidence quality cleared every action gate."
+                if _entry_action == "PLAY" else
+                "Promising direction; confirm the highlighted risk before entering."
+                if _entry_action == "WATCH" else
+                "The combined edge is not reliable enough for an entry."
+            )
+            _entry_gate_detail = (
+                f"70% hit chance ({adj:.0%}) + 30% evidence ({_sc}/100) = "
+                f"{_entry_base_score}. Gate: {_entry_gate_reason} "
+                f"({_entry_gate_adjustment:+d})."
+                if _entry_gate_adjustment < 0 else
+                f"70% hit chance ({adj:.0%}) + 30% evidence ({_sc}/100) = "
+                f"{_entry_base_score}. No blocking gate."
+            )
+            render_entry_decision(
+                score=_entry_score,
+                action=_entry_action,
+                direction=f"{tier} · {mlb_side} {mlb_line:g} strikeouts",
+                probability=adj,
+                evidence=_sc,
+                consistency=cons,
+                note=_entry_note,
+                detail=_entry_gate_detail,
+            )
+
             if tier != "Pass":
                 _new_mlb_leg = {
                     "player": mlb_pitcher, "prop": f"{mlb_prop} {mlb_side}",
@@ -16112,57 +16451,6 @@ if st.session_state.active_sport == "mlb":
                 </table>
                 </div>
                 """, unsafe_allow_html=True)
-
-            # Presentation-only summary of the completed model; it does not alter the analysis.
-            if _entry_action == "PLAY":
-                _entry_color = "#18f3a2"
-                _entry_border = "rgba(24,243,162,0.32)"
-                _entry_bg = "rgba(24,243,162,0.07)"
-                _entry_note = "Model strength and evidence quality cleared every action gate."
-            elif _entry_action == "WATCH":
-                _entry_color = "#ffd166"
-                _entry_border = "rgba(255,209,102,0.32)"
-                _entry_bg = "rgba(255,209,102,0.07)"
-                _entry_note = "Promising direction; wait for stronger confirmation before entering."
-            else:
-                _entry_color = "#8da2b8"
-                _entry_border = "rgba(141,162,184,0.25)"
-                _entry_bg = "rgba(141,162,184,0.055)"
-                _entry_note = "The combined edge is not reliable enough for an entry."
-
-            _entry_gate_text = (
-                f" · Gate: {_mlb_html.escape(str(_entry_gate_reason))} "
-                f"({_entry_gate_adjustment:+d})"
-                if _entry_gate_adjustment < 0 else
-                " · No blocking gate"
-            )
-
-            st.markdown(
-                f"<div style='position:relative;overflow:hidden;display:flex;align-items:center;"
-                f"justify-content:space-between;flex-wrap:wrap;gap:14px;margin:1rem 0 1.25rem;"
-                f"padding:1rem 1.15rem;background:{_entry_bg};border:1px solid {_entry_border};"
-                f"border-left:4px solid {_entry_color};border-radius:12px;'>"
-                f"<div>"
-                f"<div style='font-family:JetBrains Mono,monospace;font-size:0.52rem;font-weight:800;"
-                f"letter-spacing:0.16em;color:#6b7f96;text-transform:uppercase;'>Entry Score</div>"
-                f"<div style='font-family:Plus Jakarta Sans,sans-serif;font-size:2rem;font-weight:900;"
-                f"line-height:1.05;color:{_entry_color};margin-top:4px;'>{_entry_score}"
-                f"<span style='font-size:0.72rem;font-weight:700;color:#6b7f96;'> / 100</span></div>"
-                f"</div>"
-                f"<div style='flex:1;min-width:190px;'>"
-                f"<div style='font-family:Plus Jakarta Sans,sans-serif;font-size:1.15rem;font-weight:900;"
-                f"color:{_entry_color};'>{_entry_action}</div>"
-                f"<div style='font-family:DM Sans,sans-serif;font-size:0.72rem;line-height:1.45;"
-                f"color:#9aaec4;margin-top:3px;'>{_entry_note}</div>"
-                f"<div style='font-family:JetBrains Mono,monospace;font-size:0.5rem;line-height:1.5;"
-                f"color:#6b7f96;margin-top:5px;'>70% hit chance ({adj:.0%}) + 30% evidence "
-                f"({_sc}/100) = {_entry_base_score}{_entry_gate_text}</div>"
-                f"</div>"
-                f"<div style='font-family:JetBrains Mono,monospace;font-size:0.5rem;line-height:1.6;"
-                f"color:#6b7f96;text-align:right;'>80+ PLAY<br>65-79 WATCH<br>&lt;65 PASS</div>"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
 
     # Old MLB slate scanner removed. Use Edge for slate-wide MLB scanning.
 
@@ -17574,6 +17862,43 @@ if st.session_state.active_sport == "wnba":
             f"</div></div>",
             unsafe_allow_html=True,
         )
+        _wnba_entry_base = int(round((result["probability"] * 100 * 0.70) + (result["confidence"] * 0.30)))
+        _wnba_entry_score = _wnba_entry_base
+        _wnba_entry_gate = "No blocking gate"
+        if tier == "Pass":
+            _wnba_entry_score = min(_wnba_entry_score, 64)
+            _wnba_entry_gate = "Model verdict is Pass"
+        elif tier.startswith("Lean"):
+            _wnba_entry_score = min(_wnba_entry_score, 79)
+            _wnba_entry_gate = "Model verdict is a Lean"
+        elif result.get("line_anomaly"):
+            _wnba_entry_score = min(_wnba_entry_score, 79)
+            _wnba_entry_gate = "PrizePicks line needs verification"
+        _wnba_entry_action = (
+            "PLAY" if _wnba_entry_score >= 80 else
+            "WATCH" if _wnba_entry_score >= 65 else "PASS"
+        )
+        _wnba_entry_note = (
+            "Direction and evidence both support an entry."
+            if _wnba_entry_action == "PLAY" else
+            "The direction is promising, but one confirmation is still missing."
+            if _wnba_entry_action == "WATCH" else
+            "The combined signal is not strong enough to enter."
+        )
+        render_entry_decision(
+            score=_wnba_entry_score,
+            action=_wnba_entry_action,
+            direction=f"{tier} · {selected_stat} {side} {line:.1f}",
+            probability=result["probability"],
+            evidence=result["confidence"],
+            consistency=result["consistency"],
+            note=_wnba_entry_note,
+            detail=(
+                f"70% hit chance ({result['probability']:.0%}) + 30% evidence "
+                f"({result['confidence']}/100) = {_wnba_entry_base}. "
+                f"Gate: {_wnba_entry_gate}."
+            ),
+        )
         with st.expander("How the final call combines hit chance and evidence", expanded=False):
             st.markdown(
                 f"**Direction:** {probability_read} ({result['probability']:.0%} for {side})  \n"
@@ -17601,18 +17926,19 @@ if st.session_state.active_sport == "wnba":
                 f"<span class='flag-pill down'>Teammate status "
                 f"-{result['teammate_uncertainty_penalty']}</span>"
             )
-        st.markdown(
-            f"<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;"
-            f"padding:0.85rem 1rem;margin:0.25rem 0 0.75rem;'>"
-            f"<div style='display:flex;justify-content:space-between;align-items:center;gap:10px;'>"
-            f"<div class='stat-label' style='margin:0;'>EVIDENCE CONFIDENCE</div>"
-            f"<div style='font-family:var(--font-display);font-size:1rem;font-weight:900;color:{confidence_color};'>"
-            f"{result['confidence']}/100</div></div>"
-            f"<div class='conf-meter-track' style='margin-top:8px;'>"
-            f"<div class='conf-meter-fill' style='width:{result['confidence']}%;background:{confidence_color};'></div></div>"
-            f"<div class='flag-row' style='margin-top:10px;'>{confidence_parts_html}</div></div>",
-            unsafe_allow_html=True,
-        )
+        with st.expander("Evidence confidence breakdown", expanded=False):
+            st.markdown(
+                f"<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;"
+                f"padding:0.85rem 1rem;margin:0.25rem 0 0.75rem;'>"
+                f"<div style='display:flex;justify-content:space-between;align-items:center;gap:10px;'>"
+                f"<div class='stat-label' style='margin:0;'>EVIDENCE CONFIDENCE</div>"
+                f"<div style='font-family:var(--font-display);font-size:1rem;font-weight:900;color:{confidence_color};'>"
+                f"{result['confidence']}/100</div></div>"
+                f"<div class='conf-meter-track' style='margin-top:8px;'>"
+                f"<div class='conf-meter-fill' style='width:{result['confidence']}%;background:{confidence_color};'></div></div>"
+                f"<div class='flag-row' style='margin-top:10px;'>{confidence_parts_html}</div></div>",
+                unsafe_allow_html=True,
+            )
 
         st.markdown("<div class='section-header'>Form & Role</div>", unsafe_allow_html=True)
         form_delta = result["avg"] - result["season_avg"]
@@ -17645,40 +17971,34 @@ if st.session_state.active_sport == "wnba":
             "#ffc107" if consistency_pct >= 55 else
             "#ff7043"
         )
-        st.markdown(
-            f"<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;"
-            f"padding:0.85rem 1rem;margin:0.2rem 0 0.55rem;'>"
-            f"<div class='stat-label' style='margin-bottom:10px;'>DECISION QUALITY</div>"
-            f"<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:18px;'>"
-            f"<div><div style='display:flex;justify-content:space-between;align-items:center;gap:8px;'>"
-            f"<span style='font-size:0.7rem;color:var(--text2);font-weight:700;'>Consistency</span>"
-            f"<span style='font-family:var(--font-display);font-size:1rem;font-weight:900;color:{consistency_color};'>"
-            f"{consistency_pct}%</span></div>"
-            f"<div class='conf-meter-track' style='margin-top:7px;'>"
-            f"<div class='conf-meter-fill' style='width:{consistency_pct}%;background:{consistency_color};'></div></div>"
-            f"<div style='font-size:0.6rem;color:var(--text3);margin-top:5px;'>How repeatable recent production has been</div></div>"
-            f"<div><div style='display:flex;justify-content:space-between;align-items:center;gap:8px;'>"
-            f"<span style='font-size:0.7rem;color:var(--text2);font-weight:700;'>Evidence confidence</span>"
-            f"<span style='font-family:var(--font-display);font-size:1rem;font-weight:900;color:{confidence_color};'>"
-            f"{result['confidence']}/100</span></div>"
-            f"<div class='conf-meter-track' style='margin-top:7px;'>"
-            f"<div class='conf-meter-fill' style='width:{result['confidence']}%;background:{confidence_color};'></div></div>"
-            f"<div style='font-size:0.6rem;color:var(--text3);margin-top:5px;'>How trustworthy and complete the model evidence is</div></div>"
-            f"</div></div>",
-            unsafe_allow_html=True,
-        )
+        with st.expander("Consistency and evidence details", expanded=False):
+            st.markdown(
+                f"<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;"
+                f"padding:0.85rem 1rem;margin:0.2rem 0 0.55rem;'>"
+                f"<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:18px;'>"
+                f"<div><div style='display:flex;justify-content:space-between;align-items:center;gap:8px;'>"
+                f"<span style='font-size:0.7rem;color:var(--text2);font-weight:700;'>Consistency</span>"
+                f"<span style='font-family:var(--font-display);font-size:1rem;font-weight:900;color:{consistency_color};'>"
+                f"{consistency_pct}%</span></div>"
+                f"<div class='conf-meter-track' style='margin-top:7px;'>"
+                f"<div class='conf-meter-fill' style='width:{consistency_pct}%;background:{consistency_color};'></div></div>"
+                f"<div style='font-size:0.6rem;color:var(--text3);margin-top:5px;'>How repeatable recent production has been</div></div>"
+                f"<div><div style='display:flex;justify-content:space-between;align-items:center;gap:8px;'>"
+                f"<span style='font-size:0.7rem;color:var(--text2);font-weight:700;'>Evidence confidence</span>"
+                f"<span style='font-family:var(--font-display);font-size:1rem;font-weight:900;color:{confidence_color};'>"
+                f"{result['confidence']}/100</span></div>"
+                f"<div class='conf-meter-track' style='margin-top:7px;'>"
+                f"<div class='conf-meter-fill' style='width:{result['confidence']}%;background:{confidence_color};'></div></div>"
+                f"<div style='font-size:0.6rem;color:var(--text3);margin-top:5px;'>How trustworthy and complete the model evidence is</div></div>"
+                f"</div></div>",
+                unsafe_allow_html=True,
+            )
 
         flags_html = "".join(f"<span class='flag-pill down'>{flag}</span>" for flag in result["flags"])
         if not flags_html:
             flags_html = "<span class='flag-pill up'>No major model traps</span>"
         st.markdown(
-            f"<div class='verdict-banner {'green' if 'Over' in tier and tier != 'Pass' else 'red' if 'Under' in tier else 'gray'}'>"
-            f"<div><div class='verdict-label'>{selected_stat} · {side} {line:.1f}</div>"
-            f"<div class='verdict-tier' style='color:{color};font-size:2rem;'>{tier}</div>"
-            f"<div class='flag-row'>{flags_html}</div></div>"
-            f"<div style='min-width:210px'><div class='verdict-label'>EVIDENCE</div>"
-            f"<div style='font-family:JetBrains Mono,monospace;color:#9aaec4;font-size:.7rem;line-height:1.8;'>"
-            f"L{result['sample']} avg {result['avg']:.1f}<br>L5 avg {result['l5']:.1f}<br>Reliability {result['reliability']:.0%}</div></div></div>",
+            f"<div class='flag-row' style='margin:0.2rem 0 0.75rem;'>{flags_html}</div>",
             unsafe_allow_html=True,
         )
         defense_value = (
@@ -21632,6 +21952,16 @@ if st.session_state.active_sport == "edge":
                 _edge_color_class = "green" if _r["edge_pct"] >= 7 else ("yellow" if _r["edge_pct"] >= 3 else "")
                 _conf_val = int(_r.get("confidence", _r["adj"]) or 0)
                 _conf_color_class = "green" if _conf_val >= 80 else ("yellow" if _conf_val >= 65 else "")
+                _edge_entry_base = int(round((float(_r["adj"]) * 0.70) + (_conf_val * 0.30)))
+                _edge_entry_score = _edge_entry_base
+                if _line_needs_verify:
+                    _edge_entry_score = min(_edge_entry_score, 64)
+                elif not _is_strong:
+                    _edge_entry_score = min(_edge_entry_score, 79)
+                _edge_entry_action = (
+                    "PLAY" if _edge_entry_score >= 80 else
+                    "WATCH" if _edge_entry_score >= 65 else "PASS"
+                )
                 _risk_pills = ""
                 _viewed_key = (
                     f"{str(_r.get('sport', '')).lower()}|{normalize_name(_r.get('player', ''))}|"
@@ -21707,9 +22037,6 @@ if st.session_state.active_sport == "edge":
                     if _r.get("sport") == "WNBA" and _r.get("injury_status") else ""
                 )
                 _ctx_pills = (
-                    f"<span class='edge-pill-v55 accent'>{_r['stat']}</span>"
-                    f"<span class='edge-pill-v55'>{_result_side} {_r['line']}</span>"
-                    f"<span class='edge-pill-v55'>vs {_r.get('opp', 'TBD')}</span>"
                     f"{_game_pill}"
                     f"{_opp_k_pill}"
                     f"{_opp_bb_pill}"
@@ -21732,17 +22059,21 @@ if st.session_state.active_sport == "edge":
 
                 st.markdown(
                     f"<div class='edge-card-v55 {_card_class}'>"
-                    f"<div class='edge-top-v55'>"
+                    f"<div class='edge-card-head-v72'>"
                     f"<div>"
                     f"<div class='edge-player-v55'>{_r['player']}</div>"
-                    f"<div class='edge-meta-v55'>{_ctx_pills}</div>"
+                    f"<div class='edge-market-v72'>{_r['stat']} · vs {_r.get('opp', 'TBD')} · {_grade_lbl}</div>"
                     f"</div>"
+                    f"<div class='edge-call-v72'>"
+                    f"<div class='edge-line-v72'><span>Best line</span><strong>{_result_side} {_r['line']}</strong></div>"
+                    f"<div class='edge-entry-v72'><span>Entry score</span><strong>{_edge_entry_score} {_edge_entry_action}</strong></div>"
+                    f"</div></div>"
+                    f"<div class='edge-meta-v55'>{_ctx_pills}</div>"
                     f"<div class='edge-score-v55'>"
                     f"<div class='edge-score-item-v55'><span>Hit chance</span><strong class='{_model_color_class}'>{_r['adj']}%</strong></div>"
                     f"<div class='edge-score-item-v55'><span>Evidence</span><strong class='{_conf_color_class}'>{_conf_val}</strong></div>"
                     f"<div class='edge-score-item-v55'><span>Market edge</span><strong class='{_edge_color_class}'>+{_r['edge_pct']}%</strong></div>"
-                    f"<div class='edge-score-item-v55'><span>Verdict</span><strong style='color:{_grade_col};'>{_grade_lbl}</strong></div>"
-                    f"</div>"
+                    f"<div class='edge-score-item-v55'><span>Consistency</span><strong>{_r['cons']}%</strong></div>"
                     f"</div>"
                     f"{_reason_row_html}"
                     f"<details class='edge-details-v55'>"
@@ -24637,6 +24968,40 @@ if st.session_state.logs is not None:
         f"</div>"
     )
     st.markdown(_verdict_html, unsafe_allow_html=True)
+
+    _nba_entry_base = int(round((_display_adj * 100 * 0.70) + (_conf_score * 0.30)))
+    _nba_entry_score = _nba_entry_base
+    _nba_entry_gate = "No blocking gate"
+    if _display_tier == "Pass":
+        _nba_entry_score = min(_nba_entry_score, 64)
+        _nba_entry_gate = "Model verdict is Pass"
+    elif "Lean" in _display_tier:
+        _nba_entry_score = min(_nba_entry_score, 79)
+        _nba_entry_gate = "Model verdict is a Lean"
+    _nba_entry_action = (
+        "PLAY" if _nba_entry_score >= 80 else
+        "WATCH" if _nba_entry_score >= 65 else "PASS"
+    )
+    _nba_entry_note = (
+        "Direction and evidence both support an entry."
+        if _nba_entry_action == "PLAY" else
+        "The direction has merit, but the supporting evidence needs caution."
+        if _nba_entry_action == "WATCH" else
+        "The combined signal is not strong enough to enter."
+    )
+    render_entry_decision(
+        score=_nba_entry_score,
+        action=_nba_entry_action,
+        direction=f"{_display_tier} · {_display_side} {line:g} points",
+        probability=_display_adj,
+        evidence=_conf_score,
+        consistency=consistency,
+        note=_nba_entry_note,
+        detail=(
+            f"70% hit chance ({_display_adj:.0%}) + 30% evidence "
+            f"({_conf_score}/100) = {_nba_entry_base}. Gate: {_nba_entry_gate}."
+        ),
+    )
 
     # ── Playoff picture — right under verdict ─────────────────────
     # Debug: always show something so we can confirm display works
