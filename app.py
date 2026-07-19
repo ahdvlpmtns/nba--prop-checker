@@ -3520,6 +3520,258 @@ button[key="view_results"] {
         backdrop-filter: blur(14px);
     }
 }
+
+/* ══════════════════════════════════════════
+   PropIQ V7.1 — Unified mobile application shell
+   One navigation hierarchy, natural scrolling, richer analytical surfaces
+══════════════════════════════════════════ */
+.st-key-workspace_navigation {
+    border: 1px solid rgba(226,232,240,0.09);
+    border-radius: 10px;
+    background: rgba(11,16,22,0.94);
+    box-shadow: 0 10px 30px rgba(0,0,0,0.24);
+}
+.st-key-workspace_navigation button[data-testid="baseButton-primary"] {
+    background: linear-gradient(135deg, #2fc4d0, #188e99) !important;
+    color: #041114 !important;
+    border: 1px solid rgba(123,234,240,0.48) !important;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.20) !important;
+}
+.st-key-workspace_navigation button[data-testid="baseButton-secondary"] {
+    background: rgba(255,255,255,0.025) !important;
+    border-color: transparent !important;
+    color: #9ba9ba !important;
+}
+.st-key-workspace_navigation button[data-testid="baseButton-secondary"]:hover {
+    background: rgba(255,255,255,0.055) !important;
+    border-color: rgba(226,232,240,0.08) !important;
+    color: var(--text) !important;
+}
+.st-key-analyzer_sport_navigation {
+    padding: 0.34rem;
+    background: rgba(14,20,27,0.76);
+    border: 1px solid rgba(226,232,240,0.07);
+    border-radius: 9px;
+}
+.st-key-analyzer_sport_navigation button[data-testid="baseButton-primary"] {
+    background: rgba(54,198,211,0.13) !important;
+    color: #c8f7f9 !important;
+    border: 1px solid rgba(54,198,211,0.34) !important;
+    box-shadow: inset 0 -2px 0 rgba(139,232,238,0.55) !important;
+}
+.st-key-analyzer_sport_navigation button[data-testid="baseButton-secondary"] {
+    background: transparent !important;
+    border-color: transparent !important;
+}
+.workspace-page-head {
+    padding: 1rem 1.05rem;
+    background: linear-gradient(115deg, rgba(54,198,211,0.07), rgba(16,21,27,0.94) 38%);
+    border: 1px solid rgba(226,232,240,0.08);
+    border-left: 3px solid var(--accent);
+    border-radius: 10px;
+}
+
+@media (max-width: 768px) {
+    html,
+    body,
+    [data-testid="stAppViewContainer"],
+    [data-testid="stMain"] {
+        overflow-y: auto !important;
+        overscroll-behavior-y: auto !important;
+        -webkit-overflow-scrolling: touch !important;
+        scroll-behavior: auto !important;
+    }
+    [data-testid="stAppViewContainer"] {
+        background:
+            linear-gradient(180deg, rgba(54,198,211,0.08) 0, transparent 190px),
+            linear-gradient(180deg, #080c11 0%, #0c1219 46%, #080c11 100%) !important;
+    }
+    .main .block-container,
+    .block-container,
+    [data-testid="stAppViewBlockContainer"] {
+        width: 100% !important;
+        max-width: 100% !important;
+        padding-left: 0.7rem !important;
+        padding-right: 0.7rem !important;
+        padding-bottom: calc(4rem + env(safe-area-inset-bottom)) !important;
+    }
+
+    /* Brand scrolls naturally; only the primary command bar stays visible. */
+    .pl-header {
+        position: relative !important;
+        top: auto !important;
+        z-index: 2 !important;
+        margin: 0.45rem 0 0.5rem !important;
+        border-radius: 12px !important;
+        background: linear-gradient(110deg, rgba(20,31,40,0.98), rgba(9,13,18,0.98)) !important;
+        border: 1px solid rgba(139,232,238,0.16) !important;
+        box-shadow: 0 12px 30px rgba(0,0,0,0.28) !important;
+    }
+    .pl-logo { font-size: 1.38rem !important; }
+    .pl-badge {
+        background: rgba(54,198,211,0.12) !important;
+        border-color: rgba(54,198,211,0.28) !important;
+    }
+
+    .st-key-workspace_navigation {
+        position: sticky !important;
+        top: 0 !important;
+        left: auto !important;
+        right: auto !important;
+        bottom: auto !important;
+        z-index: 980 !important;
+        margin: 0.25rem 0 0.48rem !important;
+        padding: 0.3rem !important;
+        border: 1px solid rgba(226,232,240,0.12) !important;
+        border-radius: 11px !important;
+        background: rgba(8,12,17,0.965) !important;
+        box-shadow: 0 12px 32px rgba(0,0,0,0.42) !important;
+        backdrop-filter: blur(20px) saturate(130%) !important;
+        -webkit-backdrop-filter: blur(20px) saturate(130%) !important;
+    }
+    .st-key-workspace_navigation div[data-testid="stHorizontalBlock"] {
+        gap: 4px !important;
+    }
+    button[key="view_analyze"],
+    button[key="view_edge"],
+    button[key="view_picks"],
+    button[key="view_results"] {
+        position: static !important;
+        min-height: 47px !important;
+        padding: 0.42rem 0.16rem !important;
+        border-radius: 8px !important;
+        font-size: 0.68rem !important;
+        line-height: 1.1 !important;
+        white-space: nowrap !important;
+    }
+
+    .st-key-analyzer_sport_navigation {
+        position: static !important;
+        top: auto !important;
+        z-index: auto !important;
+        margin: 0 0 0.65rem !important;
+        padding: 0.28rem !important;
+        border-radius: 10px !important;
+        background: rgba(15,21,29,0.88) !important;
+        backdrop-filter: none !important;
+    }
+    button[key="sport_nba"],
+    button[key="sport_mlb"],
+    button[key="sport_wnba"],
+    button[key="sport_edge"] {
+        position: static !important;
+        top: auto !important;
+        z-index: auto !important;
+        min-height: 42px !important;
+        padding: 0.52rem 0.3rem !important;
+        font-size: 0.73rem !important;
+        border-radius: 7px !important;
+    }
+
+    /* Remove the overlapping legacy mobile controls. Picks remain in top nav. */
+    .pick-tray-v63 {
+        display: none !important;
+    }
+    button[key="mobile_quick_analyze"] {
+        display: none !important;
+        position: static !important;
+    }
+    button[key="mlb_analyze"] {
+        position: static !important;
+        bottom: auto !important;
+        z-index: auto !important;
+        box-shadow: 0 10px 24px rgba(20,146,159,0.18) !important;
+    }
+    .mlb-result-nav {
+        position: static !important;
+        top: auto !important;
+        background: transparent !important;
+        backdrop-filter: none !important;
+    }
+
+    /* Premium but compact content surfaces. */
+    .v55-hero,
+    .workspace-page-head {
+        padding: 0.95rem 1rem !important;
+        margin: 0.2rem 0 0.75rem !important;
+        background: linear-gradient(125deg, rgba(54,198,211,0.09), rgba(16,22,30,0.97) 42%) !important;
+        border: 1px solid rgba(226,232,240,0.095) !important;
+        border-left: 3px solid rgba(54,198,211,0.75) !important;
+        border-radius: 12px !important;
+        box-shadow: 0 12px 28px rgba(0,0,0,0.24) !important;
+    }
+    .v55-kicker {
+        font-size: 0.5rem !important;
+        letter-spacing: 0.14em !important;
+    }
+    .v55-title {
+        margin-top: 5px !important;
+        font-size: 1.18rem !important;
+        line-height: 1.22 !important;
+    }
+    .v55-subcopy,
+    .workspace-page-head p {
+        font-size: 0.69rem !important;
+        line-height: 1.55 !important;
+    }
+    .section-header {
+        margin: 1.15rem 0 0.65rem !important;
+        padding: 0 0 0.55rem !important;
+        font-size: 0.54rem !important;
+        letter-spacing: 0.14em !important;
+    }
+    .section-header::before {
+        width: 3px !important;
+        height: 14px !important;
+        background: linear-gradient(180deg, var(--accent3), var(--accent2)) !important;
+    }
+    .stat-card,
+    .defense-card,
+    .edge-card-v55,
+    .ai-box,
+    .hot-pick-card,
+    div[data-testid="stExpander"] {
+        border-color: rgba(226,232,240,0.095) !important;
+        box-shadow: 0 8px 22px rgba(0,0,0,0.22) !important;
+    }
+    .edge-card-v55 {
+        border-radius: 11px !important;
+        padding: 0.88rem !important;
+    }
+    .edge-score-v55 {
+        grid-template-columns: repeat(2, minmax(0,1fr)) !important;
+        gap: 6px !important;
+    }
+    .edge-score-item-v55 {
+        min-height: 58px !important;
+        padding: 0.48rem 0.52rem !important;
+        border-radius: 8px !important;
+        background: linear-gradient(145deg, rgba(255,255,255,0.055), rgba(255,255,255,0.018)) !important;
+    }
+    div[data-testid="stTextInput"] input,
+    div[data-testid="stNumberInput"] input,
+    div[data-testid="stSelectbox"] > div > div {
+        min-height: 50px !important;
+        border-radius: 9px !important;
+        background: rgba(11,16,22,0.96) !important;
+        border-color: rgba(226,232,240,0.15) !important;
+    }
+    div[data-testid="stExpander"] {
+        border-radius: 10px !important;
+        background: rgba(15,21,28,0.94) !important;
+    }
+}
+
+@media (max-width: 390px) {
+    button[key="view_analyze"],
+    button[key="view_edge"],
+    button[key="view_picks"],
+    button[key="view_results"] {
+        font-size: 0.63rem !important;
+    }
+    .pl-icon { display: none !important; }
+    .pl-logo { font-size: 1.25rem !important; }
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -9151,12 +9403,14 @@ with st.container(key="workspace_navigation"):
     with _nav1:
         st.button(
             "Analyze", key="view_analyze", use_container_width=True,
+            icon=":material/search:",
             type="primary" if _active_view == "analyze" else "secondary",
             on_click=navigate_to_view, args=("analyze",),
         )
     with _nav2:
         st.button(
             "Edge", key="view_edge", use_container_width=True,
+            icon=":material/bolt:",
             type="primary" if _active_view == "edge" else "secondary",
             on_click=navigate_to_view, args=("edge",),
         )
@@ -9164,12 +9418,14 @@ with st.container(key="workspace_navigation"):
         _pick_count = len(st.session_state.get("parlay_legs", []) or [])
         st.button(
             f"Picks ({_pick_count})", key="view_picks", use_container_width=True,
+            icon=":material/bookmarks:",
             type="primary" if _active_view == "picks" else "secondary",
             on_click=navigate_to_view, args=("picks",),
         )
     with _nav4:
         st.button(
             "Results", key="view_results", use_container_width=True,
+            icon=":material/query_stats:",
             type="primary" if _active_view == "results" else "secondary",
             on_click=navigate_to_view, args=("results",),
         )
@@ -9190,18 +9446,21 @@ if _active_view == "analyze":
         with _sp1:
             st.button(
                 "NBA", key="sport_nba", use_container_width=True,
+                icon=":material/sports_basketball:",
                 type="primary" if st.session_state.active_sport == "nba" else "secondary",
                 on_click=navigate_to_sport, args=("nba", "nba-analyzer-controls"),
             )
         with _sp2:
             st.button(
                 "MLB", key="sport_mlb", use_container_width=True,
+                icon=":material/sports_baseball:",
                 type="primary" if st.session_state.active_sport == "mlb" else "secondary",
                 on_click=navigate_to_sport, args=("mlb", "mlb-analyzer-controls"),
             )
         with _sp3:
             st.button(
                 "WNBA", key="sport_wnba", use_container_width=True,
+                icon=":material/sports_basketball:",
                 type="primary" if st.session_state.active_sport == "wnba" else "secondary",
                 on_click=navigate_to_sport, args=("wnba", "wnba-analyzer-controls"),
             )
@@ -22140,12 +22399,7 @@ if _drilldown_fetch:
     st.session_state.pop("_drilldown_line", None)
     st.session_state.pop("_drilldown_side", None)
 _main_fetch = st.button("🔍  Analyze Prop", key="analyze_prop_main", use_container_width=True)
-_mobile_fetch = st.button(
-    f"🔍 Analyze {full_name.split()[0]} · {line} {side}",
-    key="mobile_quick_analyze",
-    use_container_width=True,
-)
-fetch = _main_fetch or _mobile_fetch or _drilldown_fetch
+fetch = _main_fetch or _drilldown_fetch
 _status_ph = st.empty()  # persistent status placeholder across fetch + parallel block
 st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
 
