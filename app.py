@@ -40,8 +40,11 @@ footer { visibility: hidden; }
 div[data-testid="stDecoration"] { display: none; }
 div[data-testid="stStatusWidget"] { display: none; }
 .stDeployButton { display: none; }
-/* Speed up initial render */
-div[data-testid="stSkeleton"] { display: none; }
+/* Keep loading feedback visible while Streamlit is rebuilding a section. */
+div[data-testid="stSkeleton"] {
+    opacity: 0.55;
+    animation-duration: 1.4s !important;
+}
 
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800;900&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&family=JetBrains+Mono:wght@400;500;700&display=swap');
 
@@ -3347,9 +3350,174 @@ div[data-testid="stExpander"] {
     }
     button[key="mlb_analyze"] {
         position: sticky !important;
-        bottom: calc(68px + env(safe-area-inset-bottom)) !important;
+        bottom: calc(126px + env(safe-area-inset-bottom)) !important;
         z-index: 90 !important;
         box-shadow: 0 12px 32px rgba(0,0,0,0.5), 0 0 24px rgba(0,213,223,0.20) !important;
+    }
+}
+
+/* Product workspace navigation */
+.st-key-workspace_navigation {
+    position: sticky;
+    top: 0;
+    z-index: 96;
+    margin: 0 -0.15rem 0.65rem;
+    padding: 0.45rem 0.15rem;
+    background: rgba(9,12,16,0.92);
+    border-bottom: 1px solid var(--border);
+    backdrop-filter: blur(16px) saturate(125%);
+    -webkit-backdrop-filter: blur(16px) saturate(125%);
+}
+.st-key-workspace_navigation div[data-testid="stHorizontalBlock"] {
+    gap: 6px !important;
+}
+button[key="view_analyze"],
+button[key="view_edge"],
+button[key="view_picks"],
+button[key="view_results"] {
+    min-height: 44px !important;
+    padding: 0.55rem 0.45rem !important;
+    border-radius: 7px !important;
+    font-size: 0.79rem !important;
+    text-transform: none !important;
+    letter-spacing: 0 !important;
+}
+.st-key-analyzer_sport_navigation {
+    margin-bottom: 0.55rem;
+}
+.st-key-analyzer_sport_navigation div[data-testid="stHorizontalBlock"] {
+    gap: 6px !important;
+}
+.workspace-page-head {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 0.85rem 0 0.9rem;
+    margin-bottom: 0.7rem;
+    border-bottom: 1px solid var(--border);
+}
+.workspace-page-head h1 {
+    margin: 0;
+    color: var(--text);
+    font-family: var(--font-display);
+    font-size: 1.45rem;
+    line-height: 1.15;
+    letter-spacing: 0;
+}
+.workspace-page-head p {
+    max-width: 650px;
+    margin: 5px 0 0;
+    color: var(--text3);
+    font-size: 0.74rem;
+    line-height: 1.5;
+}
+.workspace-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 7px;
+    margin-bottom: 0.8rem;
+}
+.workspace-summary-item {
+    padding: 0.7rem 0.75rem;
+    background: rgba(16,21,27,0.94);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+}
+.workspace-summary-item span {
+    display: block;
+    color: var(--text3);
+    font-family: var(--font-mono);
+    font-size: 0.48rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+.workspace-summary-item strong {
+    display: block;
+    margin-top: 4px;
+    color: var(--text);
+    font-family: var(--font-display);
+    font-size: 1rem;
+}
+.pick-list-card {
+    padding: 0.85rem 0.95rem;
+    margin-top: 0.45rem;
+    background: rgba(16,21,27,0.96);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: 8px;
+}
+.pick-list-card strong {
+    color: var(--text);
+    font-family: var(--font-display);
+    font-size: 0.95rem;
+}
+.pick-list-card-meta {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-top: 6px;
+}
+.pick-list-empty {
+    padding: 1.6rem 1rem;
+    color: var(--text3);
+    text-align: center;
+    background: rgba(16,21,27,0.55);
+    border: 1px dashed var(--border2);
+    border-radius: 8px;
+}
+.workspace-return-row {
+    margin: -0.15rem 0 0.6rem;
+}
+
+@media (max-width: 768px) {
+    .main .block-container,
+    .block-container {
+        padding-bottom: 10.5rem !important;
+    }
+    .st-key-workspace_navigation {
+        position: fixed;
+        left: 7px;
+        right: 7px;
+        bottom: max(7px, env(safe-area-inset-bottom));
+        top: auto;
+        z-index: 999;
+        margin: 0;
+        padding: 0.38rem;
+        background: rgba(8,11,16,0.97);
+        border: 1px solid rgba(226,232,240,0.14);
+        border-radius: 9px;
+        box-shadow: 0 18px 48px rgba(0,0,0,0.58);
+    }
+    .st-key-workspace_navigation div[data-testid="stHorizontalBlock"] {
+        gap: 3px !important;
+    }
+    button[key="view_analyze"],
+    button[key="view_edge"],
+    button[key="view_picks"],
+    button[key="view_results"] {
+        min-height: 48px !important;
+        padding: 0.45rem 0.18rem !important;
+        font-size: 0.68rem !important;
+    }
+    .pick-tray-v63 {
+        bottom: calc(67px + env(safe-area-inset-bottom)) !important;
+    }
+    .workspace-page-head {
+        align-items: flex-start;
+        padding-top: 0.5rem;
+    }
+    .workspace-page-head h1 { font-size: 1.18rem; }
+    .workspace-summary-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .st-key-analyzer_sport_navigation {
+        position: sticky;
+        top: 0;
+        z-index: 90;
+        padding: 0.35rem 0;
+        background: rgba(9,12,16,0.94);
+        backdrop-filter: blur(14px);
     }
 }
 </style>
@@ -3365,6 +3533,7 @@ if "session_id" not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())
 
 _VALID_SPORTS = {"nba", "mlb", "wnba", "edge"}
+_VALID_VIEWS = {"analyze", "edge", "picks", "results"}
 try:
     _url_sport = st.query_params.get("sport", "")
     if isinstance(_url_sport, list):
@@ -3373,6 +3542,20 @@ try:
 except Exception:
     _url_sport = ""
 _default_active_sport = _url_sport if _url_sport in _VALID_SPORTS else "mlb"
+try:
+    _url_view = st.query_params.get("view", "")
+    if isinstance(_url_view, list):
+        _url_view = _url_view[0] if _url_view else ""
+    _url_view = str(_url_view).strip().lower()
+except Exception:
+    _url_view = ""
+_default_active_view = (
+    _url_view if _url_view in _VALID_VIEWS else
+    "edge" if _default_active_sport == "edge" else "analyze"
+)
+_default_analyzer_sport = (
+    _default_active_sport if _default_active_sport in {"nba", "mlb", "wnba"} else "mlb"
+)
 
 for key, default in [
     ("logs", None), ("ai_analysis", None), ("ai_error", None),
@@ -3382,6 +3565,9 @@ for key, default in [
     ("wnba_jump_player", None), ("wnba_jump_line", None),
     ("wnba_jump_side", "Over"), ("wnba_jump_stat", "Points"),
     ("runtime_debug_errors", []), ("runtime_metrics", {}),
+    ("active_view", _default_active_view),
+    ("last_analyzer_sport", _default_analyzer_sport),
+    ("edge_return_available", False), ("edge_viewed", []),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -3403,9 +3589,26 @@ def persist_active_sport(sport: str) -> None:
         pass
 
 
+def persist_active_view(view: str) -> None:
+    """Keep the product destination stable across mobile reconnects."""
+    view = str(view or "").strip().lower()
+    if view not in _VALID_VIEWS:
+        return
+    st.session_state.active_view = view
+    try:
+        current = st.query_params.get("view", "")
+        if isinstance(current, list):
+            current = current[0] if current else ""
+        if str(current).strip().lower() != view:
+            st.query_params["view"] = view
+    except Exception:
+        pass
+
+
 # Older open sessions may not have a sport in the URL yet. Add it once so a
 # mobile browser reconnect restores the current analyzer instead of MLB.
 persist_active_sport(st.session_state.active_sport)
+persist_active_view(st.session_state.active_view)
 
 
 def record_debug_error(area: str, err) -> None:
@@ -3588,8 +3791,35 @@ def set_navigation_scroll_target(target: str) -> None:
     st.session_state["_navigation_scroll_target"] = target
 
 
+def navigate_to_view(view: str, target: str = "workspace-top") -> None:
+    """Switch product destinations while preserving analyzer and scanner state."""
+    view = str(view or "").strip().lower()
+    if view not in _VALID_VIEWS:
+        return
+    current_sport = str(st.session_state.get("active_sport", "mlb")).lower()
+    if view == "analyze":
+        analyzer_sport = str(st.session_state.get("last_analyzer_sport", "mlb")).lower()
+        if analyzer_sport not in {"nba", "mlb", "wnba"}:
+            analyzer_sport = "mlb"
+        persist_active_sport(analyzer_sport)
+        if target == "workspace-top":
+            target = f"{analyzer_sport}-analyzer-controls"
+    elif view == "edge":
+        if current_sport in {"nba", "mlb", "wnba"}:
+            st.session_state.last_analyzer_sport = current_sport
+        persist_active_sport("edge")
+        if target == "workspace-top":
+            target = "edge-scanner-controls"
+    persist_active_view(view)
+    set_navigation_scroll_target(target)
+
+
 def navigate_to_sport(sport: str, target: str) -> None:
     """Single-pass navigation callback used by tabs and analyzer links."""
+    sport = str(sport or "").strip().lower()
+    if sport in {"nba", "mlb", "wnba"}:
+        st.session_state.last_analyzer_sport = sport
+    persist_active_view("analyze")
     persist_active_sport(sport)
     st.session_state.active_tab = "player"
     set_navigation_scroll_target(target)
@@ -3600,6 +3830,12 @@ def open_edge_analyzer(sport: str, player: str, line: float,
     """Open an Edge result in its analyzer without an extra rerun."""
     sport_key = str(sport or "").strip().lower()
     target = f"{sport_key}-analyzer-controls"
+    st.session_state.edge_return_available = True
+    viewed_key = f"{sport_key}|{normalize_name(player)}|{stat}|{side}|{line}"
+    viewed = list(st.session_state.get("edge_viewed", []) or [])
+    if viewed_key not in viewed:
+        viewed.append(viewed_key)
+        st.session_state.edge_viewed = viewed[-200:]
     navigate_to_sport(sport_key, target)
     if sport_key == "nba":
         st.session_state.edge_jump_player = player
@@ -3617,6 +3853,36 @@ def open_edge_analyzer(sport: str, player: str, line: float,
         st.session_state.wnba_jump_stat = stat
 
 
+def open_pick_list_analyzer(leg: dict) -> None:
+    """Reopen a saved pick in the matching analyzer."""
+    sport_key = str(leg.get("sport", "mlb") or "mlb").strip().lower()
+    if sport_key not in {"nba", "mlb", "wnba"}:
+        sport_key = "mlb"
+    player = str(leg.get("player", ""))
+    side = str(leg.get("side", "Over") or "Over")
+    line = leg.get("line", 0)
+    prop = str(leg.get("prop", ""))
+    stat = re.sub(r"\s+(Over|Under)\s*$", "", prop, flags=re.IGNORECASE).strip()
+    if not stat:
+        stat = "Strikeouts" if sport_key == "mlb" else "Points"
+    st.session_state.edge_return_available = False
+    navigate_to_sport(sport_key, f"{sport_key}-analyzer-controls")
+    if sport_key == "nba":
+        st.session_state.edge_jump_player = player
+        st.session_state.edge_jump_line = line
+        st.session_state.edge_jump_side = side
+    elif sport_key == "mlb":
+        st.session_state.edge_jump_pitcher = player
+        st.session_state.edge_jump_line = line
+        st.session_state.edge_jump_side = side
+        st.session_state.edge_jump_prop = stat
+    else:
+        st.session_state.wnba_jump_player = player
+        st.session_state.wnba_jump_line = line
+        st.session_state.wnba_jump_side = side
+        st.session_state.wnba_jump_stat = stat
+
+
 def clear_player_search(widget_key: str, sport: str,
                         extra_keys: tuple = ()) -> None:
     """Clear one analyzer search without disturbing navigation or other sports."""
@@ -3624,6 +3890,7 @@ def clear_player_search(widget_key: str, sport: str,
     st.session_state.pop(f"{widget_key}__committed", None)
     for extra_key in extra_keys:
         st.session_state.pop(extra_key, None)
+    persist_active_view("analyze")
     persist_active_sport(sport)
 
 
@@ -3631,6 +3898,8 @@ def select_recent_nba_player(player: str) -> None:
     """Commit a recent-player shortcut before the analyzer redraws."""
     st.session_state.player_key = st.session_state.get("player_key", 0) + 1
     st.session_state._recent_pick = player
+    st.session_state.last_analyzer_sport = "nba"
+    persist_active_view("analyze")
     persist_active_sport("nba")
 
 
@@ -3981,6 +4250,269 @@ def render_sticky_pick_tray() -> None:
         f"</div></div>",
         unsafe_allow_html=True,
     )
+
+
+def _move_pick_list_leg(index: int, direction: int) -> None:
+    legs = st.session_state.get("parlay_legs", []) or []
+    new_index = index + direction
+    if 0 <= index < len(legs) and 0 <= new_index < len(legs):
+        legs[index], legs[new_index] = legs[new_index], legs[index]
+
+
+def _remove_pick_list_leg(index: int) -> None:
+    legs = st.session_state.get("parlay_legs", []) or []
+    if 0 <= index < len(legs):
+        removed = legs.pop(index)
+        st.session_state.parlay_notice = f"Removed {removed.get('player', 'pick')}."
+
+
+def _set_tracker_result(index: int, result: str) -> None:
+    tracker = st.session_state.get("tracker", []) or []
+    if not (0 <= index < len(tracker)):
+        return
+    tracker[index]["Result"] = result
+    row_id = tracker[index].get("id")
+    if row_id:
+        update_result_in_supabase(row_id, result)
+
+
+def _remove_tracker_entry(index: int) -> None:
+    tracker = st.session_state.get("tracker", []) or []
+    if not (0 <= index < len(tracker)):
+        return
+    removed = tracker.pop(index)
+    if removed.get("id"):
+        delete_from_supabase(removed["id"])
+
+
+def render_pick_list_page() -> None:
+    """First-class shortlist workspace with ordering and analyzer return paths."""
+    import html as _html
+
+    legs = st.session_state.get("parlay_legs", []) or []
+    notice = st.session_state.pop("parlay_notice", None)
+    if notice:
+        st.toast(notice)
+
+    confidences = []
+    probabilities = []
+    watch_count = 0
+    for leg in legs:
+        try:
+            confidences.append(float(leg.get("confidence", leg.get("adj", 0)) or 0))
+        except Exception:
+            pass
+        try:
+            probabilities.append(float(leg.get("adj", 0) or 0))
+        except Exception:
+            pass
+        if "watch" in str(leg.get("verdict", "")).lower() or "lean" in str(leg.get("verdict", "")).lower():
+            watch_count += 1
+
+    avg_conf = round(sum(confidences) / len(confidences)) if confidences else 0
+    avg_prob = round(sum(probabilities) / len(probabilities)) if probabilities else 0
+    avg_entry = round(0.7 * avg_prob + 0.3 * avg_conf) if legs else 0
+    readiness = (
+        "Ready to review" if legs and avg_entry >= 80 and watch_count == 0 else
+        "Needs review" if legs else "Empty"
+    )
+
+    st.markdown(
+        "<div id='workspace-top' class='workspace-page-head'><div>"
+        "<h1>Pick List</h1>"
+        "<p>Your working shortlist. Reorder candidates, reopen the full analysis, and remove weak legs before building an entry.</p>"
+        "</div></div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f"<div class='workspace-summary-grid'>"
+        f"<div class='workspace-summary-item'><span>Selected</span><strong>{len(legs)} / 6</strong></div>"
+        f"<div class='workspace-summary-item'><span>Avg hit chance</span><strong>{avg_prob or '—'}{'%' if avg_prob else ''}</strong></div>"
+        f"<div class='workspace-summary-item'><span>Avg evidence</span><strong>{avg_conf or '—'}{' / 100' if avg_conf else ''}</strong></div>"
+        f"<div class='workspace-summary-item'><span>Status</span><strong>{readiness}</strong></div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+    if not legs:
+        st.markdown(
+            "<div class='pick-list-empty'><strong style='color:var(--text);'>No picks saved yet</strong><br>"
+            "Add candidates from an analyzer or the Edge Scanner. They will remain here while you move around the app.</div>",
+            unsafe_allow_html=True,
+        )
+        st.button(
+            "Open Edge Scanner", key="empty_pick_list_edge", use_container_width=True,
+            on_click=navigate_to_view, args=("edge", "edge-scanner-controls"),
+        )
+        return
+
+    if watch_count:
+        st.warning(f"{watch_count} pick{'s' if watch_count != 1 else ''} still carry a Lean or Watch-level verdict. Reopen those analyses before entering.")
+
+    for i, leg in enumerate(list(legs)):
+        verdict = str(leg.get("verdict", "Unrated"))
+        verdict_color = (
+            "#36d399" if "Strong" in verdict else
+            "#f4c95d" if "Lean" in verdict or "Watch" in verdict else "#aeb9c7"
+        )
+        player = _html.escape(str(leg.get("player", "Unknown player")))
+        prop = _html.escape(str(leg.get("prop", "Prop")))
+        sport = _html.escape(str(leg.get("sport", "")))
+        side = _html.escape(str(leg.get("side", "")))
+        line = _html.escape(str(leg.get("line", "—")))
+        st.markdown(
+            f"<div class='pick-list-card'>"
+            f"<div style='display:flex;justify-content:space-between;gap:12px;align-items:flex-start;'>"
+            f"<div><strong>{i + 1}. {player}</strong>"
+            f"<div class='pick-list-card-meta'>"
+            f"<span class='edge-pill-v55 accent'>{sport}</span>"
+            f"<span class='edge-pill-v55'>{prop}</span>"
+            f"<span class='edge-pill-v55'>{side} {line}</span>"
+            f"</div></div>"
+            f"<div style='text-align:right;font-family:var(--font-mono);'>"
+            f"<div style='color:{verdict_color};font-size:0.64rem;font-weight:800;'>{_html.escape(verdict)}</div>"
+            f"<div style='color:var(--text3);font-size:0.54rem;margin-top:4px;'>"
+            f"Hit {leg.get('adj', '—')}% · Evidence {leg.get('confidence', '—')}</div>"
+            f"</div></div></div>",
+            unsafe_allow_html=True,
+        )
+        up_col, down_col, analyze_col, remove_col = st.columns([1, 1, 4, 1])
+        with up_col:
+            st.button("↑", key=f"pick_up_{i}", help="Move up", disabled=i == 0,
+                      use_container_width=True, on_click=_move_pick_list_leg, args=(i, -1))
+        with down_col:
+            st.button("↓", key=f"pick_down_{i}", help="Move down", disabled=i == len(legs) - 1,
+                      use_container_width=True, on_click=_move_pick_list_leg, args=(i, 1))
+        with analyze_col:
+            st.button("Analyze", key=f"pick_analyze_{i}", use_container_width=True,
+                      on_click=open_pick_list_analyzer, args=(dict(leg),))
+        with remove_col:
+            st.button("✕", key=f"pick_remove_page_{i}", help="Remove", use_container_width=True,
+                      on_click=_remove_pick_list_leg, args=(i,))
+
+    share_lines = ["PropIQ Pick List"] + [
+        f"{i + 1}. {leg.get('player', '')} | {leg.get('prop', '')} | {leg.get('side', '')} {leg.get('line', '')} | {leg.get('sport', '')}"
+        for i, leg in enumerate(legs)
+    ]
+    with st.expander("Shareable list", expanded=False):
+        st.code("\n".join(share_lines), language=None)
+
+    if not st.session_state.get("confirm_clear_pick_list"):
+        if st.button("Clear Pick List", key="pick_page_clear", use_container_width=True):
+            st.session_state.confirm_clear_pick_list = True
+            st.rerun()
+    else:
+        st.warning("Clear every saved pick?")
+        clear_yes, clear_no = st.columns(2)
+        with clear_yes:
+            if st.button("Yes, clear all", key="pick_page_clear_yes", use_container_width=True):
+                st.session_state.parlay_legs = []
+                st.session_state.confirm_clear_pick_list = False
+                st.rerun()
+        with clear_no:
+            if st.button("Cancel", key="pick_page_clear_no", use_container_width=True):
+                st.session_state.confirm_clear_pick_list = False
+                st.rerun()
+
+
+def render_results_page() -> None:
+    """Tracked-pick outcomes and calibration live outside the analyzers."""
+    import html as _html
+
+    tracker = st.session_state.get("tracker", []) or []
+    hits = sum(1 for entry in tracker if entry.get("Result") == "Hit")
+    misses = sum(1 for entry in tracker if entry.get("Result") == "Miss")
+    pending = sum(1 for entry in tracker if entry.get("Result", "Pending") == "Pending")
+    settled = hits + misses
+    win_rate = hits / settled if settled else None
+
+    st.markdown(
+        "<div id='workspace-top' class='workspace-page-head'><div>"
+        "<h1>Results</h1>"
+        "<p>Settle tracked picks and use actual outcomes to judge calibration. This is the evidence layer behind future model tuning.</p>"
+        "</div></div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f"<div class='workspace-summary-grid'>"
+        f"<div class='workspace-summary-item'><span>Win rate</span><strong>{f'{win_rate:.0%}' if win_rate is not None else '—'}</strong></div>"
+        f"<div class='workspace-summary-item'><span>Hit</span><strong style='color:var(--green);'>{hits}</strong></div>"
+        f"<div class='workspace-summary-item'><span>Miss</span><strong style='color:var(--red);'>{misses}</strong></div>"
+        f"<div class='workspace-summary-item'><span>Pending</span><strong>{pending}</strong></div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+    if not tracker:
+        st.markdown(
+            "<div class='pick-list-empty'><strong style='color:var(--text);'>No tracked picks yet</strong><br>"
+            "Use Add & Track from an analyzer or Edge result. Tracked outcomes will appear here.</div>",
+            unsafe_allow_html=True,
+        )
+        return
+
+    controls_a, controls_b = st.columns([2, 1])
+    sports = sorted({str(entry.get("Sport", "Unknown") or "Unknown") for entry in tracker})
+    with controls_a:
+        sport_filter = st.selectbox("Sport", ["All sports"] + sports, key="results_sport_filter")
+    with controls_b:
+        if st.button("Refresh outcomes", key="results_refresh", use_container_width=True):
+            updated = 0
+            with st.spinner("Checking pending outcomes..."):
+                for i, entry in enumerate(tracker):
+                    if entry.get("Result", "Pending") != "Pending":
+                        continue
+                    detected = auto_detect_result(entry)
+                    if detected:
+                        _set_tracker_result(i, detected)
+                        tracker[i]["auto_detected"] = True
+                        updated += 1
+            st.toast(f"Updated {updated} outcome{'s' if updated != 1 else ''}.")
+            if updated:
+                st.rerun()
+
+    visible_entries = [
+        (i, entry) for i, entry in enumerate(tracker)
+        if sport_filter == "All sports" or str(entry.get("Sport", "Unknown") or "Unknown") == sport_filter
+    ]
+    for i, entry in visible_entries:
+        result = str(entry.get("Result", "Pending"))
+        result_color = {"Hit": "#36d399", "Miss": "#f05d75", "Pending": "#748294"}.get(result, "#748294")
+        player = _html.escape(str(entry.get("Player", "Unknown player")))
+        line = _html.escape(str(entry.get("Line", "—")))
+        matchup = _html.escape(str(entry.get("Matchup", "Prop")))
+        opponent = _html.escape(str(entry.get("Opponent", "—")))
+        verdict = _html.escape(str(entry.get("Verdict", "Unrated")))
+        st.markdown(
+            f"<div class='pick-list-card' style='border-left-color:{result_color};'>"
+            f"<div style='display:flex;justify-content:space-between;gap:12px;align-items:flex-start;'>"
+            f"<div><strong>{player}</strong><div class='pick-list-card-meta'>"
+            f"<span class='edge-pill-v55 accent'>{matchup}</span>"
+            f"<span class='edge-pill-v55'>{line}</span>"
+            f"<span class='edge-pill-v55'>vs {opponent}</span></div></div>"
+            f"<div style='text-align:right;font-family:var(--font-mono);'>"
+            f"<div style='color:{result_color};font-weight:900;font-size:0.72rem;'>{result}</div>"
+            f"<div style='color:var(--text3);font-size:0.52rem;margin-top:4px;'>{verdict}</div>"
+            f"</div></div></div>",
+            unsafe_allow_html=True,
+        )
+        hit_col, miss_col, pending_col, remove_col = st.columns([2, 2, 2, 1])
+        with hit_col:
+            st.button("Hit", key=f"results_hit_{i}", use_container_width=True,
+                      on_click=_set_tracker_result, args=(i, "Hit"))
+        with miss_col:
+            st.button("Miss", key=f"results_miss_{i}", use_container_width=True,
+                      on_click=_set_tracker_result, args=(i, "Miss"))
+        with pending_col:
+            st.button("Pending", key=f"results_pending_{i}", use_container_width=True,
+                      on_click=_set_tracker_result, args=(i, "Pending"))
+        with remove_col:
+            st.button("✕", key=f"results_remove_{i}", help="Remove", use_container_width=True,
+                      on_click=_remove_tracker_entry, args=(i,))
+
+    if sport_filter in ("All sports", "MLB"):
+        with st.expander("MLB calibration dashboard", expanded=False):
+            _render_mlb_backtest_dashboard(tracker)
 
 
 def set_runtime_metric(key: str, status: str, detail: str = "", **extra) -> None:
@@ -8171,8 +8703,12 @@ if not st.session_state.supabase_loaded:
         st.session_state.tracker = _sb_entries
     st.session_state.supabase_loaded = True
 
-# ── Trigger pre-warm once per day per session ─────────────────
-if st.session_state.get("prewarm_date") != _cache_date():
+# ── Trigger NBA pre-warm only when the NBA analyzer is actually open ──────
+if (
+    st.session_state.get("active_view") == "analyze"
+    and st.session_state.get("active_sport") == "nba"
+    and st.session_state.get("prewarm_date") != _cache_date()
+):
     st.session_state.prewarm_date = _cache_date()
     import threading as _t
     _t.Thread(target=_prewarm_cache, daemon=True).start()
@@ -8446,47 +8982,82 @@ if _all_scores:
         )
 
 # ─────────────────────────────────────────────
-# Sport Switcher
+# Product workspace navigation
 # ─────────────────────────────────────────────
-_sp1, _sp2, _sp3, _sp4 = st.columns(4)
-with _sp1:
-    st.button(
-        "🏀  NBA",
-        key="sport_nba",
-        use_container_width=True,
-        type="primary" if st.session_state.active_sport == "nba" else "secondary",
-        on_click=navigate_to_sport,
-        args=("nba", "nba-analyzer-controls"),
-    )
-with _sp2:
-    st.button(
-        "⚾  MLB",
-        key="sport_mlb",
-        use_container_width=True,
-        type="primary" if st.session_state.active_sport == "mlb" else "secondary",
-        on_click=navigate_to_sport,
-        args=("mlb", "mlb-analyzer-controls"),
-    )
-with _sp3:
-    st.button(
-        "🏀  WNBA",
-        key="sport_wnba",
-        use_container_width=True,
-        type="primary" if st.session_state.active_sport == "wnba" else "secondary",
-        on_click=navigate_to_sport,
-        args=("wnba", "wnba-analyzer-controls"),
-    )
-with _sp4:
-    st.button(
-        "🎯  EDGE",
-        key="sport_edge",
-        use_container_width=True,
-        type="primary" if st.session_state.active_sport == "edge" else "secondary",
-        on_click=navigate_to_sport,
-        args=("edge", "edge-scanner-controls"),
-    )
+_active_view = str(st.session_state.get("active_view", "analyze")).lower()
+if _active_view == "edge" and st.session_state.active_sport != "edge":
+    persist_active_sport("edge")
+elif _active_view == "analyze" and st.session_state.active_sport == "edge":
+    _restore_sport = str(st.session_state.get("last_analyzer_sport", "mlb")).lower()
+    persist_active_sport(_restore_sport if _restore_sport in {"nba", "mlb", "wnba"} else "mlb")
 
-render_pick_list()
+with st.container(key="workspace_navigation"):
+    _nav1, _nav2, _nav3, _nav4 = st.columns(4)
+    with _nav1:
+        st.button(
+            "Analyze", key="view_analyze", use_container_width=True,
+            type="primary" if _active_view == "analyze" else "secondary",
+            on_click=navigate_to_view, args=("analyze",),
+        )
+    with _nav2:
+        st.button(
+            "Edge", key="view_edge", use_container_width=True,
+            type="primary" if _active_view == "edge" else "secondary",
+            on_click=navigate_to_view, args=("edge",),
+        )
+    with _nav3:
+        _pick_count = len(st.session_state.get("parlay_legs", []) or [])
+        st.button(
+            f"Picks ({_pick_count})", key="view_picks", use_container_width=True,
+            type="primary" if _active_view == "picks" else "secondary",
+            on_click=navigate_to_view, args=("picks",),
+        )
+    with _nav4:
+        st.button(
+            "Results", key="view_results", use_container_width=True,
+            type="primary" if _active_view == "results" else "secondary",
+            on_click=navigate_to_view, args=("results",),
+        )
+
+if _active_view == "picks":
+    render_pick_list_page()
+    render_navigation_scroll_target("workspace-top")
+    st.stop()
+
+if _active_view == "results":
+    render_results_page()
+    render_navigation_scroll_target("workspace-top")
+    st.stop()
+
+if _active_view == "analyze":
+    with st.container(key="analyzer_sport_navigation"):
+        _sp1, _sp2, _sp3 = st.columns(3)
+        with _sp1:
+            st.button(
+                "NBA", key="sport_nba", use_container_width=True,
+                type="primary" if st.session_state.active_sport == "nba" else "secondary",
+                on_click=navigate_to_sport, args=("nba", "nba-analyzer-controls"),
+            )
+        with _sp2:
+            st.button(
+                "MLB", key="sport_mlb", use_container_width=True,
+                type="primary" if st.session_state.active_sport == "mlb" else "secondary",
+                on_click=navigate_to_sport, args=("mlb", "mlb-analyzer-controls"),
+            )
+        with _sp3:
+            st.button(
+                "WNBA", key="sport_wnba", use_container_width=True,
+                type="primary" if st.session_state.active_sport == "wnba" else "secondary",
+                on_click=navigate_to_sport, args=("wnba", "wnba-analyzer-controls"),
+            )
+
+    if st.session_state.get("edge_return_available"):
+        with st.container(key="return_to_edge_navigation"):
+            st.button(
+                "← Back to Edge results", key="return_to_edge", use_container_width=True,
+                on_click=navigate_to_view, args=("edge", "edge-scanner-controls"),
+            )
+
 render_sticky_pick_tray()
 
 
@@ -12029,8 +12600,8 @@ if st.session_state.active_sport == "mlb":
             f"<span class='mlb-decision-status'>{_hitter_status}</span></div></div>"
             f"<div class='mlb-decision-copy'>{_hitter_copy}</div>"
             f"<div class='mlb-decision-metrics'>"
-            f"<div class='mlb-decision-metric'><span>Model probability</span><strong>{adj:.0%}</strong></div>"
-            f"<div class='mlb-decision-metric'><span>Evidence confidence</span><strong>{score}/100</strong></div>"
+            f"<div class='mlb-decision-metric'><span>Estimated hit chance</span><strong>{adj:.0%}</strong></div>"
+            f"<div class='mlb-decision-metric'><span>Evidence quality</span><strong>{score}/100</strong></div>"
             f"<div class='mlb-decision-metric'><span>Projected FS</span><strong>{expected_fs:.1f}</strong></div>"
             f"<div class='mlb-decision-metric'><span>Edge vs line</span><strong>{_hitter_directional_edge:+.1f}</strong></div>"
             f"<div class='mlb-decision-metric'><span>Consistency</span><strong>{cons:.0%}</strong></div>"
@@ -12264,12 +12835,12 @@ if st.session_state.active_sport == "mlb":
 
         _mlb_ph = st.empty()
         _mlb_ph.markdown("<div style='font-family:JetBrains Mono,monospace;font-size:0.7rem;"
-                         "color:#555;padding:0.5rem 0;'>⏳ FETCHING GAME LOGS...</div>",
+                         "color:#7d93ab;padding:0.5rem 0;'>STEP 1 OF 2 · FETCHING CURRENT GAME LOGS</div>",
                          unsafe_allow_html=True)
         mlb_logs = mlb_get_pitcher_logs(mlb_pitcher, n=10)
 
         _mlb_ph.markdown("<div style='font-family:JetBrains Mono,monospace;font-size:0.7rem;"
-                         "color:#6b7f96;padding:0.5rem 0;'>⏳ LOADING MATCHUP + CONTEXT...</div>",
+                         "color:#36c6d3;padding:0.5rem 0;'>STEP 2 OF 2 · LOADING MATCHUP, ROLE, LINEUP, AND WEATHER</div>",
                          unsafe_allow_html=True)
 
         # Parallel fetch all new signals
@@ -16098,7 +16669,8 @@ if st.session_state.active_sport == "wnba":
 
     if should_run:
         player = wnba_find_player(selected_name)
-        with st.spinner("Loading WNBA game logs and matchup context..."):
+        with st.status("Building WNBA analysis...", expanded=True) as _wnba_load_status:
+            st.write("Fetching current-season game logs and schedule")
             logs = wnba_get_game_logs(player.get("id"), datetime.now().year, n=80)
             game = wnba_get_next_game(player.get("team", ""))
             opp_abbr = _wnba_norm_team(game.get("opp", ""))
@@ -16108,6 +16680,7 @@ if st.session_state.active_sport == "wnba":
             )
             import concurrent.futures as _wnba_futures
             position_group = player.get("position_group") or _wnba_position_group(player.get("position", ""))
+            st.write("Loading team defense, position matchup, availability, and role")
             with _wnba_futures.ThreadPoolExecutor(max_workers=3) as executor:
                 defense_future = executor.submit(
                     wnba_get_team_defense_context, opp_team_id, opp_abbr, 8, position_group
@@ -16129,6 +16702,7 @@ if st.session_state.active_sport == "wnba":
                         "position": player.get("position", ""),
                         "position_group": position_group,
                     }
+            _wnba_load_status.update(label="WNBA context ready", state="complete", expanded=False)
         if logs.empty:
             st.error("No current-season game logs were returned for this player.")
             st.stop()
@@ -16149,16 +16723,6 @@ if st.session_state.active_sport == "wnba":
             f"<div class='section-header'>{selected_name} · {matchup} · {game.get('game_date') or 'Schedule TBD'}</div>",
             unsafe_allow_html=True,
         )
-        m1, m2, m3, m4 = st.columns(4)
-        metrics = [
-            (m1, "MODEL PROBABILITY", f"{result['probability']:.0%}", "Chance of selected side"),
-            (m2, "CONFIDENCE", f"{result['confidence']}/100", "Quality and agreement"),
-            (m3, "PROJECTION", f"{result['projection']:.1f}", f"Line {line:.1f} · edge {result['edge']:+.1f}"),
-            (m4, "SEASON BASELINE", f"{result['season_avg']:.1f}", f"{result['season_sample']} games · median {result['season_median']:.1f}"),
-        ]
-        for column, label, value, hint in metrics:
-            with column:
-                st.markdown(f"<div class='stat-card'><div class='stat-label'>{label}</div><div class='stat-value' style='color:{color};font-size:1.65rem;'>{value}</div><div class='stat-hint'>{hint}</div></div>", unsafe_allow_html=True)
 
         # Probability chooses the direction; confidence decides whether the
         # estimate is trustworthy enough to act on. The verdict requires both.
@@ -16188,24 +16752,40 @@ if st.session_state.active_sport == "wnba":
             decision_color = "#7d93ab"
         if result.get("line_anomaly"):
             decision_note += " Verify that this is the standard full-game line before using the verdict."
+        _wnba_status = (
+            "Actionable" if tier.startswith("Strong") else
+            "Watchlist" if tier.startswith("Lean") else "Pass"
+        )
+        _wnba_decision_class = (
+            "actionable" if _wnba_status == "Actionable" else
+            "watchlist" if _wnba_status == "Watchlist" else "pass"
+        )
         st.markdown(
-            f"<div style='background:var(--bg2);border:1px solid {decision_color}44;border-left:3px solid {decision_color};"
-            f"border-radius:8px;padding:0.9rem 1rem;margin:0.15rem 0 0.75rem;'>"
-            f"<div style='font-family:var(--font-mono);font-size:0.55rem;color:var(--text3);letter-spacing:0.16em;"
-            f"text-transform:uppercase;'>How to use these scores</div>"
-            f"<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:12px;margin-top:9px;'>"
-            f"<div><div style='font-size:0.68rem;color:var(--text3);'>1 · DIRECTION</div>"
-            f"<div style='font-weight:800;color:var(--text);margin-top:2px;'>{probability_read}</div>"
-            f"<div style='font-size:0.68rem;color:var(--text3);margin-top:2px;'>{result['probability']:.0%} for {side}</div></div>"
-            f"<div><div style='font-size:0.68rem;color:var(--text3);'>2 · TRUST</div>"
-            f"<div style='font-weight:800;color:var(--text);margin-top:2px;'>{confidence_read}</div>"
-            f"<div style='font-size:0.68rem;color:var(--text3);margin-top:2px;'>{result['confidence']}/100 evidence score</div></div>"
-            f"<div><div style='font-size:0.68rem;color:var(--text3);'>3 · FINAL CALL</div>"
-            f"<div style='font-weight:900;color:{decision_color};margin-top:2px;'>{decision_title}</div>"
-            f"<div style='font-size:0.68rem;color:var(--text3);margin-top:2px;'>Follow the verdict, which combines both.</div></div>"
-            f"</div><div style='font-size:0.72rem;color:var(--text2);line-height:1.5;margin-top:10px;'>{decision_note}</div></div>",
+            f"<div class='mlb-decision-card {_wnba_decision_class}'>"
+            f"<div class='mlb-decision-top'><div>"
+            f"<div class='mlb-decision-kicker'>WNBA {selected_stat} Decision</div>"
+            f"<div class='mlb-decision-name'>{selected_name}</div>"
+            f"<div class='mlb-decision-matchup'>{matchup} · {side} {line:.1f}<br>"
+            f"{result['sample']} recent games · {result['season_sample']} season games · "
+            f"latest log {result.get('stale_days', 0)}d ago · evidence {float(result.get('reliability', 0) or 0):.0f}%</div></div>"
+            f"<div class='mlb-decision-verdict'><strong>{tier}</strong>"
+            f"<span class='mlb-decision-status'>{_wnba_status}</span></div></div>"
+            f"<div class='mlb-decision-copy'>{decision_note}</div>"
+            f"<div class='mlb-decision-metrics'>"
+            f"<div class='mlb-decision-metric'><span>Estimated hit chance</span><strong>{result['probability']:.0%}</strong></div>"
+            f"<div class='mlb-decision-metric'><span>Evidence quality</span><strong>{result['confidence']}/100</strong></div>"
+            f"<div class='mlb-decision-metric'><span>Projection</span><strong>{result['projection']:.1f}</strong></div>"
+            f"<div class='mlb-decision-metric'><span>Projected edge</span><strong>{result['edge']:+.1f}</strong></div>"
+            f"<div class='mlb-decision-metric'><span>Consistency</span><strong>{result['consistency']:.0%}</strong></div>"
+            f"</div></div>",
             unsafe_allow_html=True,
         )
+        with st.expander("How the final call combines hit chance and evidence", expanded=False):
+            st.markdown(
+                f"**Direction:** {probability_read} ({result['probability']:.0%} for {side})  \n"
+                f"**Trust:** {confidence_read} ({result['confidence']}/100 evidence quality)  \n"
+                f"**Final call:** {decision_title}. The verdict requires both direction and evidence quality."
+            )
 
         confidence_color = "#00e896" if result["confidence"] >= 80 else "#ffc107" if result["confidence"] >= 65 else "#ff7043"
         confidence_max = {
@@ -20139,6 +20719,12 @@ if st.session_state.active_sport == "edge":
                 _conf_val = int(_r.get("confidence", _r["adj"]) or 0)
                 _conf_color_class = "green" if _conf_val >= 80 else ("yellow" if _conf_val >= 65 else "")
                 _risk_pills = ""
+                _viewed_key = (
+                    f"{str(_r.get('sport', '')).lower()}|{normalize_name(_r.get('player', ''))}|"
+                    f"{_r.get('stat', '')}|{_result_side}|{_r.get('line', '')}"
+                )
+                if _viewed_key in (st.session_state.get("edge_viewed", []) or []):
+                    _risk_pills += "<span class='edge-pill-v55 accent'>Viewed</span>"
                 if _r.get("opp") == "TBD":
                     _risk_pills += "<span class='edge-pill-v55 warn'>Opponent TBD</span>"
                 if float(_r.get("reliability", 0) or 0) < 68:
@@ -20227,21 +20813,13 @@ if st.session_state.active_sport == "edge":
                     f"<div class='edge-meta-v55'>{_ctx_pills}</div>"
                     f"</div>"
                     f"<div class='edge-score-v55'>"
-                    f"<div class='edge-score-item-v55'><span>Model</span><strong class='{_model_color_class}'>{_r['adj']}%</strong></div>"
-                    f"<div class='edge-score-item-v55'><span>Conf</span><strong class='{_conf_color_class}'>{_conf_val}</strong></div>"
-                    f"<div class='edge-score-item-v55'><span>Edge</span><strong class='{_edge_color_class}'>+{_r['edge_pct']}%</strong></div>"
-                    f"<div class='edge-score-item-v55'><span>Grade</span><strong style='color:{_grade_col};'>{_grade_lbl}</strong></div>"
+                    f"<div class='edge-score-item-v55'><span>Hit chance</span><strong class='{_model_color_class}'>{_r['adj']}%</strong></div>"
+                    f"<div class='edge-score-item-v55'><span>Evidence</span><strong class='{_conf_color_class}'>{_conf_val}</strong></div>"
+                    f"<div class='edge-score-item-v55'><span>Market edge</span><strong class='{_edge_color_class}'>+{_r['edge_pct']}%</strong></div>"
+                    f"<div class='edge-score-item-v55'><span>Verdict</span><strong style='color:{_grade_col};'>{_grade_lbl}</strong></div>"
                     f"</div>"
                     f"</div>"
                     f"{_reason_row_html}"
-                    f"<div class='edge-meta-v55 edge-detail-row-v55' style='margin-top:0.75rem;'>"
-                    f"<span class='edge-pill-v55'>Raw {_r.get('raw_adj', _r['adj'])}%</span>"
-                    f"<span class='edge-pill-v55'>Reliability {_r.get('reliability', '—')}%</span>"
-                    f"<span class='edge-pill-v55'>Avg {_r['avg']}</span>"
-                    f"<span class='edge-pill-v55'>Avg edge <strong style='color:{_edge_raw_col};'>{_r['edge_raw']:+.1f}</strong></span>"
-                    f"<span class='edge-pill-v55'>Consistency {_r['cons']}%</span>"
-                    f"<span class='edge-pill-v55'>{_r['samples']} {'games' if _r.get('sport') == 'WNBA' or _r.get('stat') == 'Hitter Fantasy Score' else 'starts'}</span>"
-                    f"</div>"
                     f"<details class='edge-details-v55'>"
                     f"<summary>Details</summary>"
                     f"<div class='edge-meta-v55' style='margin-top:0.55rem;'>"
@@ -23531,6 +24109,7 @@ if st.session_state.logs is not None:
                         "Consistency": f"{consistency:.0%}",
                         "Verdict":     _display_tier,
                         "Result":      "Pending",
+                        "Sport":       "NBA",
                     }
                     existing = [i for i, e in enumerate(st.session_state.tracker)
                                 if e["Player"] == full_name and e["Line"] == f"{line} {_display_side}"]
@@ -23553,8 +24132,17 @@ if st.session_state.logs is not None:
                         st.session_state.tracker.append(entry)
                         st.success(f"Added {full_name} to tracker!")
 
+# Results now has its own product destination. Keep the analyzer focused and
+# avoid loading outcome checks underneath every NBA analysis.
+st.markdown(
+    "<div style='margin-top:3rem;font-family:JetBrains Mono,monospace;font-size:0.6rem;"
+    "color:#6b7f96;text-align:center;'>PropIQ · Educational analysis only</div>",
+    unsafe_allow_html=True,
+)
+st.stop()
+
 # ─────────────────────────────────────────────
-# Prop Tracker
+# Legacy Prop Tracker (unreachable; retained temporarily for migration safety)
 # ─────────────────────────────────────────────
 
 st.markdown("<div class='section-header'>Prop Tracker</div>", unsafe_allow_html=True)
