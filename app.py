@@ -3772,6 +3772,343 @@ button[key="view_results"] {
     .pl-icon { display: none !important; }
     .pl-logo { font-size: 1.25rem !important; }
 }
+
+/* ══════════════════════════════════════════
+   PropIQ V7.2 — Polished analytical workspace
+   Correct Streamlit selectors, compact mobile navigation, stronger hierarchy
+══════════════════════════════════════════ */
+:root {
+    --surface-1: #10161d;
+    --surface-2: #151c24;
+    --surface-3: #1a222c;
+    --line-soft: rgba(214,226,239,0.09);
+    --line-focus: rgba(64,217,224,0.48);
+}
+
+/* Brand and live context read as one deliberate application header. */
+.pl-header {
+    min-height: 64px;
+    padding: 0.78rem 1rem;
+    background: rgba(12,17,23,0.97);
+    border: 1px solid var(--line-soft);
+    border-radius: 8px;
+    box-shadow: 0 8px 28px rgba(0,0,0,0.28);
+}
+.pl-header::after {
+    left: 12px;
+    right: 12px;
+    height: 1px;
+}
+.pl-logo { font-size: 1.62rem; letter-spacing: 0 !important; }
+.pl-sub { color: #7f91a5; }
+.pl-badge {
+    border-radius: 5px;
+    background: rgba(0,196,204,0.09);
+}
+.score-strip {
+    gap: 6px;
+    padding: 7px 1px 10px;
+    scroll-snap-type: x proximity;
+}
+.score-card {
+    min-width: 154px;
+    padding: 8px 11px;
+    border-radius: 7px;
+    background: var(--surface-1);
+    border-color: var(--line-soft);
+    scroll-snap-align: start;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.18);
+}
+
+/* The actual Streamlit buttons expose kind=primary/secondary. */
+.st-key-workspace_navigation,
+.st-key-analyzer_sport_navigation {
+    border-radius: 8px !important;
+}
+.st-key-workspace_navigation button,
+.st-key-analyzer_sport_navigation button {
+    margin: 0 !important;
+    width: 100% !important;
+    box-shadow: none !important;
+    text-transform: none !important;
+    letter-spacing: 0 !important;
+}
+.st-key-workspace_navigation button[kind="primary"] {
+    background: #16b8c2 !important;
+    color: #031316 !important;
+    border: 1px solid #42d3da !important;
+}
+.st-key-workspace_navigation button[kind="secondary"] {
+    background: transparent !important;
+    color: #91a3b7 !important;
+    border: 1px solid transparent !important;
+}
+.st-key-workspace_navigation button[kind="secondary"]:hover {
+    background: rgba(255,255,255,0.045) !important;
+    color: #f0f4f8 !important;
+    border-color: var(--line-soft) !important;
+    transform: none !important;
+}
+.st-key-analyzer_sport_navigation button[kind="primary"] {
+    background: rgba(0,196,204,0.13) !important;
+    color: #8ff6fa !important;
+    border: 1px solid rgba(64,217,224,0.34) !important;
+}
+.st-key-analyzer_sport_navigation button[kind="secondary"] {
+    background: transparent !important;
+    color: #8295aa !important;
+    border: 1px solid transparent !important;
+}
+.st-key-analyzer_sport_navigation button[kind="secondary"]:hover {
+    background: rgba(255,255,255,0.035) !important;
+    color: #dfe8f1 !important;
+    transform: none !important;
+}
+
+/* Compact category headers replace the previous sparse section openings. */
+.analyzer-hero,
+.v55-hero,
+.workspace-page-head {
+    position: relative;
+    overflow: hidden;
+    padding: 0.9rem 1rem !important;
+    margin: 0.15rem 0 0.72rem !important;
+    background: var(--surface-1) !important;
+    border: 1px solid var(--line-soft) !important;
+    border-left: 3px solid var(--accent) !important;
+    border-radius: 8px !important;
+    box-shadow: 0 9px 24px rgba(0,0,0,0.22) !important;
+}
+.v55-hero::before,
+.v55-hero::after { display: none !important; }
+.v55-title,
+.workspace-page-head h1 {
+    font-size: 1.25rem !important;
+    line-height: 1.2 !important;
+    letter-spacing: 0 !important;
+}
+.v55-subcopy,
+.workspace-page-head p {
+    max-width: 720px;
+    margin-top: 4px !important;
+    color: #8699ad !important;
+    font-size: 0.7rem !important;
+    line-height: 1.45 !important;
+}
+.section-header {
+    margin: 1.25rem 0 0.58rem;
+    color: #8295aa;
+    letter-spacing: 0.14em;
+}
+
+/* Inputs feel like a unified control deck, including BaseWeb popup menus. */
+.stTextInput,
+.stNumberInput,
+.stSelectbox,
+.stRadio { margin-bottom: 0.1rem; }
+.stTextInput label,
+.stNumberInput label,
+.stSelectbox label,
+.stRadio label {
+    color: #8fa2b7 !important;
+}
+div[data-testid="stTextInput"] input,
+div[data-testid="stNumberInput"] input,
+div[data-baseweb="select"] > div {
+    min-height: 46px !important;
+    background: #0d131a !important;
+    color: #f0f4f8 !important;
+    border-color: rgba(214,226,239,0.14) !important;
+    border-radius: 7px !important;
+}
+div[data-testid="stTextInput"] input:focus,
+div[data-testid="stNumberInput"] input:focus,
+div[data-baseweb="select"] > div:focus-within {
+    border-color: var(--line-focus) !important;
+    box-shadow: 0 0 0 2px rgba(0,196,204,0.11) !important;
+}
+div[data-baseweb="popover"],
+div[data-baseweb="menu"],
+ul[role="listbox"] {
+    background: #111820 !important;
+    color: #f0f4f8 !important;
+}
+ul[role="listbox"] li {
+    min-height: 42px !important;
+    color: #dfe8f1 !important;
+    background: #111820 !important;
+}
+ul[role="listbox"] li:hover,
+ul[role="listbox"] li[aria-selected="true"] {
+    color: #9df7fa !important;
+    background: #1a2830 !important;
+}
+
+/* High-value commands are clear without making every button look primary. */
+.st-key-mlb_analyze button,
+.st-key-wnba_analyze button,
+.st-key-fetch button,
+.st-key-run_edge_scanner button {
+    min-height: 50px !important;
+    border-radius: 7px !important;
+    background: #16b8c2 !important;
+    color: #031316 !important;
+    border: 1px solid #47d6dd !important;
+    box-shadow: 0 7px 20px rgba(0,196,204,0.18) !important;
+}
+.st-key-mlb_analyze button:hover,
+.st-key-wnba_analyze button:hover,
+.st-key-fetch button:hover,
+.st-key-run_edge_scanner button:hover {
+    background: #25cad3 !important;
+    transform: translateY(-1px) !important;
+}
+
+/* Analytical surfaces gain depth while preserving their information density. */
+.mlb-decision-card,
+.edge-card-v55,
+.stat-card,
+.defense-card,
+.ai-box,
+.hot-pick-card,
+div[data-testid="stExpander"] {
+    background: var(--surface-1) !important;
+    border-color: var(--line-soft) !important;
+    border-radius: 8px !important;
+    box-shadow: 0 7px 22px rgba(0,0,0,0.2) !important;
+}
+.mlb-decision-metric,
+.edge-score-item-v55,
+.workspace-summary-item {
+    background: var(--surface-2) !important;
+    border-color: var(--line-soft) !important;
+    border-radius: 6px !important;
+}
+div[data-testid="stExpander"] summary {
+    min-height: 46px;
+    padding: 0.65rem 0.8rem !important;
+}
+div[data-testid="stAlert"] {
+    border-radius: 7px !important;
+    border-color: var(--line-soft) !important;
+}
+
+@keyframes v72Rise {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+.analyzer-hero,
+.mlb-decision-card,
+.edge-card-v55 { animation: v72Rise 0.28s ease both; }
+
+@media (max-width: 768px) {
+    .main .block-container,
+    .block-container,
+    [data-testid="stAppViewBlockContainer"] {
+        padding-left: 0.62rem !important;
+        padding-right: 0.62rem !important;
+        padding-bottom: calc(4.5rem + env(safe-area-inset-bottom)) !important;
+    }
+    .pl-header {
+        min-height: 56px !important;
+        margin: 0.38rem 0 0.42rem !important;
+        padding: 0.66rem 0.78rem !important;
+        border-radius: 8px !important;
+    }
+    .pl-logo { font-size: 1.32rem !important; }
+    .pl-badge { padding: 3px 8px !important; }
+    .score-card { min-width: 132px !important; }
+
+    /* Streamlit stacks columns on mobile; these application bars must not. */
+    .st-key-workspace_navigation div[data-testid="stHorizontalBlock"] {
+        display: grid !important;
+        grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+        gap: 3px !important;
+    }
+    .st-key-analyzer_sport_navigation div[data-testid="stHorizontalBlock"] {
+        display: grid !important;
+        grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+        gap: 3px !important;
+    }
+    .st-key-workspace_navigation div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"],
+    .st-key-analyzer_sport_navigation div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] {
+        width: 100% !important;
+        min-width: 0 !important;
+        flex: none !important;
+        padding: 0 !important;
+    }
+    .st-key-workspace_navigation {
+        margin: 0.18rem 0 0.4rem !important;
+        padding: 0.24rem !important;
+        border-radius: 8px !important;
+    }
+    .st-key-workspace_navigation button {
+        min-height: 46px !important;
+        padding: 0.36rem 0.1rem !important;
+        border-radius: 6px !important;
+        font-size: 0.66rem !important;
+        line-height: 1.05 !important;
+        white-space: nowrap !important;
+    }
+    .st-key-workspace_navigation button span[data-testid="stIconMaterial"] {
+        font-size: 1rem !important;
+    }
+    .st-key-analyzer_sport_navigation {
+        margin-bottom: 0.5rem !important;
+        padding: 0.23rem !important;
+        border-radius: 8px !important;
+    }
+    .st-key-analyzer_sport_navigation button {
+        min-height: 39px !important;
+        padding: 0.28rem 0.12rem !important;
+        border-radius: 6px !important;
+        font-size: 0.69rem !important;
+    }
+
+    .analyzer-hero,
+    .v55-hero,
+    .workspace-page-head {
+        padding: 0.72rem 0.8rem !important;
+        margin-bottom: 0.58rem !important;
+        border-radius: 7px !important;
+    }
+    .v55-title,
+    .workspace-page-head h1 { font-size: 1.08rem !important; }
+    .v55-subcopy,
+    .workspace-page-head p { font-size: 0.65rem !important; }
+    .section-header { margin-top: 0.95rem !important; }
+
+    /* Keep the paired prop controls paired instead of stacking into a tall form. */
+    div[data-testid="stHorizontalBlock"]:has(.st-key-mlb_line):has(.st-key-mlb_side),
+    div[data-testid="stHorizontalBlock"]:has(.st-key-wnba_stat_select):has(.st-key-wnba_line_input) {
+        display: grid !important;
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+        gap: 7px !important;
+    }
+    div[data-testid="stHorizontalBlock"]:has(.st-key-mlb_line):has(.st-key-mlb_side) > div[data-testid="stColumn"],
+    div[data-testid="stHorizontalBlock"]:has(.st-key-wnba_stat_select):has(.st-key-wnba_line_input) > div[data-testid="stColumn"] {
+        width: 100% !important;
+        min-width: 0 !important;
+        flex: none !important;
+    }
+
+    /* iOS keeps the viewport scale stable while typing. */
+    div[data-testid="stTextInput"] input,
+    div[data-testid="stNumberInput"] input,
+    div[data-baseweb="select"] input {
+        font-size: 16px !important;
+    }
+    .mlb-decision-card,
+    .edge-card-v55 { padding: 0.78rem !important; }
+    .mlb-decision-metrics,
+    .edge-score-v55 { gap: 5px !important; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .analyzer-hero,
+    .mlb-decision-card,
+    .edge-card-v55 { animation: none !important; }
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -12470,7 +12807,14 @@ if st.session_state.active_sport == "mlb":
     # ── MLB UI ────────────────────────────────────────────────
     st.markdown("<div id='mlb-analyzer-controls' class='analyzer-scroll-anchor'></div>", unsafe_allow_html=True)
     render_navigation_scroll_target("mlb-analyzer-controls")
-    st.markdown("<div class='section-header'>⚾ MLB Player Prop Analyzer</div>", unsafe_allow_html=True)
+    st.markdown(
+        "<div class='v55-hero analyzer-hero'>"
+        "<div class='v55-kicker'>MLB · INDIVIDUAL ANALYZER</div>"
+        "<div class='v55-title'>MLB Prop Lab</div>"
+        "<div class='v55-subcopy'>Pitcher strikeouts · hitter fantasy score</div>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
 
     # ── Dynamic pitcher list from MLB Stats API ──────────────────────────────
     @st.cache_data(ttl=86400, show_spinner=False)  # refresh once a day
@@ -22293,17 +22637,14 @@ with st.expander("🎯  Parlay Checker — validate your entry before locking"):
 
 st.markdown("<div id='nba-analyzer-controls' class='analyzer-scroll-anchor'></div>", unsafe_allow_html=True)
 render_navigation_scroll_target("nba-analyzer-controls")
-st.markdown("<div class='section-header'>Player & Prop</div>", unsafe_allow_html=True)
-st.markdown("""
-<div style='background:#0d1520;border:1px solid rgba(0,196,204,0.15);border-radius:10px;
-            padding:0.65rem 1rem;margin-bottom:0.75rem;display:flex;align-items:center;gap:10px;'>
-    <span style='font-size:1.1rem;'>💡</span>
-    <span style='font-family:JetBrains Mono,monospace;font-size:0.67rem;color:#6b7f96;'>
-        <span style='color:#94a3b8;'>Enter a player from tonight's PrizePicks slate, set the line, choose Over or Under, and hit </span>
-        <span style='color:#00c4cc;font-weight:700;'>Analyze Prop</span><span style='color:#94a3b8;'>. Takes ~10 seconds.</span>
-    </span>
-</div>
-""", unsafe_allow_html=True)
+st.markdown(
+    "<div class='v55-hero analyzer-hero'>"
+    "<div class='v55-kicker'>NBA · INDIVIDUAL ANALYZER</div>"
+    "<div class='v55-title'>NBA Prop Lab</div>"
+    "<div class='v55-subcopy'>Points · matchup · role context</div>"
+    "</div>",
+    unsafe_allow_html=True,
+)
 
 # Session state for player clear
 if "player_key" not in st.session_state:
