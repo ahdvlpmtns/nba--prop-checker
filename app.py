@@ -11663,39 +11663,121 @@ if st.session_state.active_sport == "mlb":
         return empty
 
     @st.cache_data(ttl=86400, show_spinner=False)
-    def mlb_get_batter_k_rate(player_id: Optional[int], player_name: str = "") -> Optional[float]:
-        """Return hitter strikeout rate from current/prior season, cached per batter."""
+    def mlb_get_batter_k_profile(
+        player_id: Optional[int],
+        player_name: str = "",
+        pitcher_hand: str = "R",
+    ) -> dict:
+        """Return a sample-regressed batter K profile versus the pitcher's hand."""
+        empty = {
+            "rate": None, "overall_rate": None, "split_rate": None,
+            "pa": 0, "split_pa": 0, "season": None,
+            "pitcher_hand": str(pitcher_hand or "R").upper()[:1],
+            "source": "unavailable",
+        }
         if not player_id:
-            return None
+            return empty
         try:
             import requests as _req, datetime as _dtx
             season = _dtx.datetime.now().year
+            hand = str(pitcher_hand or "R").upper()[:1]
+            sit_code = "vl" if hand == "L" else "vr"
+            league_k = 0.225
+
             for _yr in [season, season - 1]:
-                r = _req.get(
+                overall_r = _req.get(
                     f"https://statsapi.mlb.com/api/v1/people/{player_id}/stats",
                     params={"stats": "season", "group": "hitting",
                             "season": _yr, "gameType": "R"},
                     timeout=5,
                 )
-                if not r.ok:
+                if not overall_r.ok:
                     continue
-                splits = r.json().get("stats", [{}])[0].get("splits", [])
-                if not splits:
+                overall_splits = overall_r.json().get("stats", [{}])[0].get("splits", [])
+                if not overall_splits:
                     continue
-                stt = splits[0].get("stat", {})
-                pa = int(stt.get("plateAppearances", 0) or 0)
-                ab = int(stt.get("atBats", 0) or 0)
-                denom = pa if pa > 0 else ab
-                k = int(stt.get("strikeOuts", 0) or 0)
-                if denom >= 30:
-                    return round(k / denom, 3)
+                overall_stat = overall_splits[0].get("stat", {})
+                pa = int(overall_stat.get("plateAppearances", 0) or
+                         overall_stat.get("atBats", 0) or 0)
+                strikeouts = int(overall_stat.get("strikeOuts", 0) or 0)
+                if pa < 30:
+                    continue
+
+                overall_raw = strikeouts / pa
+                # A 30-PA rookie line should not carry the same weight as a
+                # full-season profile. Regress the overall rate before using it
+                # as the prior for the handedness split.
+                overall_reliability = pa / (pa + 100.0)
+                overall_rate = (
+                    overall_reliability * overall_raw +
+                    (1.0 - overall_reliability) * league_k
+                )
+
+                split_rate = None
+                split_pa = 0
+                try:
+                    split_r = _req.get(
+                        f"https://statsapi.mlb.com/api/v1/people/{player_id}/stats",
+                        params={"stats": "statSplits", "group": "hitting",
+                                "season": _yr, "sitCodes": sit_code,
+                                "gameType": "R"},
+                        timeout=5,
+                    )
+                    if split_r.ok:
+                        split_rows = split_r.json().get("stats", [{}])[0].get("splits", [])
+                        for row in split_rows:
+                            stat = row.get("stat", {})
+                            row_pa = int(stat.get("plateAppearances", 0) or
+                                         stat.get("atBats", 0) or 0)
+                            row_k = int(stat.get("strikeOuts", 0) or 0)
+                            if row_pa > split_pa and row_pa >= 15:
+                                split_pa = row_pa
+                                split_rate = row_k / row_pa
+                except Exception:
+                    split_rate = None
+                    split_pa = 0
+
+                if split_rate is not None:
+                    # Split samples stabilize slowly. Blend the same-hand result
+                    # into the regressed overall profile instead of trusting it
+                    # outright, even for established hitters.
+                    split_reliability = min(0.80, split_pa / (split_pa + 80.0))
+                    matchup_rate = (
+                        split_reliability * split_rate +
+                        (1.0 - split_reliability) * overall_rate
+                    )
+                    source = f"{_yr} vs {hand}HP ({split_pa} PA)"
+                else:
+                    matchup_rate = overall_rate
+                    source = f"{_yr} overall ({pa} PA); hand split unavailable"
+
+                return {
+                    "rate": round(max(0.05, min(0.45, matchup_rate)), 3),
+                    "overall_rate": round(overall_raw, 3),
+                    "split_rate": round(split_rate, 3) if split_rate is not None else None,
+                    "pa": pa,
+                    "split_pa": split_pa,
+                    "season": _yr,
+                    "pitcher_hand": hand,
+                    "source": source,
+                }
         except Exception:
             pass
-        return None
+        return empty
+
+
+    @st.cache_data(ttl=86400, show_spinner=False)
+    def mlb_get_batter_k_rate(player_id: Optional[int], player_name: str = "") -> Optional[float]:
+        """Backward-compatible overall K-rate accessor."""
+        return mlb_get_batter_k_profile(player_id, player_name, "R").get("overall_rate")
 
 
     @st.cache_data(ttl=900, show_spinner=False)
-    def mlb_get_batting_order(opp_abbr: str, game_date: str = "") -> dict:
+    def mlb_get_batting_order(
+        opp_abbr: str,
+        game_date: str = "",
+        pitcher_hand: str = "R",
+    ) -> dict:
         """
         Fetch confirmed or projected batting order for the opposing lineup.
         If today's lineup is not posted, falls back to the team's most recent
@@ -11705,7 +11787,10 @@ if st.session_state.active_sport == "mlb":
         """
         empty = {"confirmed": False, "order": [], "k_prone_count": 0,
                  "avg_k_rate": None, "lineup_note": "Lineup not yet posted",
-                 "projected": False, "source_date": "", "order_ids": []}
+                 "projected": False, "source_date": "", "order_ids": [],
+                 "order_k_rates": [], "order_k_profiles": [],
+                 "profile_coverage": 0,
+                 "profile_hand": str(pitcher_hand or "R").upper()[:1]}
         try:
             import requests as _req, datetime, pytz
             et    = pytz.timezone("America/New_York")
@@ -11741,42 +11826,70 @@ if st.session_state.active_sport == "mlb":
                 return None
 
             def _finish_order(order_players: list, date_str: str, projected: bool, source: str) -> Optional[dict]:
-                order = [p.get("fullName", "") for p in order_players if p.get("fullName")]
-                order_ids = [p.get("id") for p in order_players if p.get("id")]
+                order_rows = [p for p in order_players if p.get("fullName")]
+                order = [p.get("fullName", "") for p in order_rows]
+                # Keep IDs aligned to batting-order slots even when one player
+                # lacks an MLB ID in the source response.
+                order_ids = [p.get("id") for p in order_rows]
                 if len(order) < 6:
                     return None
 
-                # Individual batter K-rate quality.
-                k_rates = []
-                k_rates_by_id = {}
+                # Individual, handedness-aware batter K-rate quality.
+                k_profiles_by_id = {}
                 try:
                     import concurrent.futures as _cf_k
-                    with _cf_k.ThreadPoolExecutor(max_workers=6) as _kpool:
+                    with _cf_k.ThreadPoolExecutor(max_workers=9) as _kpool:
                         _futs = {
-                            _kpool.submit(mlb_get_batter_k_rate, pid, name): pid
+                            _kpool.submit(
+                                mlb_get_batter_k_profile,
+                                pid,
+                                name,
+                                pitcher_hand,
+                            ): pid
                             for pid, name in zip(order_ids, order)
                             if pid
                         }
-                        for _f in _cf_k.as_completed(_futs, timeout=8):
+                        for _f in _cf_k.as_completed(_futs, timeout=11):
                             try:
-                                _kr = _f.result(timeout=0.1)
-                                if _kr is not None:
-                                    _pid = _futs.get(_f)
-                                    _krf = float(_kr)
-                                    k_rates.append(_krf)
-                                    if _pid:
-                                        k_rates_by_id[_pid] = _krf
+                                _profile = _f.result(timeout=0.1)
+                                _pid = _futs.get(_f)
+                                if _pid and _profile and _profile.get("rate") is not None:
+                                    k_profiles_by_id[_pid] = _profile
                             except Exception:
                                 pass
                 except Exception:
-                    k_rates = []
+                    # Preserve profiles that completed before a slow endpoint
+                    # timed out; coverage is shown explicitly to the model/UI.
+                    pass
 
-                avg_k_rate = round(sum(k_rates) / len(k_rates), 3) if len(k_rates) >= 5 else None
-                k_prone_count = sum(1 for kr in k_rates if kr >= 0.25)
-                ordered_k_rates = [
-                    k_rates_by_id.get(pid)
+                ordered_k_profiles = [
+                    k_profiles_by_id.get(pid, {})
                     for pid in order_ids[:9]
                 ]
+                ordered_k_rates = [
+                    profile.get("rate") if profile else None
+                    for profile in ordered_k_profiles
+                ]
+                # Preserve every batting-order slot. Missing profiles are
+                # skipped in place, not compressed upward into leadoff weights.
+                lineup_weights = [1.16, 1.11, 1.06, 1.01, 0.97, 0.93, 0.89, 0.85, 0.81]
+                weighted_pairs = [
+                    (float(rate), lineup_weights[idx])
+                    for idx, rate in enumerate(ordered_k_rates[:9])
+                    if rate is not None and 0.05 <= float(rate) <= 0.45
+                ]
+                profile_coverage = len(weighted_pairs)
+                avg_k_rate = (
+                    round(
+                        sum(rate * weight for rate, weight in weighted_pairs) /
+                        sum(weight for _, weight in weighted_pairs),
+                        3,
+                    )
+                    if profile_coverage >= 5 else None
+                )
+                k_prone_count = sum(
+                    1 for rate in ordered_k_rates if rate is not None and rate >= 0.25
+                )
                 confirmed = (not projected) and len(order) >= 8
                 if projected:
                     note = (
@@ -11790,7 +11903,10 @@ if st.session_state.active_sport == "mlb":
                 if source:
                     note += f" · {source}"
                 if avg_k_rate is not None:
-                    note += f" · lineup K% {avg_k_rate:.0%}"
+                    note += (
+                        f" · vs {str(pitcher_hand or 'R').upper()[:1]}HP K% "
+                        f"{avg_k_rate:.0%} ({profile_coverage}/9 profiles)"
+                    )
 
                 return {
                     "confirmed":     confirmed,
@@ -11799,6 +11915,9 @@ if st.session_state.active_sport == "mlb":
                     "order":         order,
                     "order_ids":     order_ids,
                     "order_k_rates":  ordered_k_rates,
+                    "order_k_profiles": ordered_k_profiles,
+                    "profile_coverage": profile_coverage,
+                    "profile_hand": str(pitcher_hand or "R").upper()[:1],
                     "k_prone_count": k_prone_count,
                     "avg_k_rate":    avg_k_rate,
                     "lineup_note":   note,
@@ -11875,7 +11994,12 @@ if st.session_state.active_sport == "mlb":
                         if lineups:
                             side_key = "awayPlayers" if opp_side=="away" else "homePlayers"
                             players  = lineups.get(side_key, [])
-                            result = _finish_order(players[:9], date_str, projected, "posted lineup")
+                            result = _finish_order(
+                                players[:9],
+                                date_str,
+                                projected,
+                                "prior-game posted lineup" if projected else "target-game posted lineup",
+                            )
                             if result:
                                 return result
 
@@ -11961,12 +12085,17 @@ if st.session_state.active_sport == "mlb":
 
 
     @st.cache_data(ttl=900, show_spinner=False)
-    def mlb_get_batting_order_with_hands(opp_abbr: str, game_date: str = "") -> dict:
+    def mlb_get_batting_order_with_hands(
+        opp_abbr: str,
+        game_date: str = "",
+        pitcher_hand: str = "R",
+    ) -> dict:
         """
         Fetch tonight's batting order AND each batter's handedness.
         Returns lineup with L/R count for platoon weighting.
         """
-        base = mlb_get_batting_order(opp_abbr, game_date)
+        pitcher_hand = str(pitcher_hand or "R").upper()[:1]
+        base = mlb_get_batting_order(opp_abbr, game_date, pitcher_hand)
         if not base.get("order"):
             return {**base, "lhb_count": 0, "rhb_count": 0,
                     "lhb_pct": 0.5, "order_with_hands": []}
@@ -11996,7 +12125,11 @@ if st.session_state.active_sport == "mlb":
                 if not p:
                     p = next((x for x in all_players
                               if _last in _norm(x.get("fullName",""))), None)
-                hand = p.get("batSide", {}).get("code", "R") if p else "R"
+                raw_hand = p.get("batSide", {}).get("code", "R") if p else "R"
+                # Switch hitters bat opposite the pitcher's throwing hand.
+                hand = ("L" if pitcher_hand == "R" else "R") if raw_hand == "S" else raw_hand
+                if hand not in ("L", "R"):
+                    hand = "R"
                 order_with_hands.append({"name": name, "hand": hand})
                 if hand == "L": lhb += 1
                 else:           rhb += 1
@@ -12914,23 +13047,28 @@ if st.session_state.active_sport == "mlb":
             "expected_k": None, "prob": None, "weighted_lineup_k": None,
             "expected_bf": None, "pitcher_k_rate": None,
             "matchup_k_rate": None, "confidence": "low",
+            "profile_coverage": 0,
             "pitches_per_bf": None, "bf_method": "",
             "note": "Lineup/BF projection unavailable",
             "guardrail": "",
         }
         try:
             side = str(side or "Over")
-            valid_order_rates = [
-                float(x) for x in (order_k_rates or [])
-                if x is not None and 0.05 <= float(x) <= 0.45
+            order_weights = [1.16, 1.11, 1.06, 1.01, 0.97, 0.93, 0.89, 0.85, 0.81]
+            ordered_rate_pairs = [
+                (float(rate), order_weights[idx])
+                for idx, rate in enumerate((order_k_rates or [])[:9])
+                if rate is not None and 0.05 <= float(rate) <= 0.45
             ]
+            profile_coverage = len(ordered_rate_pairs)
             weighted_lineup_k = None
-            if len(valid_order_rates) >= 6:
+            if profile_coverage >= 6:
                 # Top of the lineup gets more plate appearances, so weight it
-                # more heavily than the 8/9 spots.
-                weights = [1.16, 1.11, 1.06, 1.01, 0.97, 0.93, 0.89, 0.85, 0.81]
-                pairs = list(zip(valid_order_rates[:9], weights[:len(valid_order_rates)]))
-                weighted_lineup_k = sum(v * w for v, w in pairs) / sum(w for _, w in pairs)
+                # more heavily than the 8/9 spots while preserving missing slots.
+                weighted_lineup_k = (
+                    sum(rate * weight for rate, weight in ordered_rate_pairs) /
+                    sum(weight for _, weight in ordered_rate_pairs)
+                )
             elif lineup_avg_k is not None and 0.05 <= float(lineup_avg_k) <= 0.45:
                 weighted_lineup_k = float(lineup_avg_k)
             elif opp_k_rate is not None and 0.05 <= float(opp_k_rate) <= 0.45:
@@ -13020,8 +13158,8 @@ if st.session_state.active_sport == "mlb":
             matchup_k_rate = max(0.07, min(0.40, matchup_k_rate))
             expected_k = expected_bf * matchup_k_rate
             prob = mlb_poisson_side_prob(expected_k, line, side)
-            confidence = "high" if lineup_confirmed and len(valid_order_rates) >= 7 else (
-                "medium" if (lineup_projected or len(valid_order_rates) >= 5 or weighted_lineup_k is not None) else "low"
+            confidence = "high" if lineup_confirmed and profile_coverage >= 7 else (
+                "medium" if (lineup_projected or profile_coverage >= 5 or weighted_lineup_k is not None) else "low"
             )
 
             gap = expected_k - float(line)
@@ -13044,12 +13182,14 @@ if st.session_state.active_sport == "mlb":
                 "expected_bf": round(expected_bf, 1),
                 "pitcher_k_rate": round(pitcher_k_rate, 3),
                 "matchup_k_rate": round(matchup_k_rate, 3),
+                "profile_coverage": profile_coverage,
                 "pitches_per_bf": round(matchup_ppbf, 2) if matchup_ppbf else None,
                 "bf_method": bf_method,
                 "confidence": confidence,
                 "note": (
                     f"Expected BF {expected_bf:.1f} · pitcher K/BF {pitcher_k_rate:.1%}"
                     + (f" · lineup K% {weighted_lineup_k:.1%}" if weighted_lineup_k is not None else "")
+                    + (f" ({profile_coverage}/9 batter hand splits)" if profile_coverage else "")
                     + f" · matchup K/BF {matchup_k_rate:.1%}"
                     + (f" · {matchup_ppbf:.2f} P/BF ({bf_method})" if matchup_ppbf else "")
                     + f" → exp {expected_k:.1f}K"
@@ -13950,20 +14090,31 @@ if st.session_state.active_sport == "mlb":
                          "color:#36c6d3;padding:0.5rem 0;'>STEP 2 OF 2 · LOADING MATCHUP, ROLE, LINEUP, AND WEATHER</div>",
                          unsafe_allow_html=True)
 
-        # Parallel fetch all new signals
+        # Resolve pitcher hand first because opponent splits, switch hitters,
+        # and batter K profiles all depend on it. This call is cached daily.
+        try:
+            _phand = mlb_get_pitcher_hand(mlb_pitcher)
+        except Exception:
+            _phand = "R"
+
+        # Parallel fetch all remaining signals
         import concurrent.futures as _cfu
         with _cfu.ThreadPoolExecutor(max_workers=12) as _mex:
             _f_pstats   = _mex.submit(mlb_get_pitcher_season_stats, mlb_pitcher)
-            _f_phand    = _mex.submit(mlb_get_pitcher_hand, mlb_pitcher)
             _f_ump      = _mex.submit(mlb_get_umpire_k_tendency, mlb_home) if mlb_home else None
-            _f_splits   = _mex.submit(mlb_get_opp_k_rate_splits, mlb_opp, "R") if mlb_opp else None
+            _f_splits   = _mex.submit(mlb_get_opp_k_rate_splits, mlb_opp, _phand) if mlb_opp else None
             _f_savant   = _mex.submit(mlb_get_savant_stats, mlb_pitcher)
             # Weather needs the actual game venue (home team's park)
             # If pitcher is away, mlb_home is still the home team = correct venue
             _wx_team    = mlb_home or (_tonight.get("home_team","") if _tonight else "")
             _game_date_ctx = _tonight.get("game_date", "") if _tonight else ""
             _f_weather  = _mex.submit(mlb_get_weather, _wx_team, _game_date_ctx) if _wx_team else None
-            _f_lineup   = _mex.submit(mlb_get_batting_order_with_hands, mlb_opp, _game_date_ctx) if mlb_opp else None
+            _f_lineup   = _mex.submit(
+                mlb_get_batting_order_with_hands,
+                mlb_opp,
+                _game_date_ctx,
+                _phand,
+            ) if mlb_opp else None
             _f_platoon  = _mex.submit(mlb_get_platoon_splits, mlb_pitcher)
             _f_pitches  = _mex.submit(mlb_estimate_pitch_count, mlb_pitcher)
             _f_injury   = _mex.submit(mlb_get_injury_status, mlb_pitcher)
@@ -13973,8 +14124,6 @@ if st.session_state.active_sport == "mlb":
 
         try:    _pstats  = _f_pstats.result(timeout=12)
         except: _pstats  = {}
-        try:    _phand   = _f_phand.result(timeout=8)
-        except: _phand   = "R"
         try:    _ump     = _f_ump.result(timeout=8) if _f_ump else {}
         except: _ump     = {}
         try:    _splits  = _f_splits.result(timeout=8) if _f_splits else {}
@@ -14137,7 +14286,18 @@ if st.session_state.active_sport == "mlb":
                     _away_avg = float(_away_vals.mean())
                     _ha_diff  = _home_avg - _away_avg
                     _is_home  = _tonight.get("pitcher_side","") == "home"
-                    _ha_weight = 0.04 if min(_home_n, _away_n) >= 5 else 0.02
+                    # Venue splits are noisy even across a full L10. Scale the
+                    # adjustment with sample size instead of giving five starts
+                    # on each side the same authority as a stable multi-season split.
+                    _ha_min_n = min(_home_n, _away_n)
+                    if _ha_min_n >= 12:
+                        _ha_weight = 0.04
+                    elif _ha_min_n >= 8:
+                        _ha_weight = 0.03
+                    elif _ha_min_n >= 5:
+                        _ha_weight = 0.02
+                    else:
+                        _ha_weight = 0.01
                     if abs(_ha_diff) >= 1.0:
                         _ha_adj = (
                             _ha_weight
@@ -14147,7 +14307,7 @@ if st.session_state.active_sport == "mlb":
                     _ha_note = (
                         f"Home {_home_avg:.1f} ({_home_n} starts) vs away "
                         f"{_away_avg:.1f} ({_away_n} starts)"
-                        + (" · half weight for small split" if _ha_weight < 0.04 else "")
+                        + (f" · sample-regressed to {_ha_weight:.0%}" if _ha_weight < 0.04 else "")
                     )
                 else:
                     _ha_note = f"Home {_home_n} starts · away {_away_n} starts · minimum 3 each"
@@ -14155,12 +14315,12 @@ if st.session_state.active_sport == "mlb":
             # ── Signal 5: Recent form — L3 vs season avg
             _l3_avg    = pd.to_numeric(mlb_logs.head(3)[_stat], errors="coerce").dropna().mean()
             _form_diff = float(_l3_avg - avg_val) if not pd.isna(_l3_avg) else 0.0
-            # Lower threshold for pitchers — 0.8 K difference is meaningful
-            # (NBA used 1.5 pts but pitchers average 4-7 Ks so 1.5 is too strict)
-            if _form_diff >= 1.2:    _form_adj = +0.05   # trending up
-            elif _form_diff >= 0.6:  _form_adj = +0.02   # slight uptrend
-            elif _form_diff <= -1.2: _form_adj = -0.05   # trending down
-            elif _form_diff <= -0.6: _form_adj = -0.02   # slight downtrend
+            # L3 already contributes to the weighted hit-rate base and pitch-count
+            # path. Keep only a small residual trend adjustment here.
+            if _form_diff >= 1.2:    _form_adj = +0.02   # trending up
+            elif _form_diff >= 0.6:  _form_adj = +0.01   # slight uptrend
+            elif _form_diff <= -1.2: _form_adj = -0.02   # trending down
+            elif _form_diff <= -0.6: _form_adj = -0.01   # slight downtrend
             else:                    _form_adj = 0.0
 
             # ── Signal 6: Rest days
@@ -14348,9 +14508,11 @@ if st.session_state.active_sport == "mlb":
                 _velo = None
             _velo_adj = 0.0
             if _velo and _velo > 0:
-                if _velo >= 97:    _velo_adj = +0.05  # elite velocity
-                elif _velo >= 94:  _velo_adj = +0.02  # above avg
-                elif _velo < 90:   _velo_adj = -0.04  # finesse pitcher
+                # Velocity is supporting evidence, not a strikeout outcome by
+                # itself. Whiff and K rates should carry more of this cluster.
+                if _velo >= 97:    _velo_adj = +0.03  # elite velocity
+                elif _velo >= 94:  _velo_adj = +0.01  # above avg
+                elif _velo < 90:   _velo_adj = -0.03  # soft fastball
 
             # ── Signal 10: Umpire K tendency
             _ump_tend  = _ump.get("tendency", "Avg") if _ump else "Avg"
@@ -14378,6 +14540,8 @@ if st.session_state.active_sport == "mlb":
             _lhb_pct           = _lineup.get("lhb_pct", 0.5) if _lineup else 0.5
             _order_hands       = _lineup.get("order_with_hands", []) if _lineup else []
             _order_k_rates     = _lineup.get("order_k_rates", []) if _lineup else []
+            _lineup_profile_coverage = int(_lineup.get("profile_coverage", 0) or 0) if _lineup else 0
+            _lineup_profile_hand = str(_lineup.get("profile_hand", _phand) or _phand) if _lineup else _phand
             _lineup_avg_k      = _lineup.get("avg_k_rate") if _lineup else None
             _lineup_k_prone    = _lineup.get("k_prone_count", 0) if _lineup else 0
             _lineup_adj        = 0.0
@@ -14641,6 +14805,29 @@ if st.session_state.active_sport == "mlb":
                     _matchup_cluster_adj - _matchup_cluster_raw
                 )
 
+            # K/9, Whiff%, velocity, and velocity trend are overlapping views
+            # of pitcher strikeout ability. Cap their combined influence so a
+            # hard thrower is not rewarded again for the whiffs and Ks that the
+            # same velocity already helped create.
+            _stuff_cluster_raw = 0.0
+            _stuff_cluster_adj = 0.0
+            _stuff_cluster_correction = 0.0
+            _stuff_cluster_cap = 0.0
+            if not _is_outs_prop:
+                _stuff_cluster_raw = (
+                    _k9_adj + _swstr_adj + _velo_adj + _vtrend_adj
+                )
+                _stuff_cluster_cap = (
+                    0.08 if (_k9_reliable and _whiff_real is not None) else 0.06
+                )
+                _stuff_cluster_adj = max(
+                    -_stuff_cluster_cap,
+                    min(_stuff_cluster_cap, _stuff_cluster_raw),
+                )
+                _stuff_cluster_correction = (
+                    _stuff_cluster_adj - _stuff_cluster_raw
+                )
+
             # Average innings, role classification, and pitch count are three
             # views of the same workload. Preserve a real short-leash penalty,
             # but cap the correlated stack so it is not counted three times.
@@ -14659,6 +14846,7 @@ if st.session_state.active_sport == "mlb":
             adj = max(0.05, min(_pre_anchor_cap, adj
                       + _ha_adj + _form_adj + _rest_adj
                       + _k9_adj + _swstr_adj + _velo_adj + _vtrend_adj + _ip_adj
+                      + _stuff_cluster_correction
                       + _ump_adj + _wx_adj + _lineup_adj
                       + _platoon_adj + _contact_adj + _opp_context_adj
                       + _matchup_cluster_correction
@@ -14678,6 +14866,10 @@ if st.session_state.active_sport == "mlb":
             _pc_projection_share = 0.0
             _bf_projection_share = 0.0
             _projection_note = ""
+            _adj_after_consensus_blend = adj
+            _adj_before_shared_evidence = adj
+            _shared_evidence_factor = 1.0
+            _shared_evidence_note = ""
             if mlb_prop == "Strikeouts" and _pc_expected_k:
                 _proj_prob = mlb_poisson_side_prob(_pc_expected_k, mlb_line, mlb_side)
 
@@ -14765,6 +14957,23 @@ if st.session_state.active_sport == "mlb":
                 if _combined_proj_prob < 0.82:
                     adj = min(adj, _combined_proj_prob + 0.08)
                 adj = max(0.05, min(0.95, adj))
+                _adj_after_consensus_blend = adj
+
+                # Historical hit rate and both projection paths still share
+                # game logs, pitcher K talent, and workload. Apply one modest,
+                # symmetric shrink toward 50% so agreement is not mistaken for
+                # fully independent confirmation.
+                _adj_before_shared_evidence = adj
+                _shared_evidence_factor = (
+                    0.94 if (_proj_prob is not None and _bf_prob is not None)
+                    else 0.96
+                )
+                adj = 0.50 + ((adj - 0.50) * _shared_evidence_factor)
+                adj = max(0.05, min(0.95, adj))
+                _shared_evidence_note = (
+                    f"Shared-evidence guardrail {_shared_evidence_factor:.0%}: "
+                    "recent results and projections reuse pitcher/workload inputs"
+                )
                 _projection_note = (
                     f"Consensus anchor: exp {_combined_proj_expected_k:.1f}K implies "
                     f"{_combined_proj_prob:.0%} {mlb_side} probability"
@@ -14773,6 +14982,7 @@ if st.session_state.active_sport == "mlb":
                         f"{_projection_reliability:.0%} reliability)"
                         if _combined_proj_prob_raw is not None else ""
                     )
+                    + f" · {_shared_evidence_note}"
                 )
             _adj_after_projection = adj
 
@@ -14958,6 +15168,17 @@ if st.session_state.active_sport == "mlb":
                 elif not _lineup_confirmed:
                     _conf_penalty += 5
                     _quality_notes.append("lineup TBD")
+                if _lineup_confirmed or _lineup_projected:
+                    if _lineup_profile_coverage < 5:
+                        _conf_penalty += 4
+                        _quality_notes.append(
+                            f"batter split coverage {_lineup_profile_coverage}/9"
+                        )
+                    elif _lineup_profile_coverage < 7:
+                        _conf_penalty += 2
+                        _quality_notes.append(
+                            f"partial batter split coverage {_lineup_profile_coverage}/9"
+                        )
                 if not _ump_name:
                     _conf_penalty += 1
                     _quality_notes.append("umpire TBD")
@@ -14989,6 +15210,16 @@ if st.session_state.active_sport == "mlb":
                 _sc = min(_sc, 69)
             elif _n_starts < 6:
                 _sc = min(_sc, 76)
+            # Evidence ceilings prevent a nearly complete but still unresolved
+            # pregame profile from displaying as near-certain confidence.
+            if _lineup_projected and not _ump_name:
+                _sc = min(_sc, 89)
+            elif _lineup_projected:
+                _sc = min(_sc, 92)
+            elif _lineup_confirmed and _lineup_profile_coverage < 7:
+                _sc = min(_sc, 90)
+            if not _ump_name:
+                _sc = min(_sc, 94)
 
             _tier_quality_note = ""
             if tier in ("Strong Over", "Strong Under"):
@@ -15011,6 +15242,11 @@ if st.session_state.active_sport == "mlb":
                     if (not _lineup_confirmed and not _lineup_projected):
                         _downgrade = True
                         _dq.append("lineup unavailable")
+                    if (_lineup_confirmed or _lineup_projected) and _lineup_profile_coverage < 5:
+                        _downgrade = True
+                        _dq.append(
+                            f"only {_lineup_profile_coverage}/9 batter hand splits"
+                        )
                     if psig == "Penalty" and _pc_expected_k is not None:
                         _pc_cushion = _pc_cushion_for_quality
                         if _pc_cushion < 1.0:
@@ -15943,8 +16179,8 @@ if st.session_state.active_sport == "mlb":
                     _weather.get("condition") if _weather and _weather.get("condition") else "Unavailable"
                 )
                 _lineup_loaded_label = (
-                    "✅ Lineup" if _lineup_confirmed else
-                    "🕒 Projected Lineup" if _lineup_projected else
+                    f"✅ Lineup {_lineup_profile_coverage}/9 vs {_lineup_profile_hand}HP" if _lineup_confirmed else
+                    f"🕒 Projected Lineup {_lineup_profile_coverage}/9 vs {_lineup_profile_hand}HP" if _lineup_projected else
                     "⚠️ Lineup TBD"
                 )
                 _mlb_signals = [
@@ -15986,6 +16222,9 @@ if st.session_state.active_sport == "mlb":
                     ("Velocity trend",            f"{_vtrend_mph:+.1f}mph · {_vtrend_dir}" if _vtrender.get("avg_velo") else "N/A",
                                                   _vtrend_adj,
                                                   f"{_vtrender.get('source','')}" if _vtrender.get("avg_velo") else "Trend unavailable"),
+                    ("Pitcher stuff cluster",     f"{_stuff_cluster_raw:+.1%} raw → {_stuff_cluster_adj:+.1%}",
+                                                  _stuff_cluster_correction,
+                                                  f"Caps correlated K/9, Whiff%, velocity, and velocity trend at ±{_stuff_cluster_cap:.0%}"),
                     ("Avg IP/start",              f"{_avg_ip:.1f}" if _avg_ip>0 else "N/A",
                                                   _ip_adj,
                                                   f"{'Deep — more K opportunities' if _avg_ip>=6.5 else 'Average depth' if _avg_ip>=5.0 else '⚠️ Short leash — limits K ceiling'}" + (f" · {_ip_note}" if _ip_note else "")),
@@ -15995,7 +16234,8 @@ if st.session_state.active_sport == "mlb":
                     ("Weather",                   _weather_condition_label,
                                                   _wx_adj,
                                                   _wx_note if _wx_note else ("Indoor — irrelevant" if _weather and _weather.get("condition")=="Dome/Retractable" else "No weather data")),
-                    ("Batting order",             f"{len(_lineup_order)}/9 {'projected' if _lineup_projected else 'posted'}" if _lineup_order else "Not posted",
+                    ("Batting order",             (f"{len(_lineup_order)}/9 {'projected' if _lineup_projected else 'posted'} · "
+                                                   f"vs {_lineup_profile_hand}HP profiles {_lineup_profile_coverage}/9") if _lineup_order else "Not posted",
                                                   _lineup_adj,
                                                   _lineup_note_txt if _lineup_note_txt else "Lineup not yet posted"),
                     ("Contact profile",           f"{okpct:.1%} K profile" if okpct else "N/A",
@@ -16045,6 +16285,9 @@ if st.session_state.active_sport == "mlb":
                                                    f"{_combined_proj_prob:.1%} at {_projection_reliability:.0%} reliability · "
                                                    f"blended once at {_proj_blend_weight:.0%} model weight")
                                                   if _combined_proj_prob is not None else "Consensus projection unavailable"),
+                    ("Shared-evidence guardrail",  f"{_shared_evidence_factor:.0%}" if _combined_proj_prob is not None else "N/A",
+                                                  None,
+                                                  _shared_evidence_note if _shared_evidence_note else "Projection guardrail not required"),
                 ]
                 if _is_outs_prop:
                     _mlb_signals = [
@@ -16097,14 +16340,16 @@ if st.session_state.active_sport == "mlb":
                     ]
                 else:
                     _mlb_adjs = [_ha_adj, _form_adj, _rest_adj, _k9_adj,
-                                 _swstr_adj, _velo_adj, _vtrend_adj, _ip_adj, _ump_adj, _wx_adj,
+                                 _swstr_adj, _velo_adj, _vtrend_adj, _stuff_cluster_correction,
+                                 _ip_adj, _ump_adj, _wx_adj,
                                  _lineup_adj, _platoon_adj, _contact_adj,
                                  _opp_context_adj, _matchup_cluster_correction,
                                  _role_adj, _pc_adj, _workload_cluster_correction,
                                  _variance_adj]
                     _mlb_adj_labels = [
                         "Home/Away split", "Recent form", "Rest days", "K/9 rate",
-                        "Whiff%/K%", "Velocity", "Velocity trend", "Avg IP/start", "Umpire zone",
+                        "Whiff%/K%", "Velocity", "Velocity trend", "Pitcher stuff cluster",
+                        "Avg IP/start", "Umpire zone",
                         "Weather", "Batting order", "Platoon matchup", "Contact profile",
                         "Recent opponent difficulty", "Matchup cluster cap",
                         "Pitcher role", "Pitch count est", "Workload cluster cap",
@@ -16152,11 +16397,17 @@ if st.session_state.active_sport == "mlb":
                     "Whiff%/K%":        f"{_swstr:.1%}" if _swstr is not None else "N/A",
                     "Velocity":         f"{_velo:.1f}mph" if _velo else "N/A",
                     "Velocity trend":   f"{_vtrend_mph:+.1f}mph · {_vtrend_dir}" if _vtrender.get("avg_velo") else "N/A",
+                    "Pitcher stuff cluster": (
+                        f"{_stuff_cluster_raw:+.1%} raw → "
+                        f"{_stuff_cluster_adj:+.1%} capped "
+                        f"(limit ±{_stuff_cluster_cap:.0%})"
+                    ),
                     "Avg IP/start":     f"{_avg_ip:.1f} IP ({_ip_source})" if _avg_ip > 0 else "N/A",
                     "Umpire zone":      f"{_ump_name.split()[-1]} ({_ump_tend})" if _ump_name else "TBD",
                     "Weather":          _weather_condition_label,
                     "Batting order":    (f"{len(_lineup_order)}/9 · {_lhb_count}L/{_rhb_count}R · "
                                          f"{'projected' if _lineup_projected else 'confirmed'}"
+                                         f" · vs {_lineup_profile_hand}HP profiles {_lineup_profile_coverage}/9"
                                          f"{f' · K% {_lineup_avg_k:.1%}' if _lineup_avg_k is not None else ''}") if _order_hands else (f"{len(_lineup_order)}/9" if _lineup_order else "Not posted"),
                     "Platoon matchup":  f"vsL:{_platoon_vs_l:.1%} vsR:{_platoon_vs_r:.1%} · {_lhb_count}L/{_rhb_count}R {'projected' if _lineup_projected else 'tonight'}" if (_platoon_vs_l and _platoon_vs_r) else "Lineup TBD",
                     "Contact profile":  f"{okpct:.1%} · {_okpct_source}" if okpct else "N/A",
@@ -16218,7 +16469,7 @@ if st.session_state.active_sport == "mlb":
 
                 if _combined_proj_prob is not None:
                     _proj_before = max(0.05, min(0.95, _adj_before_projection))
-                    _proj_after = max(0.05, min(0.95, _adj_after_projection))
+                    _proj_after = max(0.05, min(0.95, _adj_after_consensus_blend))
                     _proj_impact = _proj_after - _proj_before
                     _proj_col = "#22c55e" if _proj_impact > 0.001 else ("#ef4444" if _proj_impact < -0.001 else "#6b7f96")
                     _component_text = (
@@ -16235,6 +16486,23 @@ if st.session_state.active_sport == "mlb":
                     <td style='color:#7d93ab;'>{_proj_before:.1%}</td>
                     <td style='color:#e2e8f0;'>{_proj_after:.1%}</td>
                     <td style='color:{_proj_col};'>{_proj_impact:+.1%}</td>
+                </tr>"""
+
+                    _shared_before = max(0.05, min(0.95, _adj_before_shared_evidence))
+                    _shared_after = max(0.05, min(0.95, _adj_after_projection))
+                    _shared_impact = _shared_after - _shared_before
+                    _shared_col = (
+                        "#22c55e" if _shared_impact > 0.001 else
+                        "#ef4444" if _shared_impact < -0.001 else "#6b7f96"
+                    )
+                    trace_rows += f"""
+                <tr style='border-bottom:1px solid #0d1520;'>
+                    <td style='padding:4px 0;color:#9aaec4;'>Shared-evidence guardrail</td>
+                    <td style='color:#e2e8f0;font-weight:600;'>{_shared_evidence_factor:.0%} independence factor</td>
+                    <td style='color:{_shared_col};'>shrink</td>
+                    <td style='color:#7d93ab;'>{_shared_before:.1%}</td>
+                    <td style='color:#e2e8f0;'>{_shared_after:.1%}</td>
+                    <td style='color:{_shared_col};'>{_shared_impact:+.1%}</td>
                 </tr>"""
 
                 if _outs_prob is not None and _adj_before_outs_projection is not None:
