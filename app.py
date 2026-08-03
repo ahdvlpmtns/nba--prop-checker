@@ -4340,6 +4340,463 @@ div[class*="st-key-ea_"] button {
     .edge-entry-v72 { min-height: 48px; }
 }
 
+/* PropIQ V7.3 - authoritative responsive application shell. */
+:root {
+    --bg: #080c11;
+    --bg2: #0d131a;
+    --bg3: #121a23;
+    --bg4: #18222d;
+    --surface-1: #0f161e;
+    --surface-2: #151e28;
+    --surface-3: #1a2631;
+    --text: #eef4f8;
+    --text2: #9aacbe;
+    --text3: #71859a;
+    --accent: #27c5ce;
+    --accent2: #1399a3;
+    --accent3: #7ae4e8;
+    --green: #35d69f;
+    --yellow: #f0c75e;
+    --red: #f06c7d;
+    --line-soft: rgba(221,233,244,0.10);
+    --line-focus: rgba(80,220,226,0.52);
+}
+
+html,
+body,
+button,
+input,
+label,
+textarea,
+select,
+.pl-logo,
+.pl-sub,
+.pl-badge,
+.v55-kicker,
+.section-header {
+    letter-spacing: 0 !important;
+}
+
+[data-testid="stAppViewContainer"] {
+    background:
+        linear-gradient(180deg, rgba(39,197,206,0.055) 0, transparent 210px),
+        linear-gradient(180deg, #080c11 0%, #0b1117 52%, #080c11 100%) !important;
+}
+.main .block-container,
+.block-container,
+[data-testid="stAppViewBlockContainer"] {
+    width: 100% !important;
+    max-width: 1120px !important;
+    padding-left: 1rem !important;
+    padding-right: 1rem !important;
+}
+
+/* Quiet brand chrome leaves the analytical workspace in control. */
+.pl-header {
+    min-height: 62px !important;
+    margin: 0.5rem 0 0.42rem !important;
+    padding: 0.72rem 0.9rem !important;
+    background: rgba(12,18,24,0.96) !important;
+    border: 1px solid var(--line-soft) !important;
+    border-radius: 8px !important;
+    box-shadow: 0 10px 26px rgba(0,0,0,0.25) !important;
+}
+.pl-header::after {
+    left: 10px !important;
+    right: 10px !important;
+    height: 1px !important;
+    background: linear-gradient(90deg, var(--accent), rgba(53,214,159,0.65), transparent) !important;
+}
+.pl-logo { font-size: 1.58rem !important; }
+.pl-badge {
+    padding: 4px 9px !important;
+    color: #9df4f7 !important;
+    background: rgba(39,197,206,0.10) !important;
+    border: 1px solid rgba(80,220,226,0.24) !important;
+    border-radius: 5px !important;
+}
+
+/* Primary destinations use a stable application nav, not generic buttons. */
+.st-key-workspace_navigation {
+    position: sticky !important;
+    top: 8px !important;
+    z-index: 900 !important;
+    margin: 0.2rem 0 0.55rem !important;
+    padding: 4px !important;
+    background: rgba(10,15,21,0.94) !important;
+    border: 1px solid rgba(221,233,244,0.12) !important;
+    border-radius: 8px !important;
+    box-shadow: 0 12px 30px rgba(0,0,0,0.30) !important;
+    backdrop-filter: blur(18px) saturate(125%) !important;
+    -webkit-backdrop-filter: blur(18px) saturate(125%) !important;
+}
+.st-key-workspace_navigation div[data-testid="stHorizontalBlock"],
+.st-key-analyzer_sport_navigation div[data-testid="stHorizontalBlock"] {
+    gap: 4px !important;
+}
+.st-key-workspace_navigation button {
+    min-height: 44px !important;
+    padding: 0.45rem 0.5rem !important;
+    border-radius: 6px !important;
+    font-size: 0.76rem !important;
+    font-weight: 750 !important;
+    transition: color 0.16s ease, background 0.16s ease, border-color 0.16s ease !important;
+}
+.st-key-workspace_navigation button[kind="primary"] {
+    color: #041316 !important;
+    background: #28c6cf !important;
+    border-color: #63dce1 !important;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.22) !important;
+}
+.st-key-workspace_navigation button[kind="secondary"] {
+    color: #8fa2b6 !important;
+    background: transparent !important;
+    border-color: transparent !important;
+}
+
+/* Sport selection is a secondary segmented control close to the analyzer. */
+.st-key-analyzer_sport_navigation {
+    position: static !important;
+    top: auto !important;
+    z-index: auto !important;
+    margin: 0 0 0.62rem !important;
+    padding: 4px !important;
+    background: #0d141b !important;
+    border: 1px solid var(--line-soft) !important;
+    border-radius: 8px !important;
+}
+.st-key-analyzer_sport_navigation button {
+    min-height: 40px !important;
+    padding: 0.38rem 0.45rem !important;
+    border-radius: 6px !important;
+    font-size: 0.72rem !important;
+}
+.st-key-analyzer_sport_navigation button[kind="primary"] {
+    color: #b9f7f8 !important;
+    background: rgba(39,197,206,0.13) !important;
+    border-color: rgba(80,220,226,0.32) !important;
+    box-shadow: inset 0 -2px 0 rgba(80,220,226,0.55) !important;
+}
+
+/* Compact page identity with a crisp broadcast-style accent. */
+.analyzer-hero,
+.v55-hero,
+.workspace-page-head {
+    min-height: 0 !important;
+    padding: 0.85rem 0.95rem !important;
+    margin: 0.12rem 0 0.68rem !important;
+    background:
+        linear-gradient(90deg, rgba(39,197,206,0.08), transparent 34%),
+        #0f161e !important;
+    border: 1px solid var(--line-soft) !important;
+    border-left: 3px solid var(--accent) !important;
+    border-radius: 8px !important;
+    box-shadow: 0 8px 22px rgba(0,0,0,0.20) !important;
+}
+.v55-title,
+.workspace-page-head h1 {
+    margin: 4px 0 0 !important;
+    color: var(--text) !important;
+    font-size: 1.22rem !important;
+    line-height: 1.18 !important;
+}
+.v55-kicker {
+    color: #55d5dc !important;
+    font-size: 0.53rem !important;
+    font-weight: 800 !important;
+}
+.v55-subcopy,
+.workspace-page-head p {
+    margin: 4px 0 0 !important;
+    color: #8da0b4 !important;
+    font-size: 0.7rem !important;
+    line-height: 1.45 !important;
+}
+
+/* Every analyzer uses the same legible, touch-friendly control language. */
+.stSelectbox,
+.stTextInput,
+.stNumberInput,
+.stRadio { margin-bottom: 0.16rem !important; }
+.stSelectbox label,
+.stTextInput label,
+.stNumberInput label,
+.stRadio label {
+    color: #8297ac !important;
+    font-family: var(--font-mono) !important;
+    font-size: 0.58rem !important;
+    font-weight: 700 !important;
+    text-transform: uppercase !important;
+}
+div[data-testid="stTextInput"] input,
+div[data-testid="stNumberInput"] input,
+div[data-baseweb="select"] > div {
+    min-height: 48px !important;
+    color: #f1f6f9 !important;
+    background: #0b1117 !important;
+    border: 1px solid rgba(221,233,244,0.15) !important;
+    border-radius: 7px !important;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.018) !important;
+}
+div[data-testid="stTextInput"] input:hover,
+div[data-testid="stNumberInput"] input:hover,
+div[data-baseweb="select"] > div:hover {
+    border-color: rgba(80,220,226,0.30) !important;
+}
+div[data-testid="stTextInput"] input:focus,
+div[data-testid="stNumberInput"] input:focus,
+div[data-baseweb="select"] > div:focus-within {
+    border-color: var(--line-focus) !important;
+    box-shadow: 0 0 0 3px rgba(39,197,206,0.10) !important;
+}
+div[data-baseweb="popover"] {
+    z-index: 1800 !important;
+}
+div[data-baseweb="menu"],
+ul[role="listbox"] {
+    max-height: min(420px, 48vh) !important;
+    padding: 5px !important;
+    background: #101820 !important;
+    border: 1px solid rgba(221,233,244,0.14) !important;
+    border-radius: 8px !important;
+    box-shadow: 0 18px 44px rgba(0,0,0,0.46) !important;
+}
+ul[role="listbox"] li {
+    min-height: 44px !important;
+    padding: 0.58rem 0.7rem !important;
+    border-radius: 5px !important;
+}
+
+/* Clear actions stay nearby without competing with Analyze. */
+.st-key-mlb_clear_pitcher,
+.st-key-wnba_clear_player,
+.st-key-clear_player_x {
+    display: flex !important;
+    justify-content: flex-end !important;
+}
+.st-key-mlb_clear_pitcher button,
+.st-key-wnba_clear_player button,
+.st-key-clear_player_x button {
+    width: auto !important;
+    min-height: 34px !important;
+    padding: 0.28rem 0.58rem !important;
+    color: #879bae !important;
+    background: transparent !important;
+    border: 1px solid transparent !important;
+    border-radius: 5px !important;
+    box-shadow: none !important;
+    font-size: 0.67rem !important;
+    text-transform: none !important;
+}
+.st-key-mlb_clear_pitcher button:hover,
+.st-key-wnba_clear_player button:hover,
+.st-key-clear_player_x button:hover {
+    color: #ffd7dd !important;
+    background: rgba(240,108,125,0.08) !important;
+    border-color: rgba(240,108,125,0.18) !important;
+    transform: none !important;
+}
+
+.st-key-mlb_analyze button,
+.st-key-wnba_analyze button,
+.st-key-fetch button,
+.st-key-run_edge_scanner button {
+    min-height: 50px !important;
+    color: #031517 !important;
+    background: #29c8d1 !important;
+    border: 1px solid #6cdee3 !important;
+    border-radius: 7px !important;
+    box-shadow: 0 8px 22px rgba(39,197,206,0.17) !important;
+}
+
+/* Information-rich surfaces remain dense, with clearer visual separation. */
+.mlb-decision-card,
+.unified-decision-card,
+.edge-card-v55,
+.stat-card,
+.defense-card,
+.ai-box,
+.hot-pick-card,
+div[data-testid="stExpander"] {
+    background: #0f161e !important;
+    border-color: var(--line-soft) !important;
+    border-radius: 8px !important;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.21) !important;
+}
+.mlb-decision-metric,
+.unified-decision-metric,
+.edge-score-item-v55,
+.workspace-summary-item {
+    background: #151e28 !important;
+    border-color: var(--line-soft) !important;
+    border-radius: 6px !important;
+}
+.section-header {
+    margin: 1.25rem 0 0.62rem !important;
+    padding-bottom: 0.52rem !important;
+    color: #8094a8 !important;
+    border-bottom-color: var(--line-soft) !important;
+    font-size: 0.57rem !important;
+}
+.section-header::before {
+    width: 3px !important;
+    height: 15px !important;
+    background: linear-gradient(180deg, var(--accent), var(--green)) !important;
+    box-shadow: none !important;
+}
+
+@media (max-width: 768px) {
+    /* A single scroll owner prevents the nested-scroll lockups seen on iOS. */
+    html,
+    body,
+    .stApp {
+        width: 100% !important;
+        height: 100% !important;
+        overflow: hidden !important;
+    }
+    [data-testid="stAppViewContainer"] {
+        height: 100dvh !important;
+        overflow-x: hidden !important;
+        overflow-y: auto !important;
+        overscroll-behavior-y: contain !important;
+        -webkit-overflow-scrolling: touch !important;
+        scroll-behavior: auto !important;
+        scroll-padding-top: 8px !important;
+        scroll-padding-bottom: calc(88px + env(safe-area-inset-bottom)) !important;
+    }
+    [data-testid="stMain"],
+    .main {
+        height: auto !important;
+        overflow: visible !important;
+    }
+    .main .block-container,
+    .block-container,
+    [data-testid="stAppViewBlockContainer"] {
+        max-width: 100% !important;
+        padding-left: 0.65rem !important;
+        padding-right: 0.65rem !important;
+        padding-bottom: calc(7rem + env(safe-area-inset-bottom)) !important;
+    }
+
+    .pl-header {
+        position: relative !important;
+        min-height: 54px !important;
+        margin: 0.4rem 0 0.45rem !important;
+        padding: 0.62rem 0.72rem !important;
+    }
+    .pl-logo { font-size: 1.3rem !important; }
+
+    .st-key-workspace_navigation {
+        position: fixed !important;
+        top: auto !important;
+        left: 50% !important;
+        right: auto !important;
+        bottom: calc(7px + env(safe-area-inset-bottom)) !important;
+        z-index: 1300 !important;
+        width: min(calc(100% - 14px), 680px) !important;
+        margin: 0 !important;
+        padding: 4px !important;
+        transform: translateX(-50%) !important;
+        transition: transform 0.2s ease, opacity 0.2s ease !important;
+        background: rgba(9,14,19,0.97) !important;
+        border-color: rgba(221,233,244,0.15) !important;
+        box-shadow: 0 14px 38px rgba(0,0,0,0.52) !important;
+    }
+    .st-key-workspace_navigation div[data-testid="stHorizontalBlock"] {
+        display: grid !important;
+        grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+        gap: 3px !important;
+    }
+    .st-key-workspace_navigation div[data-testid="stColumn"] {
+        width: 100% !important;
+        min-width: 0 !important;
+        flex: none !important;
+        padding: 0 !important;
+    }
+    .st-key-workspace_navigation button {
+        min-height: 51px !important;
+        padding: 0.34rem 0.08rem !important;
+        border-radius: 6px !important;
+        font-size: 0.65rem !important;
+        line-height: 1.05 !important;
+        white-space: nowrap !important;
+        transform: none !important;
+    }
+    .st-key-workspace_navigation button span[data-testid="stIconMaterial"] {
+        font-size: 1.05rem !important;
+    }
+
+    /* Give the keyboard and typeahead menu the full viewport. */
+    body:has(input:focus) .st-key-workspace_navigation {
+        opacity: 0 !important;
+        pointer-events: none !important;
+        transform: translate(-50%, 140%) !important;
+    }
+    div[data-baseweb="popover"] { z-index: 2000 !important; }
+    div[data-baseweb="menu"],
+    ul[role="listbox"] {
+        max-height: 42dvh !important;
+    }
+    ul[role="listbox"] li { min-height: 48px !important; }
+
+    .st-key-analyzer_sport_navigation div[data-testid="stHorizontalBlock"] {
+        display: grid !important;
+        grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+        gap: 3px !important;
+    }
+    .st-key-analyzer_sport_navigation div[data-testid="stColumn"] {
+        width: 100% !important;
+        min-width: 0 !important;
+        flex: none !important;
+        padding: 0 !important;
+    }
+    .st-key-analyzer_sport_navigation button {
+        min-height: 42px !important;
+        padding: 0.32rem 0.12rem !important;
+        font-size: 0.68rem !important;
+        transform: none !important;
+    }
+
+    .analyzer-hero,
+    .v55-hero,
+    .workspace-page-head {
+        padding: 0.75rem 0.8rem !important;
+        margin-bottom: 0.58rem !important;
+        border-radius: 7px !important;
+    }
+    .v55-title,
+    .workspace-page-head h1 { font-size: 1.08rem !important; }
+    .v55-subcopy,
+    .workspace-page-head p { font-size: 0.66rem !important; }
+
+    div[data-testid="stTextInput"] input,
+    div[data-testid="stNumberInput"] input,
+    div[data-baseweb="select"] input {
+        font-size: 16px !important;
+    }
+    div[data-testid="stTextInput"] input,
+    div[data-testid="stNumberInput"] input,
+    div[data-baseweb="select"] > div {
+        min-height: 52px !important;
+    }
+    .stButton > button:hover,
+    .score-card:hover,
+    .stat-card:hover,
+    .edge-card-v55:hover {
+        transform: none !important;
+    }
+    .pick-tray-v63,
+    button[key="mobile_quick_analyze"] { display: none !important; }
+}
+
+@media (max-width: 390px) {
+    .pl-icon { display: none !important; }
+    .pl-logo { font-size: 1.2rem !important; }
+    .st-key-workspace_navigation button { font-size: 0.61rem !important; }
+    .edge-card-head-v72 { flex-direction: column !important; }
+    .edge-call-v72 { width: 100% !important; }
+}
+
 @media (prefers-reduced-motion: reduce) {
     .analyzer-hero,
     .mlb-decision-card,
@@ -4444,41 +4901,44 @@ for key, default in [
 
 
 def persist_active_sport(sport: str) -> None:
-    """Keep navigation stable across widget reruns and mobile reconnects."""
+    """Update analyzer routing state without triggering a query-string rerun."""
     sport = str(sport or "").strip().lower()
     if sport not in _VALID_SPORTS:
         return
     st.session_state.active_sport = sport
-    try:
-        current = st.query_params.get("sport", "")
-        if isinstance(current, list):
-            current = current[0] if current else ""
-        if str(current).strip().lower() != sport:
-            st.query_params["sport"] = sport
-    except Exception:
-        pass
 
 
 def persist_active_view(view: str) -> None:
-    """Keep the product destination stable across mobile reconnects."""
+    """Update product routing state without triggering a query-string rerun."""
     view = str(view or "").strip().lower()
     if view not in _VALID_VIEWS:
         return
     st.session_state.active_view = view
+
+
+def sync_navigation_query() -> None:
+    """Persist the completed route in one URL update after navigation."""
     try:
-        current = st.query_params.get("view", "")
-        if isinstance(current, list):
-            current = current[0] if current else ""
-        if str(current).strip().lower() != view:
-            st.query_params["view"] = view
+        sport = str(st.session_state.get("active_sport", "mlb")).lower()
+        view = str(st.session_state.get("active_view", "analyze")).lower()
+        if sport not in _VALID_SPORTS or view not in _VALID_VIEWS:
+            return
+        current_sport = st.query_params.get("sport", "")
+        current_view = st.query_params.get("view", "")
+        if isinstance(current_sport, list):
+            current_sport = current_sport[0] if current_sport else ""
+        if isinstance(current_view, list):
+            current_view = current_view[0] if current_view else ""
+        if (
+            str(current_sport).strip().lower() == sport
+            and str(current_view).strip().lower() == view
+        ):
+            return
+        params = dict(st.query_params)
+        params.update({"sport": sport, "view": view})
+        st.query_params.from_dict(params)
     except Exception:
         pass
-
-
-# Older open sessions may not have a sport in the URL yet. Add it once so a
-# mobile browser reconnect restores the current analyzer instead of MLB.
-persist_active_sport(st.session_state.active_sport)
-persist_active_view(st.session_state.active_view)
 
 
 def record_debug_error(area: str, err) -> None:
@@ -4571,15 +5031,22 @@ def add_to_pick_list_and_tracker(leg: dict, entry: dict) -> None:
         record_debug_error("tracker.add_calibration", err)
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _sorted_player_choices(options: tuple) -> tuple:
+    """Normalize a roster once instead of re-sorting it on every app rerun."""
+    return tuple(sorted(
+        {str(option).strip() for option in options if str(option).strip()},
+        key=lambda name: normalize_name(name),
+    ))
+
+
 def player_typeahead(label: str, options: list, key: str,
                      prefill: Optional[str] = None,
                      aliases: Optional[dict] = None,
-                     noun: str = "player") -> Optional[str]:
+                     noun: str = "player",
+                     sport: Optional[str] = None) -> Optional[str]:
     """Editable player search with native, client-side suggestions."""
-    choices = sorted(
-        {str(option).strip() for option in (options or []) if str(option).strip()},
-        key=lambda name: normalize_name(name),
-    )
+    choices = _sorted_player_choices(tuple(options or ()))
     alias_map = {
         normalize_name(alias): full_name
         for alias, full_name in (aliases or {}).items()
@@ -4588,14 +5055,22 @@ def player_typeahead(label: str, options: list, key: str,
     index = choices.index(canonical_prefill) if canonical_prefill in choices else None
 
     def _commit_search_change() -> None:
-        # Callbacks run before Streamlit redraws the page. Pinning the active
-        # sport here prevents a mobile selection from landing on the default
-        # MLB view if the browser reconnects while the keyboard closes.
-        persist_active_sport(st.session_state.get("active_sport", "mlb"))
-        st.session_state[f"{key}__committed"] = st.session_state.get(key)
-        if st.session_state.get("active_sport") == "wnba":
+        pinned_sport = str(
+            sport or st.session_state.get("active_sport", "mlb")
+        ).strip().lower()
+        if pinned_sport not in {"nba", "mlb", "wnba"}:
+            pinned_sport = "mlb"
+        previous = st.session_state.get(f"{key}__committed")
+        selected = st.session_state.get(key)
+        st.session_state.active_view = "analyze"
+        st.session_state.active_sport = pinned_sport
+        st.session_state.last_analyzer_sport = pinned_sport
+        st.session_state[f"{key}__committed"] = selected
+        if selected == previous:
+            return
+        if pinned_sport == "wnba":
             st.session_state.pop("wnba_last_analysis", None)
-        elif st.session_state.get("active_sport") == "nba":
+        elif pinned_sport == "nba":
             st.session_state.logs = None
             st.session_state.ai_analysis = None
 
@@ -4671,17 +5146,18 @@ def navigate_to_view(view: str, target: str = "workspace-top") -> None:
         analyzer_sport = str(st.session_state.get("last_analyzer_sport", "mlb")).lower()
         if analyzer_sport not in {"nba", "mlb", "wnba"}:
             analyzer_sport = "mlb"
-        persist_active_sport(analyzer_sport)
+        st.session_state.active_sport = analyzer_sport
         if target == "workspace-top":
             target = f"{analyzer_sport}-analyzer-controls"
     elif view == "edge":
         if current_sport in {"nba", "mlb", "wnba"}:
             st.session_state.last_analyzer_sport = current_sport
-        persist_active_sport("edge")
+        st.session_state.active_sport = "edge"
         if target == "workspace-top":
             target = "edge-scanner-controls"
-    persist_active_view(view)
+    st.session_state.active_view = view
     set_navigation_scroll_target(target)
+    sync_navigation_query()
 
 
 def navigate_to_sport(sport: str, target: str) -> None:
@@ -4689,10 +5165,11 @@ def navigate_to_sport(sport: str, target: str) -> None:
     sport = str(sport or "").strip().lower()
     if sport in {"nba", "mlb", "wnba"}:
         st.session_state.last_analyzer_sport = sport
-    persist_active_view("analyze")
-    persist_active_sport(sport)
+    st.session_state.active_view = "analyze"
+    st.session_state.active_sport = sport
     st.session_state.active_tab = "player"
     set_navigation_scroll_target(target)
+    sync_navigation_query()
 
 
 def open_edge_analyzer(sport: str, player: str, line: float,
@@ -4706,7 +5183,6 @@ def open_edge_analyzer(sport: str, player: str, line: float,
     if viewed_key not in viewed:
         viewed.append(viewed_key)
         st.session_state.edge_viewed = viewed[-200:]
-    navigate_to_sport(sport_key, target)
     if sport_key == "nba":
         st.session_state.edge_jump_player = player
         st.session_state.edge_jump_line = line
@@ -4721,6 +5197,7 @@ def open_edge_analyzer(sport: str, player: str, line: float,
         st.session_state.wnba_jump_line = line
         st.session_state.wnba_jump_side = side
         st.session_state.wnba_jump_stat = stat
+    navigate_to_sport(sport_key, target)
 
 
 def open_pick_list_analyzer(leg: dict) -> None:
@@ -4736,7 +5213,6 @@ def open_pick_list_analyzer(leg: dict) -> None:
     if not stat:
         stat = "Strikeouts" if sport_key == "mlb" else "Points"
     st.session_state.edge_return_available = False
-    navigate_to_sport(sport_key, f"{sport_key}-analyzer-controls")
     if sport_key == "nba":
         st.session_state.edge_jump_player = player
         st.session_state.edge_jump_line = line
@@ -4751,6 +5227,7 @@ def open_pick_list_analyzer(leg: dict) -> None:
         st.session_state.wnba_jump_line = line
         st.session_state.wnba_jump_side = side
         st.session_state.wnba_jump_stat = stat
+    navigate_to_sport(sport_key, f"{sport_key}-analyzer-controls")
 
 
 def clear_player_search(widget_key: str, sport: str,
@@ -4760,8 +5237,9 @@ def clear_player_search(widget_key: str, sport: str,
     st.session_state.pop(f"{widget_key}__committed", None)
     for extra_key in extra_keys:
         st.session_state.pop(extra_key, None)
-    persist_active_view("analyze")
-    persist_active_sport(sport)
+    st.session_state.active_view = "analyze"
+    st.session_state.active_sport = sport
+    st.session_state.last_analyzer_sport = sport
 
 
 def select_recent_nba_player(player: str) -> None:
@@ -4769,8 +5247,8 @@ def select_recent_nba_player(player: str) -> None:
     st.session_state.player_key = st.session_state.get("player_key", 0) + 1
     st.session_state._recent_pick = player
     st.session_state.last_analyzer_sport = "nba"
-    persist_active_view("analyze")
-    persist_active_sport("nba")
+    st.session_state.active_view = "analyze"
+    st.session_state.active_sport = "nba"
 
 
 def render_navigation_scroll_target(target: str) -> None:
@@ -13987,6 +14465,7 @@ if st.session_state.active_sport == "mlb":
             "Othani": "Shohei Ohtani",
         },
         noun="hitter" if mlb_prop == "Hitter Fantasy Score" else "pitcher",
+        sport="mlb",
     )
     _mlb_bottom1, _mlb_bottom2 = st.columns(2)
     with _mlb_bottom1:
@@ -17983,6 +18462,7 @@ if st.session_state.active_sport == "wnba":
         key="wnba_player_select",
         prefill=default_player,
         noun="WNBA player",
+        sport="wnba",
     )
     if selected_name:
         st.button(
@@ -23278,6 +23758,7 @@ with col_a:
         prefill=_pick_target,
         aliases=_aliases,
         noun="NBA player",
+        sport="nba",
     )
 
     # Resolve alias: if user typed a known nickname, swap to full name
