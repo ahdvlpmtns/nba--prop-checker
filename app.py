@@ -17221,7 +17221,19 @@ WNBA_STAT_COLUMNS = {
 
 
 def _wnba_norm_team(abbr: str) -> str:
-    return re.sub(r"[^A-Z]", "", str(abbr or "").upper().strip())
+    cleaned = re.sub(r"[^A-Z]", "", str(abbr or "").upper().strip())
+    aliases = {
+        "LA": "LAS", "LAS": "LAS", "LOSANGELESSPARKS": "LAS",
+        "NY": "NYL", "NYL": "NYL", "NEWYORKLIBERTY": "NYL",
+        "LV": "LVA", "LVA": "LVA", "LASVEGASACES": "LVA",
+        "GS": "GSV", "GSW": "GSV", "GSV": "GSV", "GOLDENSTATEVALKYRIES": "GSV",
+        "WAS": "WAS", "WSH": "WAS", "WSN": "WAS", "WASHINGTONMYSTICS": "WAS",
+        "PHO": "PHX", "PHX": "PHX", "PHOENIXMERCURY": "PHX",
+        "ATLANTADREAM": "ATL", "CHICAGOSKY": "CHI", "CONNECTICUTSUN": "CON",
+        "DALLASWINGS": "DAL", "INDIANAFEVER": "IND", "MINNESOTALYNX": "MIN",
+        "SEATTLESTORM": "SEA", "PORTLANDFIRE": "POR", "TORONTOTEMPO": "TOR",
+    }
+    return aliases.get(cleaned, cleaned)
 
 
 def _wnba_position_group(position: str) -> str:
@@ -17245,7 +17257,7 @@ def _wnba_box_value(labels: list, stats: list, *names: str) -> Optional[float]:
 
 @st.cache_data(ttl=21600, show_spinner=False)
 def wnba_get_players() -> list:
-    """Load active WNBA rosters from ESPN."""
+    """Load active WNBA rosters from ESPN and preserve team-identity evidence."""
     found = []
     try:
         teams_data = espn_get(f"{WNBA_ANALYZER_SITE}/teams")
@@ -17269,6 +17281,15 @@ def wnba_get_players() -> list:
                         position = str(
                             (athlete.get("position", {}) or {}).get("abbreviation", "") or ""
                         ).upper()
+                        athlete_team = athlete.get("team", {}) or {}
+                        nested_team = _wnba_norm_team(
+                            athlete_team.get("abbreviation", "")
+                            if isinstance(athlete_team, dict) else ""
+                        )
+                        nested_team_id = str(
+                            athlete_team.get("id", "")
+                            if isinstance(athlete_team, dict) else ""
+                        )
                         found.append({
                             "id": player_id,
                             "name": name,
@@ -17276,30 +17297,67 @@ def wnba_get_players() -> list:
                             "team_id": team_id,
                             "position": position,
                             "position_group": _wnba_position_group(position),
+                            "active": bool(athlete.get("active", True)),
+                            "nested_team": nested_team,
+                            "nested_team_id": nested_team_id,
                         })
     except Exception as err:
         record_debug_error("wnba.players", err)
-    unique = {p["id"]: p for p in found}
-    return sorted(unique.values(), key=lambda p: normalize_name(p["name"]))
+
+    # ESPN can briefly expose a traded player on more than one roster. A
+    # last-write-wins dictionary silently attached those players to whichever
+    # team happened to be returned last. Prefer the athlete's embedded team
+    # identity and retain conflicts so the analyzer can fail closed.
+    grouped = {}
+    for player in found:
+        grouped.setdefault(player["id"], []).append(player)
+    resolved = []
+    for candidates in grouped.values():
+        team_candidates = sorted({p["team"] for p in candidates if p.get("team")})
+
+        def candidate_score(item):
+            nested_match = bool(
+                (item.get("nested_team") and item.get("nested_team") == item.get("team"))
+                or (item.get("nested_team_id") and item.get("nested_team_id") == item.get("team_id"))
+            )
+            return (2 if nested_match else 0, 1 if item.get("active", True) else 0)
+
+        best = dict(max(candidates, key=candidate_score))
+        embedded_matches = [
+            p for p in candidates
+            if (p.get("nested_team") and p.get("nested_team") == p.get("team"))
+            or (p.get("nested_team_id") and p.get("nested_team_id") == p.get("team_id"))
+        ]
+        best["team_candidates"] = team_candidates
+        best["team_verified"] = bool(
+            len(team_candidates) == 1
+            or len({p.get("team") for p in embedded_matches if p.get("team")}) == 1
+        )
+        resolved.append(best)
+    return sorted(resolved, key=lambda p: normalize_name(p["name"]))
 
 
 def wnba_find_player(player_name: str) -> dict:
     target = normalize_name(player_name)
     players = wnba_get_players()
-    exact = next((p for p in players if normalize_name(p["name"]) == target), None)
+    exact = [p for p in players if normalize_name(p["name"]) == target]
     if exact:
-        return exact
+        return max(exact, key=lambda p: (bool(p.get("team_verified")), bool(p.get("active", True))))
     partial = [p for p in players if target and target in normalize_name(p["name"])]
-    return partial[0] if partial else {
+    return max(partial, key=lambda p: (bool(p.get("team_verified")), bool(p.get("active", True)))) if partial else {
         "id": None, "name": player_name, "team": "", "team_id": "",
-        "position": "", "position_group": "Unknown",
+        "position": "", "position_group": "Unknown", "team_verified": False,
+        "team_candidates": [],
     }
 
 
 @st.cache_data(ttl=1200, show_spinner=False)
 def wnba_get_next_game(team_abbr: str) -> dict:
     """Return the next scheduled WNBA game, searching seven days ahead."""
-    empty = {"opp": "TBD", "game_date": "", "side": "", "event_id": ""}
+    empty = {
+        "team": _wnba_norm_team(team_abbr), "opp": "TBD", "game_date": "",
+        "side": "", "event_id": "", "home_team": "", "away_team": "",
+    }
     if not team_abbr:
         return empty
     try:
@@ -17325,15 +17383,68 @@ def wnba_get_next_game(team_abbr: str) -> dict:
                 )
                 opponent = next((c for c in competitors if c is not mine), None)
                 if mine and opponent:
+                    home_team = next(
+                        (_wnba_norm_team(c.get("team", {}).get("abbreviation", ""))
+                         for c in competitors if c.get("homeAway") == "home"),
+                        "",
+                    )
+                    away_team = next(
+                        (_wnba_norm_team(c.get("team", {}).get("abbreviation", ""))
+                         for c in competitors if c.get("homeAway") == "away"),
+                        "",
+                    )
                     return {
+                        "team": target,
                         "opp": _wnba_norm_team(opponent.get("team", {}).get("abbreviation", "")) or "TBD",
                         "game_date": game_day.isoformat(),
                         "side": "Home" if mine.get("homeAway") == "home" else "Away",
                         "event_id": str(event.get("id", "") or ""),
+                        "home_team": home_team,
+                        "away_team": away_team,
                     }
     except Exception as err:
         record_debug_error("wnba.next_game", err)
     return empty
+
+
+def wnba_validate_player_context(player: dict, game: dict, prop_team: str = "") -> dict:
+    """Verify that roster, schedule, and optional PrizePicks team identities agree."""
+    roster_team = _wnba_norm_team(player.get("team", ""))
+    schedule_team = _wnba_norm_team(game.get("team", ""))
+    prizepicks_team = _wnba_norm_team(prop_team)
+    candidates = [_wnba_norm_team(team) for team in (player.get("team_candidates") or [])]
+    reasons = []
+    hard_invalid = False
+
+    if not player.get("id") or not roster_team:
+        reasons.append("Player roster team unavailable")
+        hard_invalid = True
+    if player.get("team_verified") is False and len(set(candidates)) > 1:
+        reasons.append("Player appears on multiple ESPN rosters")
+        hard_invalid = True
+    if schedule_team and roster_team and schedule_team != roster_team:
+        reasons.append(f"Schedule team {schedule_team} does not match roster team {roster_team}")
+        hard_invalid = True
+    if prizepicks_team and roster_team and prizepicks_team != roster_team:
+        reasons.append(f"PrizePicks team {prizepicks_team} does not match roster team {roster_team}")
+        hard_invalid = True
+    if game.get("opp") not in (None, "", "TBD") and _wnba_norm_team(game.get("opp")) == roster_team:
+        reasons.append("Scheduled opponent matches the player's own team")
+        hard_invalid = True
+
+    schedule_found = bool(game.get("event_id") and game.get("opp") not in (None, "", "TBD"))
+    verified = bool(not hard_invalid and player.get("team_verified", True) and schedule_found)
+    return {
+        "valid": not hard_invalid,
+        "verified": verified,
+        "hard_invalid": hard_invalid,
+        "roster_team": roster_team,
+        "schedule_team": schedule_team,
+        "prizepicks_team": prizepicks_team,
+        "schedule_found": schedule_found,
+        "reasons": reasons,
+        "label": "Verified" if verified else "Invalid" if hard_invalid else "Schedule unavailable",
+    }
 
 
 @st.cache_data(ttl=1200, show_spinner=False)
@@ -17848,7 +17959,9 @@ def wnba_get_injury_status(team_id: str, player_name: str) -> dict:
 def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
                       game: dict, defense: Optional[dict] = None,
                       injury: Optional[dict] = None,
-                      role_context: Optional[dict] = None) -> dict:
+                      role_context: Optional[dict] = None,
+                      context_validation: Optional[dict] = None,
+                      market_context: Optional[dict] = None) -> dict:
     """Calibrated WNBA model: history, projection, minutes, venue, H2H, and data quality."""
     import numpy as np
     col = WNBA_STAT_COLUMNS[stat]
@@ -17864,6 +17977,12 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
     n = len(values)
     if n < 4:
         raise ValueError("At least four recent games are required for a reliable analysis.")
+
+    context_validation = context_validation or {}
+    market_context = market_context or {}
+    last_log_date = _wnba_calendar_date(work.iloc[0]["DATE"])
+    today_et = _wnba_calendar_date(pd.Timestamp.now(tz="America/New_York"))
+    stale_days = max(0, (today_et - last_log_date).days) if today_et and last_log_date else 14
 
     weights = np.array([1.65 if i < 3 else 1.25 if i < 6 else 1.0 for i in range(n)], dtype=float)
     hits = (values > line) if side == "Over" else (values < line)
@@ -17963,7 +18082,11 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
     )
     projection_prob = _wnba_normal_probability(projection, sigma, line, side)
     blended_probability = 0.42 * calibrated + 0.58 * projection_prob
-    evidence_overlap_factor = 0.86
+    # With fewer than a full season of games, the L15, L24, and season paths
+    # substantially reuse the same observations. Discount that overlap more
+    # aggressively until the longer baseline is genuinely independent.
+    horizon_independence = min(len(season_values) / 30.0, 1.0)
+    evidence_overlap_factor = 0.79 + 0.07 * horizon_independence
     probability = 0.50 + (blended_probability - 0.50) * evidence_overlap_factor
     trace = [{
         "Signal": "Calibrated recent hit rate",
@@ -17985,6 +18108,17 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
         "Adjustment": f"→ {probability:.1%}",
         "Notes": "Recent hit rate and projection share the same game sample, so agreement is discounted",
     }]
+    trace.append({
+        "Signal": "Player/team/game validation",
+        "Value": context_validation.get("label", "Not supplied"),
+        "Adjustment": "Pass gate" if context_validation.get("hard_invalid") else "No probability change",
+        "Notes": (
+            "Roster, scheduled team, and PrizePicks team agree"
+            if context_validation.get("verified") else
+            " | ".join(context_validation.get("reasons") or [])
+            or "Schedule verification was not available for this analysis"
+        ),
+    })
 
     role_games = int(role_context.get("games", 0) or 0)
     role_starts = int(role_context.get("starts", 0) or 0)
@@ -18208,12 +18342,17 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
             rest_days = (upcoming_date - last_game_date).days
             if rest_days <= 1:
                 rest_adj = -0.025
-            elif rest_days >= 4:
+            elif 4 <= rest_days <= 7:
                 rest_adj = 0.008
             if side == "Under":
                 rest_adj *= -1
             probability += rest_adj
-            trace.append({"Signal": "Rest", "Value": f"{max(rest_days - 1, 0)} full day(s)", "Adjustment": f"{rest_adj:+.1%}" if rest_adj else "No change", "Notes": "Small bounded adjustment; back-to-backs carry the meaningful penalty"})
+            rest_note = (
+                "Extended layoffs are handled by the freshness guardrail, not rewarded as extra rest"
+                if rest_days >= 8 else
+                "Small bounded adjustment; back-to-backs carry the meaningful penalty"
+            )
+            trace.append({"Signal": "Rest", "Value": f"{max(rest_days - 1, 0)} full day(s)", "Adjustment": f"{rest_adj:+.1%}" if rest_adj else "No change", "Notes": rest_note})
         else:
             trace.append({"Signal": "Rest", "Value": "Unavailable", "Adjustment": "No change", "Notes": "Schedule or last-game date could not be normalized"})
 
@@ -18254,9 +18393,14 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
         historical_line_gap >= anomaly_threshold
         and (relative_line_gap >= 0.30 or projection_z_gap >= 1.60)
     )
+    reduced_payout_line = bool(
+        market_context.get("is_goblin") or market_context.get("is_promo")
+        or market_context.get("adjusted_odds")
+    )
+    line_type_note = "reduced-payout promo/alternate market" if reduced_payout_line else "standard full-game market"
     line_anomaly_note = (
         f"Line {line:.1f} is {historical_line_gap:.1f} from the season L{len(season_values)} baseline "
-        f"({projection_z_gap:.1f} volatility units from projection); verify standard full-game market"
+        f"({projection_z_gap:.1f} volatility units from projection); verify {line_type_note}"
         if line_anomaly else "Line is within the model's normal verification range"
     )
     trace.append({
@@ -18287,11 +18431,39 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
         reliability -= 0.035
     if questionable_starters:
         reliability -= min(0.04, 0.02 * len(questionable_starters))
+    if context_validation.get("verified"):
+        reliability += 0.015
+    elif context_validation.get("hard_invalid"):
+        reliability -= 0.18
+    elif context_validation:
+        reliability -= 0.04
+    if stale_days > 7:
+        reliability -= 0.04
+    if stale_days > 14:
+        reliability -= 0.06
+    if stale_days > 30:
+        reliability = min(reliability, 0.65)
     reliability = max(0.60, min(0.92, reliability))
     pre_reliability = max(0.05, min(0.95, probability))
     probability = 0.50 + (pre_reliability - 0.50) * reliability
     probability = max(0.05, min(0.95, probability))
     trace.append({"Signal": "Evidence reliability", "Value": f"{reliability:.0%}", "Adjustment": f"{pre_reliability:.1%} → {probability:.1%}", "Notes": "Shrinks incomplete or disagreeing evidence toward neutral"})
+
+    freshness_factor = (
+        1.0 if stale_days <= 7 else
+        0.90 if stale_days <= 14 else
+        0.80 if stale_days <= 21 else
+        0.62
+    )
+    if freshness_factor < 1.0:
+        before_freshness = probability
+        probability = 0.50 + (probability - 0.50) * freshness_factor
+        trace.append({
+            "Signal": "Data freshness guardrail",
+            "Value": f"Latest game {stale_days} days ago",
+            "Adjustment": f"{before_freshness:.1%} → {probability:.1%}",
+            "Notes": "Old logs cannot support a current role, minutes, or availability assumption",
+        })
     if line_anomaly and probability > 0.86:
         before_line_gate = probability
         probability = 0.86
@@ -18303,9 +18475,6 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
         })
 
     directional_edge = (projection - line) if side == "Over" else (line - projection)
-    last_log_date = _wnba_calendar_date(work.iloc[0]["DATE"])
-    today_et = _wnba_calendar_date(pd.Timestamp.now(tz="America/New_York"))
-    stale_days = max(0, (today_et - last_log_date).days) if today_et and last_log_date else 14
     freshness_score = 1.0 if stale_days <= 4 else 0.78 if stale_days <= 7 else 0.42 if stale_days <= 14 else 0.12
     sample_score = 0.55 * min(n / 12.0, 1.0) + 0.45 * season_coverage
     minute_role_score = max(0.0, min(1.0, 1.0 - minute_std / 9.0))
@@ -18373,10 +18542,27 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
         flags.append("Team defense sample unavailable")
     if stale_days > 7:
         flags.append(f"Game logs are {stale_days} days old")
+    if context_validation.get("hard_invalid"):
+        flags.extend(context_validation.get("reasons") or ["Player/team/game context failed validation"])
+    elif context_validation and not context_validation.get("verified"):
+        flags.append("Player team verified; next game schedule unavailable")
     if injury_penalty:
         flags.append(f"Availability: {injury_status}")
 
-    if force_pass:
+    freshness_force_pass = stale_days > 21
+    anomaly_force_pass = bool(line_anomaly and stale_days > 7 and not reduced_payout_line)
+    context_force_pass = bool(context_validation.get("hard_invalid"))
+    quality_gate_reasons = []
+    if freshness_force_pass:
+        flags.append("Current role cannot be verified from stale game logs")
+        quality_gate_reasons.append(f"Latest game log is {stale_days} days old")
+    if anomaly_force_pass:
+        flags.append("Extreme standard line cannot be verified against stale logs")
+        quality_gate_reasons.append("Extreme standard line plus stale evidence")
+    if context_force_pass:
+        quality_gate_reasons.extend(context_validation.get("reasons") or ["Player/team/game validation failed"])
+
+    if force_pass or freshness_force_pass or anomaly_force_pass or context_force_pass:
         tier = "Pass"
     elif probability >= 0.70 and confidence >= 72 and directional_edge >= cushion:
         tier = f"Strong {side}"
@@ -18408,6 +18594,12 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
         "defense": defense, "defense_allowed": defense_allowed,
         "defense_games": defense_games, "defense_label": defense_label,
         "injury": injury, "stale_days": stale_days,
+        "freshness_factor": freshness_factor,
+        "context_validation": context_validation,
+        "market_context": market_context,
+        "reduced_payout_line": reduced_payout_line,
+        "quality_force_pass": bool(freshness_force_pass or anomaly_force_pass or context_force_pass),
+        "quality_gate_reasons": quality_gate_reasons,
         "line_anomaly": line_anomaly,
         "line_anomaly_note": line_anomaly_note,
         "line_anomaly_penalty": line_anomaly_penalty,
@@ -18503,6 +18695,19 @@ if st.session_state.active_sport == "wnba":
             st.write("Fetching current-season game logs and schedule")
             logs = wnba_get_game_logs(player.get("id"), datetime.now().year, n=80)
             game = wnba_get_next_game(player.get("team", ""))
+            context_validation = wnba_validate_player_context(player, game)
+            if context_validation.get("hard_invalid"):
+                _wnba_load_status.update(
+                    label="WNBA player/team context could not be verified",
+                    state="error",
+                    expanded=True,
+                )
+                st.error(
+                    "This analysis was stopped because the player roster and game context disagree: "
+                    + " | ".join(context_validation.get("reasons") or ["Unknown identity conflict"])
+                    + ". Clear the app cache after ESPN updates its roster data, then try again."
+                )
+                st.stop()
             opp_abbr = _wnba_norm_team(game.get("opp", ""))
             opp_team_id = next(
                 (p.get("team_id") for p in players if _wnba_norm_team(p.get("team", "")) == opp_abbr),
@@ -18540,6 +18745,8 @@ if st.session_state.active_sport == "wnba":
             result = wnba_analyze_prop(
                 logs, selected_stat, float(line), side, game,
                 defense=defense, injury=injury, role_context=role_context,
+                context_validation=context_validation,
+                market_context={"source": "manual"},
             )
         except ValueError as err:
             st.warning(str(err))
@@ -18580,6 +18787,8 @@ if st.session_state.active_sport == "wnba":
             decision_title = "Pass this line"
             decision_note = "Probability, confidence, or projection cushion is not strong enough to support the selected side."
             decision_color = "#7d93ab"
+        if result.get("quality_gate_reasons"):
+            decision_note = "Pass gate: " + " | ".join(result["quality_gate_reasons"]) + "."
         if result.get("line_anomaly"):
             decision_note += " Verify that this is the standard full-game line before using the verdict."
         _wnba_status = (
@@ -18875,6 +19084,11 @@ if st.session_state.active_sport == "wnba":
                 else "Unavailable"
             )
             teammate_debug = teammate_hint
+            validation_debug = (
+                f"{context_validation.get('label', 'Unavailable')} · roster {context_validation.get('roster_team') or 'TBD'}"
+                + (f" · schedule {context_validation.get('schedule_team')}" if context_validation.get("schedule_team") else "")
+                + (f" · {' | '.join(context_validation.get('reasons') or [])}" if context_validation.get("reasons") else "")
+            )
             copyable_debug = "\n".join([
                 "WNBA MODEL DEBUGGER",
                 "",
@@ -18906,6 +19120,7 @@ if st.session_state.active_sport == "wnba":
                 f"Season minutes: {result['season_avg_min']:.1f}",
                 "",
                 "MATCHUP + AVAILABILITY",
+                f"Player/team/game validation: {validation_debug}",
                 f"Opponent defense: {defense_debug}",
                 f"Position-group matchup: {role_matchup_debug}",
                 f"Game environment: {game_total_debug}",
@@ -18916,6 +19131,7 @@ if st.session_state.active_sport == "wnba":
                 f"Availability: {result.get('injury', {}).get('status', 'Active/Unlisted')}",
                 f"Availability detail: {result.get('injury', {}).get('detail') or 'None'}",
                 f"Latest log age: {result['stale_days']} day(s)",
+                f"Freshness probability factor: {result.get('freshness_factor', 1.0):.0%}",
                 f"Evidence reliability: {result['reliability']:.1%}",
                 f"Line verification: {result['line_anomaly_note']}",
                 "",
@@ -18932,6 +19148,7 @@ if st.session_state.active_sport == "wnba":
                 f"How to read: probability selects the direction; confidence grades the evidence; verdict requires both",
                 f"Line-verification confidence penalty: -{result['line_anomaly_penalty']}",
                 f"Teammate-status confidence penalty: -{result.get('teammate_uncertainty_penalty', 0)}",
+                f"Quality gate: {' | '.join(result.get('quality_gate_reasons') or []) or 'Cleared'}",
                 f"Quality flags: {' | '.join(result['flags']) or 'None'}",
                 f"Verdict: {tier}",
             ])
@@ -18955,10 +19172,13 @@ if st.session_state.active_sport == "wnba":
                 ["Opponent defense", f"{result['defense_label']} · {result['defense_allowed']:.2f} allowed in {result['defense_games']} games" if result['defense_allowed'] is not None else "Unavailable"],
                 ["Position-group matchup", role_matchup_debug],
                 ["Starting role", role_debug],
+                ["Player/team/game validation", validation_debug],
                 ["Teammate availability", teammate_debug],
                 ["Availability", result.get("injury", {}).get("status", "Active/Unlisted")],
                 ["Log freshness", f"{result['stale_days']} day(s) since latest game"],
+                ["Freshness probability factor", f"{result.get('freshness_factor', 1.0):.0%}"],
                 ["Evidence reliability", f"{result['reliability']:.1%}"],
+                ["Quality gate", " | ".join(result.get("quality_gate_reasons") or []) or "Cleared"],
                 ["Line verification", result["line_anomaly_note"]],
                 ["Quality flags", " | ".join(result["flags"]) or "None"],
             ], columns=["Check", "Result"])
@@ -21897,7 +22117,8 @@ if st.session_state.active_sport == "edge":
 
     def run_wnba_edge_check(player_name: str, line: float,
                             stat: str, side: str = "Over",
-                            team: str = "") -> Optional[dict]:
+                            team: str = "",
+                            market_context: Optional[dict] = None) -> Optional[dict]:
         """Run the same calibrated WNBA engine used by the individual analyzer."""
         try:
             market = normalize_wnba_prop_stat(stat)
@@ -21908,8 +22129,20 @@ if st.session_state.active_sport == "edge":
             player = wnba_find_player(player_name)
             if not player.get("id"):
                 return None
-            team_abbr = _wnba_norm_team(team or player.get("team", ""))
+            # ESPN's resolved roster is the schedule authority. PrizePicks team
+            # metadata is corroboration only; a disagreement invalidates the row.
+            team_abbr = _wnba_norm_team(player.get("team", ""))
             game = wnba_get_next_game(team_abbr)
+            context_validation = wnba_validate_player_context(player, game, prop_team=team)
+            if context_validation.get("hard_invalid") or not context_validation.get("verified"):
+                record_debug_error(
+                    "wnba.edge.context_validation",
+                    ValueError(
+                        f"{player_name}: "
+                        + " | ".join(context_validation.get("reasons") or ["Next game could not be verified"])
+                    ),
+                )
+                return None
             opp = _wnba_norm_team(game.get("opp", ""))
             if not opp or opp == "TBD":
                 return None
@@ -21936,7 +22169,9 @@ if st.session_state.active_sport == "edge":
                     "position_group": position_group,
                 }
             model = wnba_analyze_prop(
-                logs, market, line, side, game, defense, injury, role_context
+                logs, market, line, side, game, defense, injury, role_context,
+                context_validation=context_validation,
+                market_context=market_context or {},
             )
             if model["tier"] == "Pass" or model["confidence"] < 55:
                 return None
@@ -21993,10 +22228,14 @@ if st.session_state.active_sport == "edge":
                 "confidence_parts": model.get("confidence_parts", {}),
                 "model_trace": model.get("trace", []),
                 "model_flags": model.get("flags", []),
+                "quality_gate_reasons": model.get("quality_gate_reasons", []),
                 "h2h_avg": model.get("h2h_avg"),
                 "h2h_n": int(model.get("h2h_n", 0) or 0),
                 "rest_days": model.get("rest_days"),
                 "stale_days": int(model.get("stale_days", 0) or 0),
+                "context_validation": model.get("context_validation", {}),
+                "freshness_factor": round(float(model.get("freshness_factor", 1.0) or 1.0), 2),
+                "reduced_payout_line": bool(model.get("reduced_payout_line")),
                 "sigma": round(float(model.get("sigma", 0) or 0), 2),
                 "l3_min": round(float(model.get("l3_min", 0) or 0), 1),
                 "market_prev_line": line_history.get("prev_line"),
@@ -22079,12 +22318,12 @@ if st.session_state.active_sport == "edge":
         )
     with _ec4:
         _include_goblin = st.checkbox(
-            "Use lowest promo lines",
-            value=True,
+            "Include reduced-payout lines",
+            value=False,
             key="edge_goblins",
             help=(
-                "For Overs, use the lowest live standard, promo, or goblin line for each player and market. "
-                "Goblin lines have adjusted payouts and remain clearly labeled. Unders use the standard line."
+                "Off by default so the board ranks standard full-payout lines. Turn this on to also inspect "
+                "promo or Goblin lines; those rows are labeled and receive a ranking penalty for reduced payout."
             ),
         )
 
@@ -22226,9 +22465,16 @@ if st.session_state.active_sport == "edge":
         # lines explicitly, including when reading a slate saved by older code.
         _filtered = [p for p in _filtered if not p.get("is_demon", False)]
 
-        # Goblin filter
+        # Standard lines are the default board. Reduced-payout variants can be
+        # inspected explicitly, but should never be mistaken for equal-value bets.
         if not _include_goblin:
-            _filtered = [p for p in _filtered if not p["is_goblin"]]
+            _filtered = [
+                p for p in _filtered
+                if not (
+                    p.get("is_goblin") or p.get("is_promo")
+                    or p.get("adjusted_odds")
+                )
+            ]
 
         # Deduplicate deterministically: preserve one standard and one optional
         # goblin per player/market. For multiple goblins, keep the lowest live
@@ -22240,12 +22486,15 @@ if st.session_state.active_sport == "edge":
                 if _edge_sport == "MLB" else normalize_wnba_prop_stat(p.get("stat", ""))
             )
             p["stat"] = _norm_stat
-            _variant = "goblin" if p.get("is_goblin") else "standard"
+            _variant = (
+                "reduced" if p.get("is_goblin") or p.get("is_promo")
+                or p.get("adjusted_odds") else "standard"
+            )
             _k = f"{p['sport']}|{p['player']}|{_norm_stat}|{_variant}"
             existing = _deduped.get(_k)
             if existing is None:
                 _deduped[_k] = p
-            elif _variant == "goblin":
+            elif _variant == "reduced":
                 _new_line = float(p.get("line", 999) or 999)
                 _old_line = float(existing.get("line", 999) or 999)
                 if (
@@ -22330,8 +22579,8 @@ if st.session_state.active_sport == "edge":
                 if prop["sport"] == "WNBA":
                     _market = normalize_wnba_prop_stat(prop.get("stat", ""))
                     if is_wnba_supported_prop(_market):
-                        if prop.get("is_goblin"):
-                            # Lower goblin lines are favorable only to the Over.
+                        if prop.get("is_goblin") or prop.get("is_promo") or prop.get("adjusted_odds"):
+                            # Reduced-payout lines are favorable only to the Over.
                             # Standard lines still evaluate both directions.
                             _requested_sides = ("Over",)
                         else:
@@ -22341,7 +22590,17 @@ if st.session_state.active_sport == "edge":
                                 ("Over", "Under")
                             )
                         _sides = [
-                            run_wnba_edge_check(prop["player"], prop["line"], _market, _side, prop.get("team", ""))
+                            run_wnba_edge_check(
+                                prop["player"], prop["line"], _market, _side,
+                                prop.get("team", ""),
+                                market_context={
+                                    "is_goblin": bool(prop.get("is_goblin")),
+                                    "is_promo": bool(prop.get("is_promo")),
+                                    "adjusted_odds": bool(prop.get("adjusted_odds")),
+                                    "odds_type": prop.get("odds_type", "standard"),
+                                    "source": "prizepicks",
+                                },
+                            )
                             for _side in _requested_sides
                         ]
                         _sides = [result for result in _sides if result]
@@ -22389,6 +22648,17 @@ if st.session_state.active_sport == "edge":
                         _res["line_verification_required"] = bool(
                             _prop_ref.get("line_verification_required", False)
                         )
+                        _reduced_payout = bool(
+                            _res.get("is_goblin") or _res.get("is_promo")
+                            or _res.get("adjusted_odds")
+                        )
+                        _res["payout_rank_penalty"] = 8 if _reduced_payout else 0
+                        _res["rank_score"] = round(
+                            float(_res.get("adj", 0) or 0) * 0.70
+                            + float(_res.get("confidence", 0) or 0) * 0.30
+                            - _res["payout_rank_penalty"],
+                            1,
+                        )
                         _results.append(_res)
                 except Exception as _future_err:
                     record_debug_error(
@@ -22409,14 +22679,16 @@ if st.session_state.active_sport == "edge":
                 )
                 current = _best_wnba_results.get(result_key)
                 result_rank = (
+                    float(result.get("rank_score", 0) or 0),
+                    0 if result.get("is_goblin") or result.get("is_promo") else 1,
                     float(result.get("adj", 0) or 0),
                     int(result.get("confidence", 0) or 0),
-                    1 if result.get("is_goblin") else 0,
                 )
                 current_rank = (
+                    float(current.get("rank_score", 0) or 0),
+                    0 if current.get("is_goblin") or current.get("is_promo") else 1,
                     float(current.get("adj", 0) or 0),
                     int(current.get("confidence", 0) or 0),
-                    1 if current.get("is_goblin") else 0,
                 ) if current else None
                 if current is None or result_rank > current_rank:
                     _best_wnba_results[result_key] = result
@@ -22491,9 +22763,9 @@ if st.session_state.active_sport == "edge":
         # Current verified lines rank ahead of stale fallback lines.
         _with_edge.sort(key=lambda r: (
             1 if r.get("line_verification_required") else 0,
-            -r["edge_pct"],
+            -float(r.get("rank_score", r.get("adj", 0)) or 0),
             -r["adj"],
-            0 if r.get("is_goblin") else 1
+            1 if r.get("is_goblin") or r.get("is_promo") else 0,
         ))
 
         if not _with_edge:
@@ -22530,7 +22802,7 @@ if st.session_state.active_sport == "edge":
                 f"🟡 {len(_lean)} Lean plays</div>"
                 f"<div style='background:rgba(255,61,92,0.1);border:1px solid rgba(255,61,92,0.25);"
                 f"border-radius:8px;padding:6px 14px;font-size:0.65rem;color:#ff3d5c;'>"
-                f"🔴 {len(_goblins)} Goblin value plays</div>"
+                f"🔴 {len(_goblins)} reduced-payout lines</div>"
                 f"<div style='background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);"
                 f"border-radius:8px;padding:6px 14px;font-size:0.65rem;color:#6b7f96;'>"
                 f"Total: {len(_with_edge)} plays</div>"
@@ -22701,7 +22973,7 @@ if st.session_state.active_sport == "edge":
                 _conf_val = int(_r.get("confidence", _r["adj"]) or 0)
                 _conf_color_class = "green" if _conf_val >= 80 else ("yellow" if _conf_val >= 65 else "")
                 _edge_entry_base = int(round((float(_r["adj"]) * 0.70) + (_conf_val * 0.30)))
-                _edge_entry_score = _edge_entry_base
+                _edge_entry_score = _edge_entry_base - int(_r.get("payout_rank_penalty", 0) or 0)
                 if _line_needs_verify:
                     _edge_entry_score = min(_edge_entry_score, 64)
                 elif not _is_strong:
@@ -22870,7 +23142,12 @@ if st.session_state.active_sport == "edge":
                                 if _r.get("defense_allowed") is not None else "Unavailable"
                             )],
                             ["Availability", _r.get("injury_status", "Active/Unlisted")],
+                            ["Player/team/game validation", (
+                                (_r.get("context_validation") or {}).get("label", "Unavailable")
+                                + " · roster " + ((_r.get("context_validation") or {}).get("roster_team") or "TBD")
+                            )],
                             ["Log freshness", f"{_r.get('stale_days', 0)} day(s) since latest game"],
+                            ["Freshness probability factor", f"{float(_r.get('freshness_factor', 1.0) or 1.0):.0%}"],
                             ["Evidence reliability", f"{float(_r.get('reliability', 0)):.1f}%"],
                             ["PrizePicks line variant", (
                                 "Lowest Goblin · adjusted payout"
@@ -22878,6 +23155,11 @@ if st.session_state.active_sport == "edge":
                                 f"Promo override {float(_r.get('base_line')):g} → {float(_r.get('line')):g}"
                                 if _r.get("is_promo") and _r.get("base_line") is not None else
                                 "Standard line"
+                            )],
+                            ["Quality gate", " | ".join(_r.get("quality_gate_reasons") or []) or "Cleared"],
+                            ["Scanner ranking penalty", (
+                                f"-{int(_r.get('payout_rank_penalty', 0) or 0)} for reduced payout"
+                                if _r.get("payout_rank_penalty") else "None"
                             )],
                             ["Quality flags", " | ".join(_r.get("model_flags") or []) or "None"],
                         ]
