@@ -18,6 +18,7 @@ st.set_page_config(
     page_title="PropIQ — Sports Intelligence",
     page_icon="propiq_favicon.png",
     layout="wide",
+    initial_sidebar_state="collapsed",
 )
 # Favicon injection — must be separate from CSS markdown
 st.markdown(
@@ -49,8 +50,7 @@ div[data-testid="stSkeleton"] {
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800;900&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&family=JetBrains+Mono:wght@400;500;700&display=swap');
 
 /* ══════════════════════════════════════════
-   PropIQ V5.0 — Electric Teal · Broadcast Dark
-   Sportsy · ESPN Energy · App Store Ready
+   Core component foundations
 ══════════════════════════════════════════ */
 
 :root {
@@ -1186,7 +1186,7 @@ button[key="mobile_quick_analyze"] {
 }
 
 /* ══════════════════════════════════════════
-   PropIQ V6 — Scanner polish base
+   Scanner component foundations
 ══════════════════════════════════════════ */
 .v55-hero {
     background: linear-gradient(135deg, rgba(0,196,204,0.10), rgba(255,255,255,0.025));
@@ -1337,8 +1337,7 @@ button[key="mobile_quick_analyze"] {
 }
 
 /* ══════════════════════════════════════════
-   PropIQ V6 — Visual overhaul layer
-   Pure UI polish: app shell, cards, scanner, mobile ergonomics
+   Analyzer and result component foundations
 ══════════════════════════════════════════ */
 :root {
     --bg: #070a0f;
@@ -1692,8 +1691,7 @@ div[data-baseweb="popover"] > div {
 }
 
 /* ══════════════════════════════════════════
-   PropIQ V6.1 — Mobile-first experience pass
-   Visual only: clearer hierarchy, safer taps, cleaner result scanning
+   Responsive component foundations
 ══════════════════════════════════════════ */
 html {
     scroll-behavior: smooth;
@@ -2048,8 +2046,7 @@ div[data-testid="stCodeBlock"] {
 }
 
 /* ══════════════════════════════════════════
-   PropIQ V6.2 — Dynamic command-center layer
-   Motion polish only: slicker, livelier, still lightweight
+   Interactive component foundations
 ══════════════════════════════════════════ */
 @keyframes propiqAmbientSweep {
     0% { background-position: 0% 0%, 0% 50%; }
@@ -2296,7 +2293,7 @@ button[data-testid="baseButton-primary"]:focus-visible {
 }
 
 /* ══════════════════════════════════════════
-   PropIQ V6.3 — Mobile pick board
+   Mobile pick-board foundations
 ══════════════════════════════════════════ */
 .pick-tray-v63 {
     position: fixed;
@@ -2426,8 +2423,7 @@ button[data-testid="baseButton-primary"]:focus-visible {
 }
 
 /* ══════════════════════════════════════════
-   PropIQ V6.4 — Premium analytical UI pass
-   Balanced dark terminal: high-end, calmer, still distinctive
+   Analytical component foundations
 ══════════════════════════════════════════ */
 :root {
     --bg: #080b10;
@@ -2661,8 +2657,7 @@ div[data-testid="stTextInput"] input {
 }
 
 /* ══════════════════════════════════════════
-   PropIQ V7 — Modern product system
-   Calm, information-dense, mobile-first
+   Workspace component foundations
 ══════════════════════════════════════════ */
 :root {
     --bg: #090c10;
@@ -3522,8 +3517,7 @@ button[key="view_results"] {
 }
 
 /* ══════════════════════════════════════════
-   PropIQ V7.1 — Unified mobile application shell
-   One navigation hierarchy, natural scrolling, richer analytical surfaces
+   Unified application-shell foundations
 ══════════════════════════════════════════ */
 .st-key-workspace_navigation {
     border: 1px solid rgba(226,232,240,0.09);
@@ -3774,8 +3768,7 @@ button[key="view_results"] {
 }
 
 /* ══════════════════════════════════════════
-   PropIQ V7.2 — Polished analytical workspace
-   Correct Streamlit selectors, compact mobile navigation, stronger hierarchy
+   Analytical workspace foundations
 ══════════════════════════════════════════ */
 :root {
     --surface-1: #10161d;
@@ -4351,7 +4344,7 @@ div[class*="st-key-ea_"] button {
     .edge-entry-v72 { min-height: 48px; }
 }
 
-/* PropIQ V7.3 - authoritative responsive application shell. */
+/* Compatibility foundations for existing Streamlit class contracts. */
 :root {
     --bg: #080c11;
     --bg2: #0d131a;
@@ -4808,6 +4801,1237 @@ div[data-testid="stExpander"] {
     .edge-call-v72 { width: 100% !important; }
 }
 
+/* ══════════════════════════════════════════
+   PropIQ V8 — Single authoritative responsive theme
+   Task-first, mobile-safe, decision-focused
+══════════════════════════════════════════ */
+:root {
+    --bg: #080c10;
+    --bg2: #0d1319;
+    --bg3: #121a22;
+    --bg4: #18222c;
+    --surface-0: #080c10;
+    --surface-1: #0d1319;
+    --surface-2: #121a22;
+    --surface-3: #18222c;
+    --border: rgba(220,232,242,0.08);
+    --border2: rgba(220,232,242,0.15);
+    --line-soft: rgba(220,232,242,0.08);
+    --line-strong: rgba(220,232,242,0.16);
+    --accent: #28c6cf;
+    --accent2: #1599a2;
+    --accent3: #72e2e7;
+    --green: #36d399;
+    --yellow: #f2c14e;
+    --orange: #ff9257;
+    --red: #ff6078;
+    --text: #f3f7fa;
+    --text2: #a9b8c7;
+    --text3: #718397;
+    --v8-nav-height: 66px;
+    --v8-safe-bottom: calc(var(--v8-nav-height) + 22px + env(safe-area-inset-bottom));
+    --r-xs: 4px;
+    --r-sm: 6px;
+    --r-md: 8px;
+    --r-lg: 8px;
+    --r-xl: 8px;
+    --shadow-sm: 0 1px 2px rgba(0,0,0,0.22);
+    --shadow-md: 0 10px 28px rgba(0,0,0,0.26);
+    --shadow-lg: 0 18px 48px rgba(0,0,0,0.34);
+}
+
+html body * {
+    letter-spacing: 0 !important;
+}
+.stMarkdown p,
+.stMarkdown li,
+div[data-testid="stAlert"] p,
+div[data-testid="stCaptionContainer"] {
+    font-size: 0.9rem !important;
+    line-height: 1.55 !important;
+}
+
+html,
+body,
+[data-testid="stAppViewContainer"],
+[data-testid="stAppViewBlockContainer"] {
+    background: var(--bg) !important;
+}
+[data-testid="stAppViewContainer"] {
+    background-image:
+        linear-gradient(180deg, rgba(40,198,207,0.045) 0, transparent 210px),
+        linear-gradient(90deg, rgba(255,255,255,0.012) 1px, transparent 1px) !important;
+    background-size: auto, 56px 56px !important;
+}
+[data-testid="stAppViewContainer"]::before,
+[data-testid="stAppViewContainer"]::after {
+    display: none !important;
+}
+
+/* The legacy rail is collapsed by default and acts as an optional tools drawer. */
+section[data-testid="stSidebar"] {
+    display: flex !important;
+    background: #0b1117 !important;
+    border-right: 1px solid var(--line-soft) !important;
+}
+section[data-testid="stSidebar"] > div {
+    background: #0b1117 !important;
+}
+section[data-testid="stSidebar"] [data-testid="stSidebarContent"] {
+    padding: 0.8rem 0.75rem 5rem !important;
+}
+section[data-testid="stSidebar"] .section-header {
+    margin-top: 1.1rem !important;
+}
+section[data-testid="stSidebar"] div[data-testid="stExpander"] {
+    background: #0e151c !important;
+}
+button[data-testid="collapsedControl"] {
+    display: flex !important;
+    visibility: visible !important;
+    position: fixed !important;
+    top: 18px !important;
+    left: 12px !important;
+    z-index: 2200 !important;
+    width: 36px !important;
+    min-width: 36px !important;
+    max-width: 36px !important;
+    height: 36px !important;
+    color: #91a4b5 !important;
+    background: rgba(11,17,23,0.96) !important;
+    border: 1px solid var(--line-strong) !important;
+    border-radius: 7px !important;
+    box-shadow: 0 8px 20px rgba(0,0,0,0.28) !important;
+}
+.main .block-container,
+.block-container {
+    width: min(100%, 1120px) !important;
+    max-width: 1120px !important;
+    margin: 0 auto !important;
+    padding: 0 1rem 6rem !important;
+}
+[data-testid="stAppViewBlockContainer"] {
+    padding-top: 0.25rem !important;
+}
+
+/* Compact premium app bar. */
+.pl-header {
+    position: relative !important;
+    top: auto !important;
+    min-height: 62px !important;
+    margin: 0.45rem 0 0.35rem !important;
+    padding: 0.65rem 0.8rem 0.65rem 3.35rem !important;
+    background: #0c1218 !important;
+    border: 1px solid var(--line-soft) !important;
+    border-radius: 8px !important;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.24) !important;
+    backdrop-filter: blur(18px) saturate(125%) !important;
+    -webkit-backdrop-filter: blur(18px) saturate(125%) !important;
+}
+.pl-header::before { display: none !important; }
+.pl-header::after {
+    display: block !important;
+    left: 0 !important;
+    right: auto !important;
+    top: 10px !important;
+    bottom: 10px !important;
+    width: 3px !important;
+    height: auto !important;
+    background: var(--accent) !important;
+    animation: none !important;
+    border-radius: 0 3px 3px 0 !important;
+}
+.pl-logo-wrap { gap: 10px !important; min-width: 0 !important; }
+.pl-icon { width: 42px !important; height: 34px !important; opacity: 0.96 !important; }
+.pl-icon svg { width: 42px !important; height: 34px !important; }
+.pl-logo {
+    font-size: 1.52rem !important;
+    font-weight: 850 !important;
+    line-height: 1 !important;
+}
+.pl-logo small {
+    margin-left: 6px;
+    color: #6f8496;
+    font-family: var(--font-mono) !important;
+    font-size: 0.5rem;
+    font-weight: 800;
+    vertical-align: top;
+}
+.pl-sub {
+    margin-top: 4px !important;
+    color: #718397 !important;
+    font-size: 0.54rem !important;
+    text-transform: uppercase !important;
+}
+.pl-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.pl-header-sport {
+    display: inline-flex;
+    align-items: center;
+    min-height: 26px;
+    padding: 0 8px;
+    color: #dffbfc;
+    background: rgba(40,198,207,0.10);
+    border: 1px solid rgba(114,226,231,0.20);
+    border-radius: 6px;
+    font-family: var(--font-mono) !important;
+    font-size: 0.62rem;
+    font-weight: 800;
+}
+.pl-live-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 26px;
+    padding: 0 8px;
+    color: #9fb0bf;
+    background: #101820;
+    border: 1px solid var(--line-soft);
+    border-radius: 6px;
+    font-family: var(--font-mono) !important;
+    font-size: 0.58rem;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+.pl-live-status i {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 0 3px rgba(54,211,153,0.10);
+}
+.pl-badge {
+    min-width: 34px !important;
+    padding: 5px 7px !important;
+    color: #071216 !important;
+    background: var(--accent) !important;
+    border: 0 !important;
+    border-radius: 5px !important;
+    font-size: 0.58rem !important;
+    box-shadow: none !important;
+}
+
+/* Live information is secondary to the product workflow. */
+.pl-ticker-wrap {
+    height: 25px !important;
+    margin-bottom: 0.3rem !important;
+    background: #090e13 !important;
+    border: 1px solid var(--line-soft) !important;
+    border-radius: 6px !important;
+}
+.pl-ticker-label {
+    color: #b9f5f7 !important;
+    background: #153038 !important;
+    font-size: 0.52rem !important;
+}
+.score-strip {
+    gap: 6px !important;
+    margin: 0 0 0.35rem !important;
+    padding: 5px 0 7px !important;
+}
+.score-card {
+    min-width: 150px !important;
+    background: #0c1218 !important;
+    border-color: var(--line-soft) !important;
+    border-radius: 7px !important;
+    box-shadow: none !important;
+}
+
+/* Primary destinations: stable app navigation with a quiet selected state. */
+.st-key-workspace_navigation {
+    position: sticky !important;
+    top: 6px !important;
+    z-index: 1000 !important;
+    margin: 0 0 0.55rem !important;
+    padding: 4px !important;
+    background: rgba(10,15,20,0.96) !important;
+    border: 1px solid var(--line-strong) !important;
+    border-radius: 8px !important;
+    box-shadow: 0 10px 28px rgba(0,0,0,0.30) !important;
+}
+.st-key-workspace_navigation div[data-testid="stHorizontalBlock"] {
+    display: grid !important;
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+    gap: 4px !important;
+}
+.st-key-workspace_navigation div[data-testid="stColumn"] {
+    width: 100% !important;
+    min-width: 0 !important;
+    padding: 0 !important;
+}
+.st-key-workspace_navigation button {
+    min-height: 44px !important;
+    margin: 0 !important;
+    padding: 0.42rem 0.35rem !important;
+    color: #899cad !important;
+    background: transparent !important;
+    border: 1px solid transparent !important;
+    border-radius: 6px !important;
+    box-shadow: none !important;
+    font-size: 0.76rem !important;
+    font-weight: 720 !important;
+    text-transform: none !important;
+    transform: none !important;
+}
+.st-key-workspace_navigation button[kind="primary"] {
+    color: #e9feff !important;
+    background: #15252b !important;
+    border-color: rgba(74,214,221,0.30) !important;
+    box-shadow: inset 0 -2px 0 var(--accent) !important;
+}
+.st-key-workspace_navigation button[kind="secondary"]:hover {
+    color: var(--text) !important;
+    background: rgba(255,255,255,0.035) !important;
+    border-color: var(--line-soft) !important;
+}
+
+/* Sport is a secondary mode, close to the analyzer it controls. */
+.st-key-analyzer_sport_navigation {
+    width: min(100%, 540px) !important;
+    margin: 0 auto 0.65rem !important;
+    padding: 4px !important;
+    background: #0b1117 !important;
+    border: 1px solid var(--line-soft) !important;
+    border-radius: 8px !important;
+}
+.st-key-analyzer_sport_navigation div[data-testid="stHorizontalBlock"] {
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    gap: 4px !important;
+}
+.st-key-analyzer_sport_navigation div[data-testid="stColumn"] {
+    width: 100% !important;
+    min-width: 0 !important;
+    padding: 0 !important;
+}
+.st-key-analyzer_sport_navigation button {
+    min-height: 40px !important;
+    margin: 0 !important;
+    padding: 0.35rem 0.25rem !important;
+    color: #8092a3 !important;
+    background: transparent !important;
+    border: 1px solid transparent !important;
+    border-radius: 6px !important;
+    box-shadow: none !important;
+    font-size: 0.72rem !important;
+    text-transform: none !important;
+    transform: none !important;
+}
+.st-key-analyzer_sport_navigation button[kind="primary"] {
+    color: #dffbfc !important;
+    background: rgba(40,198,207,0.12) !important;
+    border-color: rgba(40,198,207,0.26) !important;
+    box-shadow: inset 0 -2px 0 rgba(114,226,231,0.72) !important;
+}
+
+/* Utility content stays available without occupying the workspace. */
+div[data-testid="stPopover"] {
+    display: flex !important;
+    justify-content: flex-end !important;
+    margin: -0.15rem 0 0.2rem !important;
+}
+div[data-testid="stPopover"] > button {
+    width: auto !important;
+    min-height: 34px !important;
+    padding: 0.35rem 0.65rem !important;
+    color: #8496a7 !important;
+    background: transparent !important;
+    border: 1px solid var(--line-soft) !important;
+    border-radius: 6px !important;
+    box-shadow: none !important;
+    font-size: 0.68rem !important;
+    text-transform: none !important;
+}
+.v8-popover-label {
+    margin-bottom: 0.55rem;
+    color: var(--text);
+    font-family: var(--font-display) !important;
+    font-size: 0.84rem;
+    font-weight: 750;
+}
+.v8-walkthrough-lead {
+    margin-bottom: 0.9rem;
+    color: #a9b8c7;
+    font-size: 0.94rem;
+    line-height: 1.55;
+}
+.v8-help-steps {
+    display: grid;
+    gap: 7px;
+}
+.v8-help-steps > div {
+    display: grid;
+    grid-template-columns: 30px minmax(0, 1fr);
+    gap: 9px;
+    align-items: start;
+    padding: 0.7rem;
+    background: #101820;
+    border: 1px solid var(--line-soft);
+    border-radius: 7px;
+}
+.v8-help-steps b {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    color: #061417;
+    background: var(--accent);
+    border-radius: 6px;
+    font-size: 0.78rem;
+}
+.v8-help-steps span {
+    color: #8fa1b2;
+    font-size: 0.82rem;
+    line-height: 1.45;
+}
+.v8-help-steps strong {
+    display: block;
+    margin-bottom: 2px;
+    color: var(--text);
+    font-size: 0.86rem;
+}
+.v8-help-note {
+    margin-top: 0.75rem;
+    color: #718397;
+    font-size: 0.76rem;
+    line-height: 1.5;
+}
+div[data-testid="stDialog"] [role="dialog"] {
+    background: #0d1319 !important;
+    border: 1px solid var(--line-strong) !important;
+    border-radius: 8px !important;
+    box-shadow: 0 26px 70px rgba(0,0,0,0.58) !important;
+}
+
+/* Page identity is an unframed section header, not another card. */
+.analyzer-hero,
+.v55-hero,
+.workspace-page-head {
+    min-height: 0 !important;
+    margin: 0 0 0.75rem !important;
+    padding: 0.7rem 0 0.85rem !important;
+    background: transparent !important;
+    border: 0 !important;
+    border-bottom: 1px solid var(--line-soft) !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    overflow: visible !important;
+}
+.analyzer-hero::before,
+.analyzer-hero::after,
+.v55-hero::before,
+.v55-hero::after,
+.workspace-page-head::before,
+.workspace-page-head::after {
+    display: none !important;
+}
+.v55-kicker,
+.mlb-decision-kicker,
+.section-header,
+.stat-label,
+.verdict-label {
+    font-family: var(--font-mono) !important;
+    text-transform: uppercase !important;
+}
+.v55-kicker {
+    margin-bottom: 5px !important;
+    color: var(--accent3) !important;
+    font-size: 0.58rem !important;
+    font-weight: 750 !important;
+}
+.v55-title,
+.workspace-page-head h1 {
+    margin: 0 !important;
+    color: var(--text) !important;
+    font-family: var(--font-display) !important;
+    font-size: 1.38rem !important;
+    font-weight: 820 !important;
+    line-height: 1.18 !important;
+}
+.v55-subcopy,
+.workspace-page-head p {
+    max-width: 720px !important;
+    margin-top: 5px !important;
+    color: #8293a4 !important;
+    font-size: 0.9rem !important;
+    line-height: 1.5 !important;
+}
+.section-header {
+    margin: 1.35rem 0 0.65rem !important;
+    padding: 0 0 0.55rem !important;
+    color: #8799aa !important;
+    border-bottom: 1px solid var(--line-soft) !important;
+    font-size: 0.64rem !important;
+    font-weight: 760 !important;
+}
+.section-header::before {
+    width: 3px !important;
+    height: 13px !important;
+    background: var(--accent) !important;
+    border-radius: 2px !important;
+}
+
+/* Controls: strong contrast, predictable dimensions, app-native menus. */
+.stSelectbox label,
+.stTextInput label,
+.stNumberInput label,
+.stRadio label,
+.stCheckbox label,
+div[data-testid="stSelectbox"] label,
+div[data-testid="stTextInput"] label,
+div[data-testid="stNumberInput"] label {
+    color: #9aacbc !important;
+    font-family: var(--font-body) !important;
+    font-size: 0.72rem !important;
+    font-weight: 700 !important;
+    text-transform: none !important;
+}
+div[data-baseweb="select"] > div,
+div[data-testid="stTextInput"] input,
+div[data-testid="stNumberInput"] input,
+input[role="combobox"] {
+    min-height: 48px !important;
+    color: var(--text) !important;
+    background: #0a1016 !important;
+    border-color: var(--line-strong) !important;
+    border-radius: 7px !important;
+    box-shadow: none !important;
+    font-family: var(--font-body) !important;
+    font-size: 0.94rem !important;
+}
+input::placeholder {
+    color: #708397 !important;
+    opacity: 1 !important;
+}
+div[data-baseweb="select"] > div:hover,
+div[data-testid="stTextInput"] input:hover,
+div[data-testid="stNumberInput"] input:hover {
+    border-color: rgba(114,226,231,0.34) !important;
+}
+div[data-baseweb="select"]:focus-within > div,
+div[data-testid="stTextInput"] input:focus,
+div[data-testid="stNumberInput"] input:focus {
+    border-color: var(--accent) !important;
+    box-shadow: 0 0 0 3px rgba(40,198,207,0.10) !important;
+}
+div[data-baseweb="popover"] {
+    z-index: 2400 !important;
+}
+div[data-baseweb="popover"] > div,
+div[data-baseweb="popover"] [role="listbox"],
+ul[role="listbox"] {
+    color: var(--text) !important;
+    background: #101820 !important;
+    border: 1px solid rgba(114,226,231,0.20) !important;
+    border-radius: 7px !important;
+    box-shadow: 0 18px 44px rgba(0,0,0,0.52) !important;
+    overflow: hidden !important;
+}
+li[role="option"],
+div[data-baseweb="menu"] li {
+    min-height: 46px !important;
+    color: #dbe7ef !important;
+    background: #101820 !important;
+    border-bottom: 1px solid rgba(220,232,242,0.06) !important;
+    font-size: 0.9rem !important;
+}
+li[role="option"]:hover,
+li[role="option"][aria-selected="true"],
+div[data-baseweb="menu"] li:hover {
+    color: #eaffff !important;
+    background: #173038 !important;
+}
+
+/* Commands use solid color and restrained motion. */
+.stButton > button {
+    min-height: 46px !important;
+    padding: 0.7rem 1rem !important;
+    color: #051417 !important;
+    background: var(--accent) !important;
+    border: 1px solid #5fd9df !important;
+    border-radius: 7px !important;
+    box-shadow: 0 8px 20px rgba(40,198,207,0.16) !important;
+    font-family: var(--font-display) !important;
+    font-size: 0.82rem !important;
+    font-weight: 780 !important;
+    text-transform: none !important;
+    transform: none !important;
+}
+.stButton > button::after { display: none !important; }
+.stButton > button:hover {
+    color: #031114 !important;
+    background: #55d5dc !important;
+    border-color: #8be9ed !important;
+    box-shadow: 0 10px 24px rgba(40,198,207,0.22) !important;
+    transform: translateY(-1px) !important;
+}
+.stButton > button:active {
+    background: #22b6bf !important;
+    box-shadow: none !important;
+    transform: none !important;
+}
+button[data-testid="baseButton-secondary"] {
+    color: #a8b6c4 !important;
+    background: #0e151c !important;
+    border: 1px solid var(--line-soft) !important;
+    border-radius: 7px !important;
+    box-shadow: none !important;
+    text-transform: none !important;
+}
+
+/* Edge controls are one compact tool surface with visible labels. */
+.st-key-edge_scanner_controls {
+    margin-bottom: 0.65rem !important;
+    padding: 0.75rem !important;
+    background: #0b1117 !important;
+    border: 1px solid var(--line-soft) !important;
+    border-radius: 8px !important;
+}
+.st-key-edge_scanner_controls div[data-testid="stHorizontalBlock"] {
+    align-items: end !important;
+    gap: 8px !important;
+}
+.v55-command-note {
+    margin: 0.45rem 0 0.65rem !important;
+    padding: 0.6rem 0.75rem !important;
+    color: #8193a3 !important;
+    background: transparent !important;
+    border: 1px solid var(--line-soft) !important;
+    border-left: 3px solid var(--accent2) !important;
+    border-radius: 6px !important;
+    font-size: 0.64rem !important;
+    line-height: 1.55 !important;
+}
+
+/* Analytical surfaces: two elevation levels, clearer information density. */
+.stat-card,
+.defense-card,
+.ai-box,
+.explainer,
+.how-it-works,
+.parlay-builder,
+.edge-card-v55,
+.edge-card-v72,
+.verdict-banner,
+.mlb-decision-card,
+.unified-decision-card,
+div[data-testid="stExpander"] {
+    background: #0d1319 !important;
+    border-color: var(--line-soft) !important;
+    border-radius: 8px !important;
+    box-shadow: none !important;
+}
+.stat-card,
+.defense-card {
+    padding: 0.85rem 0.9rem !important;
+}
+.stat-card:hover,
+.defense-card:hover,
+.edge-card-v55:hover,
+.edge-card-v72:hover {
+    background: #111922 !important;
+    border-color: rgba(114,226,231,0.20) !important;
+    box-shadow: 0 10px 26px rgba(0,0,0,0.20) !important;
+    transform: translateY(-1px) !important;
+}
+.edge-card-v55 {
+    margin-bottom: 0.65rem !important;
+    padding: 0 !important;
+    border-left: 3px solid #465667 !important;
+    overflow: hidden !important;
+}
+.edge-card-v55.strong {
+    border-left-color: var(--green) !important;
+}
+.edge-card-v55.lean {
+    border-left-color: var(--yellow) !important;
+}
+.edge-row-summary {
+    position: relative !important;
+    display: block !important;
+    min-height: 72px !important;
+    padding: 0.8rem 2rem 0.8rem 0.85rem !important;
+    cursor: pointer !important;
+    list-style: none !important;
+}
+.edge-row-summary::-webkit-details-marker { display: none !important; }
+.edge-row-summary::after {
+    content: '+' !important;
+    position: absolute !important;
+    top: 50% !important;
+    right: 0.7rem !important;
+    color: var(--accent) !important;
+    font-size: 1rem !important;
+    font-weight: 700 !important;
+    transform: translateY(-50%) !important;
+}
+.edge-card-v55[open] > .edge-row-summary {
+    border-bottom: 1px solid var(--line-soft) !important;
+}
+.edge-card-v55[open] > .edge-row-summary::after { content: '-' !important; }
+.edge-row-body {
+    padding: 0.75rem 0.85rem 0.8rem !important;
+    background: #0b1117 !important;
+}
+.edge-card-head-v72 {
+    display: flex !important;
+    align-items: flex-start !important;
+    justify-content: space-between !important;
+    gap: 12px !important;
+    margin-bottom: 0.65rem !important;
+}
+.edge-player-v55 {
+    color: var(--text) !important;
+    font-size: 1.02rem !important;
+    font-weight: 800 !important;
+}
+.edge-market-v72 {
+    margin-top: 4px !important;
+    color: #7f91a3 !important;
+    font-size: 0.58rem !important;
+}
+.edge-call-v72 {
+    border-color: var(--line-soft) !important;
+    border-radius: 7px !important;
+}
+.edge-line-v72,
+.edge-entry-v72 {
+    min-width: 108px !important;
+    padding: 0.5rem 0.6rem !important;
+}
+.edge-line-v72 {
+    color: #051417 !important;
+    background: var(--accent) !important;
+}
+.edge-entry-v72 { background: #121b23 !important; }
+.edge-score-v55 {
+    display: grid !important;
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+    gap: 6px !important;
+}
+.edge-score-item-v55 {
+    min-width: 0 !important;
+    padding: 0.55rem !important;
+    background: #101820 !important;
+    border: 1px solid var(--line-soft) !important;
+    border-radius: 7px !important;
+    text-align: left !important;
+}
+.edge-score-item-v55 span {
+    color: #718397 !important;
+    font-size: 0.5rem !important;
+}
+.edge-score-item-v55 strong {
+    color: var(--text) !important;
+    font-size: 0.9rem !important;
+}
+.edge-reasons-v55 {
+    gap: 5px !important;
+    margin-top: 0.6rem !important;
+}
+.edge-pill-v55 {
+    padding: 3px 7px !important;
+    border-radius: 5px !important;
+    font-size: 0.53rem !important;
+}
+.edge-details-v55 {
+    margin-top: 0.55rem !important;
+    color: #8496a7 !important;
+    border-top: 1px solid var(--line-soft) !important;
+}
+.stat-label,
+.verdict-label,
+.mlb-decision-kicker {
+    color: #74879a !important;
+    font-size: 0.58rem !important;
+    font-weight: 720 !important;
+}
+.stat-value {
+    color: var(--text) !important;
+    font-size: 1.75rem !important;
+    line-height: 1.05 !important;
+}
+.stat-hint {
+    color: #7d8fa1 !important;
+    font-size: 0.64rem !important;
+}
+.mlb-decision-card {
+    padding: 1rem !important;
+    overflow: hidden !important;
+}
+.unified-decision-card {
+    margin: 0.6rem 0 0.85rem !important;
+    display: grid !important;
+    grid-template-columns: minmax(112px, 0.72fr) minmax(0, 2.15fr) !important;
+    background: #0d1319 !important;
+    border-radius: 8px !important;
+    box-shadow: none !important;
+}
+.unified-decision-score { background: rgba(255,255,255,0.018) !important; }
+.unified-decision-evidence {
+    display: grid !important;
+    grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+    gap: 6px !important;
+    padding: 0.65rem 0.75rem !important;
+    background: #0b1117 !important;
+    border: 0 !important;
+}
+.unified-score-details {
+    grid-column: 1 / -1 !important;
+}
+.unified-score-details summary {
+    min-height: 42px !important;
+    padding: 0.65rem 0.8rem !important;
+    color: #91a3b4 !important;
+    font-size: 0.7rem !important;
+    font-weight: 700 !important;
+}
+.secondary-decision-details {
+    margin: 0 0 0.8rem !important;
+    background: #0b1117 !important;
+    border: 1px solid var(--line-soft) !important;
+    border-radius: 8px !important;
+    overflow: hidden !important;
+}
+.secondary-decision-details > summary {
+    position: relative !important;
+    min-height: 44px !important;
+    padding: 0.72rem 2rem 0.72rem 0.8rem !important;
+    color: #9aabba !important;
+    font-size: 0.86rem !important;
+    font-weight: 700 !important;
+    cursor: pointer !important;
+    list-style: none !important;
+}
+.secondary-decision-details > summary::-webkit-details-marker { display: none !important; }
+.secondary-decision-details > summary::after {
+    content: '+' !important;
+    position: absolute !important;
+    top: 50% !important;
+    right: 0.8rem !important;
+    color: var(--accent) !important;
+    transform: translateY(-50%) !important;
+}
+.secondary-decision-details[open] > summary::after { content: '-' !important; }
+.secondary-decision-details .mlb-decision-card,
+.secondary-decision-details .verdict-banner {
+    margin: 0 !important;
+    border-right: 0 !important;
+    border-bottom: 0 !important;
+    border-left: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+}
+.unified-decision-metric {
+    background: #101820 !important;
+    border-color: var(--line-soft) !important;
+    border-radius: 6px !important;
+}
+.mlb-decision-card.actionable { border-left: 3px solid var(--green) !important; }
+.mlb-decision-card.watchlist { border-left: 3px solid var(--yellow) !important; }
+.mlb-decision-card.pass { border-left: 3px solid var(--red) !important; }
+.mlb-decision-name,
+.verdict-tier {
+    color: var(--text) !important;
+    font-size: 1.55rem !important;
+    line-height: 1.1 !important;
+}
+.mlb-decision-copy {
+    color: #9aabba !important;
+    font-size: 0.9rem !important;
+    line-height: 1.6 !important;
+}
+.mlb-decision-metric {
+    min-width: 0 !important;
+    padding: 0.7rem !important;
+    background: #101820 !important;
+    border: 1px solid var(--line-soft) !important;
+    border-radius: 7px !important;
+}
+.mlb-decision-metric span { color: #718397 !important; }
+.mlb-decision-metric strong { color: var(--text) !important; }
+div[data-testid="stExpander"] summary {
+    min-height: 46px !important;
+    padding: 0.55rem 0.75rem !important;
+    color: #a8b7c5 !important;
+    font-size: 0.88rem !important;
+}
+
+/* Data tables and status widgets remain readable without becoming dominant. */
+div[data-testid="stDataFrame"] {
+    background: #0b1117 !important;
+    border-color: var(--line-soft) !important;
+    border-radius: 7px !important;
+}
+div[data-testid="stStatusWidget"],
+div[data-testid="stAlert"] {
+    border-radius: 7px !important;
+}
+div[data-testid="stSkeleton"] {
+    display: block !important;
+    border-radius: 6px !important;
+}
+.bb-loader {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
+    margin: 0.5rem 0 1rem;
+    padding: 1.5rem;
+    background: #0d1319;
+    border: 1px solid var(--line-soft);
+    border-radius: 8px;
+    animation: fadeUp 0.3s ease both;
+}
+@keyframes ball-bounce {
+    0% { transform: translateY(0); animation-timing-function: ease-in; }
+    45% { transform: translateY(36px); animation-timing-function: ease-out; }
+    55% { transform: translateY(36px); animation-timing-function: ease-in; }
+    100% { transform: translateY(0); animation-timing-function: ease-out; }
+}
+@keyframes shadow-pulse {
+    0%, 100% { transform: translateX(-50%) scaleX(1); opacity: 0.4; }
+    45%, 55% { transform: translateX(-50%) scaleX(1.5); opacity: 0.15; }
+}
+@keyframes txt-fade {
+    0%, 100% { opacity: 0.5; }
+    50% { opacity: 1; }
+}
+.bb-court {
+    position: relative;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    width: 60px;
+    height: 70px;
+}
+.bb-ball {
+    font-size: 2rem;
+    line-height: 1;
+    animation: ball-bounce 0.65s cubic-bezier(0.33,0,0.66,1) infinite;
+    filter: drop-shadow(0 2px 6px rgba(249,115,22,0.4));
+}
+.bb-shadow {
+    position: absolute;
+    bottom: 0;
+    left: 50%;
+    width: 28px;
+    height: 6px;
+    background: rgba(249,115,22,0.25);
+    border-radius: 50%;
+    animation: shadow-pulse 0.65s cubic-bezier(0.33,0,0.66,1) infinite;
+    filter: blur(3px);
+}
+.bb-title {
+    margin-top: 0.6rem;
+    color: var(--text);
+    font-family: var(--font-display);
+    font-size: 0.95rem;
+    font-weight: 700;
+    text-align: center;
+}
+.bb-sub {
+    margin-top: 4px;
+    color: var(--text3);
+    font-family: var(--font-mono);
+    font-size: 0.66rem;
+    text-align: center;
+    animation: txt-fade 2s ease-in-out infinite;
+}
+div[role="radiogroup"] {
+    display: inline-flex !important;
+    gap: 4px !important;
+    padding: 4px !important;
+    background: #0b1117 !important;
+    border: 1px solid var(--line-soft) !important;
+    border-radius: 7px !important;
+}
+div[role="radiogroup"] label {
+    min-height: 38px !important;
+    margin: 0 !important;
+    padding: 0 0.65rem !important;
+    border-radius: 5px !important;
+}
+div[data-testid="stToast"] {
+    color: var(--text) !important;
+    background: #121b23 !important;
+    border: 1px solid var(--line-strong) !important;
+    border-radius: 7px !important;
+    box-shadow: var(--shadow-md) !important;
+}
+
+@media (min-width: 1100px) {
+    .main .block-container,
+    .block-container {
+        width: min(calc(100% - 122px), 1120px) !important;
+        margin-left: max(110px, calc((100% - 1120px) / 2 + 56px)) !important;
+        margin-right: auto !important;
+    }
+    .st-key-workspace_navigation {
+        position: fixed !important;
+        top: 94px !important;
+        left: 12px !important;
+        width: 88px !important;
+        margin: 0 !important;
+        padding: 5px !important;
+        border-radius: 8px !important;
+    }
+    .st-key-workspace_navigation div[data-testid="stHorizontalBlock"] {
+        display: grid !important;
+        grid-template-columns: 1fr !important;
+        gap: 4px !important;
+    }
+    .st-key-workspace_navigation button {
+        min-height: 58px !important;
+        padding: 0.35rem 0.15rem !important;
+        font-size: 0.66rem !important;
+        line-height: 1.05 !important;
+    }
+    .st-key-workspace_navigation button span[data-testid="stIconMaterial"] {
+        display: block !important;
+        margin: 0 auto 3px !important;
+        font-size: 1.05rem !important;
+    }
+}
+
+@media (max-width: 768px) {
+    html,
+    body,
+    .stApp,
+    [data-testid="stAppViewContainer"] {
+        max-width: 100% !important;
+        overflow-x: hidden !important;
+    }
+    .main .block-container,
+    .block-container,
+    [data-testid="stAppViewBlockContainer"] {
+        width: 100% !important;
+        max-width: 100% !important;
+        padding-left: 0.65rem !important;
+        padding-right: 0.65rem !important;
+        padding-bottom: var(--v8-safe-bottom) !important;
+    }
+    [data-testid="stAppViewBlockContainer"] {
+        padding-top: 0.1rem !important;
+    }
+    .pl-header {
+        min-height: 52px !important;
+        margin: 0.35rem 0 0.45rem !important;
+        padding: 0.55rem 0.65rem 0.55rem 3.05rem !important;
+        border-radius: 8px !important;
+    }
+    .pl-icon { width: 34px !important; height: 29px !important; }
+    .pl-icon svg { width: 34px !important; height: 29px !important; }
+    .pl-logo { font-size: 1.24rem !important; }
+    .pl-sub { display: none !important; }
+    .pl-live-status {
+        min-height: 24px !important;
+        padding: 0 6px !important;
+        font-size: 0.51rem !important;
+    }
+    .pl-badge { min-width: 30px !important; font-size: 0.52rem !important; }
+    .pl-header-sport {
+        min-height: 24px !important;
+        padding: 0 6px !important;
+        font-size: 0.55rem !important;
+    }
+    .pl-ticker-wrap { display: none !important; }
+    .score-strip {
+        margin-top: -0.1rem !important;
+        scroll-padding-left: 1px !important;
+    }
+    .score-card { min-width: 132px !important; }
+
+    .st-key-workspace_navigation {
+        position: fixed !important;
+        top: auto !important;
+        left: 50% !important;
+        right: auto !important;
+        bottom: calc(7px + env(safe-area-inset-bottom)) !important;
+        z-index: 1800 !important;
+        width: min(calc(100% - 14px), 680px) !important;
+        height: var(--v8-nav-height) !important;
+        margin: 0 !important;
+        padding: 5px !important;
+        transform: translateX(-50%) !important;
+        opacity: 1 !important;
+        pointer-events: auto !important;
+        background: rgba(9,14,19,0.98) !important;
+        border-color: rgba(220,232,242,0.16) !important;
+        box-shadow: 0 16px 40px rgba(0,0,0,0.56) !important;
+        transition: transform 0.18s ease, opacity 0.18s ease !important;
+    }
+    .st-key-workspace_navigation button {
+        min-height: 54px !important;
+        padding: 0.32rem 0.08rem !important;
+        border-radius: 6px !important;
+        font-size: 0.65rem !important;
+        line-height: 1.05 !important;
+        white-space: nowrap !important;
+    }
+    .st-key-workspace_navigation button span[data-testid="stIconMaterial"] {
+        font-size: 1.08rem !important;
+    }
+    /* The older focus rule kept navigation hidden after a suggestion was selected. */
+    body:has(input:focus) .st-key-workspace_navigation {
+        opacity: 1 !important;
+        pointer-events: auto !important;
+        transform: translateX(-50%) !important;
+    }
+    body:has(input[role="combobox"][aria-expanded="true"]) .st-key-workspace_navigation,
+    body:has(input[type="number"]:focus) .st-key-workspace_navigation,
+    body:has(input[type="text"]:focus:not([role="combobox"])) .st-key-workspace_navigation {
+        opacity: 0 !important;
+        pointer-events: none !important;
+        transform: translate(-50%, 135%) !important;
+    }
+
+    .st-key-analyzer_sport_navigation {
+        width: 100% !important;
+        margin-bottom: 0.55rem !important;
+    }
+    .st-key-analyzer_sport_navigation button {
+        min-height: 42px !important;
+        font-size: 0.69rem !important;
+    }
+    div[data-testid="stPopover"] {
+        margin: -0.1rem 0 0.15rem !important;
+    }
+    div[data-testid="stPopover"] > button {
+        min-height: 32px !important;
+        font-size: 0.64rem !important;
+    }
+    .analyzer-hero,
+    .v55-hero,
+    .workspace-page-head {
+        margin-bottom: 0.6rem !important;
+        padding: 0.6rem 0 0.7rem !important;
+    }
+    .v55-title,
+    .workspace-page-head h1 {
+        font-size: 1.2rem !important;
+    }
+    .v55-subcopy,
+    .workspace-page-head p { font-size: 0.88rem !important; }
+
+    .st-key-edge_scanner_controls {
+        padding: 0.65rem !important;
+    }
+    .st-key-edge_scanner_controls div[data-testid="stHorizontalBlock"] {
+        display: grid !important;
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+        gap: 8px !important;
+    }
+    .st-key-edge_scanner_controls div[data-testid="stColumn"] {
+        width: 100% !important;
+        min-width: 0 !important;
+        padding: 0 !important;
+    }
+    .st-key-edge_scanner_controls div[data-testid="stColumn"]:last-child {
+        grid-column: 1 / -1 !important;
+    }
+    .st-key-edge_scanner_controls div[data-baseweb="select"] > div {
+        min-height: 46px !important;
+    }
+    div[data-baseweb="popover"] [role="listbox"],
+    ul[role="listbox"] {
+        max-height: min(44dvh, 360px) !important;
+    }
+    li[role="option"] { min-height: 48px !important; }
+    input,
+    textarea,
+    select {
+        font-size: 16px !important;
+    }
+    .stButton > button {
+        min-height: 52px !important;
+        font-size: 0.82rem !important;
+    }
+    .st-key-mlb_analyze,
+    .st-key-wnba_analyze,
+    .st-key-analyze_prop_main,
+    .st-key-run_edge_scanner {
+        position: sticky !important;
+        bottom: var(--v8-safe-bottom) !important;
+        z-index: 1250 !important;
+        margin-bottom: 0.4rem !important;
+        padding: 5px !important;
+        background: rgba(8,12,16,0.94) !important;
+        border: 1px solid var(--line-soft) !important;
+        border-radius: 8px !important;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.42) !important;
+        scroll-margin-bottom: var(--v8-safe-bottom) !important;
+    }
+    body:has(input:focus) .st-key-mlb_analyze,
+    body:has(input:focus) .st-key-wnba_analyze,
+    body:has(input:focus) .st-key-analyze_prop_main,
+    body:has(input:focus) .st-key-run_edge_scanner {
+        position: static !important;
+    }
+    .mlb-decision-top {
+        align-items: flex-start !important;
+        gap: 10px !important;
+    }
+    .mlb-decision-verdict { text-align: left !important; }
+    .mlb-decision-metrics {
+        display: grid !important;
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+        gap: 6px !important;
+    }
+    .unified-decision-card {
+        grid-template-columns: 96px minmax(0, 1fr) !important;
+    }
+    .unified-decision-evidence {
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    }
+    .mlb-decision-metric {
+        min-height: 70px !important;
+        padding: 0.65rem !important;
+    }
+    .edge-card-v55 { padding: 0 !important; }
+    .edge-card-head-v72 {
+        align-items: stretch !important;
+        gap: 8px !important;
+    }
+    .edge-call-v72 {
+        flex: 0 0 150px !important;
+    }
+    .edge-line-v72,
+    .edge-entry-v72 {
+        min-width: 0 !important;
+        padding: 0.42rem 0.35rem !important;
+    }
+    .edge-score-v55 {
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    }
+    .edge-reasons-v55 {
+        flex-wrap: nowrap !important;
+        overflow-x: auto !important;
+        padding-bottom: 3px !important;
+        scrollbar-width: none !important;
+    }
+    .edge-reasons-v55::-webkit-scrollbar { display: none !important; }
+    .stat-card:hover,
+    .defense-card:hover,
+    .edge-card-v55:hover,
+    .edge-card-v72:hover {
+        transform: none !important;
+    }
+}
+
+@media (max-width: 390px) {
+    .pl-icon { display: none !important; }
+    .pl-live-status { font-size: 0 !important; gap: 0 !important; }
+    .pl-live-status i { margin: 0 2px !important; }
+    .st-key-workspace_navigation button { font-size: 0.62rem !important; }
+    .edge-card-head-v72 { flex-direction: column !important; }
+    .edge-call-v72 { width: 100% !important; flex-basis: auto !important; }
+    .mlb-decision-metrics { grid-template-columns: 1fr 1fr !important; }
+}
+
 @media (prefers-reduced-motion: reduce) {
     .analyzer-hero,
     .mlb-decision-card,
@@ -4864,13 +6088,13 @@ def render_entry_decision(
         f"<div class='unified-decision-direction'>{safe_direction}</div>"
         f"<div class='unified-decision-note'>{safe_note}</div>"
         f"</div>"
+        f"<details class='unified-score-details'><summary>Supporting evidence</summary>"
         f"<div class='unified-decision-evidence'>"
         f"<div class='unified-decision-metric'><span>{safe_probability_label}</span><strong>{probability_pct:.0f}%</strong></div>"
         f"<div class='unified-decision-metric'><span>{safe_evidence_label}</span><strong>{int(evidence)}/100</strong></div>"
         f"{history_metric}"
         f"<div class='unified-decision-metric'><span>{safe_consistency_label}</span><strong>{consistency_pct:.0f}%</strong></div>"
         f"</div>"
-        f"<details class='unified-score-details'><summary>Why these numbers differ</summary>"
         f"<div class='unified-score-detail-copy'>{safe_detail}</div></details>"
         f"</div>",
         unsafe_allow_html=True,
@@ -4921,6 +6145,7 @@ for key, default in [
     ("active_view", _default_active_view),
     ("last_analyzer_sport", _default_analyzer_sport),
     ("edge_return_available", False), ("edge_viewed", []),
+    ("v8_walkthrough_seen", False),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -5901,6 +7126,42 @@ def set_runtime_metric(key: str, status: str, detail: str = "", **extra) -> None
         st.session_state.runtime_metrics[key] = payload
     except Exception:
         pass
+
+
+def _complete_v8_walkthrough() -> None:
+    st.session_state.v8_walkthrough_seen = True
+
+
+def render_v8_help_content() -> None:
+    """Compact guidance shared by the first-run walkthrough and Help drawer."""
+    st.markdown(
+        """
+        <div class="v8-help-steps">
+            <div><b>1</b><span><strong>Choose a workspace</strong>Use Analyze for one player or Edge for a ranked slate.</span></div>
+            <div><b>2</b><span><strong>Enter the exact market</strong>Select the player, market, standard line, and direction shown by PrizePicks.</span></div>
+            <div><b>3</b><span><strong>Read Entry Score first</strong>PLAY is actionable, WATCH needs confirmation, and PASS should be skipped.</span></div>
+            <div><b>4</b><span><strong>Inspect supporting evidence</strong>Open model details, recent logs, and the debugger only when you need the deeper audit.</span></div>
+        </div>
+        <div class="v8-help-note">Reduced-payout and promotional lines are labeled separately. PropIQ is an educational analysis tool, not a guarantee.</div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+@st.dialog("Welcome to PropIQ V8")
+def render_v8_walkthrough() -> None:
+    st.markdown(
+        "<div class='v8-walkthrough-lead'>A faster way to move from a live line to a clear, evidence-backed decision.</div>",
+        unsafe_allow_html=True,
+    )
+    render_v8_help_content()
+    st.button(
+        "Start analyzing",
+        key="finish_v8_walkthrough",
+        type="primary",
+        use_container_width=True,
+        on_click=_complete_v8_walkthrough,
+    )
 
 
 def format_utc_age(iso_ts: str) -> str:
@@ -10317,7 +11578,14 @@ if (
     import threading as _t
     _t.Thread(target=_prewarm_cache, daemon=True).start()
 
-st.markdown("""
+if not st.session_state.get("v8_walkthrough_seen", False):
+    render_v8_walkthrough()
+
+_header_view = str(st.session_state.get("active_view", "analyze")).lower()
+_header_sport = str(st.session_state.get("active_sport", "mlb")).upper()
+_header_context = "EDGE" if _header_view == "edge" else _header_sport
+
+st.markdown(f"""
 <div class="pl-header">
     <div class="pl-logo-wrap">
         <div class="pl-icon" style="position:relative;overflow:hidden;width:56px;height:44px;">
@@ -10363,12 +11631,13 @@ st.markdown("""
             </svg>
         </div>
         <div>
-            <div class="pl-logo">Prop<span>IQ</span></div>
-            <div class="pl-sub">Sports Intelligence · AI-Powered</div>
+            <div class="pl-logo">Prop<span>IQ</span><small>V8</small></div>
+            <div class="pl-sub">Sports intelligence</div>
         </div>
     </div>
-    <div style="display:flex; align-items:center; gap:10px;">
-        <span class="pl-badge">V7</span>
+    <div class="pl-header-actions">
+        <span class="pl-header-sport">{_header_context}</span>
+        <span class="pl-live-status"><i></i> Live data</span>
     </div>
 </div>
 
@@ -10672,7 +11941,9 @@ if _active_view == "analyze":
 render_sticky_pick_tray()
 
 
-with st.expander("Runtime Diagnostics", expanded=False):
+def render_runtime_diagnostics() -> None:
+    """Render secondary health checks inside the optional tools drawer."""
+    st.markdown("<div class='v8-popover-label'>System status</div>", unsafe_allow_html=True)
     _metrics = st.session_state.get("runtime_metrics", {})
     _sb_url_status = masked_env_status(
         "SUPABASE_URL", "SUPABASE_PROJECT_URL", "NEXT_PUBLIC_SUPABASE_URL"
@@ -10755,8 +12026,6 @@ with st.expander("Runtime Diagnostics", expanded=False):
             unsafe_allow_html=True,
         )
 
-st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
-
 # ─────────────────────────────────────────────
 # Sidebar
 # ─────────────────────────────────────────────
@@ -10769,75 +12038,20 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
-    st.markdown("<div class='section-header'>How To Use PropIQ</div>", unsafe_allow_html=True)
-    st.markdown("""
-    <div style='display:flex;flex-direction:column;gap:8px;'>
-        <div style='display:flex;gap:12px;align-items:flex-start;background:#0d1520;border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:0.75rem 1rem;'>
-            <div style='min-width:28px;height:28px;background:#00c4cc;border-radius:8px;display:flex;align-items:center;justify-content:center;font-family:Outfit,sans-serif;font-weight:800;font-size:0.9rem;color:#fff;flex-shrink:0;'>1</div>
-            <div>
-                <div style='font-family:Outfit,sans-serif;font-weight:600;color:#f1f5f9;font-size:0.85rem;'>Open PrizePicks and find a prop you like</div>
-                <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#6b7f96;margin-top:3px;'>Example: LeBron James — 22.5 pts — Over</div>
-            </div>
-        </div>
-        <div style='display:flex;gap:12px;align-items:flex-start;background:#0d1520;border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:0.75rem 1rem;'>
-            <div style='min-width:28px;height:28px;background:#00c4cc;border-radius:8px;display:flex;align-items:center;justify-content:center;font-family:Outfit,sans-serif;font-weight:800;font-size:0.9rem;color:#fff;flex-shrink:0;'>2</div>
-            <div>
-                <div style='font-family:Outfit,sans-serif;font-weight:600;color:#f1f5f9;font-size:0.85rem;'>Type the player name, enter the line and pick Over or Under</div>
-                <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#6b7f96;margin-top:3px;'>Always use the standard line — not the goblin (lower) or demon (higher)</div>
-            </div>
-        </div>
-        <div style='display:flex;gap:12px;align-items:flex-start;background:#0d1520;border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:0.75rem 1rem;'>
-            <div style='min-width:28px;height:28px;background:#00c4cc;border-radius:8px;display:flex;align-items:center;justify-content:center;font-family:Outfit,sans-serif;font-weight:800;font-size:0.9rem;color:#fff;flex-shrink:0;'>3</div>
-            <div>
-                <div style='font-family:Outfit,sans-serif;font-weight:600;color:#f1f5f9;font-size:0.85rem;'>Hit Analyze Prop and wait ~10 seconds</div>
-                <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#6b7f96;margin-top:3px;'>PropIQ pulls live stats, injuries, matchups, referee data, and more</div>
-            </div>
-        </div>
-        <div style='display:flex;gap:12px;align-items:flex-start;background:#0d1520;border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:0.75rem 1rem;'>
-            <div style='min-width:28px;height:28px;background:#10f590;border-radius:8px;display:flex;align-items:center;justify-content:center;font-family:Outfit,sans-serif;font-weight:800;font-size:0.9rem;color:#041a0e;flex-shrink:0;'>4</div>
-            <div>
-                <div style='font-family:Outfit,sans-serif;font-weight:600;color:#f1f5f9;font-size:0.85rem;'>Read the verdict — only play Strong Over / Strong Under</div>
-                <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#6b7f96;margin-top:3px;'>Lean picks are OK in 2-leg entries only. Always skip Pass.</div>
-            </div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.markdown("<div class='section-header'>Verdict Guide</div>", unsafe_allow_html=True)
-    st.markdown("""
-    <div style='display:flex;flex-direction:column;gap:6px;'>
-        <div style='background:#041a0e;border:1px solid rgba(16,245,144,0.2);border-radius:10px;padding:0.6rem 0.9rem;display:flex;justify-content:space-between;align-items:center;'>
-            <div><span style='font-size:1rem;'>🟢</span> <span style='color:#10f590;font-weight:700;font-family:Outfit,sans-serif;'>Strong Over / Strong Under</span></div>
-            <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#6b7f96;text-align:right;'>64%+ hit rate · edge ≥1.5pts<br><span style='color:#10f590;'>Best bets — play these</span></div>
-        </div>
-        <div style='background:#1a1200;border:1px solid rgba(251,191,36,0.2);border-radius:10px;padding:0.6rem 0.9rem;display:flex;justify-content:space-between;align-items:center;'>
-            <div><span style='font-size:1rem;'>🟡</span> <span style='color:#fbbf24;font-weight:700;font-family:Outfit,sans-serif;'>Lean Over</span> &nbsp;<span style='font-size:1rem;'>🟠</span> <span style='color:#f97316;font-weight:700;font-family:Outfit,sans-serif;'>Lean Under</span></div>
-            <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#6b7f96;text-align:right;'>55–63% hit rate<br><span style='color:#fbbf24;'>OK for 2-leg entries only</span></div>
-        </div>
-        <div style='background:#111;border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:0.6rem 0.9rem;display:flex;justify-content:space-between;align-items:center;'>
-            <div><span style='font-size:1rem;'>⚪</span> <span style='color:#6b7f96;font-weight:700;font-family:Outfit,sans-serif;'>Pass</span></div>
-            <div style='font-family:JetBrains Mono,monospace;font-size:0.62rem;color:#6b7f96;text-align:right;'>No clear edge<br><span style='color:#ef4444;'>Skip this prop</span></div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    st.markdown("<div class='section-header'>Confidence Score</div>", unsafe_allow_html=True)
-    st.markdown("""
-    <div style='font-family:JetBrains Mono,monospace;font-size:0.68rem;color:#6b7f96;line-height:1.9;
-                background:#0d1520;border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:0.75rem 1rem;'>
-        The <span style='color:#f1f5f9;'>confidence score (0–100)</span> combines three things:<br>
-        &nbsp;&nbsp;<span style='color:#00c4cc;'>●</span> <span style='color:#94a3b8;'>Hit rate</span> — how often has this player cleared this line?<br>
-        &nbsp;&nbsp;<span style='color:#00c4cc;'>●</span> <span style='color:#94a3b8;'>Edge</span> — how far is their average above/below the line?<br>
-        &nbsp;&nbsp;<span style='color:#00c4cc;'>●</span> <span style='color:#94a3b8;'>Consistency</span> — do they score reliably or all over the place?<br><br>
-        <span style='color:#10f590;'>80+</span> = elite pick &nbsp;·&nbsp; <span style='color:#fbbf24;'>65–79</span> = solid &nbsp;·&nbsp; <span style='color:#ef4444;'>below 65</span> = skip
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown("<div class='section-header'>Help</div>", unsafe_allow_html=True)
+    with st.expander("Quick start and score guide", expanded=False):
+        render_v8_help_content()
+    if st.button("Replay first-run walkthrough", key="replay_v8_walkthrough", use_container_width=True):
+        st.session_state.v8_walkthrough_seen = False
+        st.rerun()
 
     st.markdown("<div class='section-header'>Settings</div>", unsafe_allow_html=True)
     manual_mode = st.checkbox("Manual input fallback", help="Enter points manually if NBA API is unavailable")
     if st.button("🔄 Clear Cache"):
         st.cache_data.clear()
         st.success("Cache cleared!")
+    with st.expander("System status", expanded=False):
+        render_runtime_diagnostics()
 
 
     # ── Parlay Builder ────────────────────────────────────────
@@ -14350,30 +15564,6 @@ if st.session_state.active_sport == "mlb":
             f"{basic.get('team') or 'MLB'} · {opp_txt} · "
             f"{ctx.get('game_date') or 'date TBD'}"
         )
-        st.markdown(
-            f"<div class='mlb-decision-card {_hitter_decision_class}'>"
-            f"<div class='mlb-decision-top'>"
-            f"<div><div class='mlb-decision-kicker'>MLB Hitter Fantasy Score</div>"
-            f"<div class='mlb-decision-name'>{_html.escape(player_name)}</div>"
-            f"<div class='mlb-decision-matchup'>{_html.escape(_hitter_matchup_meta)}</div></div>"
-            f"<div class='mlb-decision-verdict'><strong>{tier}</strong>"
-            f"<span class='mlb-decision-status'>{_hitter_status}</span></div></div>"
-            f"<div class='mlb-decision-copy'>{_hitter_copy}</div>"
-            f"<div class='mlb-decision-metrics'>"
-            f"<div class='mlb-decision-metric'><span>Estimated hit chance</span><strong>{adj:.0%}</strong></div>"
-            f"<div class='mlb-decision-metric'><span>Evidence quality</span><strong>{score}/100</strong></div>"
-            f"<div class='mlb-decision-metric'><span>Projected FS</span><strong>{expected_fs:.1f}</strong></div>"
-            f"<div class='mlb-decision-metric'><span>Edge vs line</span><strong>{_hitter_directional_edge:+.1f}</strong></div>"
-            f"<div class='mlb-decision-metric'><span>Consistency</span><strong>{cons:.0%}</strong></div>"
-            f"</div>"
-            f"<div class='mlb-driver-grid'>"
-            f"<div class='mlb-driver-panel'><h4>Why it works</h4>"
-            f"{_hitter_driver_html(_hitter_supports, 'No major positive adjustment')}</div>"
-            f"<div class='mlb-driver-panel'><h4>What can break it</h4>"
-            f"{_hitter_driver_html(_hitter_risks, 'No major model risk detected')}</div>"
-            f"</div></div>",
-            unsafe_allow_html=True,
-        )
         _hitter_entry_base = int(round((adj * 100 * 0.70) + (score * 0.30)))
         _hitter_entry_score = _hitter_entry_base
         _hitter_entry_gate = "No blocking gate"
@@ -14405,6 +15595,31 @@ if st.session_state.active_sport == "mlb":
                 f"70% hit chance ({adj:.0%}) + 30% evidence ({score}/100) = "
                 f"{_hitter_entry_base}. Gate: {_hitter_entry_gate}."
             ),
+        )
+        st.markdown(
+            f"<details class='secondary-decision-details'><summary>Supporting analysis</summary>"
+            f"<div class='mlb-decision-card {_hitter_decision_class}'>"
+            f"<div class='mlb-decision-top'>"
+            f"<div><div class='mlb-decision-kicker'>MLB Hitter Fantasy Score</div>"
+            f"<div class='mlb-decision-name'>{_html.escape(player_name)}</div>"
+            f"<div class='mlb-decision-matchup'>{_html.escape(_hitter_matchup_meta)}</div></div>"
+            f"<div class='mlb-decision-verdict'><strong>{tier}</strong>"
+            f"<span class='mlb-decision-status'>{_hitter_status}</span></div></div>"
+            f"<div class='mlb-decision-copy'>{_hitter_copy}</div>"
+            f"<div class='mlb-decision-metrics'>"
+            f"<div class='mlb-decision-metric'><span>Estimated hit chance</span><strong>{adj:.0%}</strong></div>"
+            f"<div class='mlb-decision-metric'><span>Evidence quality</span><strong>{score}/100</strong></div>"
+            f"<div class='mlb-decision-metric'><span>Projected FS</span><strong>{expected_fs:.1f}</strong></div>"
+            f"<div class='mlb-decision-metric'><span>Edge vs line</span><strong>{_hitter_directional_edge:+.1f}</strong></div>"
+            f"<div class='mlb-decision-metric'><span>Consistency</span><strong>{cons:.0%}</strong></div>"
+            f"</div>"
+            f"<div class='mlb-driver-grid'>"
+            f"<div class='mlb-driver-panel'><h4>Why it works</h4>"
+            f"{_hitter_driver_html(_hitter_supports, 'No major positive adjustment')}</div>"
+            f"<div class='mlb-driver-panel'><h4>What can break it</h4>"
+            f"{_hitter_driver_html(_hitter_risks, 'No major model risk detected')}</div>"
+            f"</div></div></details>",
+            unsafe_allow_html=True,
         )
         st.markdown(
             "<nav class='mlb-result-nav'>"
@@ -14513,35 +15728,39 @@ if st.session_state.active_sport == "mlb":
         st.session_state.pop("mlb_side", None)
     _mlb_prop_default = "Hitter Fantasy Score" if _mlb_jump_prop == "Hitter Fantasy Score" else "Strikeouts"
     _mlb_prop_options = ["Strikeouts", "Hitter Fantasy Score"]
-    mlb_prop = st.selectbox(
-        "Prop market", _mlb_prop_options,
-        index=_mlb_prop_options.index(_mlb_prop_default),
-        key="mlb_prop_type",
-    )
-    _mlb_options = _mlb_hitters if mlb_prop == "Hitter Fantasy Score" else _mlb_pitchers
+    _mlb_prop_current = st.session_state.get("mlb_prop_type", _mlb_prop_default)
+    if _mlb_prop_current not in _mlb_prop_options:
+        _mlb_prop_current = _mlb_prop_default
+    _mlb_options = _mlb_hitters if _mlb_prop_current == "Hitter Fantasy Score" else _mlb_pitchers
     _mlb_pf_name = st.session_state.get("_mlb_prefill_name", "")
     _mlb_pf_idx  = (_mlb_options.index(_mlb_pf_name) + 1
                     if _mlb_pf_name and _mlb_pf_name in _mlb_options else 0)
     mlb_pitcher = player_typeahead(
         "Player search",
         _mlb_options,
-        key=f"mlb_player_sel_{mlb_prop}_{st.session_state.get('mlb_pitcher_key', 0)}",
+        key=f"mlb_player_sel_{_mlb_prop_current}_{st.session_state.get('mlb_pitcher_key', 0)}",
         prefill=_mlb_pf_name if _mlb_pf_idx else None,
         aliases={
             "Shohei Othani": "Shohei Ohtani",
             "Othani": "Shohei Ohtani",
         },
-        noun="hitter" if mlb_prop == "Hitter Fantasy Score" else "pitcher",
+        noun="hitter" if _mlb_prop_current == "Hitter Fantasy Score" else "pitcher",
         sport="mlb",
     )
-    _mlb_bottom1, _mlb_bottom2 = st.columns(2)
-    with _mlb_bottom1:
+    _mlb_market_col, _mlb_line_col, _mlb_side_col = st.columns([1.35, 1, 1])
+    with _mlb_market_col:
+        mlb_prop = st.selectbox(
+            "Prop market", _mlb_prop_options,
+            index=_mlb_prop_options.index(_mlb_prop_current),
+            key="mlb_prop_type",
+        )
+    with _mlb_line_col:
         _mlb_line_default = float(_mlb_jump_line) if _mlb_jump_line is not None else 5.5
         mlb_line = st.number_input(
             "Line", min_value=0.5, max_value=30.0,
             value=_mlb_line_default, step=0.5, key="mlb_line",
         )
-    with _mlb_bottom2:
+    with _mlb_side_col:
         _mlb_side_options = ["Over", "Under"]
         _mlb_side_default = _mlb_jump_side if _mlb_jump_side in _mlb_side_options else "Over"
         mlb_side = st.selectbox(
@@ -16289,6 +17508,7 @@ if st.session_state.active_sport == "mlb":
             )
 
             st.markdown(
+                f"<details class='secondary-decision-details'><summary>Supporting analysis</summary>"
                 f"<div class='mlb-decision-card {_pitcher_decision_class}'>"
                 f"<div class='mlb-decision-top'>"
                 f"<div><div class='mlb-decision-kicker'>MLB Strikeout Decision</div>"
@@ -16314,7 +17534,7 @@ if st.session_state.active_sport == "mlb":
                 f"{_pitcher_driver_html(_pitcher_supports, 'No major positive adjustment')}</div>"
                 f"<div class='mlb-driver-panel'><h4>What can break it</h4>"
                 f"{_pitcher_driver_html(_pitcher_risks, 'No major model risk detected')}</div>"
-                f"</div></div>",
+                f"</div></div></details>",
                 unsafe_allow_html=True,
             )
 
@@ -18814,15 +20034,16 @@ if st.session_state.active_sport == "wnba":
                 ("wnba_last_analysis",),
             ),
         )
-    wc2, wc3 = st.columns(2)
+    wc2, wc3, wc4 = st.columns([1.35, 1, 1])
     with wc2:
         selected_stat = st.selectbox("Prop", stat_options, index=stat_options.index(default_stat), key="wnba_stat_select")
     with wc3:
         default_line = float(jump_line) if jump_line is not None else (15.5 if selected_stat == "Points" else 5.5)
         line = st.number_input("PrizePicks line", min_value=0.5, max_value=70.5, value=default_line, step=0.5, key="wnba_line_input")
-    side_options = ["Over", "Under"]
-    default_side = jump_side if jump_side in side_options else "Over"
-    side = st.radio("Side", side_options, index=side_options.index(default_side), horizontal=True, key="wnba_side_select")
+    with wc4:
+        side_options = ["Over", "Under"]
+        default_side = jump_side if jump_side in side_options else "Over"
+        side = st.selectbox("Direction", side_options, index=side_options.index(default_side), key="wnba_side_select")
 
     analyze = st.button("Analyze WNBA Prop", type="primary", use_container_width=True, key="wnba_analyze")
     should_run = bool(selected_name) and (
@@ -18945,26 +20166,6 @@ if st.session_state.active_sport == "wnba":
             "actionable" if _wnba_status == "Actionable" else
             "watchlist" if _wnba_status == "Watchlist" else "pass"
         )
-        st.markdown(
-            f"<div class='mlb-decision-card {_wnba_decision_class}'>"
-            f"<div class='mlb-decision-top'><div>"
-            f"<div class='mlb-decision-kicker'>WNBA {selected_stat} Decision</div>"
-            f"<div class='mlb-decision-name'>{selected_name}</div>"
-            f"<div class='mlb-decision-matchup'>{matchup} · {side} {line:.1f}<br>"
-            f"{result['sample']} recent games · {result['season_sample']} season games · "
-            f"latest log {result.get('stale_days', 0)}d ago · evidence {float(result.get('reliability', 0) or 0):.0f}%</div></div>"
-            f"<div class='mlb-decision-verdict'><strong>{tier}</strong>"
-            f"<span class='mlb-decision-status'>{_wnba_status}</span></div></div>"
-            f"<div class='mlb-decision-copy'>{decision_note}</div>"
-            f"<div class='mlb-decision-metrics'>"
-            f"<div class='mlb-decision-metric'><span>Estimated hit chance</span><strong>{result['probability']:.0%}</strong></div>"
-            f"<div class='mlb-decision-metric'><span>Evidence quality</span><strong>{result['confidence']}/100</strong></div>"
-            f"<div class='mlb-decision-metric'><span>Projection</span><strong>{result['projection']:.1f}</strong></div>"
-            f"<div class='mlb-decision-metric'><span>Projected edge</span><strong>{result['edge']:+.1f}</strong></div>"
-            f"<div class='mlb-decision-metric'><span>Consistency</span><strong>{result['consistency']:.0%}</strong></div>"
-            f"</div></div>",
-            unsafe_allow_html=True,
-        )
         _wnba_entry_base = int(round((result["probability"] * 100 * 0.70) + (result["confidence"] * 0.30)))
         _wnba_entry_score = _wnba_entry_base
         _wnba_entry_gate = "No blocking gate"
@@ -19002,6 +20203,27 @@ if st.session_state.active_sport == "wnba":
                 f"Gate: {_wnba_entry_gate}."
             ),
             evidence_label="Data quality",
+        )
+        st.markdown(
+            f"<details class='secondary-decision-details'><summary>Supporting analysis</summary>"
+            f"<div class='mlb-decision-card {_wnba_decision_class}'>"
+            f"<div class='mlb-decision-top'><div>"
+            f"<div class='mlb-decision-kicker'>WNBA {selected_stat} Decision</div>"
+            f"<div class='mlb-decision-name'>{selected_name}</div>"
+            f"<div class='mlb-decision-matchup'>{matchup} · {side} {line:.1f}<br>"
+            f"{result['sample']} recent games · {result['season_sample']} season games · "
+            f"latest log {result.get('stale_days', 0)}d ago · evidence {float(result.get('reliability', 0) or 0):.0f}%</div></div>"
+            f"<div class='mlb-decision-verdict'><strong>{tier}</strong>"
+            f"<span class='mlb-decision-status'>{_wnba_status}</span></div></div>"
+            f"<div class='mlb-decision-copy'>{decision_note}</div>"
+            f"<div class='mlb-decision-metrics'>"
+            f"<div class='mlb-decision-metric'><span>Estimated hit chance</span><strong>{result['probability']:.0%}</strong></div>"
+            f"<div class='mlb-decision-metric'><span>Evidence quality</span><strong>{result['confidence']}/100</strong></div>"
+            f"<div class='mlb-decision-metric'><span>Projection</span><strong>{result['projection']:.1f}</strong></div>"
+            f"<div class='mlb-decision-metric'><span>Projected edge</span><strong>{result['edge']:+.1f}</strong></div>"
+            f"<div class='mlb-decision-metric'><span>Consistency</span><strong>{result['consistency']:.0%}</strong></div>"
+            f"</div></div></details>",
+            unsafe_allow_html=True,
         )
         with st.expander("How the final call combines hit chance and evidence", expanded=False):
             st.markdown(
@@ -22819,82 +24041,80 @@ if st.session_state.active_sport == "edge":
 
 
     # ── UI ────────────────────────────────────────────────────────────────
-    st.markdown("<div class='section-header'>🎯 PropIQ Edge Scanner</div>",
-                unsafe_allow_html=True)
-
     st.markdown("""
     <div class='v55-hero'>
-        <div class='v55-kicker'>V7 Edge Board</div>
-        <div class='v55-title'>A focused board for the strongest available edges.</div>
+        <div class='v55-kicker'>V8 Edge Board</div>
+        <div class='v55-title'>Find the strongest available edges.</div>
         <div class='v55-subcopy'>
-            Scan PrizePicks MLB and core WNBA props, then rank only calibrated
-            shortlist candidates. Cards blend projection anchors, recent form, role/volume,
-            matchup context, market movement, and risk tags before anything reaches your board.
+            Scan MLB and WNBA lines, then rank the shortlist after calibration and risk checks.
         </div>
     </div>
     """, unsafe_allow_html=True)
 
     # Controls
-    _ec0, _ec1, _ec2, _ec3, _ec4 = st.columns([0.8, 1.35, 0.9, 1, 0.9])
-    with _ec0:
-        _edge_sport = st.selectbox(
-            "Sport",
-            ["MLB", "WNBA"],
-            key="edge_sport_filter",
-            label_visibility="collapsed",
-        )
-    with _ec1:
-        if _edge_sport == "MLB" and not st.session_state.get("mlb_edge_controls_v4"):
-            st.session_state.edge_stat_filter = "Strikeouts"
-            st.session_state.edge_side_filter = "All sides"
-            st.session_state.mlb_edge_controls_v4 = True
-        if _edge_sport == "WNBA" and not st.session_state.get("wnba_edge_controls_v2"):
-            st.session_state.edge_stat_filter = "All WNBA Props"
-            st.session_state.edge_side_filter = "All sides"
-            st.session_state.wnba_edge_controls_v2 = True
-        _stat_options = (
-            ["All MLB Props", "Strikeouts", "Hitter Fantasy Score"]
-            if _edge_sport == "MLB" else
-            ["All WNBA Props", "Points", "Rebounds", "Assists", "3-Pointers Made",
-             "Pts + Reb + Ast", "Points + Rebounds", "Points + Assists", "Rebounds + Assists"]
-        )
-        if st.session_state.get("edge_stat_filter") not in _stat_options:
-            st.session_state.edge_stat_filter = _stat_options[0]
-        _edge_stat = st.selectbox(
-            "Prop market",
-            _stat_options,
-            key="edge_stat_filter",
-            label_visibility="collapsed"
-        )
-    with _ec2:
-        _side_options = ["All sides", "Overs", "Unders"]
-        if st.session_state.get("edge_side_filter") not in _side_options:
-            st.session_state.edge_side_filter = _side_options[0]
-        _edge_side = st.selectbox(
-            "Side",
-            _side_options,
-            key="edge_side_filter",
-            label_visibility="collapsed",
-        )
-    with _ec3:
-        _edge_min = st.selectbox(
-            "Min calibrated edge",
-            ["Any edge", "+3%", "+5%", "+7%", "+10%"],
-            key="edge_min_filter",
-            label_visibility="collapsed"
-        )
-    with _ec4:
-        _include_goblin = st.checkbox(
-            "Include reduced-payout lines",
-            value=False,
-            key="edge_goblins",
-            disabled=_edge_side == "Unders",
-            help=(
-                "Off by default so the board ranks standard full-payout lines. Turn this on to also inspect "
-                "promo or Goblin lines; those rows are labeled and receive a ranking penalty for reduced payout. "
-                "Reduced lines are Over-only and are automatically excluded from Under scans."
-            ),
-        )
+    with st.container(key="edge_scanner_controls"):
+        _ec0, _ec1, _ec2, _ec3, _ec4, _ec5 = st.columns([0.7, 1.2, 0.8, 0.9, 1.05, 0.9])
+        with _ec0:
+            _edge_sport = st.selectbox(
+                "Sport",
+                ["MLB", "WNBA"],
+                key="edge_sport_filter",
+            )
+        with _ec1:
+            if _edge_sport == "MLB" and not st.session_state.get("mlb_edge_controls_v4"):
+                st.session_state.edge_stat_filter = "Strikeouts"
+                st.session_state.edge_side_filter = "All sides"
+                st.session_state.mlb_edge_controls_v4 = True
+            if _edge_sport == "WNBA" and not st.session_state.get("wnba_edge_controls_v2"):
+                st.session_state.edge_stat_filter = "All WNBA Props"
+                st.session_state.edge_side_filter = "All sides"
+                st.session_state.wnba_edge_controls_v2 = True
+            _stat_options = (
+                ["All MLB Props", "Strikeouts", "Hitter Fantasy Score"]
+                if _edge_sport == "MLB" else
+                ["All WNBA Props", "Points", "Rebounds", "Assists", "3-Pointers Made",
+                 "Pts + Reb + Ast", "Points + Rebounds", "Points + Assists", "Rebounds + Assists"]
+            )
+            if st.session_state.get("edge_stat_filter") not in _stat_options:
+                st.session_state.edge_stat_filter = _stat_options[0]
+            _edge_stat = st.selectbox(
+                "Prop market",
+                _stat_options,
+                key="edge_stat_filter",
+            )
+        with _ec2:
+            _side_options = ["All sides", "Overs", "Unders"]
+            if st.session_state.get("edge_side_filter") not in _side_options:
+                st.session_state.edge_side_filter = _side_options[0]
+            _edge_side = st.selectbox(
+                "Side",
+                _side_options,
+                key="edge_side_filter",
+            )
+        with _ec3:
+            _edge_min = st.selectbox(
+                "Min calibrated edge",
+                ["Any edge", "+3%", "+5%", "+7%", "+10%"],
+                key="edge_min_filter",
+            )
+        with _ec4:
+            _edge_sort = st.selectbox(
+                "Sort results",
+                ["Best entry score", "Model chance", "Market edge", "Data quality"],
+                key="edge_sort_filter",
+            )
+        with _ec5:
+            _include_goblin = st.checkbox(
+                "Include reduced-payout lines",
+                value=False,
+                key="edge_goblins",
+                disabled=_edge_side == "Unders",
+                help=(
+                    "Off by default so the board ranks standard full-payout lines. Turn this on to also inspect "
+                    "promo or Goblin lines; those rows are labeled and receive a ranking penalty for reduced payout. "
+                    "Reduced lines are Over-only and are automatically excluded from Under scans."
+                ),
+            )
 
     _min_edge_val = {
         "Any edge": 0, "+3%": 3, "+5%": 5, "+7%": 7, "+10%": 10
@@ -23625,8 +24845,26 @@ if st.session_state.active_sport == "edge":
                         unsafe_allow_html=True,
                     )
 
-            # Render each result as a card
-            for _r in _with_edge:
+            _edge_sort_fields = {
+                "Best entry score": "rank_score",
+                "Model chance": "adj",
+                "Market edge": "edge_pct",
+                "Data quality": "confidence",
+            }
+            _edge_sort_field = _edge_sort_fields.get(_edge_sort, "rank_score")
+            _display_edge_results = sorted(
+                _with_edge,
+                key=lambda result: (
+                    1 if result.get("line_verification_required") else 0,
+                    1 if result.get("is_goblin") or result.get("is_promo") else 0,
+                    -float(result.get(_edge_sort_field, 0) or 0),
+                    -float(result.get("rank_score", result.get("adj", 0)) or 0),
+                ),
+            )
+            st.caption(f"Sorted by {_edge_sort.lower()} · current standard lines shown first")
+
+            # Render each result as a compact row. Supporting signals expand on demand.
+            for _r in _display_edge_results:
                 _grade_lbl, _grade_col, _reason_list = scanner_grade_and_reasons(_r)
                 _reason_html = "".join(
                     f"<span class='edge-pill-v55'>{_why}</span>"
@@ -23674,6 +24912,11 @@ if st.session_state.active_sport == "edge":
                         if _base_line is not None else "PrizePicks promo line"
                     )
                     _promo_tag = f"<span class='edge-pill-v55 accent'>{_promo_text}</span>"
+                _standard_tag = (
+                    "<span class='edge-pill-v55 accent'>Standard full-payout line</span>"
+                    if not _r.get("is_goblin") and not _r.get("is_promo")
+                    and not _r.get("adjusted_odds") else ""
+                )
                 _bar_w = min(100, int(_r["adj"]))
                 _edge_raw_col = "#00e896" if _r["edge_raw"] > 0 else "#ff3d5c"
                 _card_class = "strong" if _is_strong else ("lean" if _is_lean else "")
@@ -23801,7 +25044,7 @@ if st.session_state.active_sport == "edge":
                     f"{_projection_prob_pill}"
                     f"{_recent_k_pill}{_handed_k_pill}{_bf_pill}{_starter_pill}{_readiness_pill}"
                     f"{_defense_pill}{_injury_pill}"
-                    f"{_promo_tag}{_goblin_tag}{_risk_pills}"
+                    f"{_standard_tag}{_promo_tag}{_goblin_tag}{_risk_pills}"
                 )
                 if _r.get("market_snapshots"):
                     _move = float(_r.get("market_open_move") or _r.get("market_move") or 0)
@@ -23810,7 +25053,8 @@ if st.session_state.active_sport == "edge":
                     _ctx_pills += f"<span class='edge-pill-v55 accent'>Market {_market_text}</span>"
 
                 st.markdown(
-                    f"<div class='edge-card-v55 {_card_class}'>"
+                    f"<details class='edge-card-v55 {_card_class}'>"
+                    f"<summary class='edge-row-summary'>"
                     f"<div class='edge-card-head-v72'>"
                     f"<div>"
                     f"<div class='edge-player-v55'>{_r['player']}</div>"
@@ -23820,6 +25064,8 @@ if st.session_state.active_sport == "edge":
                     f"<div class='edge-line-v72'><span>PrizePicks line</span><strong>{_result_side} {_r['line']}</strong></div>"
                     f"<div class='edge-entry-v72'><span>Entry score</span><strong>{_edge_entry_score} {_edge_entry_action}</strong></div>"
                     f"</div></div>"
+                    f"</summary>"
+                    f"<div class='edge-row-body'>"
                     f"<div class='edge-meta-v55'>{_ctx_pills}</div>"
                     f"<div class='edge-score-v55'>"
                     f"<div class='edge-score-item-v55'><span>Model chance</span><strong class='{_model_color_class}'>{_r['adj']}%</strong></div>"
@@ -23840,7 +25086,8 @@ if st.session_state.active_sport == "edge":
                     f"</div>"
                     f"</details>"
                     f"<div class='edge-bar-v55'><div style='width:{_bar_w}%;background:{_tier_col};'></div></div>"
-                    f"</div>",
+                    f"</div>"
+                    f"</details>",
                     unsafe_allow_html=True
                 )
 
@@ -24832,9 +26079,14 @@ with col_a:
                 args=(_rp,),
             )
 
-col_b, col_c, col_d, col_e = st.columns([1, 1, 1, 0.8])
+col_b, col_c, col_d = st.columns([1.2, 1, 1])
 
 with col_b:
+    st.selectbox(
+        "Prop market", ["Points"], index=0,
+        key="nba_prop_market_display", disabled=True,
+    )
+with col_c:
     _dd_line = st.session_state.get("_drilldown_line", None)
     line = st.number_input(
         "Points Line",
@@ -24846,20 +26098,27 @@ with col_b:
         key="nba_line_input",
         help="The number shown on PrizePicks — use the standard line, not goblin/demon"
     )
-with col_c:
+with col_d:
     _dd_side = st.session_state.get("_drilldown_side", None)
     side = st.selectbox(
-        "Over / Under", ["Over", "Under"],
+        "Direction", ["Over", "Under"],
         index=0 if not _dd_side or _dd_side == "Over" else 1,
         key="nba_side_select",
         help="Match what PrizePicks shows. Over = player scores MORE than the line"
     )
-with col_d:
-    n_games = st.selectbox("Sample", [5, 10, 15], index=1,
-                           help="How many recent games to analyze. 10 is the sweet spot.")
-with col_e:
-    season_str = st.text_input("Season", value="2025-26",
-                               help="Leave this as 2025-26 unless analyzing a past season")
+
+with st.expander("Analysis settings", expanded=False):
+    _nba_settings_a, _nba_settings_b = st.columns(2)
+    with _nba_settings_a:
+        n_games = st.selectbox(
+            "Recent-game sample", [5, 10, 15], index=1,
+            help="How many recent games to analyze. 10 is the default balanced sample.",
+        )
+    with _nba_settings_b:
+        season_str = st.text_input(
+            "Season", value="2025-26",
+            help="Leave this as 2025-26 unless analyzing a past season",
+        )
 
 season_int = season_str_to_int(season_str)
 season_str_clean = season_str_to_season(season_str)
@@ -24970,79 +26229,6 @@ if not fetch and st.session_state.logs is None:
 # Loading animation — shows immediately when button is clicked
 if fetch:
     st.markdown("""
-    <style>
-    @keyframes ball-bounce {
-        0%   { transform: translateY(0px);   animation-timing-function: ease-in; }
-        45%  { transform: translateY(36px);  animation-timing-function: ease-out; }
-        55%  { transform: translateY(36px);  animation-timing-function: ease-in; }
-        100% { transform: translateY(0px);   animation-timing-function: ease-out; }
-    }
-    @keyframes shadow-pulse {
-        0%   { transform: scaleX(1);   opacity: 0.4; }
-        45%  { transform: scaleX(1.5); opacity: 0.15; }
-        55%  { transform: scaleX(1.5); opacity: 0.15; }
-        100% { transform: scaleX(1);   opacity: 0.4; }
-    }
-    @keyframes txt-fade {
-        0%, 100% { opacity: 0.5; }
-        50%       { opacity: 1.0; }
-    }
-    .bb-loader {
-        background: linear-gradient(145deg, #0c1424, #080d18);
-        border: 1px solid #1e2840;
-        border-radius: 16px;
-        padding: 1.75rem 1.5rem 1.5rem 1.5rem;
-        margin: 0.5rem 0 1rem 0;
-        animation: fadeUp 0.3s ease both;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        gap: 0;
-    }
-    .bb-court {
-        position: relative;
-        width: 60px;
-        height: 70px;
-        display: flex;
-        align-items: flex-start;
-        justify-content: center;
-    }
-    .bb-ball {
-        font-size: 2rem;
-        line-height: 1;
-        animation: ball-bounce 0.65s cubic-bezier(0.33,0,0.66,1) infinite;
-        filter: drop-shadow(0 2px 6px rgba(249,115,22,0.4));
-    }
-    .bb-shadow {
-        position: absolute;
-        bottom: 0;
-        left: 50%;
-        transform: translateX(-50%);
-        width: 28px;
-        height: 6px;
-        border-radius: 50%;
-        background: rgba(249,115,22,0.25);
-        animation: shadow-pulse 0.65s cubic-bezier(0.33,0,0.66,1) infinite;
-        filter: blur(3px);
-    }
-    .bb-title {
-        font-family: 'Outfit', sans-serif;
-        font-size: 0.95rem;
-        font-weight: 700;
-        color: #edf2f8;
-        margin-top: 0.6rem;
-        text-align: center;
-    }
-    .bb-sub {
-        font-family: 'DM Mono', monospace;
-        font-size: 0.6rem;
-        color: #4a6080;
-        letter-spacing: 0.1em;
-        text-align: center;
-        margin-top: 4px;
-        animation: txt-fade 2s ease-in-out infinite;
-    }
-    </style>
     <div class="bb-loader">
         <div class="bb-court">
             <div class="bb-ball">🏀</div>
@@ -26456,6 +27642,40 @@ if st.session_state.logs is not None:
     _score_cons = consistency * 10
     _conf_score = min(99, int(_score_adj + _score_edge + _score_cons))
 
+    _nba_entry_base = int(round((_display_adj * 100 * 0.70) + (_conf_score * 0.30)))
+    _nba_entry_score = _nba_entry_base
+    _nba_entry_gate = "No blocking gate"
+    if _display_tier == "Pass":
+        _nba_entry_score = min(_nba_entry_score, 64)
+        _nba_entry_gate = "Model verdict is Pass"
+    elif "Lean" in _display_tier:
+        _nba_entry_score = min(_nba_entry_score, 79)
+        _nba_entry_gate = "Model verdict is a Lean"
+    _nba_entry_action = (
+        "PLAY" if _nba_entry_score >= 80 else
+        "WATCH" if _nba_entry_score >= 65 else "PASS"
+    )
+    _nba_entry_note = (
+        "Direction and evidence both support an entry."
+        if _nba_entry_action == "PLAY" else
+        "The direction has merit, but the supporting evidence needs caution."
+        if _nba_entry_action == "WATCH" else
+        "The combined signal is not strong enough to enter."
+    )
+    render_entry_decision(
+        score=_nba_entry_score,
+        action=_nba_entry_action,
+        direction=f"{_display_tier} · {_display_side} {line:g} points",
+        probability=_display_adj,
+        evidence=_conf_score,
+        consistency=consistency,
+        note=_nba_entry_note,
+        detail=(
+            f"70% hit chance ({_display_adj:.0%}) + 30% evidence "
+            f"({_conf_score}/100) = {_nba_entry_base}. Gate: {_nba_entry_gate}."
+        ),
+    )
+
     # Plain language summary — for casual users
     _plain_map = {
         "Strong Over":  ("✅ Strong Over — the model backs this pick", "#10f590", "#041a0e"),
@@ -26465,43 +27685,10 @@ if st.session_state.logs is not None:
         "Pass":         ("⛔ Pass — no clear edge on this prop, skip it", "#6b7f96", "#0d1520"),
     }
     _pm = _plain_map.get(_display_tier, ("", "#6b7f96", "#0d1520"))
-    st.markdown(
-        f"<div style='background:{_pm[2]};border:1px solid rgba(255,255,255,0.06);"
-        f"border-radius:12px;padding:0.75rem 1.1rem;margin-bottom:0.5rem;"
-        f"display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;'>"
-        f"<span style='font-family:Outfit,sans-serif;font-size:0.95rem;"
-        f"font-weight:600;color:{_pm[1]};'>{_pm[0]}</span>"
-        f"<span style='font-family:JetBrains Mono,monospace;font-size:0.65rem;color:#6b7f96;'>"
-        f"Confidence {_conf_score}/100 · Adjusted {_display_adj:.0%}</span>"
-        f"</div>",
-        unsafe_allow_html=True
-    )
-
-    # ── Animated probability bar ─────────────────────────────────
+    # Retained for the detailed legacy visualization below. The primary result
+    # now begins with the single Entry Score rendered above.
     _bar_pct = min(100, int(_display_adj * 100))
     _bar_col = (_pm[1] if _pm[1] != "#6b7f96" else "#6b7f96")
-    st.markdown(
-        f"<div style='margin-bottom:0.75rem;'>"
-        f"<div style='display:flex;justify-content:space-between;"
-        f"font-family:JetBrains Mono,monospace;font-size:0.56rem;color:#6b7f96;"
-        f"margin-bottom:5px;'>"
-        f"<span>Model probability</span>"
-        f"<span style='color:{_bar_col};font-weight:700;'>{_bar_pct}%</span></div>"
-        f"<div class='prob-bar-wrap' style='height:8px;'>"
-        f"<div class='prob-bar-fill' style='width:{_bar_pct}%;"
-        f"background:linear-gradient(90deg,{_bar_col}99,{_bar_col});'></div>"
-        f"</div>"
-        f"<div class='conf-meter-wrap' style='margin-top:8px;'>"
-        f"<div style='font-family:JetBrains Mono,monospace;font-size:0.52rem;color:#6b7f96;white-space:nowrap;'>CONF</div>"
-        f"<div class='conf-meter-track'>"
-        f"<div class='conf-meter-fill' style='width:{_conf_score}%;'></div>"
-        f"</div>"
-        f"<div class='conf-meter-val' style='color:{'#00c4cc' if _conf_score>=80 else '#ffc107' if _conf_score>=65 else '#f97316'};'>"
-        f"{_conf_score}</div>"
-        f"</div>"
-        f"</div>",
-        unsafe_allow_html=True
-    )
 
 
     venue_adj_labels = {
@@ -26752,40 +27939,12 @@ if st.session_state.logs is not None:
         f"</div>"
         f"</div>"
     )
-    st.markdown(_verdict_html, unsafe_allow_html=True)
-
-    _nba_entry_base = int(round((_display_adj * 100 * 0.70) + (_conf_score * 0.30)))
-    _nba_entry_score = _nba_entry_base
-    _nba_entry_gate = "No blocking gate"
-    if _display_tier == "Pass":
-        _nba_entry_score = min(_nba_entry_score, 64)
-        _nba_entry_gate = "Model verdict is Pass"
-    elif "Lean" in _display_tier:
-        _nba_entry_score = min(_nba_entry_score, 79)
-        _nba_entry_gate = "Model verdict is a Lean"
-    _nba_entry_action = (
-        "PLAY" if _nba_entry_score >= 80 else
-        "WATCH" if _nba_entry_score >= 65 else "PASS"
-    )
-    _nba_entry_note = (
-        "Direction and evidence both support an entry."
-        if _nba_entry_action == "PLAY" else
-        "The direction has merit, but the supporting evidence needs caution."
-        if _nba_entry_action == "WATCH" else
-        "The combined signal is not strong enough to enter."
-    )
-    render_entry_decision(
-        score=_nba_entry_score,
-        action=_nba_entry_action,
-        direction=f"{_display_tier} · {_display_side} {line:g} points",
-        probability=_display_adj,
-        evidence=_conf_score,
-        consistency=consistency,
-        note=_nba_entry_note,
-        detail=(
-            f"70% hit chance ({_display_adj:.0%}) + 30% evidence "
-            f"({_conf_score}/100) = {_nba_entry_base}. Gate: {_nba_entry_gate}."
-        ),
+    st.markdown(
+        "<details class='secondary-decision-details'>"
+        "<summary>Supporting analysis</summary>"
+        + _verdict_html
+        + "</details>",
+        unsafe_allow_html=True,
     )
 
     # ── Playoff picture — right under verdict ─────────────────────
