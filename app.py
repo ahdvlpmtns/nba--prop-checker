@@ -4187,7 +4187,7 @@ div[data-testid="stAlert"] {
 }
 .unified-decision-evidence {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     align-content: center;
     gap: 5px;
     background: rgba(255,255,255,0.015);
@@ -4233,6 +4233,17 @@ div[data-testid="stAlert"] {
 .unified-score-details summary::-webkit-details-marker { display: none; }
 .unified-score-details summary::after { content: ' +'; color: var(--decision-color); }
 .unified-score-details[open] summary::after { content: ' −'; }
+.mlb-metric-guide {
+    margin-top: 0.65rem;
+    padding: 0.58rem 0.68rem;
+    color: #7f93a7;
+    background: rgba(0,196,204,0.035);
+    border-left: 2px solid rgba(0,196,204,0.35);
+    font-family: var(--font-mono);
+    font-size: 0.54rem;
+    line-height: 1.55;
+}
+.mlb-metric-guide b { color: #b7c6d4; }
 .unified-score-detail-copy {
     padding: 0 0.9rem 0.65rem;
     color: #7f92a6;
@@ -4815,6 +4826,11 @@ def render_entry_decision(
     consistency: float,
     note: str,
     detail: str,
+    history_label: Optional[str] = None,
+    history_value: Optional[str] = None,
+    probability_label: str = "Model chance",
+    evidence_label: str = "Pick confidence",
+    consistency_label: str = "Output stability",
 ) -> None:
     """Render one presentation-only decision index without changing model output."""
     import html as _html
@@ -4827,6 +4843,15 @@ def render_entry_decision(
     safe_direction = _html.escape(str(direction or "Model decision"))
     safe_note = _html.escape(str(note or ""))
     safe_detail = _html.escape(str(detail or ""))
+    safe_probability_label = _html.escape(str(probability_label or "Model chance"))
+    safe_evidence_label = _html.escape(str(evidence_label or "Pick confidence"))
+    safe_consistency_label = _html.escape(str(consistency_label or "Output stability"))
+    history_metric = ""
+    if history_label and history_value:
+        history_metric = (
+            f"<div class='unified-decision-metric'><span>{_html.escape(str(history_label))}</span>"
+            f"<strong>{_html.escape(str(history_value))}</strong></div>"
+        )
 
     st.markdown(
         f"<div class='unified-decision-card {action_class}'>"
@@ -4840,11 +4865,12 @@ def render_entry_decision(
         f"<div class='unified-decision-note'>{safe_note}</div>"
         f"</div>"
         f"<div class='unified-decision-evidence'>"
-        f"<div class='unified-decision-metric'><span>Hit chance</span><strong>{probability_pct:.0f}%</strong></div>"
-        f"<div class='unified-decision-metric'><span>Evidence</span><strong>{int(evidence)}/100</strong></div>"
-        f"<div class='unified-decision-metric'><span>Consistency</span><strong>{consistency_pct:.0f}%</strong></div>"
+        f"<div class='unified-decision-metric'><span>{safe_probability_label}</span><strong>{probability_pct:.0f}%</strong></div>"
+        f"<div class='unified-decision-metric'><span>{safe_evidence_label}</span><strong>{int(evidence)}/100</strong></div>"
+        f"{history_metric}"
+        f"<div class='unified-decision-metric'><span>{safe_consistency_label}</span><strong>{consistency_pct:.0f}%</strong></div>"
         f"</div>"
-        f"<details class='unified-score-details'><summary>How this decision is built</summary>"
+        f"<details class='unified-score-details'><summary>Why these numbers differ</summary>"
         f"<div class='unified-score-detail-copy'>{safe_detail}</div></details>"
         f"</div>",
         unsafe_allow_html=True,
@@ -14736,8 +14762,15 @@ if st.session_state.active_sport == "mlb":
             avg_val = vals.mean()
             edge    = avg_val - mlb_line
             _n_starts = len(vals)
-            cv   = vals.std() / avg_val if avg_val > 0 else 1.0
+            _sample_std = float(vals.std()) if _n_starts > 1 else 0.0
+            cv   = _sample_std / avg_val if avg_val > 0 else 1.0
             cons = max(0.1, min(0.95, 1.0 - cv * 0.8))
+            _recent_hit_count = int(
+                (vals >= mlb_line).sum()
+                if mlb_side == "Over" else
+                (vals <= mlb_line).sum()
+            )
+            _recent_record = f"{_recent_hit_count}/{_n_starts}"
 
             # Small sample warning — show banner but still run the model
             if _n_starts < 4:
@@ -15612,7 +15645,9 @@ if st.session_state.active_sport == "mlb":
                               pc_ceiling=_pc_outs_ceiling if _is_outs_prop else _pc_k_ceiling,
                               line=mlb_line)
 
-            # Confidence score — weighted by signal count and strength
+            # Data quality is deliberately independent of pick direction and
+            # probability. Entry Score blends this coverage/reliability grade
+            # with the model chance later, so probability is counted only once.
             if _is_outs_prop:
                 _data_bonus = sum([
                     5 if _outs_expected is not None else 0,
@@ -15623,32 +15658,89 @@ if st.session_state.active_sport == "mlb":
                     2 if _weather else 0,
                     2 if _lineup_confirmed or _lineup_projected else 0,
                 ])
+                _sc = min(99, int(
+                    max(0, min((adj - 0.50) / 0.45, 1.0) * 65) +
+                    min(abs(edge) / 4.0, 1.0) * 12 +
+                    cons * 8 +
+                    _data_bonus
+                ))
             else:
-                _data_bonus = sum([
-                    5 if okpct is not None else 0,
-                    4 if _k9 > 0 else 0,
-                    5 if _whiff_real is not None else (3 if _swstr is not None else 0),
-                    3 if _ump_name else 0,
-                    3 if _avg_ip > 0 else 0,
-                    3 if _velo and _velo > 0 else 0,
-                    2 if _weather else 0,
-                    2 if _lineup_confirmed else 0,
-                    1 if _lineup_projected else 0,
-                    1 if _opp_context.get("avg_recent_k") is not None else 0,
-                    4 if (_proj_prob is not None and _bf_prob is not None) else
-                    (2 if (_proj_prob is not None or _bf_prob is not None) else 0),
-                    4 if (
-                        whr >= 0.80 and cons >= 0.70 and
-                        ((mlb_side == "Over" and edge > 0) or
-                         (mlb_side == "Under" and edge < 0))
-                    ) else 0,
+                _sample_quality = 18.0 * min(_n_starts / 10.0, 1.0)
+                if _extended_layoff:
+                    _freshness_quality = 1.0 if _rest_days >= 16 else 3.0
+                elif _post_break_monitor:
+                    _freshness_quality = 6.0
+                elif _rest_days <= 7:
+                    _freshness_quality = 8.0
+                elif _rest_days <= 10:
+                    _freshness_quality = 6.0
+                else:
+                    _freshness_quality = 4.0
+
+                _pitcher_profile_quality = sum([
+                    5.0 if _k9 > 0 else 0.0,
+                    5.0 if _whiff_real is not None else (3.0 if _swstr is not None else 0.0),
+                    3.0 if _velo and _velo > 0 else 0.0,
+                    3.0 if _vtrender.get("prior_velo") else
+                    (1.0 if _vtrender.get("avg_velo") else 0.0),
                 ])
-            _sc = min(99, int(
-                max(0, min((adj - 0.50) / 0.45, 1.0) * 65) +
-                min(abs(edge) / 4.0, 1.0) * 12 +
-                cons * 8 +
-                _data_bonus
-            ))
+                _workload_quality = sum([
+                    5.0 if _avg_ip > 0 else 0.0,
+                    5.0 if _pc_avg else 0.0,
+                    6.0 if _role.get("confirmed") else
+                    (3.0 if _role.get("status") else 0.0),
+                ])
+                _lineup_quality = (
+                    5.0 if _lineup_confirmed else
+                    3.5 if _lineup_projected else 0.0
+                )
+                _matchup_quality = sum([
+                    4.0 if okpct is not None else 0.0,
+                    _lineup_quality,
+                    4.0 * min(max(_lineup_profile_coverage, 0) / 9.0, 1.0),
+                    2.0 if _platoon_vs_l is not None and _platoon_vs_r is not None else 0.0,
+                    2.0 if _opp_context.get("avg_recent_k") is not None else 0.0,
+                ])
+                _weather_loaded = bool(
+                    _weather and (
+                        _weather.get("temp_f") or
+                        _weather.get("condition") == "Dome/Retractable"
+                    )
+                )
+                _context_quality = sum([
+                    3.0 if _weather_loaded else 0.0,
+                    3.0 if _ump_name else 0.0,
+                    2.0 if "HOME" in mlb_logs.columns else 0.0,
+                ])
+                _projection_paths = 6.0 if (_proj_prob is not None and _bf_prob is not None) else (
+                    3.0 if (_proj_prob is not None or _bf_prob is not None) else 0.0
+                )
+                _projection_reliability_quality = (
+                    5.0 * float(_projection_reliability)
+                    if _projection_reliability is not None else 0.0
+                )
+                if _proj_prob is not None and _bf_prob is not None:
+                    _projection_agreement_quality = 5.0 * (
+                        1.0 - min(abs(float(_proj_prob) - float(_bf_prob)) / 0.25, 1.0)
+                    )
+                else:
+                    _projection_agreement_quality = 2.0 if (
+                        _proj_prob is not None or _bf_prob is not None
+                    ) else 0.0
+                _model_quality = (
+                    _projection_paths +
+                    _projection_reliability_quality +
+                    _projection_agreement_quality
+                )
+                _sc = int(round(min(99.0, max(0.0, sum([
+                    _sample_quality,
+                    _freshness_quality,
+                    _pitcher_profile_quality,
+                    _workload_quality,
+                    _matchup_quality,
+                    _context_quality,
+                    _model_quality,
+                ])))))
             _quality_notes = []
             _conf_penalty = 0
             _bf_cushion_for_quality = None
@@ -15747,7 +15839,7 @@ if st.session_state.active_sport == "mlb":
                 _dq = []
                 if _sc < 80:
                     _downgrade = True
-                    _dq.append(f"confidence {_sc}/100")
+                    _dq.append(f"data quality {_sc}/100")
                 if _n_starts < 6:
                     _downgrade = True
                     _dq.append(f"only {_n_starts} starts")
@@ -15780,13 +15872,12 @@ if st.session_state.active_sport == "mlb":
                     _tier_quality_note = "Strong label downgraded: " + ", ".join(_dq[:3])
 
             # A lean is still an actionable recommendation. Do not surface one
-            # when the combined confidence score says the data quality, edge,
-            # and model agreement are collectively too weak.
+            # when the independently graded data quality is too weak.
             if tier in ("Lean Over", "Lean Under") and _sc < 55:
                 _previous_tier = tier
                 tier = "Pass"
                 _lean_gate_note = (
-                    f"{_previous_tier} changed to Pass: confidence {_sc}/100 "
+                    f"{_previous_tier} changed to Pass: data quality {_sc}/100 "
                     f"is below the 55-point lean minimum"
                 )
                 _tier_quality_note = (
@@ -15833,8 +15924,8 @@ if st.session_state.active_sport == "mlb":
                 _trap["summary"] = _trap["summary"][:5]
                 _trap.update({"label": "Trap Risk", "css": "orange", "icon": "⚠️"})
 
-            # Entry Score is a decision index, not another probability. Start with
-            # the hit estimate and evidence quality, then apply only material gates.
+            # Entry Score is the one action index: model chance plus independently
+            # graded data quality, followed by material risk gates.
             _entry_base_score = int(round((adj * 100 * 0.70) + (_sc * 0.30)))
             _entry_score = _entry_base_score
             _entry_gate_reason = "No blocking gate"
@@ -16136,9 +16227,9 @@ if st.session_state.active_sport == "mlb":
                 "projected lineup" if _lineup_projected else "lineup TBD"
             )
             _pitcher_copy = (
-                f"The {mlb_side} is supported by the calibrated model with clean role and risk checks."
+                f"{_recent_record} recent starts cleared this line. Tonight's projection still discounts that history for matchup, workload, and unresolved inputs."
                 if _pitcher_status == "Actionable" else
-                f"The model leans {mlb_side}, but the evidence or risk checks call for confirmation before entry."
+                f"The model leans {mlb_side}, but the data-quality or risk checks call for confirmation before entry."
                 if _pitcher_status == "Watchlist" else
                 "The model does not find enough reliable separation from the line to recommend this entry."
             )
@@ -16162,6 +16253,41 @@ if st.session_state.active_sport == "mlb":
                     for label, _, note in rows
                 )
 
+            _entry_note = (
+                "Primary decision: model direction and data quality cleared every action gate."
+                if _entry_action == "PLAY" else
+                "Primary decision: promising direction, but confirm the highlighted risk first."
+                if _entry_action == "WATCH" else
+                "Primary decision: the combined signal is not reliable enough to enter."
+            )
+            _entry_formula = (
+                f"70% Model Chance ({adj:.0%}) + 30% Data Quality ({_sc}/100) = "
+                f"{_entry_base_score}."
+            )
+            _entry_gate_copy = (
+                f" Risk gate: {_entry_gate_reason} ({_entry_gate_adjustment:+d})."
+                if _entry_gate_adjustment < 0 else
+                " No blocking risk gate."
+            )
+            _entry_gate_detail = (
+                f"{_entry_formula}{_entry_gate_copy} Recent Record is backward-looking. "
+                "Output Stability measures how tightly strikeout totals cluster; it is not another hit rate."
+            )
+            render_entry_decision(
+                score=_entry_score,
+                action=_entry_action,
+                direction=f"{tier} · {mlb_side} {mlb_line:g} strikeouts",
+                probability=adj,
+                evidence=_sc,
+                consistency=cons,
+                note=_entry_note,
+                detail=_entry_gate_detail,
+                history_label=f"Recent L{_n_starts} record",
+                history_value=_recent_record,
+                evidence_label="Data quality",
+                consistency_label="K-output stability",
+            )
+
             st.markdown(
                 f"<div class='mlb-decision-card {_pitcher_decision_class}'>"
                 f"<div class='mlb-decision-top'>"
@@ -16173,13 +16299,16 @@ if st.session_state.active_sport == "mlb":
                 f"<span class='mlb-decision-status'>{_pitcher_status}</span></div></div>"
                 f"<div class='mlb-decision-copy'>{_pitcher_copy}</div>"
                 f"<div class='mlb-decision-metrics'>"
-                f"<div class='mlb-decision-metric'><span>Estimated hit chance</span><strong>{adj:.0%}</strong></div>"
-                f"<div class='mlb-decision-metric'><span>Evidence quality</span><strong>{_sc}/100</strong></div>"
-                f"<div class='mlb-decision-metric'><span>Projected K</span><strong>{_pitcher_projection:.1f}</strong></div>"
-                f"<div class='mlb-decision-metric'><span>Projected edge</span><strong>{_pitcher_projected_edge:+.1f}</strong></div>"
-                f"<div class='mlb-decision-metric'><span>Historical avg edge</span><strong>{_pitcher_directional_edge:+.1f}</strong></div>"
-                f"<div class='mlb-decision-metric'><span>Consistency</span><strong>{cons:.0%}</strong></div>"
+                f"<div class='mlb-decision-metric'><span>Recent line record</span><strong>{_recent_record}</strong></div>"
+                f"<div class='mlb-decision-metric'><span>Recent average</span><strong>{avg_val:.1f} K</strong></div>"
+                f"<div class='mlb-decision-metric'><span>Tonight projection</span><strong>{_pitcher_projection:.1f} K</strong></div>"
+                f"<div class='mlb-decision-metric'><span>Projection cushion</span><strong>{_pitcher_projected_edge:+.1f}</strong></div>"
+                f"<div class='mlb-decision-metric'><span>Average cushion</span><strong>{_pitcher_directional_edge:+.1f}</strong></div>"
+                f"<div class='mlb-decision-metric'><span>K-output stability</span><strong>{cons:.0%}</strong></div>"
                 f"</div>"
+                f"<div class='mlb-metric-guide'><b>Recent record</b> says what happened. "
+                f"<b>Tonight projection</b> estimates this matchup. <b>Output stability</b> measures variance, "
+                f"so it does not need to equal the line-hit record.</div>"
                 f"<div class='mlb-driver-grid'>"
                 f"<div class='mlb-driver-panel'><h4>Why it works</h4>"
                 f"{_pitcher_driver_html(_pitcher_supports, 'No major positive adjustment')}</div>"
@@ -16187,32 +16316,6 @@ if st.session_state.active_sport == "mlb":
                 f"{_pitcher_driver_html(_pitcher_risks, 'No major model risk detected')}</div>"
                 f"</div></div>",
                 unsafe_allow_html=True,
-            )
-
-            _entry_note = (
-                "Model strength and evidence quality cleared every action gate."
-                if _entry_action == "PLAY" else
-                "Promising direction; confirm the highlighted risk before entering."
-                if _entry_action == "WATCH" else
-                "The combined edge is not reliable enough for an entry."
-            )
-            _entry_gate_detail = (
-                f"70% hit chance ({adj:.0%}) + 30% evidence ({_sc}/100) = "
-                f"{_entry_base_score}. Gate: {_entry_gate_reason} "
-                f"({_entry_gate_adjustment:+d})."
-                if _entry_gate_adjustment < 0 else
-                f"70% hit chance ({adj:.0%}) + 30% evidence ({_sc}/100) = "
-                f"{_entry_base_score}. No blocking gate."
-            )
-            render_entry_decision(
-                score=_entry_score,
-                action=_entry_action,
-                direction=f"{tier} · {mlb_side} {mlb_line:g} strikeouts",
-                probability=adj,
-                evidence=_sc,
-                consistency=cons,
-                note=_entry_note,
-                detail=_entry_gate_detail,
             )
 
             if tier != "Pass":
@@ -16648,7 +16751,7 @@ if st.session_state.active_sport == "mlb":
                             background:#0d1520;border:1px solid rgba(255,255,255,0.06);border-radius:8px;
                             padding:0.65rem 1rem;margin-bottom:0.75rem;line-height:1.8;'>
                     This table shows exactly how PropIQ arrived at the final probability for this {_debug_prop_kind} prop.
-                    Each row is a signal that pushed the adjusted hit rate up or down.
+                    Each row is a signal that pushed tonight's model chance up or down.
                     <span style='color:#00c4cc;'>Positive</span> = favors the Over.
                     <span style='color:#ef4444;'>Negative</span> = favors the Under.
                 </div>
@@ -16669,14 +16772,14 @@ if st.session_state.active_sport == "mlb":
                     <tr>
                         <td style='padding:3px 8px 3px 0;color:#6b7f96;'>Starts (sample)</td>
                         <td style='color:#e2e8f0;'>L{len(vals)} · avg {avg_val:.1f} {_lbl}</td>
-                        <td style='padding:3px 8px;color:#6b7f96;'>Historical avg edge</td>
+                        <td style='padding:3px 8px;color:#6b7f96;'>Average cushion vs line</td>
                         <td style='color:{"#22c55e" if edge > 0 else "#ef4444"};'>{edge:+.2f}</td>
                     </tr>
                     <tr>
-                        <td style='padding:3px 8px 3px 0;color:#6b7f96;'>Raw hit rate</td>
-                        <td style='color:#e2e8f0;'>{whr:.1%} (weighted L{len(vals)})</td>
-                        <td style='padding:3px 8px;color:#6b7f96;'>Consistency</td>
-                        <td style='color:{"#22c55e" if cons>=0.70 else "#ffc107" if cons>=0.55 else "#ef4444"};'>{cons:.1%} · {_cl}</td>
+                        <td style='padding:3px 8px 3px 0;color:#6b7f96;'>Recent line record</td>
+                        <td style='color:#e2e8f0;'>{_recent_record} · {whr:.1%} weighted</td>
+                        <td style='padding:3px 8px;color:#6b7f96;'>K-output stability</td>
+                        <td style='color:{"#22c55e" if cons>=0.70 else "#ffc107" if cons>=0.55 else "#ef4444"};'>{cons:.1%} · {_cl} · SD {_sample_std:.1f} {_lbl}</td>
                     </tr>
                     <tr>
                         <td style='padding:3px 8px 3px 0;color:#6b7f96;'>Pitcher hand</td>
@@ -16737,7 +16840,7 @@ if st.session_state.active_sport == "mlb":
                                                   )),
                     ("Fastball velocity",         f"{_velo:.1f}mph" if _velo else "N/A",
                                                   _velo_adj,
-                                                  f"{'Elite velo (97+)' if (_velo or 0)>=97 else 'Hard (94+)' if (_velo or 0)>=94 else 'Avg' if (_velo or 0)>=91 else 'Soft (<91)' if _velo else 'N/A — pitchMix & Savant CSV both unavailable'}"
+                                                  f"{'Elite velo (97+)' if (_velo or 0)>=97 else 'Hard (94+)' if (_velo or 0)>=94 else 'Below-average, neutral band (90–94)' if (_velo or 0)>=90 else 'Soft (<90)' if _velo else 'N/A — pitchMix & Savant CSV both unavailable'}"
                                                   + (f" · pstats velo: {_pstats.get('velo','none')}" if not _velo else "")),
                     ("Velocity trend",            f"{_vtrend_mph:+.1f}mph · {_vtrend_dir}" if _vtrender.get("avg_velo") else "N/A",
                                                   _vtrend_adj,
@@ -16779,7 +16882,7 @@ if st.session_state.active_sport == "mlb":
                     ("Workload cluster cap",     f"{_workload_cluster_raw:+.1%} raw → {_workload_cluster_adj:+.1%}",
                                                   _workload_cluster_correction,
                                                   "Caps correlated avg-IP, pitcher-role, and pitch-count signals at -12% / +5%"),
-                    ("Pitcher variance",           f"{cons:.1%} consistency",
+                    ("K-output stability",         f"{cons:.1%} · SD {_sample_std:.1f} {_lbl}",
                                                   _variance_adj,
                                                   _variance_note),
                     ("BF efficiency",              (
@@ -16824,7 +16927,7 @@ if st.session_state.active_sport == "mlb":
                         ("Weather", _weather_condition_label, _wx_adj, _wx_note if _wx_note else "No weather data"),
                         ("Pitcher role", _role.get("label", "Role TBD"), _role_adj,
                          " | ".join(_role.get("summary", [])) or "No role risk detected"),
-                        ("Pitcher variance", f"{cons:.1%} consistency", _variance_adj, _variance_note),
+                        ("Output stability", f"{cons:.1%} · SD {_sample_std:.1f} {_lbl}", _variance_adj, _variance_note),
                         ("Outs projection", f"{_outs_prob:.1%}" if _outs_prob is not None else "N/A", None, _outs_note if _outs_note else "Workload projection unavailable"),
                     ]
 
@@ -16856,7 +16959,7 @@ if st.session_state.active_sport == "mlb":
                     _mlb_adj_labels = [
                         "Home/Away split", "Recent form", "Rest days",
                         "Avg IP/start", "Weather", "Pitcher role",
-                        "Pitch count est", "Pitcher variance"
+                        "Pitch count est", "Output stability"
                     ]
                 else:
                     _mlb_adjs = [_ha_adj, _form_adj, _rest_adj, _k9_adj,
@@ -16873,7 +16976,7 @@ if st.session_state.active_sport == "mlb":
                         "Weather", "Batting order", "Platoon matchup", "Contact profile",
                         "Recent opponent difficulty", "Matchup cluster cap",
                         "Pitcher role", "Pitch count est", "Workload cluster cap",
-                        "Pitcher variance"
+                        "K-output stability"
                     ]
                 _mlb_running = _mlb_base_adj
                 _mlb_steps = []
@@ -16954,7 +17057,8 @@ if st.session_state.active_sport == "mlb":
                         f"{_workload_cluster_adj:+.1%} capped "
                         "(limit -12% / +5%)"
                     ),
-                    "Pitcher variance": f"{cons:.1%} consistency · {_variance_note}",
+                    "Output stability": f"{cons:.1%} · SD {_sample_std:.1f} {_lbl} · {_variance_note}",
+                    "K-output stability": f"{cons:.1%} · SD {_sample_std:.1f} {_lbl} · {_variance_note}",
                 }
 
                 for _lbl2, _a, _bef, _aft in _mlb_steps:
@@ -17109,9 +17213,9 @@ if st.session_state.active_sport == "mlb":
                     "≥72% + hist edge ≤-0.75 OR ≥64% + hist edge ≤-1.75 · quality gate"
                 )
                 _mlb_lean_thresh = (
-                    "≥ 52% · edge > 0 · confidence ≥ 55"
+                    "≥ 52% · edge > 0 · data quality ≥ 55"
                     if mlb_side == "Over" else
-                    "≥ 52% · edge < 0 · confidence ≥ 55"
+                    "≥ 52% · edge < 0 · data quality ≥ 55"
                 )
                 _edge_ok_mlb       = (edge >= -1.5 if mlb_side=="Over" else edge <= 1.5)
                 _loaded_signals_html = (
@@ -17167,13 +17271,14 @@ if st.session_state.active_sport == "mlb":
                     "<tr>"
                     "<td style='padding:3px 8px 3px 0;color:#6b7f96;'>Calibration</td>"
                     f"<td colspan='3' style='color:#9aaec4;'>Raw L{len(vals)} {whr:.1%} → "
-                    f"calibrated base {_calibrated_whr:.1%} · consistency {cons:.1%}</td>"
+                    f"calibrated base {_calibrated_whr:.1%} · K-output stability {cons:.1%} "
+                    f"(SD {_sample_std:.1f} {_lbl})</td>"
                     "</tr>"
                 )
                 _quality_final_row = ""
                 if _quality_notes or _tier_quality_note:
                     _quality_text = _tier_quality_note or (
-                        "Confidence quality haircut: " + ", ".join(_quality_notes[:4])
+                        "Data-quality limits: " + ", ".join(_quality_notes[:4])
                     )
                     _quality_final_row = (
                         "<tr>"
@@ -17197,13 +17302,13 @@ if st.session_state.active_sport == "mlb":
                 <div style='font-family:JetBrains Mono,monospace;font-size:0.7rem;color:#9aaec4;'>
                 <table style='width:100%;border-collapse:collapse;'>
                     <tr>
-                        <td style='padding:3px 8px 3px 0;color:#6b7f96;'>Adjusted hit rate</td>
+                        <td style='padding:3px 8px 3px 0;color:#6b7f96;'>Tonight model chance</td>
                         <td style='color:#e2e8f0;font-weight:700;'>{adj:.1%}</td>
                         <td style='padding:3px 8px;color:#6b7f96;'>Strong threshold</td>
                         <td style='color:#9aaec4;'>{_mlb_strong_thresh}</td>
                     </tr>
                     <tr>
-                        <td style='padding:3px 8px 3px 0;color:#6b7f96;'>Historical avg edge</td>
+                        <td style='padding:3px 8px 3px 0;color:#6b7f96;'>Average cushion vs line</td>
                         <td style='color:{"#22c55e" if _edge_ok_mlb else "#ef4444"};'>{edge:+.2f} {"✓" if _edge_ok_mlb else "✗ tight"}</td>
                         <td style='padding:3px 8px;color:#6b7f96;'>Lean threshold</td>
                         <td style='color:#9aaec4;'>{_mlb_lean_thresh}</td>
@@ -17215,7 +17320,7 @@ if st.session_state.active_sport == "mlb":
                         <td style='color:#9aaec4;'>{_pitcher_projection:.1f} K vs {mlb_line:.1f}</td>
                     </tr>
                     <tr>
-                        <td style='padding:3px 8px 3px 0;color:#6b7f96;'>Confidence score</td>
+                        <td style='padding:3px 8px 3px 0;color:#6b7f96;'>Data quality</td>
                         <td style='color:{_cc};font-weight:700;'>{_sc}/100</td>
                         <td style='padding:3px 8px;color:#6b7f96;'>Data signals loaded</td>
                         <td style='color:#9aaec4;'>{_loaded_signals_html}</td>
@@ -18896,6 +19001,7 @@ if st.session_state.active_sport == "wnba":
                 f"({result['confidence']}/100) = {_wnba_entry_base}. "
                 f"Gate: {_wnba_entry_gate}."
             ),
+            evidence_label="Data quality",
         )
         with st.expander("How the final call combines hit chance and evidence", expanded=False):
             st.markdown(
