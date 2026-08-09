@@ -20013,7 +20013,7 @@ if st.session_state.active_sport == "edge":
                 reasons.append(str(result["injury_status"]))
 
         if edge:
-            reasons.append(f"Avg edge {edge:+.1f}")
+            reasons.append(f"Directional avg edge {edge:+.1f}")
         if samples:
             reasons.append(f"{samples} game sample")
         return grade, color, reasons[:5]
@@ -20071,7 +20071,11 @@ if st.session_state.active_sport == "edge":
                 score += 10
             elif "Validated" in validation:
                 score += 4
-            if float(r.get("market_open_move") or 0) > 0:
+            market_move = float(r.get("market_open_move") or 0)
+            if (
+                (r.get("side", "Over") == "Over" and market_move > 0)
+                or (r.get("side") == "Under" and market_move < 0)
+            ):
                 score += 3
             eligible.append({**r, "_entry_score": round(score, 2), "_entry_watch": is_watch})
 
@@ -21071,6 +21075,7 @@ if st.session_state.active_sport == "edge":
         """
         try:
             market_context = market_context or {}
+            side = "Under" if str(side).strip().lower() == "under" else "Over"
 
             def _reject(reason: str, details: Optional[list] = None) -> dict:
                 return {
@@ -21091,6 +21096,7 @@ if st.session_state.active_sport == "edge":
             if not is_sane_mlb_pitcher_prop_line(_stat_label, line):
                 return _reject("invalid market line")
             _is_outs = _stat_label == "Outs Recorded"
+            _side_mult = 1.0 if side == "Over" else -1.0
             _line_history = summarize_pp_line_history(
                 line,
                 get_pp_line_history_from_supabase(pitcher_name, _stat_label),
@@ -21347,6 +21353,7 @@ if st.session_state.active_sport == "edge":
             elif _diff >= _form_med:  _form_adj = 0.02
             elif _diff <= -_form_big: _form_adj = -0.05
             elif _diff <= -_form_med: _form_adj = -0.02
+            _form_adj *= _side_mult
             _adj += _form_adj
 
             # ── Signal 3: K/9 rate vs league avg 8.3 ─────────────────
@@ -21356,47 +21363,51 @@ if st.session_state.active_sport == "edge":
                 elif _model_k9 >= 8.0:  _k9_adj = 0.01
                 elif _model_k9 >= 6.5:  _k9_adj = -0.03
                 else:                   _k9_adj = -0.06
+                _k9_adj *= _side_mult
                 _adj += _k9_adj
 
             # ── Signal 4: Avg IP / pitch count ceiling ────────────────
             if _avg_ip:
                 if _is_outs:
-                    if _avg_ip >= 6.3:   _adj += 0.06
-                    elif _avg_ip >= 5.7: _adj += 0.03
-                    elif _avg_ip <= 4.5: _adj -= 0.08
-                    elif _avg_ip <= 5.0: _adj -= 0.04
+                    if _avg_ip >= 6.3:   _ip_adj = 0.06
+                    elif _avg_ip >= 5.7: _ip_adj = 0.03
+                    elif _avg_ip <= 4.5: _ip_adj = -0.08
+                    elif _avg_ip <= 5.0: _ip_adj = -0.04
                 else:
                     if _avg_ip >= 6.0:   _ip_adj = 0.02
                     elif _avg_ip >= 5.0: _ip_adj = 0.01
                     elif _avg_ip <= 3.5: _ip_adj = -0.07
                     elif _avg_ip <= 4.5: _ip_adj = -0.03
-                    _adj += _ip_adj
+                _ip_adj *= _side_mult
+                _adj += _ip_adj
 
             # ── Signal 4b: pitch count leash ─────────────────────────
             if _projected_pc:
                 if _is_outs:
-                    if _projected_pc >= 100:   _adj += 0.05
-                    elif _projected_pc >= 92:  _adj += 0.02
-                    elif _projected_pc < 75:   _adj -= 0.08
-                    elif _projected_pc < 85:   _adj -= 0.04
+                    if _projected_pc >= 100:   _pitch_count_adj = 0.05
+                    elif _projected_pc >= 92:  _pitch_count_adj = 0.02
+                    elif _projected_pc < 75:   _pitch_count_adj = -0.08
+                    elif _projected_pc < 85:   _pitch_count_adj = -0.04
                 else:
                     if _projected_pc >= 98:    _pitch_count_adj = 0.03
                     elif _projected_pc >= 90:  _pitch_count_adj = 0.01
                     elif _projected_pc < 75:   _pitch_count_adj = -0.06
                     elif _projected_pc < 85:   _pitch_count_adj = -0.03
-                    _adj += _pitch_count_adj
+                _pitch_count_adj *= _side_mult
+                _adj += _pitch_count_adj
 
             # ── Signal 5: Edge vs line (avg above/below line) ─────────
             _edge = _avg_exact - line
             _edge_big = 4.0 if _is_outs else 2.5
             _edge_med = 2.0 if _is_outs else 1.5
             _edge_min = 1.0 if _is_outs else 0.5
-            if _edge >= _edge_big:    _historical_edge_adj = 0.05
-            elif _edge >= _edge_med:  _historical_edge_adj = 0.03
-            elif _edge >= _edge_min:  _historical_edge_adj = 0.01
-            elif _edge <= -_edge_big: _historical_edge_adj = -0.05
-            elif _edge <= -_edge_med: _historical_edge_adj = -0.03
-            elif _edge <= -_edge_min: _historical_edge_adj = -0.01
+            _directional_edge = _edge if side == "Over" else -_edge
+            if _directional_edge >= _edge_big:    _historical_edge_adj = 0.05
+            elif _directional_edge >= _edge_med:  _historical_edge_adj = 0.03
+            elif _directional_edge >= _edge_min:  _historical_edge_adj = 0.01
+            elif _directional_edge <= -_edge_big: _historical_edge_adj = -0.05
+            elif _directional_edge <= -_edge_med: _historical_edge_adj = -0.03
+            elif _directional_edge <= -_edge_min: _historical_edge_adj = -0.01
             _adj += _historical_edge_adj
 
             # ── Signal 6: Consistency ─────────────────────────────────
@@ -21445,24 +21456,31 @@ if st.session_state.active_sport == "edge":
             elif _park_sig == "Penalty":
                 _adj -= 0.01
             _matchup_raw_delta = _adj - _matchup_before
+            _matchup_raw_delta *= _side_mult
             _matchup_limit = 0.075 if not _is_outs else 0.055
             _matchup_delta = max(-_matchup_limit, min(_matchup_limit, _matchup_raw_delta))
             _adj = _matchup_before + _matchup_delta
 
             # ── Signal 7b: bullpen leash context ─────────────────────
             if _bullpen_signal == "Taxed":
-                _adj += 0.035 if _is_outs else 0.01
+                _adj += (0.035 if _is_outs else 0.01) * _side_mult
             elif _bullpen_signal == "Fresh":
-                _adj -= 0.025 if _is_outs else 0.005
+                _adj -= (0.025 if _is_outs else 0.005) * _side_mult
 
             # ── Signal 8: PrizePicks market movement ─────────────────
-            # This is intentionally small. A line moving up can confirm Over
-            # interest, while a line moving down is a warning for Over-only scans.
+            # This is intentionally small and follows market direction. Reduced
+            # payout lines are evaluated as Overs only elsewhere in the scanner.
             _market_move = float(_line_history.get("open_move") or _line_history.get("move") or 0)
-            if _market_move >= 0.5 and _edge > 0:
-                _adj += 0.015
-            elif _market_move <= -0.5:
-                _adj -= 0.025
+            if side == "Over":
+                if _market_move >= 0.5 and _directional_edge > 0:
+                    _adj += 0.015
+                elif _market_move <= -0.5:
+                    _adj -= 0.025
+            else:
+                if _market_move <= -0.5 and _directional_edge > 0:
+                    _adj += 0.015
+                elif _market_move >= 0.5:
+                    _adj -= 0.025
 
             # If pitch-count math puts the realistic ceiling below the line,
             # prevent the scanner from labeling it a strong play.
@@ -21493,13 +21511,18 @@ if st.session_state.active_sport == "edge":
                 elif _model_k9:
                     _pc_expected = round(_est_ip * (_model_k9 / 9.0), 1)
                     _pc_ceiling = round((_ceil_ip * (_model_k9 / 9.0)) + 0.4, 1)
-                if _pc_expected is not None and _pc_expected <= line - (1.0 if _is_outs else 0.25):
-                    _adj = min(_adj, 0.68)
                 if _pc_expected is not None:
-                    _proj_gap = _pc_expected - line
+                    _proj_gap = (
+                        _pc_expected - line if side == "Over"
+                        else line - _pc_expected
+                    )
+                    if side == "Over" and _pc_expected <= line - (1.0 if _is_outs else 0.25):
+                        _adj = min(_adj, 0.68)
+                    elif side == "Under" and _pc_expected >= line + (1.0 if _is_outs else 0.25):
+                        _adj = min(_adj, 0.68)
                 else:
                     _proj_gap = None
-                if _pc_ceiling is not None:
+                if _pc_ceiling is not None and side == "Over":
                     if _is_outs:
                         if _pc_ceiling <= line + 0.5:
                             _adj = min(_adj, 0.64)
@@ -21578,7 +21601,10 @@ if st.session_state.active_sport == "edge":
             _reliability = max(0.50, min(0.88, _reliability))
 
             _adj = 0.50 + ((_raw_adj - 0.50) * _reliability)
-            if _raw_adj >= 0.72 and _cons >= 0.65 and abs(_edge) >= (1.5 if not _is_outs else 3.0):
+            if (
+                _raw_adj >= 0.72 and _cons >= 0.65
+                and _directional_edge >= (1.5 if not _is_outs else 3.0)
+            ):
                 _adj = min(_raw_adj, _adj + 0.025)
             if _cons < 0.45 or _n < 5:
                 _adj = min(_adj, 0.66)
@@ -21603,10 +21629,10 @@ if st.session_state.active_sport == "edge":
                         _edge_trap(f"thin K projection ({_pc_expected:.1f})", 3)
                     elif _proj_gap < 0.75:
                         _edge_trap(f"small K cushion ({_pc_expected:.1f})", 2)
-            if _pc_ceiling is not None:
+            if _pc_ceiling is not None and side == "Over":
                 if (_is_outs and _pc_ceiling <= line + 0.5) or ((not _is_outs) and _pc_ceiling <= line + 0.25):
                     _edge_trap(f"tight pitch-count ceiling ({_pc_ceiling:.1f})", 3)
-            if _opp_bb is not None and _opp_bb >= 0.105:
+            if side == "Over" and _opp_bb is not None and _opp_bb >= 0.105:
                 _edge_trap(f"patient opponent BB% {_opp_bb:.1%}", 1 if not _is_outs else 2)
             if _cons < 0.45:
                 _edge_trap("volatile recent logs", 2)
@@ -21616,9 +21642,9 @@ if st.session_state.active_sport == "edge":
                 _edge_trap(f"long layoff ({_days_since_last}d)", 3)
             elif _post_break_monitor:
                 _trap_reasons.append("first post-break workload monitor")
-            if _l3_avg_pc and _avg_pc and float(_l3_avg_pc) <= float(_avg_pc) - 10:
+            if side == "Over" and _l3_avg_pc and _avg_pc and float(_l3_avg_pc) <= float(_avg_pc) - 10:
                 _edge_trap("recent pitch-count decline", 2)
-            if _short_starts_l5 >= 2:
+            if side == "Over" and _short_starts_l5 >= 2:
                 _edge_trap(f"{_short_starts_l5} abbreviated starts in L5", 3)
             if _trap_severity >= 5:
                 _trap_label = "Do Not Force"
@@ -21720,15 +21746,23 @@ if st.session_state.active_sport == "edge":
             if _projected_pc is None:
                 _watch("pitch-count path limited", 6)
             elif _projected_pc < 72:
-                _block(f"opener/bulk risk (~{_projected_pc:.0f}p)")
+                if side == "Over":
+                    _block(f"opener/bulk risk (~{_projected_pc:.0f}p)")
+                else:
+                    _watch(f"limited workload supports Under; verify role (~{_projected_pc:.0f}p)", 3)
             elif _projected_pc < 82:
-                _watch(f"short leash risk (~{_projected_pc:.0f}p)", 8)
+                if side == "Over":
+                    _watch(f"short leash risk (~{_projected_pc:.0f}p)", 8)
             if _avg_ip is None:
                 _watch("avg IP unavailable", 5)
             elif _avg_ip < 4.2:
-                _block(f"short outing profile ({_avg_ip:.1f} IP)")
+                if side == "Over":
+                    _block(f"short outing profile ({_avg_ip:.1f} IP)")
+                else:
+                    _watch(f"short outing profile supports Under; verify role ({_avg_ip:.1f} IP)", 3)
             elif _avg_ip < 5.0:
-                _watch(f"limited depth ({_avg_ip:.1f} IP)", 5)
+                if side == "Over":
+                    _watch(f"limited depth ({_avg_ip:.1f} IP)", 5)
             if _pc_expected is None or _proj_prob is None:
                 _watch("projection anchor missing", 8)
             elif _proj_prob < 0.56:
@@ -21746,7 +21780,7 @@ if st.session_state.active_sport == "edge":
                         _block(f"thin K cushion ({_pc_expected:.1f})")
                     elif _proj_gap < 0.75:
                         _watch(f"small K cushion ({_pc_expected:.1f})", 6)
-            if _pc_ceiling is not None:
+            if _pc_ceiling is not None and side == "Over":
                 if (_is_outs and _pc_ceiling <= line + 0.5) or ((not _is_outs) and _pc_ceiling <= line + 0.25):
                     _block(f"tight ceiling ({_pc_ceiling:.1f})")
             if _trap_label == "Do Not Force":
@@ -21755,13 +21789,13 @@ if st.session_state.active_sport == "edge":
                 _watch("trap detector watchlist", 7)
             if _n < 5:
                 _watch(f"small sample ({_n})", 6)
-            if _short_starts_l5 >= 2:
+            if side == "Over" and _short_starts_l5 >= 2:
                 _watch(f"{_short_starts_l5} abbreviated starts in L5", 8)
             if _days_since_last is not None and _days_since_last >= 16:
                 _block(f"long layoff requires workload confirmation ({_days_since_last}d)")
             elif _post_break_monitor:
                 _watch("first post-break workload monitor", 0)
-            if _l3_avg_pc and _avg_pc and float(_l3_avg_pc) <= float(_avg_pc) - 10:
+            if side == "Over" and _l3_avg_pc and _avg_pc and float(_l3_avg_pc) <= float(_avg_pc) - 10:
                 _watch(f"recent pitch count down ({_l3_avg_pc:.0f} vs {_avg_pc:.0f})", 6)
             if _scanner_conf < 55:
                 _block(f"confidence too low ({_scanner_conf}/100)")
@@ -21890,7 +21924,8 @@ if st.session_state.active_sport == "edge":
                 "raw_adj":  round(_raw_adj * 100, 1),
                 "reliability": round(_reliability * 100, 1),
                 "avg":      _avg,
-                "edge_raw": round(_edge, 2),
+                "edge_raw": round(_directional_edge, 2),
+                "avg_minus_line": round(_edge, 2),
                 "cons":     round(_cons * 100, 1),
                 "samples":  _n,
                 "k9":       round(float(_model_k9), 1) if _model_k9 else None,
@@ -22130,6 +22165,8 @@ if st.session_state.active_sport == "edge":
                                           team: str = "") -> Optional[dict]:
         """Fast Hitter Fantasy Score edge model for MLB Edge Scanner."""
         try:
+            side = "Under" if str(side).strip().lower() == "under" else "Over"
+            side_mult = 1.0 if side == "Over" else -1.0
             _stat_label = "Hitter Fantasy Score"
             if not is_sane_mlb_pitcher_prop_line(_stat_label, line):
                 return None
@@ -22157,14 +22194,16 @@ if st.session_state.active_sport == "edge":
             adj = whr
 
             diff = l3 - avg
+            trend_adj = 0.0
             if diff >= 2.5:
-                adj += 0.05
+                trend_adj = 0.05
             elif diff >= 1.25:
-                adj += 0.025
+                trend_adj = 0.025
             elif diff <= -2.5:
-                adj -= 0.05
+                trend_adj = -0.05
             elif diff <= -1.25:
-                adj -= 0.025
+                trend_adj = -0.025
+            adj += trend_adj * side_mult
 
             side_edge = edge if side == "Over" else -edge
             if side_edge >= 3.0:
@@ -22182,13 +22221,13 @@ if st.session_state.active_sport == "edge":
 
             if pa_avg:
                 if pa_avg >= 4.35:
-                    adj += 0.035
+                    adj += 0.035 * side_mult
                 elif pa_avg >= 4.05:
-                    adj += 0.018
+                    adj += 0.018 * side_mult
                 elif pa_avg <= 3.15:
-                    adj -= 0.045
+                    adj -= 0.045 * side_mult
                 elif pa_avg <= 3.50:
-                    adj -= 0.02
+                    adj -= 0.02 * side_mult
 
             try:
                 per_pa = float(vals.sum() / max(pa_vals.sum(), 1))
@@ -22213,18 +22252,24 @@ if st.session_state.active_sport == "edge":
                 get_pp_line_history_from_supabase(player_name, _stat_label)
             )
             market_move = float(line_history.get("open_move") or line_history.get("move") or 0)
-            if market_move >= 0.5 and side_edge > 0:
-                adj += 0.012
-            elif market_move <= -0.5:
-                adj -= 0.02
+            if side == "Over":
+                if market_move >= 0.5 and side_edge > 0:
+                    adj += 0.012
+                elif market_move <= -0.5:
+                    adj -= 0.02
+            else:
+                if market_move <= -0.5 and side_edge > 0:
+                    adj += 0.012
+                elif market_move >= 0.5:
+                    adj -= 0.02
 
             game = _scanner_get_hitter_game_context(team_abbr)
             opp = game.get("opp", "TBD") or "TBD"
             park = _scanner_mlb_park_signal(game.get("home_team", "")) if game.get("home_team") else "Neutral"
             if park == "Penalty":
-                adj += 0.012
+                adj += 0.012 * side_mult
             elif park == "Boost":
-                adj -= 0.012
+                adj -= 0.012 * side_mult
 
             raw_adj = max(0.05, min(0.92, adj))
             reliability = 0.52 + min(max(n - 4, 0) * 0.018, 0.16)
@@ -22244,7 +22289,7 @@ if st.session_state.active_sport == "edge":
 
             trap_label = "Clean"
             trap_reasons = []
-            if pa_avg is not None and pa_avg < 3.5:
+            if side == "Over" and pa_avg is not None and pa_avg < 3.5:
                 trap_reasons.append(f"low PA path ({pa_avg:.1f})")
             if cons < 0.40:
                 trap_reasons.append("volatile fantasy logs")
@@ -22278,13 +22323,17 @@ if st.session_state.active_sport == "edge":
                 "raw_adj": round(raw_adj * 100, 1),
                 "reliability": round(reliability * 100, 1),
                 "avg": round(avg, 1),
-                "edge_raw": round(edge, 2),
+                "edge_raw": round(side_edge, 2),
+                "avg_minus_line": round(edge, 2),
                 "cons": round(cons * 100, 1),
                 "samples": n,
                 "l3": round(l3, 1),
                 "pa_avg": round(pa_avg, 1) if pa_avg is not None else None,
                 "expected_fs": round(expected_fs, 1),
-                "projection_gap": round(expected_fs - line, 1),
+                "projection_gap": round(
+                    expected_fs - line if side == "Over" else line - expected_fs,
+                    1,
+                ),
                 "projection_prob": round(proj_prob * 100, 1) if proj_prob is not None else None,
                 "opp": opp,
                 "game_date": game.get("game_date", ""),
@@ -22795,10 +22844,10 @@ if st.session_state.active_sport == "edge":
             label_visibility="collapsed",
         )
     with _ec1:
-        if _edge_sport == "MLB" and not st.session_state.get("mlb_edge_controls_v3"):
+        if _edge_sport == "MLB" and not st.session_state.get("mlb_edge_controls_v4"):
             st.session_state.edge_stat_filter = "Strikeouts"
-            st.session_state.edge_side_filter = "Overs"
-            st.session_state.mlb_edge_controls_v3 = True
+            st.session_state.edge_side_filter = "All sides"
+            st.session_state.mlb_edge_controls_v4 = True
         if _edge_sport == "WNBA" and not st.session_state.get("wnba_edge_controls_v2"):
             st.session_state.edge_stat_filter = "All WNBA Props"
             st.session_state.edge_side_filter = "All sides"
@@ -22818,7 +22867,7 @@ if st.session_state.active_sport == "edge":
             label_visibility="collapsed"
         )
     with _ec2:
-        _side_options = ["Overs"] if _edge_sport == "MLB" else ["All sides", "Overs", "Unders"]
+        _side_options = ["All sides", "Overs", "Unders"]
         if st.session_state.get("edge_side_filter") not in _side_options:
             st.session_state.edge_side_filter = _side_options[0]
         _edge_side = st.selectbox(
@@ -22839,9 +22888,11 @@ if st.session_state.active_sport == "edge":
             "Include reduced-payout lines",
             value=False,
             key="edge_goblins",
+            disabled=_edge_side == "Unders",
             help=(
                 "Off by default so the board ranks standard full-payout lines. Turn this on to also inspect "
-                "promo or Goblin lines; those rows are labeled and receive a ranking penalty for reduced payout."
+                "promo or Goblin lines; those rows are labeled and receive a ranking penalty for reduced payout. "
+                "Reduced lines are Over-only and are automatically excluded from Under scans."
             ),
         )
 
@@ -23033,17 +23084,19 @@ if st.session_state.active_sport == "edge":
                 _deduped[_k] = p
         _filtered = list(_deduped.values())
 
-        # Apply line selection after filters so the model receives the line the
-        # user can actually act on. Overs use the lowest selectable line. WNBA
-        # Unders stay on standard lines; in All-sides mode both candidates are
-        # modeled and the stronger direction is selected after analysis.
-        if _include_goblin and (
-            _edge_sport == "MLB"
-            or (_edge_sport == "WNBA" and _edge_side == "Overs")
-        ):
+        # Reduced-payout lines are favorable only to the Over. Under scans use
+        # the standard full-payout line; All-sides scans retain both variants
+        # and evaluate a reduced line as Over-only.
+        if _edge_side == "Unders":
+            _filtered = [
+                p for p in _filtered
+                if not (
+                    p.get("is_goblin") or p.get("is_promo")
+                    or p.get("adjusted_odds")
+                )
+            ]
+        elif _include_goblin and _edge_side == "Overs":
             _filtered = select_safest_pp_over_rows(_filtered)
-        elif _edge_sport == "WNBA" and _edge_side == "Unders":
-            _filtered = [p for p in _filtered if not p.get("is_goblin")]
 
         _mlb_k_count = sum(1 for p in _filtered if p.get("sport") == "MLB" and is_mlb_strikeout_prop(p.get("stat", "")))
         _mlb_hfs_count = sum(1 for p in _filtered if p.get("sport") == "MLB" and is_mlb_hitter_fantasy_prop(p.get("stat", "")))
@@ -23092,31 +23145,62 @@ if st.session_state.active_sport == "edge":
                 if prop["sport"] == "MLB":
                     # Normalize stat names — PrizePicks uses several pitcher labels
                     _norm_stat = normalize_mlb_pitcher_prop_stat(prop["stat"])
+                    _is_reduced = bool(
+                        prop.get("is_goblin") or prop.get("is_promo")
+                        or prop.get("adjusted_odds")
+                    )
+                    _requested_sides = (
+                        ("Over",) if _is_reduced or _edge_side == "Overs" else
+                        ("Under",) if _edge_side == "Unders" else
+                        ("Over", "Under")
+                    )
+                    _market_context = {
+                        "start_time": prop.get("start_time", ""),
+                        "game_id": prop.get("game_id", ""),
+                        "projection_id": prop.get("projection_id", ""),
+                        "line_verification_required": bool(
+                            prop.get("line_verification_required", False)
+                        ),
+                        "slate_source": prop.get("slate_source", "live"),
+                        "slate_age_minutes": float(
+                            prop.get("slate_age_minutes", 0) or 0
+                        ),
+                        "is_goblin": bool(prop.get("is_goblin")),
+                        "is_promo": bool(prop.get("is_promo")),
+                        "adjusted_odds": bool(prop.get("adjusted_odds")),
+                        "odds_type": prop.get("odds_type", "standard"),
+                    }
                     if _norm_stat == "Strikeouts":
-                        return run_mlb_edge_check(
-                            prop["player"], prop["line"], _norm_stat, "Over",
-                            prop.get("team", ""),
-                            market_context={
-                                "start_time": prop.get("start_time", ""),
-                                "game_id": prop.get("game_id", ""),
-                                "projection_id": prop.get("projection_id", ""),
-                                "line_verification_required": bool(
-                                    prop.get("line_verification_required", False)
-                                ),
-                                "slate_source": prop.get("slate_source", "live"),
-                                "slate_age_minutes": float(
-                                    prop.get("slate_age_minutes", 0) or 0
-                                ),
-                                "is_goblin": bool(prop.get("is_goblin")),
-                                "is_promo": bool(prop.get("is_promo")),
-                                "adjusted_odds": bool(prop.get("adjusted_odds")),
-                                "odds_type": prop.get("odds_type", "standard"),
-                            },
-                        )
+                        _side_results = [
+                            run_mlb_edge_check(
+                                prop["player"], prop["line"], _norm_stat, _side,
+                                prop.get("team", ""), market_context=_market_context,
+                            )
+                            for _side in _requested_sides
+                        ]
+                        _valid_results = [
+                            result for result in _side_results
+                            if result and not result.get("_rejected")
+                        ]
+                        if _valid_results:
+                            return max(
+                                _valid_results,
+                                key=lambda result: (result["adj"], result["confidence"]),
+                            )
+                        return next((result for result in _side_results if result), None)
                     if _norm_stat == "Hitter Fantasy Score":
-                        return run_mlb_hitter_fantasy_edge_check(
-                            prop["player"], prop["line"], "Over", prop.get("team", "")
-                        )
+                        _side_results = [
+                            run_mlb_hitter_fantasy_edge_check(
+                                prop["player"], prop["line"], _side,
+                                prop.get("team", ""),
+                            )
+                            for _side in _requested_sides
+                        ]
+                        _side_results = [result for result in _side_results if result]
+                        return max(
+                            _side_results,
+                            key=lambda result: (result["adj"], result["confidence"]),
+                        ) if _side_results else None
                     if _norm_stat not in ("Strikeouts", "Hitter Fantasy Score"):
                         return None
                 if prop["sport"] == "WNBA":
@@ -23251,18 +23335,24 @@ if st.session_state.active_sport == "edge":
                         _future_err,
                     )
 
-        # All-sides WNBA scans can produce a standard-line direction and a
-        # lowest-goblin Over for the same market. Keep the stronger actionable
-        # result so a middle line cannot crowd the favorable line off the board.
-        if _edge_sport == "WNBA" and _include_goblin and _edge_side == "All sides":
-            _best_wnba_results = {}
+        # All-sides scans can produce a standard-line direction and a reduced
+        # Over for the same market. Keep the stronger actionable result so two
+        # variants of one player do not crowd the board.
+        if _include_goblin and _edge_side == "All sides":
+            _best_variant_results = {}
             for result in _results:
+                _result_stat = (
+                    normalize_mlb_pitcher_prop_stat(result.get("stat", ""))
+                    if result.get("sport") == "MLB"
+                    else normalize_wnba_prop_stat(result.get("stat", ""))
+                )
                 result_key = (
+                    result.get("sport", ""),
                     normalize_name(result.get("player", "")),
-                    normalize_wnba_prop_stat(result.get("stat", "")),
+                    _result_stat,
                     str(result.get("game_date", "")),
                 )
-                current = _best_wnba_results.get(result_key)
+                current = _best_variant_results.get(result_key)
                 result_rank = (
                     float(result.get("rank_score", 0) or 0),
                     0 if result.get("is_goblin") or result.get("is_promo") else 1,
@@ -23276,8 +23366,8 @@ if st.session_state.active_sport == "edge":
                     int(current.get("confidence", 0) or 0),
                 ) if current else None
                 if current is None or result_rank > current_rank:
-                    _best_wnba_results[result_key] = result
-            _results = list(_best_wnba_results.values())
+                    _best_variant_results[result_key] = result
+            _results = list(_best_variant_results.values())
 
         _prog.empty()
         _status.empty()
@@ -23309,7 +23399,8 @@ if st.session_state.active_sport == "edge":
     _results = _raw_edge_results
     _results = [
         r for r in _results
-        if (
+        if r.get("sport") == _edge_sport
+        and (
             (
                 r.get("sport") == "MLB"
                 and normalize_mlb_pitcher_prop_stat(r.get("stat", "")) in ("Strikeouts", "Hitter Fantasy Score")
@@ -23333,11 +23424,10 @@ if st.session_state.active_sport == "edge":
             r for r in _results
             if r.get("sport") == "WNBA" and normalize_wnba_prop_stat(r.get("stat", "")) == _edge_stat
         ]
-    if _edge_sport == "WNBA":
-        if _edge_side == "Overs":
-            _results = [r for r in _results if r.get("side", "Over") == "Over"]
-        elif _edge_side == "Unders":
-            _results = [r for r in _results if r.get("side") == "Under"]
+    if _edge_side == "Overs":
+        _results = [r for r in _results if r.get("side", "Over") == "Over"]
+    elif _edge_side == "Unders":
+        _results = [r for r in _results if r.get("side") == "Under"]
 
     if _results:
         if st.session_state.get("edge_has_scanned"):
@@ -23399,6 +23489,8 @@ if st.session_state.active_sport == "edge":
                 and (r["adj"] >= 60 or r["edge_pct"] >= 3)
             ]
             _goblins = [r for r in _with_edge if r.get("is_goblin")]
+            _over_count = sum(1 for r in _with_edge if r.get("side", "Over") == "Over")
+            _under_count = sum(1 for r in _with_edge if r.get("side") == "Under")
             st.markdown(
                 f"<div style='display:flex;gap:12px;flex-wrap:wrap;"
                 f"margin-bottom:1rem;font-family:JetBrains Mono,monospace;'>"
@@ -23413,7 +23505,7 @@ if st.session_state.active_sport == "edge":
                 f"🔴 {len(_goblins)} reduced-payout lines</div>"
                 f"<div style='background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);"
                 f"border-radius:8px;padding:6px 14px;font-size:0.65rem;color:#6b7f96;'>"
-                f"Total: {len(_with_edge)} plays</div>"
+                f"{_over_count} Overs · {_under_count} Unders</div>"
                 f"</div>",
                 unsafe_allow_html=True
             )
@@ -23434,6 +23526,7 @@ if st.session_state.active_sport == "edge":
                     _best_rows = ""
                     for _bi, _leg in enumerate(_best_legs, start=1):
                         _leg_watch = " · Watchlist" if _leg.get("_entry_watch") else ""
+                        _leg_side = _leg.get("side", "Over")
                         _best_rows += (
                             f"<div style='display:grid;grid-template-columns:24px minmax(0,1fr) auto;"
                             f"gap:8px;align-items:center;padding:7px 0;border-top:1px solid rgba(255,255,255,0.055);'>"
@@ -23442,7 +23535,7 @@ if st.session_state.active_sport == "edge":
                             f"<div style='font-family:Plus Jakarta Sans,sans-serif;color:#f0f4f8;font-weight:900;font-size:0.88rem;"
                             f"white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'>{_leg.get('player')}</div>"
                             f"<div style='font-family:JetBrains Mono,monospace;color:#7d93ab;font-size:0.55rem;margin-top:2px;'>"
-                            f"{_leg.get('stat')} Over {_leg.get('line')} · vs {_leg.get('opp', 'TBD')}{_leg_watch}</div>"
+                            f"{_leg.get('stat')} {_leg_side} {_leg.get('line')} · vs {_leg.get('opp', 'TBD')}{_leg_watch}</div>"
                             f"</div>"
                             f"<div style='text-align:right;font-family:JetBrains Mono,monospace;'>"
                             f"<div style='color:#00e896;font-weight:900;font-size:0.8rem;'>{_leg.get('adj')}%</div>"
@@ -23474,18 +23567,22 @@ if st.session_state.active_sport == "edge":
                     if st.button("➕ Add Recommended Entry", key="add_best_mlb_entry", use_container_width=True):
                         import datetime as _dt_best_entry
                         for _leg in _best_legs:
+                            _leg_side = _leg.get("side", "Over")
                             _is_strong_leg = (
                                 float(_leg.get("adj", 0) or 0) >= 67
                                 and float(_leg.get("edge_pct", 0) or 0) >= 7
                                 and int(_leg.get("confidence", 0) or 0) >= 75
                                 and not _leg.get("_entry_watch")
                             )
-                            _tier_leg = "Strong Over" if _is_strong_leg else "Lean Over"
+                            _tier_leg = (
+                                f"Strong {_leg_side}" if _is_strong_leg
+                                else f"Lean {_leg_side}"
+                            )
                             _new_leg = {
                                 "player":     _leg["player"],
-                                "prop":       f"{_leg['stat']} Over",
+                                "prop":       f"{_leg['stat']} {_leg_side}",
                                 "line":       _leg["line"],
-                                "side":       "Over",
+                                "side":       _leg_side,
                                 "verdict":    _tier_leg,
                                 "confidence": int(_leg.get("confidence", 0) or 0),
                                 "adj":        _leg["adj"],
@@ -23494,7 +23591,7 @@ if st.session_state.active_sport == "edge":
                             }
                             _entry = {
                                 "Player":      _leg["player"],
-                                "Line":        f"{_leg['line']} Over",
+                                "Line":        f"{_leg['line']} {_leg_side}",
                                 "Opponent":    _leg.get("opp", "—"),
                                 "Matchup":     _leg["stat"],
                                 "Venue":       f"Best Entry · Edge Scanner · date:{_leg.get('game_date', '')}",
@@ -23617,7 +23714,12 @@ if st.session_state.active_sport == "edge":
                     )
                 for _vr in (_r.get("validation_reasons") or [])[:2]:
                     _risk_pills += f"<span class='edge-pill-v55 warn'>{_vr}</span>"
-                if _r.get("stat") == "Strikeouts" and _r.get("pc_ceiling") is not None and _r.get("pc_ceiling") <= _r["line"] + 0.5:
+                if (
+                    _result_side == "Over"
+                    and _r.get("stat") == "Strikeouts"
+                    and _r.get("pc_ceiling") is not None
+                    and _r.get("pc_ceiling") <= _r["line"] + 0.5
+                ):
                     _risk_pills += "<span class='edge-pill-v55 warn'>Ceiling tight</span>"
                 if _r.get("line_verification_required"):
                     _cache_age = float(_r.get("slate_age_minutes", 0) or 0)
@@ -23715,15 +23817,15 @@ if st.session_state.active_sport == "edge":
                     f"<div class='edge-market-v72'>{_r['stat']} · vs {_r.get('opp', 'TBD')} · {_grade_lbl}</div>"
                     f"</div>"
                     f"<div class='edge-call-v72'>"
-                    f"<div class='edge-line-v72'><span>Best line</span><strong>{_result_side} {_r['line']}</strong></div>"
+                    f"<div class='edge-line-v72'><span>PrizePicks line</span><strong>{_result_side} {_r['line']}</strong></div>"
                     f"<div class='edge-entry-v72'><span>Entry score</span><strong>{_edge_entry_score} {_edge_entry_action}</strong></div>"
                     f"</div></div>"
                     f"<div class='edge-meta-v55'>{_ctx_pills}</div>"
                     f"<div class='edge-score-v55'>"
-                    f"<div class='edge-score-item-v55'><span>Hit chance</span><strong class='{_model_color_class}'>{_r['adj']}%</strong></div>"
-                    f"<div class='edge-score-item-v55'><span>Evidence</span><strong class='{_conf_color_class}'>{_conf_val}</strong></div>"
+                    f"<div class='edge-score-item-v55'><span>Model chance</span><strong class='{_model_color_class}'>{_r['adj']}%</strong></div>"
+                    f"<div class='edge-score-item-v55'><span>Data quality</span><strong class='{_conf_color_class}'>{_conf_val}</strong></div>"
                     f"<div class='edge-score-item-v55'><span>Market edge</span><strong class='{_edge_color_class}'>+{_r['edge_pct']}%</strong></div>"
-                    f"<div class='edge-score-item-v55'><span>Consistency</span><strong>{_r['cons']}%</strong></div>"
+                    f"<div class='edge-score-item-v55'><span>Output stability</span><strong>{_r['cons']}%</strong></div>"
                     f"</div>"
                     f"{_reason_row_html}"
                     f"<details class='edge-details-v55'>"
@@ -23732,8 +23834,8 @@ if st.session_state.active_sport == "edge":
                     f"<span class='edge-pill-v55'>Raw {_r.get('raw_adj', _r['adj'])}%</span>"
                     f"<span class='edge-pill-v55'>Reliability {_r.get('reliability', '—')}%</span>"
                     f"<span class='edge-pill-v55'>Avg {_r['avg']}</span>"
-                    f"<span class='edge-pill-v55'>Avg edge <strong style='color:{_edge_raw_col};'>{_r['edge_raw']:+.1f}</strong></span>"
-                    f"<span class='edge-pill-v55'>Consistency {_r['cons']}%</span>"
+                    f"<span class='edge-pill-v55'>Directional avg edge <strong style='color:{_edge_raw_col};'>{_r['edge_raw']:+.1f}</strong></span>"
+                    f"<span class='edge-pill-v55'>Output stability {_r['cons']}%</span>"
                     f"<span class='edge-pill-v55'>{_r['samples']} {'games' if _r.get('sport') == 'WNBA' or _r.get('stat') == 'Hitter Fantasy Score' else 'starts'}</span>"
                     f"</div>"
                     f"</details>"
