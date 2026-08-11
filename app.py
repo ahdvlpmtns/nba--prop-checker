@@ -5152,12 +5152,6 @@ div[data-testid="stPopover"] > button {
     font-size: 0.84rem;
     font-weight: 750;
 }
-.v8-walkthrough-lead {
-    margin-bottom: 0.9rem;
-    color: #a9b8c7;
-    font-size: 0.94rem;
-    line-height: 1.55;
-}
 .v8-help-steps {
     display: grid;
     gap: 7px;
@@ -5199,13 +5193,6 @@ div[data-testid="stPopover"] > button {
     font-size: 0.76rem;
     line-height: 1.5;
 }
-div[data-testid="stDialog"] [role="dialog"] {
-    background: #0d1319 !important;
-    border: 1px solid var(--line-strong) !important;
-    border-radius: 8px !important;
-    box-shadow: 0 26px 70px rgba(0,0,0,0.58) !important;
-}
-
 /* Page identity is an unframed section header, not another card. */
 .analyzer-hero,
 .v55-hero,
@@ -6145,7 +6132,6 @@ for key, default in [
     ("active_view", _default_active_view),
     ("last_analyzer_sport", _default_analyzer_sport),
     ("edge_return_available", False), ("edge_viewed", []),
-    ("v8_walkthrough_seen", False),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -7128,12 +7114,8 @@ def set_runtime_metric(key: str, status: str, detail: str = "", **extra) -> None
         pass
 
 
-def _complete_v8_walkthrough() -> None:
-    st.session_state.v8_walkthrough_seen = True
-
-
 def render_v8_help_content() -> None:
-    """Compact guidance shared by the first-run walkthrough and Help drawer."""
+    """Compact guidance shown only when the user opens the Help drawer."""
     st.markdown(
         """
         <div class="v8-help-steps">
@@ -7146,23 +7128,6 @@ def render_v8_help_content() -> None:
         """,
         unsafe_allow_html=True,
     )
-
-
-@st.dialog("Welcome to PropIQ V8")
-def render_v8_walkthrough() -> None:
-    st.markdown(
-        "<div class='v8-walkthrough-lead'>A faster way to move from a live line to a clear, evidence-backed decision.</div>",
-        unsafe_allow_html=True,
-    )
-    render_v8_help_content()
-    st.button(
-        "Start analyzing",
-        key="finish_v8_walkthrough",
-        type="primary",
-        use_container_width=True,
-        on_click=_complete_v8_walkthrough,
-    )
-
 
 def format_utc_age(iso_ts: str) -> str:
     """Human-friendly age for UTC timestamps."""
@@ -11578,9 +11543,6 @@ if (
     import threading as _t
     _t.Thread(target=_prewarm_cache, daemon=True).start()
 
-if not st.session_state.get("v8_walkthrough_seen", False):
-    render_v8_walkthrough()
-
 _header_view = str(st.session_state.get("active_view", "analyze")).lower()
 _header_sport = str(st.session_state.get("active_sport", "mlb")).upper()
 _header_context = "EDGE" if _header_view == "edge" else _header_sport
@@ -12041,9 +12003,6 @@ with st.sidebar:
     st.markdown("<div class='section-header'>Help</div>", unsafe_allow_html=True)
     with st.expander("Quick start and score guide", expanded=False):
         render_v8_help_content()
-    if st.button("Replay first-run walkthrough", key="replay_v8_walkthrough", use_container_width=True):
-        st.session_state.v8_walkthrough_seen = False
-        st.rerun()
 
     st.markdown("<div class='section-header'>Settings</div>", unsafe_allow_html=True)
     manual_mode = st.checkbox("Manual input fallback", help="Enter points manually if NBA API is unavailable")
