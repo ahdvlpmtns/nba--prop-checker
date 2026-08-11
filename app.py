@@ -19722,16 +19722,28 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
         market_context.get("is_goblin") or market_context.get("is_promo")
         or market_context.get("adjusted_odds")
     )
+    line_verified = bool(market_context.get("line_verified", False))
+    line_verification_required = bool(line_anomaly and not line_verified)
     line_type_note = "reduced-payout promo/alternate market" if reduced_payout_line else "standard full-game market"
-    line_anomaly_note = (
-        f"Line {line:.1f} is {historical_line_gap:.1f} from the season L{len(season_values)} baseline "
-        f"({projection_z_gap:.1f} volatility units from projection); verify {line_type_note}"
-        if line_anomaly else "Line is within the model's normal verification range"
-    )
+    if line_anomaly and line_verified:
+        line_anomaly_note = (
+            f"Confirmed {line_type_note}; line remains {historical_line_gap:.1f} from the season "
+            f"L{len(season_values)} baseline ({projection_z_gap:.1f} volatility units from projection)"
+        )
+    elif line_anomaly:
+        line_anomaly_note = (
+            f"Line {line:.1f} is {historical_line_gap:.1f} from the season L{len(season_values)} baseline "
+            f"({projection_z_gap:.1f} volatility units from projection); verify {line_type_note}"
+        )
+    else:
+        line_anomaly_note = "Line is within the model's normal verification range"
     trace.append({
         "Signal": "Line verification",
         "Value": f"{line:.1f} vs season L{len(season_values)} avg {season_avg:.1f}",
-        "Adjustment": "Extreme-probability gate" if line_anomaly else "No change",
+        "Adjustment": (
+            "Confirmed; no gate" if line_anomaly and line_verified else
+            "Extreme-probability gate" if line_verification_required else "No change"
+        ),
         "Notes": line_anomaly_note,
     })
 
@@ -19789,7 +19801,7 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
             "Adjustment": f"{before_freshness:.1%} → {probability:.1%}",
             "Notes": "Old logs cannot support a current role, minutes, or availability assumption",
         })
-    if line_anomaly and probability > 0.86:
+    if line_verification_required and probability > 0.86:
         before_line_gate = probability
         probability = 0.86
         trace.append({
@@ -19824,7 +19836,7 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
         "Matchup coverage": 18.0 * matchup_score,
         "Data completeness": 10.0 * data_score,
     }
-    line_anomaly_penalty = 5 if line_anomaly else 0
+    line_anomaly_penalty = 5 if line_verification_required else 0
     teammate_uncertainty_penalty = min(6, 3 * len(questionable_starters))
     confidence = int(round(
         sum(confidence_parts.values()) - injury_penalty
@@ -19859,7 +19871,7 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
         )
     if directional_edge < cushion:
         flags.append("Thin projection cushion")
-    if line_anomaly:
+    if line_verification_required:
         flags.append("Verify line: unusually far from historical baseline")
     if game.get("opp") in (None, "", "TBD"):
         flags.append("Next opponent unavailable")
@@ -19875,7 +19887,7 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
         flags.append(f"Availability: {injury_status}")
 
     freshness_force_pass = stale_days > 21
-    anomaly_force_pass = bool(line_anomaly and stale_days > 7 and not reduced_payout_line)
+    anomaly_force_pass = bool(line_verification_required and stale_days > 7 and not reduced_payout_line)
     context_force_pass = bool(context_validation.get("hard_invalid"))
     quality_gate_reasons = []
     if freshness_force_pass:
@@ -19926,6 +19938,8 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
         "quality_force_pass": bool(freshness_force_pass or anomaly_force_pass or context_force_pass),
         "quality_gate_reasons": quality_gate_reasons,
         "line_anomaly": line_anomaly,
+        "line_verified": line_verified,
+        "line_verification_required": line_verification_required,
         "line_anomaly_note": line_anomaly_note,
         "line_anomaly_penalty": line_anomaly_penalty,
         "teammate_uncertainty_penalty": teammate_uncertainty_penalty,
@@ -20004,6 +20018,20 @@ if st.session_state.active_sport == "wnba":
         default_side = jump_side if jump_side in side_options else "Over"
         side = st.selectbox("Direction", side_options, index=side_options.index(default_side), key="wnba_side_select")
 
+    _wnba_line_signature = re.sub(
+        r"[^a-zA-Z0-9]+", "_",
+        f"{selected_name or 'none'}_{selected_stat}_{float(line):.1f}",
+    ).strip("_")
+    standard_line_confirmed = st.checkbox(
+        "Confirmed standard full-game PrizePicks line",
+        value=False,
+        key=f"wnba_standard_line_{_wnba_line_signature}",
+        help=(
+            "Check this only after confirming the exact player, market, and standard full-game line in PrizePicks. "
+            "Leave it unchecked for Goblin, promo, discounted, alternate, or uncertain lines."
+        ),
+    )
+
     analyze = st.button("Analyze WNBA Prop", type="primary", use_container_width=True, key="wnba_analyze")
     should_run = bool(selected_name) and (
         analyze or jump_player is not None
@@ -20072,7 +20100,10 @@ if st.session_state.active_sport == "wnba":
                 logs, selected_stat, float(line), side, game,
                 defense=defense, injury=injury, role_context=role_context,
                 context_validation=context_validation,
-                market_context={"source": "manual"},
+                market_context={
+                    "source": "manual",
+                    "line_verified": bool(standard_line_confirmed),
+                },
             )
         except ValueError as err:
             st.warning(str(err))
@@ -20115,7 +20146,7 @@ if st.session_state.active_sport == "wnba":
             decision_color = "#7d93ab"
         if result.get("quality_gate_reasons"):
             decision_note = "Pass gate: " + " | ".join(result["quality_gate_reasons"]) + "."
-        if result.get("line_anomaly"):
+        if result.get("line_verification_required"):
             decision_note += " Verify that this is the standard full-game line before using the verdict."
         _wnba_status = (
             "Actionable" if tier.startswith("Strong") else
@@ -20134,7 +20165,7 @@ if st.session_state.active_sport == "wnba":
         elif tier.startswith("Lean"):
             _wnba_entry_score = min(_wnba_entry_score, 79)
             _wnba_entry_gate = "Model verdict is a Lean"
-        elif result.get("line_anomaly"):
+        elif result.get("line_verification_required"):
             _wnba_entry_score = min(_wnba_entry_score, 79)
             _wnba_entry_gate = "PrizePicks line needs verification"
         _wnba_entry_action = (
@@ -20142,11 +20173,21 @@ if st.session_state.active_sport == "wnba":
             "WATCH" if _wnba_entry_score >= 65 else "PASS"
         )
         _wnba_entry_note = (
+            f"Base score {_wnba_entry_base}; capped at WATCH until the standard full-game line is confirmed."
+            if result.get("line_verification_required") else
             "Direction and evidence both support an entry."
             if _wnba_entry_action == "PLAY" else
             "The direction is promising, but one confirmation is still missing."
             if _wnba_entry_action == "WATCH" else
             "The combined signal is not strong enough to enter."
+        )
+        _wnba_status = (
+            "Actionable" if _wnba_entry_action == "PLAY" else
+            "Watchlist" if _wnba_entry_action == "WATCH" else "Pass"
+        )
+        _wnba_decision_class = (
+            "actionable" if _wnba_status == "Actionable" else
+            "watchlist" if _wnba_status == "Watchlist" else "pass"
         )
         render_entry_decision(
             score=_wnba_entry_score,
@@ -20163,6 +20204,11 @@ if st.session_state.active_sport == "wnba":
             ),
             evidence_label="Data quality",
         )
+        if result.get("line_verification_required"):
+            st.warning(
+                f"Entry Score {_wnba_entry_base} was capped at 79 because this line is unusually far from the "
+                "player's season baseline. Confirm the standard full-game line above to remove this gate."
+            )
         st.markdown(
             f"<details class='secondary-decision-details'><summary>Supporting analysis</summary>"
             f"<div class='mlb-decision-card {_wnba_decision_class}'>"
@@ -20211,12 +20257,12 @@ if st.session_state.active_sport == "wnba":
                 f"<span class='flag-pill down'>Teammate status "
                 f"-{result['teammate_uncertainty_penalty']}</span>"
             )
-        with st.expander("Evidence confidence breakdown", expanded=False):
+        with st.expander("Evidence quality breakdown", expanded=False):
             st.markdown(
                 f"<div style='background:var(--bg2);border:1px solid var(--border);border-radius:8px;"
                 f"padding:0.85rem 1rem;margin:0.25rem 0 0.75rem;'>"
                 f"<div style='display:flex;justify-content:space-between;align-items:center;gap:10px;'>"
-                f"<div class='stat-label' style='margin:0;'>EVIDENCE CONFIDENCE</div>"
+                f"<div class='stat-label' style='margin:0;'>EVIDENCE QUALITY</div>"
                 f"<div style='font-family:var(--font-display);font-size:1rem;font-weight:900;color:{confidence_color};'>"
                 f"{result['confidence']}/100</div></div>"
                 f"<div class='conf-meter-track' style='margin-top:8px;'>"
@@ -20269,7 +20315,7 @@ if st.session_state.active_sport == "wnba":
                 f"<div class='conf-meter-fill' style='width:{consistency_pct}%;background:{consistency_color};'></div></div>"
                 f"<div style='font-size:0.6rem;color:var(--text3);margin-top:5px;'>How repeatable recent production has been</div></div>"
                 f"<div><div style='display:flex;justify-content:space-between;align-items:center;gap:8px;'>"
-                f"<span style='font-size:0.7rem;color:var(--text2);font-weight:700;'>Evidence confidence</span>"
+                f"<span style='font-size:0.7rem;color:var(--text2);font-weight:700;'>Evidence quality</span>"
                 f"<span style='font-family:var(--font-display);font-size:1rem;font-weight:900;color:{confidence_color};'>"
                 f"{result['confidence']}/100</span></div>"
                 f"<div class='conf-meter-track' style='margin-top:7px;'>"
@@ -20333,7 +20379,10 @@ if st.session_state.active_sport == "wnba":
                     f"<div class='stat-hint'>{hint}</div></div>",
                     unsafe_allow_html=True,
                 )
-        st.caption("Decision rule: use model probability for direction, confidence for trust, and the final verdict for the pick. A high probability with weak confidence is a watchlist signal, not a strong play.")
+        st.caption(
+            "Decision rule: follow Entry Score for PLAY/WATCH/PASS. Model probability explains the direction, "
+            "while evidence quality explains how trustworthy the supporting data is."
+        )
 
         add_leg = {
             "player": selected_name, "prop": selected_stat, "line": float(line), "side": side,
@@ -20467,24 +20516,28 @@ if st.session_state.active_sport == "wnba":
                 "SIGNAL | VALUE | ADJUSTMENT | NOTES",
                 *trace_lines,
                 "",
-                "CONFIDENCE BREAKDOWN",
+                "EVIDENCE QUALITY BREAKDOWN",
                 *confidence_lines,
                 "",
                 "FINAL DECISION",
                 f"Model probability: {result['probability']:.1%}",
-                f"Confidence: {result['confidence']}/100",
-                f"How to read: probability selects the direction; confidence grades the evidence; verdict requires both",
+                f"Evidence quality: {result['confidence']}/100",
+                f"How to read: Entry Score is the final action; model probability selects direction; evidence quality grades trust",
                 f"Line-verification confidence penalty: -{result['line_anomaly_penalty']}",
                 f"Teammate-status confidence penalty: -{result.get('teammate_uncertainty_penalty', 0)}",
-                f"Quality gate: {' | '.join(result.get('quality_gate_reasons') or []) or 'Cleared'}",
+                f"Directional verdict gate: {' | '.join(result.get('quality_gate_reasons') or []) or 'Cleared'}",
+                f"Entry score base: {_wnba_entry_base}/100",
+                f"Entry gate: {_wnba_entry_gate}",
+                f"Entry score: {_wnba_entry_score}/100 · {_wnba_entry_action}",
                 f"Quality flags: {' | '.join(result['flags']) or 'None'}",
-                f"Verdict: {tier}",
+                f"Directional verdict: {tier}",
             ])
             st.caption("Use the copy button in the top-right corner of this report, then paste it into the chat.")
             st.code(copyable_debug, language=None)
             st.markdown(
                 f"**Input:** {selected_name} · {selected_stat} {side} {line:.1f} · L{result['sample']} · {matchup}  \n"
-                f"**Final:** {result['probability']:.1%} probability · {result['confidence']}/100 confidence · **{tier}**"
+                f"**Final:** Entry {_wnba_entry_score}/100 {_wnba_entry_action} · "
+                f"{result['probability']:.1%} probability · {result['confidence']}/100 evidence · **{tier}**"
             )
             st.dataframe(pd.DataFrame(result["trace"]), hide_index=True, use_container_width=True)
             debug_summary = pd.DataFrame([
@@ -20506,7 +20559,9 @@ if st.session_state.active_sport == "wnba":
                 ["Log freshness", f"{result['stale_days']} day(s) since latest game"],
                 ["Freshness probability factor", f"{result.get('freshness_factor', 1.0):.0%}"],
                 ["Evidence reliability", f"{result['reliability']:.1%}"],
-                ["Quality gate", " | ".join(result.get("quality_gate_reasons") or []) or "Cleared"],
+                ["Directional verdict gate", " | ".join(result.get("quality_gate_reasons") or []) or "Cleared"],
+                ["Entry score / action", f"{_wnba_entry_score}/100 · {_wnba_entry_action}"],
+                ["Entry gate", _wnba_entry_gate],
                 ["Line verification", result["line_anomaly_note"]],
                 ["Quality flags", " | ".join(result["flags"]) or "None"],
             ], columns=["Check", "Result"])
@@ -24405,6 +24460,13 @@ if st.session_state.active_sport == "edge":
                                     "adjusted_odds": bool(prop.get("adjusted_odds")),
                                     "odds_type": prop.get("odds_type", "standard"),
                                     "source": "prizepicks",
+                                    "line_verified": bool(
+                                        prop.get("slate_source", "live") == "live"
+                                        and not prop.get("line_verification_required", False)
+                                        and not prop.get("is_goblin")
+                                        and not prop.get("is_promo")
+                                        and not prop.get("adjusted_odds")
+                                    ),
                                 },
                             )
                             for _side in _requested_sides
@@ -25094,7 +25156,7 @@ if st.session_state.active_sport == "edge":
                                 if _r.get("is_promo") and _r.get("base_line") is not None else
                                 "Standard line"
                             )],
-                            ["Quality gate", " | ".join(_r.get("quality_gate_reasons") or []) or "Cleared"],
+                            ["Directional verdict gate", " | ".join(_r.get("quality_gate_reasons") or []) or "Cleared"],
                             ["Scanner ranking penalty", (
                                 f"-{int(_r.get('payout_rank_penalty', 0) or 0)} for reduced payout"
                                 if _r.get("payout_rank_penalty") else "None"
