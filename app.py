@@ -8996,7 +8996,20 @@ def delete_from_supabase(row_id: str) -> bool:
 
 PP_FRESH_SLATE_MINUTES = 5
 PP_VERIFY_LINE_AFTER_MINUTES = 15
-PP_LINE_SELECTION_VERSION = 2
+PP_LINE_SELECTION_VERSION = 3
+PP_CACHE_MIN_LINE_SELECTION_VERSION = 2
+
+
+def pp_event_key(row: dict) -> str:
+    """Stable event identity for slate dedupe and line-history isolation."""
+    row = row or {}
+    game_id = str(row.get("game_id", "") or "").strip()
+    if game_id:
+        return f"game:{game_id}"
+    start = pd.to_datetime(row.get("start_time"), utc=True, errors="coerce")
+    if pd.notna(start):
+        return f"start:{start.isoformat()}"
+    return ""
 
 
 def get_pp_displayed_line(attributes: dict) -> dict:
@@ -9091,10 +9104,16 @@ def stamp_pp_slate_metadata(props: list, source: str, age_minutes: float = 0.0) 
             continue
         row = dict(prop)
         legacy_line = "line_source" not in row
+        legacy_selection = (
+            int(row.get("line_selection_version", 0) or 0)
+            < PP_LINE_SELECTION_VERSION
+        )
         row["slate_source"] = source
         row["slate_age_minutes"] = max(0.0, float(age_minutes or 0.0))
         row["line_verification_required"] = (
             legacy_line
+            or legacy_selection
+            or not pp_event_key(row)
             or (
                 source != "live"
                 and row["slate_age_minutes"] > PP_VERIFY_LINE_AFTER_MINUTES
@@ -9434,12 +9453,18 @@ def save_pp_line_history_to_supabase(props: list, source: str = "live") -> bool:
         for p in props:
             sport = str(p.get("sport", "")).upper()
             stat = str(p.get("stat", ""))
-            if sport != "MLB":
+            if sport == "MLB":
+                stat_norm = normalize_mlb_pitcher_prop_stat(stat)
+                if stat_norm not in ("Strikeouts", "Hitter Fantasy Score"):
+                    continue
+            elif sport == "WNBA":
+                stat_norm = normalize_wnba_prop_stat(stat)
+                if not is_wnba_supported_prop(stat_norm):
+                    continue
+            else:
                 continue
-            stat_l = stat.lower()
-            stat_norm = normalize_mlb_pitcher_prop_stat(stat)
-            if stat_norm not in ("Strikeouts", "Hitter Fantasy Score"):
-                continue
+            event_key = pp_event_key(p)
+            event_source = f"{source}|{event_key}" if event_key else source
             rows.append({
                 "sport":       sport,
                 "player":      p.get("player", ""),
@@ -9449,7 +9474,7 @@ def save_pp_line_history_to_supabase(props: list, source: str = "live") -> bool:
                 "odds_type":   p.get("odds_type", "standard"),
                 "is_goblin":   bool(p.get("is_goblin", False)),
                 "is_demon":    bool(p.get("is_demon", False)),
-                "source":      source,
+                "source":      event_source,
                 "snapshot_at": snapshot_at,
             })
         if not rows:
@@ -9460,28 +9485,36 @@ def save_pp_line_history_to_supabase(props: list, source: str = "live") -> bool:
             "Content-Type": "application/json",
             "Prefer": "return=minimal",
         }
-        r = _req.post(
-            f"{sb.url}/rest/v1/pp_line_history",
-            headers=hdrs,
-            json=rows[:500],
-            timeout=10,
-        )
-        if r.ok:
-            set_runtime_metric(
-                "pp_line_history", "ok",
-                f"Saved {len(rows[:500])} MLB line snapshots",
-                table="pp_line_history", source=source,
+        saved = 0
+        for offset in range(0, len(rows), 400):
+            chunk = rows[offset:offset + 400]
+            r = _req.post(
+                f"{sb.url}/rest/v1/pp_line_history",
+                headers=hdrs,
+                json=chunk,
+                timeout=10,
             )
-            return True
-        record_debug_error("pp_line_history.save", f"HTTP {r.status_code}: {r.text[:200]}")
-        return False
+            if not r.ok:
+                record_debug_error(
+                    "pp_line_history.save",
+                    f"HTTP {r.status_code}: {r.text[:200]}",
+                )
+                return False
+            saved += len(chunk)
+        set_runtime_metric(
+            "pp_line_history", "ok",
+            f"Saved {saved} event-scoped line snapshots",
+            table="pp_line_history", source=source,
+        )
+        return True
     except Exception as e:
         record_debug_error("pp_line_history.save", e)
         return False
 
 
 @st.cache_data(ttl=300, show_spinner=False)
-def get_pp_line_history_from_supabase(player: str, stat: str, limit: int = 25) -> list:
+def get_pp_line_history_from_supabase(player: str, stat: str, limit: int = 25,
+                                      sport: str = "MLB") -> list:
     """Return recent historical PrizePicks lines for one player/stat."""
     try:
         sb = get_supabase_client()
@@ -9496,10 +9529,10 @@ def get_pp_line_history_from_supabase(player: str, stat: str, limit: int = 25) -
         }
         url = (
             f"{sb.url}/rest/v1/pp_line_history"
-            f"?sport=eq.MLB"
+            f"?sport=eq.{_quote(str(sport or 'MLB').upper(), safe='')}"
             f"&player=eq.{_quote(str(player), safe='')}"
             f"&stat=eq.{_quote(str(stat), safe='')}"
-            f"&select=line,team,odds_type,is_goblin,is_demon,snapshot_at"
+            f"&select=line,team,odds_type,is_goblin,is_demon,source,snapshot_at"
             f"&order=snapshot_at.desc"
             f"&limit={int(limit)}"
         )
@@ -9516,7 +9549,8 @@ def get_pp_line_history_from_supabase(player: str, stat: str, limit: int = 25) -
 
 def summarize_pp_line_history(current_line: float, rows: list,
                               current_odds_type: str = "standard",
-                              current_team: str = "") -> dict:
+                              current_team: str = "",
+                              current_event_key: str = "") -> dict:
     """Summarize current line vs recent stored PrizePicks snapshots."""
     summary = {
         "prev_line": None,
@@ -9544,6 +9578,12 @@ def summarize_pp_line_history(current_line: float, rows: list,
         )
         parsed = []
         for r in rows:
+            if current_event_key:
+                row_source = str(r.get("source") or "")
+                if row_source != f"live|{current_event_key}" and not row_source.endswith(
+                    f"|{current_event_key}"
+                ):
+                    continue
             row_odds = str(r.get("odds_type") or "standard").lower()
             row_odds = "goblin" if row_odds == "goblin" or r.get("is_goblin") else "standard"
             if row_odds != target_odds or r.get("is_demon"):
@@ -18681,7 +18721,8 @@ def wnba_get_next_game(team_abbr: str) -> dict:
     """Return the next scheduled WNBA game, searching seven days ahead."""
     empty = {
         "team": _wnba_norm_team(team_abbr), "opp": "TBD", "game_date": "",
-        "side": "", "event_id": "", "home_team": "", "away_team": "",
+        "side": "", "event_id": "", "game_datetime": "",
+        "home_team": "", "away_team": "",
     }
     if not team_abbr:
         return empty
@@ -18724,6 +18765,7 @@ def wnba_get_next_game(team_abbr: str) -> dict:
                         "game_date": game_day.isoformat(),
                         "side": "Home" if mine.get("homeAway") == "home" else "Away",
                         "event_id": str(event.get("id", "") or ""),
+                        "game_datetime": event.get("date") or comp.get("date") or "",
                         "home_team": home_team,
                         "away_team": away_team,
                     }
@@ -20567,7 +20609,7 @@ if st.session_state.active_sport == "wnba":
             ], columns=["Check", "Result"])
             st.dataframe(debug_summary, hide_index=True, use_container_width=True)
             confidence_debug = pd.DataFrame([
-                {"Confidence component": name, "Points earned": round(points, 1), "Maximum": confidence_max[name]}
+                {"Evidence component": name, "Points earned": round(points, 1), "Maximum": confidence_max[name]}
                 for name, points in result["confidence_parts"].items()
             ])
             st.dataframe(confidence_debug, hide_index=True, use_container_width=True)
@@ -20627,7 +20669,8 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
             if sport_filter == "MLB":
                 mlb_rows = [p for p in cached if p.get("sport") == "MLB"]
                 if mlb_rows and any(
-                    int(p.get("line_selection_version", 0) or 0) < PP_LINE_SELECTION_VERSION
+                    int(p.get("line_selection_version", 0) or 0)
+                    < PP_CACHE_MIN_LINE_SELECTION_VERSION
                     for p in mlb_rows
                 ):
                     return False
@@ -20641,7 +20684,8 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
             if sport_filter == "WNBA":
                 rows = [p for p in cached if p.get("sport") == "WNBA"]
                 if rows and any(
-                    int(p.get("line_selection_version", 0) or 0) < PP_LINE_SELECTION_VERSION
+                    int(p.get("line_selection_version", 0) or 0)
+                    < PP_CACHE_MIN_LINE_SELECTION_VERSION
                     for p in rows
                 ):
                     return False
@@ -20862,8 +20906,17 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
                 "group_key": a.get("group_key") or "",
                 "line_selection_version": PP_LINE_SELECTION_VERSION,
             }
-            key = (expected_sport, normalize_name(name), market)
-            buckets.setdefault(key, {"standard": [], "goblin": []})[odds_type].append(entry)
+            # Keep full-payout standard rows separate from every adjusted-payout
+            # variant. PrizePicks may report a promo as odds_type=standard, so
+            # odds_type alone is not sufficient to identify the real base line.
+            variant_key = (
+                "reduced"
+                if entry["is_goblin"] or entry["is_promo"] or entry["adjusted_odds"]
+                else "standard"
+            )
+            event_key = pp_event_key(entry) or "upcoming"
+            key = (expected_sport, normalize_name(name), market, event_key)
+            buckets.setdefault(key, {"standard": [], "reduced": []})[variant_key].append(entry)
 
         result = []
         for variants in buckets.values():
@@ -20871,13 +20924,13 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
             if variants["standard"]:
                 standard = max(variants["standard"], key=pp_projection_recency_key)
                 result.append(standard)
-            if variants["goblin"]:
-                # PrizePicks may publish several reduced-payout goblin lines for
-                # one market. The scanner's "safest" mode means the actual
-                # lowest selectable Over line, not the goblin nearest standard.
-                goblin = select_lowest_pp_goblin_row(variants["goblin"], standard)
-                if goblin:
-                    result.append(goblin)
+            if variants["reduced"]:
+                # Promo, adjusted-payout, and Goblin rows share the same value
+                # class: lower Over line, reduced return. Preserve the lowest
+                # selectable row without allowing it to replace the standard.
+                reduced = select_lowest_pp_goblin_row(variants["reduced"], standard)
+                if reduced:
+                    result.append(reduced)
 
         meta = {
             "verified": payload_verified,
@@ -22338,6 +22391,7 @@ if st.session_state.active_sport == "edge":
                 get_pp_line_history_from_supabase(pitcher_name, _stat_label),
                 current_odds_type=market_context.get("odds_type", "standard"),
                 current_team=team,
+                current_event_key=pp_event_key(market_context),
             )
             _raw_vals = _outs if _is_outs else _ks
             if not _raw_vals or len(_raw_vals) < 3:
@@ -23398,9 +23452,11 @@ if st.session_state.active_sport == "edge":
 
     def run_mlb_hitter_fantasy_edge_check(player_name: str, line: float,
                                           side: str = "Over",
-                                          team: str = "") -> Optional[dict]:
+                                          team: str = "",
+                                          market_context: Optional[dict] = None) -> Optional[dict]:
         """Fast Hitter Fantasy Score edge model for MLB Edge Scanner."""
         try:
+            market_context = market_context or {}
             side = "Under" if str(side).strip().lower() == "under" else "Over"
             side_mult = 1.0 if side == "Over" else -1.0
             _stat_label = "Hitter Fantasy Score"
@@ -23485,7 +23541,10 @@ if st.session_state.active_sport == "edge":
 
             line_history = summarize_pp_line_history(
                 line,
-                get_pp_line_history_from_supabase(player_name, _stat_label)
+                get_pp_line_history_from_supabase(player_name, _stat_label),
+                current_odds_type=market_context.get("odds_type", "standard"),
+                current_team=team,
+                current_event_key=pp_event_key(market_context),
             )
             market_move = float(line_history.get("open_move") or line_history.get("move") or 0)
             if side == "Over":
@@ -23828,7 +23887,9 @@ if st.session_state.active_sport == "edge":
 
             line_history = summarize_pp_line_history(
                 line,
-                get_pp_line_history_from_supabase(player_name, "WNBA Points")
+                get_pp_line_history_from_supabase(
+                    player_name, "Points", sport="WNBA"
+                )
             )
             move = float(line_history.get("open_move") or line_history.get("move") or 0)
             if move >= 0.5 and side_edge > 0:
@@ -23924,6 +23985,7 @@ if st.session_state.active_sport == "edge":
                             market_context: Optional[dict] = None) -> Optional[dict]:
         """Run the same calibrated WNBA engine used by the individual analyzer."""
         try:
+            market_context = market_context or {}
             market = normalize_wnba_prop_stat(stat)
             line = float(line)
             if market not in WNBA_STAT_COLUMNS or not is_sane_wnba_prop_line(market, line):
@@ -23946,6 +24008,31 @@ if st.session_state.active_sport == "edge":
                     ),
                 )
                 return None
+            pp_start = pd.to_datetime(
+                market_context.get("start_time"), utc=True, errors="coerce"
+            )
+            official_start = pd.to_datetime(
+                game.get("game_datetime"), utc=True, errors="coerce"
+            )
+            start_delta_hours = None
+            if pd.notna(pp_start) and pd.notna(official_start):
+                start_delta_hours = abs(
+                    (pp_start - official_start).total_seconds()
+                ) / 3600.0
+                if start_delta_hours > 8.0:
+                    record_debug_error(
+                        "wnba.edge.game_time_mismatch",
+                        f"{player_name}: PrizePicks {pp_start.isoformat()} vs "
+                        f"ESPN {official_start.isoformat()}",
+                    )
+                    return None
+            elif pd.notna(pp_start) and game.get("game_date"):
+                try:
+                    pp_game_date = pp_start.tz_convert("America/New_York").date().isoformat()
+                    if pp_game_date != str(game.get("game_date")):
+                        return None
+                except Exception:
+                    pass
             opp = _wnba_norm_team(game.get("opp", ""))
             if not opp or opp == "TBD":
                 return None
@@ -23974,14 +24061,19 @@ if st.session_state.active_sport == "edge":
             model = wnba_analyze_prop(
                 logs, market, line, side, game, defense, injury, role_context,
                 context_validation=context_validation,
-                market_context=market_context or {},
+                market_context=market_context,
             )
             if model["tier"] == "Pass" or model["confidence"] < 55:
                 return None
 
-            history_key = f"WNBA {market}"
             line_history = summarize_pp_line_history(
-                line, get_pp_line_history_from_supabase(player_name, history_key)
+                line,
+                get_pp_line_history_from_supabase(
+                    player_name, market, sport="WNBA"
+                ),
+                current_odds_type=(market_context or {}).get("odds_type", "standard"),
+                current_team=team,
+                current_event_key=pp_event_key(market_context or {}),
             )
             flags = list(model.get("flags") or [])
             severe_flags = [flag for flag in flags if "Low role" in flag or "Availability" in flag]
@@ -24011,6 +24103,11 @@ if st.session_state.active_sport == "edge":
                 "avg_min": round(float(model["avg_min"]), 1),
                 "opp": opp,
                 "game_date": game.get("game_date", ""),
+                "game_datetime": game.get("game_datetime", ""),
+                "start_delta_hours": (
+                    round(float(start_delta_hours), 2)
+                    if start_delta_hours is not None else None
+                ),
                 "park": model.get("defense_label", "Unavailable"),
                 "projection_gap": round(float(model["edge"]), 1),
                 "projection_prob": round(float(model["projection_prob"]) * 100, 1),
@@ -24039,6 +24136,11 @@ if st.session_state.active_sport == "edge":
                 "context_validation": model.get("context_validation", {}),
                 "freshness_factor": round(float(model.get("freshness_factor", 1.0) or 1.0), 2),
                 "reduced_payout_line": bool(model.get("reduced_payout_line")),
+                "line_verified": bool(model.get("line_verified")),
+                "line_verification_required": bool(
+                    model.get("line_verification_required")
+                ),
+                "line_anomaly_note": model.get("line_anomaly_note", ""),
                 "sigma": round(float(model.get("sigma", 0) or 0), 2),
                 "l3_min": round(float(model.get("l3_min", 0) or 0), 1),
                 "market_prev_line": line_history.get("prev_line"),
@@ -24107,14 +24209,16 @@ if st.session_state.active_sport == "edge":
             )
         with _ec3:
             _edge_min = st.selectbox(
-                "Min calibrated edge",
+                "Min model margin",
                 ["Any edge", "+3%", "+5%", "+7%", "+10%"],
                 key="edge_min_filter",
             )
         with _ec4:
+            if st.session_state.get("edge_sort_filter") == "Market edge":
+                st.session_state.edge_sort_filter = "Model margin"
             _edge_sort = st.selectbox(
                 "Sort results",
-                ["Best entry score", "Model chance", "Market edge", "Data quality"],
+                ["Best entry score", "Model chance", "Model margin", "Data quality"],
                 key="edge_sort_filter",
             )
         with _ec5:
@@ -24137,7 +24241,7 @@ if st.session_state.active_sport == "edge":
     # Breakeven thresholds by entry size
     st.markdown(
         "<div class='v55-command-note'>"
-        "Scanner edge is measured vs a conservative 55% action threshold, not raw 50%. "
+        "Model margin is measured above a conservative 55% action threshold; it is not a sportsbook payout edge. "
         "Deep-dive before adding any leg."
         "</div>",
         unsafe_allow_html=True
@@ -24282,8 +24386,8 @@ if st.session_state.active_sport == "edge":
             ]
 
         # Deduplicate deterministically: preserve one standard and one optional
-        # goblin per player/market. For multiple goblins, keep the lowest live
-        # line because the control explicitly requests the safest Over line.
+        # reduced row per player, market, and event. For multiple reduced rows,
+        # keep the lowest live Over line.
         _deduped = {}
         for p in _filtered:
             _norm_stat = (
@@ -24295,7 +24399,7 @@ if st.session_state.active_sport == "edge":
                 "reduced" if p.get("is_goblin") or p.get("is_promo")
                 or p.get("adjusted_odds") else "standard"
             )
-            _event_key = p.get("game_id") or p.get("start_time") or "upcoming"
+            _event_key = pp_event_key(p) or "upcoming"
             _k = (
                 f"{p['sport']}|{normalize_name(p['player'])}|{_norm_stat}|"
                 f"{_variant}|{_event_key}"
@@ -24329,8 +24433,10 @@ if st.session_state.active_sport == "edge":
                     or p.get("adjusted_odds")
                 )
             ]
-        elif _include_goblin and _edge_side == "Overs":
-            _filtered = select_safest_pp_over_rows(_filtered)
+        # When reduced lines are enabled, preserve one standard and one lowest
+        # reduced variant. They are different payout products and should be
+        # compared explicitly rather than allowing the easier line to replace
+        # the standard row.
 
         _mlb_k_count = sum(1 for p in _filtered if p.get("sport") == "MLB" and is_mlb_strikeout_prop(p.get("stat", "")))
         _mlb_hfs_count = sum(1 for p in _filtered if p.get("sport") == "MLB" and is_mlb_hitter_fantasy_prop(p.get("stat", "")))
@@ -24426,7 +24532,7 @@ if st.session_state.active_sport == "edge":
                         _side_results = [
                             run_mlb_hitter_fantasy_edge_check(
                                 prop["player"], prop["line"], _side,
-                                prop.get("team", ""),
+                                prop.get("team", ""), market_context=_market_context,
                             )
                             for _side in _requested_sides
                         ]
@@ -24455,6 +24561,12 @@ if st.session_state.active_sport == "edge":
                                 prop["player"], prop["line"], _market, _side,
                                 prop.get("team", ""),
                                 market_context={
+                                    "start_time": prop.get("start_time", ""),
+                                    "game_id": prop.get("game_id", ""),
+                                    "projection_id": prop.get("projection_id", ""),
+                                    "line_verification_required": bool(
+                                        prop.get("line_verification_required", False)
+                                    ),
                                     "is_goblin": bool(prop.get("is_goblin")),
                                     "is_promo": bool(prop.get("is_promo")),
                                     "adjusted_odds": bool(prop.get("adjusted_odds")),
@@ -24463,6 +24575,7 @@ if st.session_state.active_sport == "edge":
                                     "line_verified": bool(
                                         prop.get("slate_source", "live") == "live"
                                         and not prop.get("line_verification_required", False)
+                                        and bool(pp_event_key(prop))
                                         and not prop.get("is_goblin")
                                         and not prop.get("is_promo")
                                         and not prop.get("adjusted_odds")
@@ -24527,7 +24640,8 @@ if st.session_state.active_sport == "edge":
                             _prop_ref.get("slate_age_minutes", 0) or 0
                         )
                         _res["line_verification_required"] = bool(
-                            _prop_ref.get("line_verification_required", False)
+                            _res.get("line_verification_required", False)
+                            or _prop_ref.get("line_verification_required", False)
                         )
                         _reduced_payout = bool(
                             _res.get("is_goblin") or _res.get("is_promo")
@@ -24575,40 +24689,6 @@ if st.session_state.active_sport == "edge":
                         f"edge.future.{_prop_ref.get('player', 'unknown')}",
                         _future_err,
                     )
-
-        # All-sides scans can produce a standard-line direction and a reduced
-        # Over for the same market. Keep the stronger actionable result so two
-        # variants of one player do not crowd the board.
-        if _include_goblin and _edge_side == "All sides":
-            _best_variant_results = {}
-            for result in _results:
-                _result_stat = (
-                    normalize_mlb_pitcher_prop_stat(result.get("stat", ""))
-                    if result.get("sport") == "MLB"
-                    else normalize_wnba_prop_stat(result.get("stat", ""))
-                )
-                result_key = (
-                    result.get("sport", ""),
-                    normalize_name(result.get("player", "")),
-                    _result_stat,
-                    str(result.get("game_date", "")),
-                )
-                current = _best_variant_results.get(result_key)
-                result_rank = (
-                    float(result.get("rank_score", 0) or 0),
-                    0 if result.get("is_goblin") or result.get("is_promo") else 1,
-                    float(result.get("adj", 0) or 0),
-                    int(result.get("confidence", 0) or 0),
-                )
-                current_rank = (
-                    float(current.get("rank_score", 0) or 0),
-                    0 if current.get("is_goblin") or current.get("is_promo") else 1,
-                    float(current.get("adj", 0) or 0),
-                    int(current.get("confidence", 0) or 0),
-                ) if current else None
-                if current is None or result_rank > current_rank:
-                    _best_variant_results[result_key] = result
-            _results = list(_best_variant_results.values())
 
         _prog.empty()
         _status.empty()
@@ -24780,7 +24860,7 @@ if st.session_state.active_sport == "edge":
                             f"</div>"
                             f"<div style='text-align:right;font-family:JetBrains Mono,monospace;'>"
                             f"<div style='color:#00e896;font-weight:900;font-size:0.8rem;'>{_leg.get('adj')}%</div>"
-                            f"<div style='color:#6b7f96;font-size:0.5rem;'>Conf {_leg.get('confidence')}</div>"
+                            f"<div style='color:#6b7f96;font-size:0.5rem;'>Quality {_leg.get('confidence')}</div>"
                             f"</div></div>"
                         )
                     st.markdown(
@@ -24798,7 +24878,7 @@ if st.session_state.active_sport == "edge":
                         f"</div>"
                         f"<div style='display:flex;gap:8px;flex-wrap:wrap;'>"
                         f"<span class='edge-pill-v55 accent'>Combined {_best_combined:.1%}</span>"
-                        f"<span class='edge-pill-v55'>Avg conf {_best_avg_conf:.0f}</span>"
+                        f"<span class='edge-pill-v55'>Avg quality {_best_avg_conf:.0f}</span>"
                         f"<span class='edge-pill-v55' style='color:{_best_risk_col};border-color:{_best_risk_col}55;'>Risk {_best_risk}</span>"
                         f"</div></div>"
                         f"<div style='margin-top:0.7rem;'>{_best_rows}</div>"
@@ -24869,7 +24949,7 @@ if st.session_state.active_sport == "edge":
             _edge_sort_fields = {
                 "Best entry score": "rank_score",
                 "Model chance": "adj",
-                "Market edge": "edge_pct",
+                "Model margin": "edge_pct",
                 "Data quality": "confidence",
             }
             _edge_sort_field = _edge_sort_fields.get(_edge_sort, "rank_score")
@@ -25091,7 +25171,7 @@ if st.session_state.active_sport == "edge":
                     f"<div class='edge-score-v55'>"
                     f"<div class='edge-score-item-v55'><span>Model chance</span><strong class='{_model_color_class}'>{_r['adj']}%</strong></div>"
                     f"<div class='edge-score-item-v55'><span>Data quality</span><strong class='{_conf_color_class}'>{_conf_val}</strong></div>"
-                    f"<div class='edge-score-item-v55'><span>Market edge</span><strong class='{_edge_color_class}'>+{_r['edge_pct']}%</strong></div>"
+                    f"<div class='edge-score-item-v55'><span>Model margin</span><strong class='{_edge_color_class}'>+{_r['edge_pct']}%</strong></div>"
                     f"<div class='edge-score-item-v55'><span>Output stability</span><strong>{_r['cons']}%</strong></div>"
                     f"</div>"
                     f"{_reason_row_html}"
@@ -25120,7 +25200,7 @@ if st.session_state.active_sport == "edge":
                         st.markdown(
                             f"**Input:** {_r['player']} · {_r['stat']} {_result_side} {_r['line']} · "
                             f"L{_r['samples']} · vs {_r.get('opp', 'TBD')}  \n"
-                            f"**Final:** {_r['adj']:.1f}% probability · {_conf_val}/100 confidence · **{_tier_lbl}**"
+                            f"**Final:** {_r['adj']:.1f}% probability · {_conf_val}/100 evidence quality · **{_tier_lbl}**"
                         )
                         _trace_rows = _r.get("model_trace") or []
                         if _trace_rows:
@@ -25175,7 +25255,7 @@ if st.session_state.active_sport == "edge":
                         }
                         _confidence_rows = [
                             {
-                                "Confidence component": name,
+                                "Evidence component": name,
                                 "Points earned": round(float(points), 1),
                                 "Maximum": _confidence_max.get(name, "—"),
                             }
@@ -25196,7 +25276,7 @@ if st.session_state.active_sport == "edge":
                         st.markdown(
                             f"**Input:** {_r['player']} · Strikeouts {_result_side} {_r['line']} · "
                             f"L{_r['samples']} · vs {_r.get('opp', 'TBD')}  \n"
-                            f"**Final:** {_r['adj']:.1f}% probability · {_conf_val}/100 evidence confidence · "
+                            f"**Final:** {_r['adj']:.1f}% probability · {_conf_val}/100 evidence quality · "
                             f"**{_tier_lbl}**"
                         )
                         st.dataframe(
@@ -25278,7 +25358,7 @@ if st.session_state.active_sport == "edge":
                         }
                         _mlb_conf_rows = [
                             {
-                                "Confidence component": name,
+                                "Evidence component": name,
                                 "Points earned": round(float(points), 1),
                                 "Maximum": _mlb_conf_max.get(name, "—"),
                             }
