@@ -14795,6 +14795,7 @@ if st.session_state.active_sport == "mlb":
         pitcher_pitches_per_bf: Optional[float] = None,
         opponent_pitches_per_pa: Optional[float] = None,
         opponent_bb_rate: Optional[float] = None,
+        pitcher_k_bf: Optional[float] = None,
     ) -> dict:
         """
         Batter-facing projection for MLB K props.
@@ -14832,7 +14833,12 @@ if st.session_state.active_sport == "mlb":
             elif opp_k_rate is not None and 0.05 <= float(opp_k_rate) <= 0.45:
                 weighted_lineup_k = float(opp_k_rate)
 
-            if pitcher_k9 and pitcher_k9 > 0:
+            if pitcher_k_bf is not None and 0.05 <= float(pitcher_k_bf) <= 0.45:
+                # Prefer the pitcher's observed K/BF. K/9 divided by a league
+                # BF/9 constant is only a fallback and can miss pitchers with
+                # unusual baserunner or contact profiles.
+                pitcher_k_rate = float(pitcher_k_bf)
+            elif pitcher_k9 and pitcher_k9 > 0:
                 # Rough K/BF conversion. League batters faced per 9 is usually
                 # high-30s; this keeps K/9 from overstating low-workload arms.
                 pitcher_k_rate = max(0.08, min(0.38, float(pitcher_k9) / 38.5))
@@ -16322,18 +16328,34 @@ if st.session_state.active_sport == "mlb":
             _platoon_vs_l  = _platoon.get("vs_l") if _platoon else None
             _platoon_vs_r  = _platoon.get("vs_r") if _platoon else None
             _platoon_adj   = 0.0
+            _pitcher_kbf_baseline = (
+                _pstats.get("swstr") if _pstats else None
+            ) or _k_pct_sv
             if (_lineup_confirmed or _lineup_projected) and _order_hands and _platoon_vs_l and _platoon_vs_r:
                 # Weighted K rate for tonight's actual lineup
                 _lineup_kr = (_lhb_pct * _platoon_vs_l +
                               (1 - _lhb_pct) * _platoon_vs_r)
-                # Vs blended opponent K% from splits
-                _opp_kr_blended = ((_splits.get("vs_l",0) or 0) * _lhb_pct +
-                                   (_splits.get("vs_r",0) or 0) * (1-_lhb_pct))
-                # Divergence from overall K% — if lineup is more favorable/unfavorable
-                _opp_kr_overall = _splits.get("overall") or (okpct if okpct else 0.22)
-                if _opp_kr_overall > 0:
-                    _platoon_div = (_lineup_kr / _opp_kr_overall) - 1.0
-                    _platoon_adj = max(-0.06, min(0.06, _platoon_div * 0.25)) * _lineup_conf_weight
+                # Compare tonight's handedness-weighted pitcher split with the
+                # pitcher's own overall K/BF. Comparing it with the opponent's
+                # K% mixes two different baselines and double-counts pitcher
+                # talent already represented by K/9, whiff rate, and projections.
+                if not (
+                    _pitcher_kbf_baseline is not None and
+                    0.05 <= float(_pitcher_kbf_baseline) <= 0.45
+                ):
+                    _pitcher_kbf_baseline = (
+                        float(_platoon_vs_l) + float(_platoon_vs_r)
+                    ) / 2.0
+                if _pitcher_kbf_baseline > 0:
+                    _platoon_div = (
+                        _lineup_kr / float(_pitcher_kbf_baseline)
+                    ) - 1.0
+                    _platoon_adj = (
+                        max(-0.04, min(0.04, _platoon_div * 0.20)) *
+                        _lineup_conf_weight
+                    )
+                    if mlb_side == "Under":
+                        _platoon_adj = -_platoon_adj
 
             # Confirmed-lineup opponent K% override.
             # Once the batting order is posted, the aggregate team split is less
@@ -16534,6 +16556,7 @@ if st.session_state.active_sport == "mlb":
                 _pitchcnt.get("pitches_per_bf") or _pstats.get("pitches_per_bf"),
                 _opp_plate.get("pitches_per_pa"),
                 _opp_plate.get("bb_rate"),
+                _pstats.get("swstr") or _k_pct_sv,
             )
             _bf_expected_k = _bf_proj.get("expected_k")
             _bf_prob = _bf_proj.get("prob")
@@ -18080,6 +18103,17 @@ if st.session_state.active_sport == "mlb":
                                                    f"vs {_lineup_profile_hand}HP profiles {_lineup_profile_coverage}/9") if _lineup_order else "Not posted",
                                                   _lineup_adj,
                                                   _lineup_note_txt if _lineup_note_txt else "Lineup not yet posted"),
+                    ("Platoon matchup",           (
+                                                  f"vsL {_platoon_vs_l:.1%} · vsR {_platoon_vs_r:.1%} · "
+                                                  f"{_lhb_count}L/{_rhb_count}R"
+                                                  if _platoon_vs_l and _platoon_vs_r else "N/A"),
+                                                  _platoon_adj,
+                                                  (
+                                                      f"Tonight's handedness-weighted pitcher K rate compared with "
+                                                      f"the pitcher's {_pitcher_kbf_baseline:.1%} overall K/BF baseline"
+                                                      if _pitcher_kbf_baseline else
+                                                      "Pitcher platoon baseline unavailable"
+                                                  )),
                     ("Contact profile",           f"{okpct:.1%} K profile" if okpct else "N/A",
                                                   _contact_adj,
                                                   "Extra guardrail for contact-heavy or swing-and-miss confirmed/opponent profile"),
@@ -18251,7 +18285,14 @@ if st.session_state.active_sport == "mlb":
                                          f"{'projected' if _lineup_projected else 'confirmed'}"
                                          f" · vs {_lineup_profile_hand}HP profiles {_lineup_profile_coverage}/9"
                                          f"{f' · K% {_lineup_avg_k:.1%}' if _lineup_avg_k is not None else ''}") if _order_hands else (f"{len(_lineup_order)}/9" if _lineup_order else "Not posted"),
-                    "Platoon matchup":  f"vsL:{_platoon_vs_l:.1%} vsR:{_platoon_vs_r:.1%} · {_lhb_count}L/{_rhb_count}R {'projected' if _lineup_projected else 'tonight'}" if (_platoon_vs_l and _platoon_vs_r) else "Lineup TBD",
+                    "Platoon matchup":  (
+                        f"vsL:{_platoon_vs_l:.1%} vsR:{_platoon_vs_r:.1%} · "
+                        f"overall:{_pitcher_kbf_baseline:.1%} · "
+                        f"{_lhb_count}L/{_rhb_count}R "
+                        f"{'projected' if _lineup_projected else 'tonight'}"
+                        if (_platoon_vs_l and _platoon_vs_r and _pitcher_kbf_baseline)
+                        else "Lineup or pitcher baseline TBD"
+                    ),
                     "Contact profile":  f"{okpct:.1%} · {_okpct_source}" if okpct else "N/A",
                     "Pitch count est":  (f"~{_pc_avg}p → exp {_pc_expected_outs:.1f} outs / ceil {_pc_outs_ceiling:.1f} outs · {_pc_status_label}"
                                          if (_is_outs_prop and _pc_avg) else
