@@ -12828,6 +12828,7 @@ def render_runtime_diagnostics() -> None:
         ("supabase", "Supabase Cache"),
         ("nba_logs", "NBA Logs"),
         ("nba_context", "NBA Context"),
+        ("wnba_rosters", "WNBA Rosters"),
     ]:
         _m = _metrics.get(_name, {})
         _detail = _m.get("detail", "not checked")
@@ -19517,59 +19518,66 @@ def _wnba_box_value(labels: list, stats: list, *names: str) -> Optional[float]:
     return None
 
 
-@st.cache_data(ttl=21600, show_spinner=False)
-def wnba_get_players() -> list:
-    """Load active WNBA rosters from ESPN and preserve team-identity evidence."""
-    found = []
+def _wnba_request_json(url: str, params: Optional[dict] = None) -> dict:
+    """Fetch ESPN JSON without letting the general ESPN cache retain an empty response."""
+    last_error = "empty response"
+    for attempt in range(3):
+        try:
+            response = requests.get(
+                url,
+                params=params,
+                headers={**ESPN_HEADERS, "Accept": "application/json"},
+                timeout=10,
+            )
+            if response.ok:
+                payload = response.json()
+                if isinstance(payload, dict) and payload:
+                    return payload
+                last_error = "empty JSON"
+            else:
+                last_error = f"HTTP {response.status_code}"
+        except Exception as err:
+            last_error = f"{type(err).__name__}: {str(err)[:120]}"
+        if attempt < 2:
+            time.sleep(0.5 * (attempt + 1))
+    raise RuntimeError(f"ESPN request failed ({last_error})")
+
+
+def _wnba_team_index(payload: dict) -> list:
+    """Read team identity from either ESPN's team index or season scoreboard."""
+    teams = {}
     try:
-        teams_data = espn_get(f"{WNBA_ANALYZER_SITE}/teams")
-        teams = (
-            teams_data.get("sports", [{}])[0]
+        index_rows = (
+            payload.get("sports", [{}])[0]
             .get("leagues", [{}])[0]
             .get("teams", [])
         )
-        for item in teams:
-            team = item.get("team", {}) or {}
-            team_id = str(team.get("id", "") or "")
-            team_abbr = _wnba_norm_team(team.get("abbreviation", ""))
-            if not team_id:
-                continue
-            roster = espn_get(f"{WNBA_ANALYZER_SITE}/teams/{team_id}/roster")
-            for group in roster.get("athletes", []) or []:
-                for athlete in (group.get("items") or [group]):
-                    player_id = str(athlete.get("id", "") or "")
-                    name = athlete.get("displayName") or athlete.get("fullName") or ""
-                    if player_id and name:
-                        position = str(
-                            (athlete.get("position", {}) or {}).get("abbreviation", "") or ""
-                        ).upper()
-                        athlete_team = athlete.get("team", {}) or {}
-                        nested_team = _wnba_norm_team(
-                            athlete_team.get("abbreviation", "")
-                            if isinstance(athlete_team, dict) else ""
-                        )
-                        nested_team_id = str(
-                            athlete_team.get("id", "")
-                            if isinstance(athlete_team, dict) else ""
-                        )
-                        found.append({
-                            "id": player_id,
-                            "name": name,
-                            "team": team_abbr,
-                            "team_id": team_id,
-                            "position": position,
-                            "position_group": _wnba_position_group(position),
-                            "active": bool(athlete.get("active", True)),
-                            "nested_team": nested_team,
-                            "nested_team_id": nested_team_id,
-                        })
-    except Exception as err:
-        record_debug_error("wnba.players", err)
+    except Exception:
+        index_rows = []
+    for item in index_rows or []:
+        team = (item or {}).get("team", item) or {}
+        team_id = str(team.get("id", "") or "")
+        abbr = _wnba_norm_team(
+            team.get("abbreviation") or team.get("shortDisplayName") or ""
+        )
+        if team_id and abbr:
+            teams[team_id] = {"id": team_id, "abbr": abbr}
 
-    # ESPN can briefly expose a traded player on more than one roster. A
-    # last-write-wins dictionary silently attached those players to whichever
-    # team happened to be returned last. Prefer the athlete's embedded team
-    # identity and retain conflicts so the analyzer can fail closed.
+    for event in payload.get("events", []) or []:
+        for competition in event.get("competitions", []) or []:
+            for competitor in competition.get("competitors", []) or []:
+                team = competitor.get("team", {}) or {}
+                team_id = str(team.get("id", "") or "")
+                abbr = _wnba_norm_team(
+                    team.get("abbreviation") or team.get("shortDisplayName") or ""
+                )
+                if team_id and abbr:
+                    teams[team_id] = {"id": team_id, "abbr": abbr}
+    return sorted(teams.values(), key=lambda item: item["abbr"])
+
+
+def _wnba_resolve_roster_players(found: list) -> list:
+    """Resolve duplicate roster appearances without guessing through team conflicts."""
     grouped = {}
     for player in found:
         grouped.setdefault(player["id"], []).append(player)
@@ -19597,6 +19605,141 @@ def wnba_get_players() -> list:
         )
         resolved.append(best)
     return sorted(resolved, key=lambda p: normalize_name(p["name"]))
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def _wnba_get_players_cached(_date: str) -> list:
+    """Load a complete roster set; exceptions prevent Streamlit from caching failures."""
+    errors = []
+    teams = []
+    try:
+        teams_payload = _wnba_request_json(
+            f"{WNBA_ANALYZER_SITE}/teams", params={"limit": 100}
+        )
+        teams = _wnba_team_index(teams_payload)
+    except Exception as err:
+        errors.append(f"team index: {err}")
+
+    if not teams:
+        try:
+            season = int(str(_date)[:4])
+            scoreboard = _wnba_request_json(
+                f"{WNBA_ANALYZER_SITE}/scoreboard",
+                params={"dates": str(season), "limit": 1000},
+            )
+            teams = _wnba_team_index(scoreboard)
+        except Exception as err:
+            errors.append(f"season scoreboard: {err}")
+
+    if not teams:
+        raise RuntimeError("; ".join(errors) or "ESPN returned no WNBA teams")
+
+    import concurrent.futures as _wnba_futures
+
+    def fetch_roster(team):
+        team_id = team["id"]
+        team_abbr = team["abbr"]
+        try:
+            roster = _wnba_request_json(
+                f"{WNBA_ANALYZER_SITE}/teams/{team_id}/roster",
+                params={"limit": 100},
+            )
+        except Exception as err:
+            return team, {}, f"{team_abbr}: {err}"
+        return team, roster, ""
+
+    found = []
+    roster_failures = []
+    roster_results = []
+    with _wnba_futures.ThreadPoolExecutor(
+        max_workers=min(6, max(1, len(teams)))
+    ) as executor:
+        futures = [executor.submit(fetch_roster, team) for team in teams]
+        for future in _wnba_futures.as_completed(futures):
+            try:
+                roster_results.append(future.result())
+            except Exception as err:
+                roster_failures.append(str(err)[:160])
+
+    for team, roster, roster_error in roster_results:
+        team_id = team["id"]
+        team_abbr = team["abbr"]
+        if roster_error:
+            roster_failures.append(roster_error)
+            continue
+        for group in roster.get("athletes", []) or []:
+            if not isinstance(group, dict):
+                continue
+            items = group.get("items") or [group]
+            for athlete in items:
+                if not isinstance(athlete, dict):
+                    continue
+                player_id = str(athlete.get("id", "") or "")
+                name = athlete.get("displayName") or athlete.get("fullName") or ""
+                if not player_id or not name:
+                    continue
+                position = str(
+                    (athlete.get("position", {}) or {}).get("abbreviation", "") or ""
+                ).upper()
+                athlete_team = athlete.get("team", {}) or {}
+                nested_team = _wnba_norm_team(
+                    athlete_team.get("abbreviation", "")
+                    if isinstance(athlete_team, dict) else ""
+                )
+                nested_team_id = str(
+                    athlete_team.get("id", "")
+                    if isinstance(athlete_team, dict) else ""
+                )
+                found.append({
+                    "id": player_id,
+                    "name": name,
+                    "team": team_abbr,
+                    "team_id": team_id,
+                    "position": position,
+                    "position_group": _wnba_position_group(position),
+                    "active": bool(athlete.get("active", True)),
+                    "nested_team": nested_team,
+                    "nested_team_id": nested_team_id,
+                })
+
+    resolved = _wnba_resolve_roster_players(found)
+    if not resolved:
+        detail = "; ".join(roster_failures[:5])
+        raise RuntimeError(detail or "ESPN returned no WNBA athletes")
+    return resolved
+
+
+def wnba_get_players(force_refresh: bool = False) -> list:
+    """Return fresh ESPN rosters, falling back only to a prior successful set."""
+    if force_refresh:
+        try:
+            _wnba_get_players_cached.clear()
+            espn_get_cached.clear()
+        except Exception:
+            pass
+    try:
+        players = _wnba_get_players_cached(_cache_date())
+        st.session_state["wnba_roster_last_good"] = players
+        status = "ok" if len(players) >= 100 else "warn"
+        set_runtime_metric(
+            "wnba_rosters", status,
+            f"{len(players)} ESPN roster players loaded",
+            fetched_at=datetime.utcnow().isoformat() + "Z",
+        )
+        return players
+    except Exception as err:
+        record_debug_error("wnba.players", err)
+        fallback = st.session_state.get("wnba_roster_last_good", []) or []
+        if fallback:
+            set_runtime_metric(
+                "wnba_rosters", "warn",
+                f"Using last known roster ({len(fallback)} players) · live refresh failed",
+            )
+            return fallback
+        set_runtime_metric(
+            "wnba_rosters", "error", f"ESPN roster fetch failed · {str(err)[:160]}"
+        )
+        return []
 
 
 def wnba_find_player(player_name: str) -> dict:
@@ -20908,7 +21051,28 @@ if st.session_state.active_sport == "wnba":
     )
     players = wnba_get_players()
     if not players:
-        st.error("WNBA rosters are unavailable from ESPN right now. Retry in a moment.")
+        st.error(
+            "WNBA roster data could not be loaded from ESPN. The app will not guess "
+            "player teams because that would weaken matchup validation."
+        )
+        roster_metric = (
+            st.session_state.get("runtime_metrics", {}).get("wnba_rosters", {}) or {}
+        )
+        if roster_metric.get("detail"):
+            st.caption(roster_metric["detail"])
+        if st.button(
+            "Retry WNBA rosters", key="wnba_retry_rosters",
+            type="primary", use_container_width=True,
+        ):
+            with st.spinner("Refreshing WNBA teams and rosters..."):
+                refreshed_players = wnba_get_players(force_refresh=True)
+            if refreshed_players:
+                st.rerun()
+            else:
+                st.warning(
+                    "ESPN still did not return a usable roster. The failure is recorded "
+                    "under Settings → Runtime Diagnostics."
+                )
         st.stop()
 
     names = [p["name"] for p in players]
@@ -25126,40 +25290,17 @@ if st.session_state.active_sport == "edge":
         return re.sub(r"[^A-Z]", "", str(abbr or "").upper().strip())
 
 
-    @st.cache_data(ttl=21600, show_spinner=False)
     def _scanner_get_wnba_players() -> list:
-        """Load active WNBA players from ESPN team rosters."""
-        players = []
-        try:
-            import requests as _req
-            teams_r = _req.get(f"{WNBA_SITE}/teams", timeout=8)
-            if not teams_r.ok:
-                return players
-            teams = (
-                teams_r.json()
-                .get("sports", [{}])[0]
-                .get("leagues", [{}])[0]
-                .get("teams", [])
-            )
-            for item in teams:
-                team = item.get("team", {})
-                tid = team.get("id")
-                abbr = _scanner_norm_wnba_team(team.get("abbreviation", ""))
-                if not tid:
-                    continue
-                rr = _req.get(f"{WNBA_SITE}/teams/{tid}/roster", timeout=8)
-                if not rr.ok:
-                    continue
-                for group in rr.json().get("athletes", []):
-                    for athlete in (group.get("items") or [group]):
-                        pid = str(athlete.get("id", "") or "")
-                        name = athlete.get("displayName") or athlete.get("fullName") or ""
-                        if pid and name:
-                            players.append({"id": pid, "name": name, "team": abbr})
-            return players
-        except Exception as e:
-            record_debug_error("wnba.edge.players", e)
-            return players
+        """Share the analyzer's resilient ESPN roster source."""
+        return [
+            {
+                "id": player.get("id"),
+                "name": player.get("name", ""),
+                "team": _scanner_norm_wnba_team(player.get("team", "")),
+            }
+            for player in wnba_get_players()
+            if player.get("id") and player.get("name")
+        ]
 
 
     def _scanner_find_wnba_player(player_name: str) -> dict:
