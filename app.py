@@ -21355,6 +21355,10 @@ if st.session_state.active_sport == "edge":
         confidence = int(result.get("confidence", 0) or 0)
         edge_pct = float(result.get("edge_pct", adj - 55.0) or 0)
         line_needs_verify = bool(result.get("line_verification_required"))
+        model_pass = str(result.get("tier", "")).strip().lower() == "pass"
+        hard_risk = str(result.get("trap_label", "")).strip() in (
+            "Trap Risk", "Do Not Force"
+        )
         is_strong = (
             adj >= 67
             and edge_pct >= 7
@@ -21365,11 +21369,15 @@ if st.session_state.active_sport == "edge":
                 or str(result.get("trap_label", "Clean")) == "Clean"
             )
             and not line_needs_verify
+            and not model_pass
+            and not hard_risk
         )
 
         base_score = int(round((adj * 0.70) + (confidence * 0.30)))
         score = int(round(float(result.get("rank_score", base_score) or 0)))
-        if line_needs_verify:
+        if model_pass or confidence < 55 or hard_risk:
+            score = min(score, 64)
+        elif line_needs_verify:
             score = min(score, 64)
         elif not is_strong:
             score = min(score, 79)
@@ -21404,7 +21412,15 @@ if st.session_state.active_sport == "edge":
         returned = int(audit.get("returned", 0) or 0)
         omitted = int(audit.get("omitted", max(0, attempted - returned)) or 0)
         execution_issues = int(audit.get("execution_issues", 0) or 0)
-        complete = attempted == returned + omitted and execution_issues == 0
+        omission_rate = (omitted / attempted) if attempted else 0.0
+        coverage_alert = bool(
+            attempted and (returned == 0 or omission_rate >= 0.50)
+        )
+        complete = (
+            attempted == returned + omitted
+            and execution_issues == 0
+            and not coverage_alert
+        )
         status_label = "COMPLETE" if complete else "REVIEW"
         status_color = "#00e896" if complete else "#ffc107"
         filter_label = (
@@ -24161,16 +24177,35 @@ if st.session_state.active_sport == "edge":
                             team: str = "",
                             market_context: Optional[dict] = None) -> Optional[dict]:
         """Run the same calibrated WNBA engine used by the individual analyzer."""
+        market_context = market_context or {}
+        market = normalize_wnba_prop_stat(stat)
+
+        def _reject(reason: str, details: Optional[list] = None) -> dict:
+            return {
+                "_rejected": True,
+                "reject_reason": str(reason or "WNBA model validation"),
+                "reject_details": list(details or []),
+                "sport": "WNBA",
+                "player": player_name,
+                "stat": market,
+                "line": line,
+                "side": side,
+            }
+
         try:
-            market_context = market_context or {}
-            market = normalize_wnba_prop_stat(stat)
             line = float(line)
             if market not in WNBA_STAT_COLUMNS or not is_sane_wnba_prop_line(market, line):
-                return None
+                return _reject(
+                    "unsupported or invalid WNBA market",
+                    [f"{market or stat} at line {line}"],
+                )
 
             player = wnba_find_player(player_name)
             if not player.get("id"):
-                return None
+                return _reject(
+                    "WNBA player lookup failed",
+                    [f"ESPN roster did not resolve {player_name}"],
+                )
             # ESPN's resolved roster is the schedule authority. PrizePicks team
             # metadata is corroboration only; a disagreement invalidates the row.
             team_abbr = _wnba_norm_team(player.get("team", ""))
@@ -24184,7 +24219,10 @@ if st.session_state.active_sport == "edge":
                         + " | ".join(context_validation.get("reasons") or ["Next game could not be verified"])
                     ),
                 )
-                return None
+                return _reject(
+                    "player/team/game validation failed",
+                    context_validation.get("reasons") or ["Next game could not be verified"],
+                )
             pp_start = pd.to_datetime(
                 market_context.get("start_time"), utc=True, errors="coerce"
             )
@@ -24202,21 +24240,39 @@ if st.session_state.active_sport == "edge":
                         f"{player_name}: PrizePicks {pp_start.isoformat()} vs "
                         f"ESPN {official_start.isoformat()}",
                     )
-                    return None
+                    return _reject(
+                        "PrizePicks/ESPN game-time mismatch",
+                        [
+                            f"PrizePicks {pp_start.isoformat()} vs ESPN "
+                            f"{official_start.isoformat()} ({start_delta_hours:.1f}h apart)"
+                        ],
+                    )
             elif pd.notna(pp_start) and game.get("game_date"):
                 try:
                     pp_game_date = pp_start.tz_convert("America/New_York").date().isoformat()
                     if pp_game_date != str(game.get("game_date")):
-                        return None
+                        return _reject(
+                            "PrizePicks/ESPN game-date mismatch",
+                            [
+                                f"PrizePicks {pp_game_date} vs ESPN "
+                                f"{game.get('game_date')}"
+                            ],
+                        )
                 except Exception:
                     pass
             opp = _wnba_norm_team(game.get("opp", ""))
             if not opp or opp == "TBD":
-                return None
+                return _reject(
+                    "WNBA opponent could not be verified",
+                    [f"Resolved team {team_abbr or 'TBD'} has no upcoming opponent"],
+                )
 
             logs = wnba_get_game_logs(player["id"], datetime.now().year, n=80)
             if logs is None or len(logs) < 4:
-                return None
+                return _reject(
+                    "insufficient WNBA game logs",
+                    [f"{player.get('name') or player_name}: {0 if logs is None else len(logs)} usable games"],
+                )
 
             opponent = next((p for p in wnba_get_players() if _wnba_norm_team(p.get("team")) == opp), {})
             position_group = player.get("position_group") or _wnba_position_group(player.get("position", ""))
@@ -24240,8 +24296,6 @@ if st.session_state.active_sport == "edge":
                 context_validation=context_validation,
                 market_context=market_context,
             )
-            if model["tier"] == "Pass" or model["confidence"] < 55:
-                return None
 
             line_history = summarize_pp_line_history(
                 line,
@@ -24255,8 +24309,6 @@ if st.session_state.active_sport == "edge":
             flags = list(model.get("flags") or [])
             severe_flags = [flag for flag in flags if "Low role" in flag or "Availability" in flag]
             trap_label = "Trap Risk" if severe_flags else "Watchlist" if flags else "Clean"
-            if trap_label == "Trap Risk":
-                return None
 
             probability = float(model["probability"])
             directional_avg_edge = (
@@ -24330,7 +24382,10 @@ if st.session_state.active_sport == "edge":
             }
         except Exception as err:
             record_debug_error("wnba.edge.shared_model", err)
-            return None
+            return _reject(
+                "WNBA model execution failed",
+                [f"{type(err).__name__}: {str(err)[:220]}"],
+            )
 
 
     # ── UI ────────────────────────────────────────────────────────────────
@@ -24881,8 +24936,18 @@ if st.session_state.active_sport == "edge":
                             )
                             for _side in _requested_sides
                         ]
-                        _sides = [result for result in _sides if result]
-                        return max(_sides, key=lambda result: (result["adj"], result["confidence"])) if _sides else None
+                        _valid_sides = [
+                            result for result in _sides
+                            if result and not result.get("_rejected")
+                        ]
+                        if _valid_sides:
+                            return max(
+                                _valid_sides,
+                                key=lambda result: (
+                                    result["adj"], result["confidence"]
+                                ),
+                            )
+                        return next((result for result in _sides if result), None)
             except Exception as _model_err:
                 record_debug_error(
                     f"{str(prop.get('sport', 'edge')).lower()}.edge.model.{prop.get('player', 'unknown')}",
@@ -24912,13 +24977,16 @@ if st.session_state.active_sport == "edge":
                 try:
                     _res = _fut.result(timeout=12)
                     if _res and _res.get("_rejected"):
+                        _reject_details = list(_res.get("reject_details") or [])
                         _reject_detail = (
-                            (_res.get("reject_details") or [None])[0]
+                            " | ".join(str(detail) for detail in _reject_details if detail)
                             or _res.get("reject_reason")
                             or "model validation"
                         )
                         _reject_label = re.sub(
-                            r"\s*\([^)]*\)", "", str(_reject_detail)
+                            r"\s*\([^)]*\)", "", str(
+                                _res.get("reject_reason") or _reject_detail
+                            )
                         ).strip()
                         _rejection_counts[_reject_label] = (
                             _rejection_counts.get(_reject_label, 0) + 1
@@ -25060,9 +25128,9 @@ if st.session_state.active_sport == "edge":
                 "play": _action_counts.get("PLAY", 0),
                 "watch": _action_counts.get("WATCH", 0),
                 "pass": _action_counts.get("PASS", 0),
-                "execution_issues": (
-                    _rejection_counts.get("No model result", 0)
-                    + _rejection_counts.get("Model execution error", 0)
+                "execution_issues": sum(
+                    count for reason, count in _rejection_counts.items()
+                    if reason == "No model result" or "execution" in reason.lower()
                 ),
                 "rejection_counts": dict(_rejection_counts),
             }
@@ -25156,7 +25224,8 @@ if st.session_state.active_sport == "edge":
         _with_edge = []
         for r in _results:
             _edge_pct = r["adj"] - _breakeven
-            if _edge_pct >= _min_edge_val:
+            _, _result_action, _ = scanner_entry_decision(r)
+            if _edge_pct >= _min_edge_val and _result_action in ("PLAY", "WATCH"):
                 r["edge_pct"] = round(_edge_pct, 1)
                 _with_edge.append(r)
 
@@ -25169,21 +25238,20 @@ if st.session_state.active_sport == "edge":
         if not _with_edge:
             st.markdown(
                 "<div style='text-align:center;color:#6b7f96;font-family:JetBrains Mono,"
-                "monospace;font-size:0.75rem;padding:2rem;'>No plays found above the "
-                f"minimum {_edge_min} edge threshold. Try lowering the filter.</div>",
+                "monospace;font-size:0.75rem;padding:2rem;'>No PLAY or WATCH results "
+                f"cleared the minimum {_edge_min} model-margin threshold. PASS results "
+                "remain counted in the Slate Coverage Audit but are hidden from this board.</div>",
                 unsafe_allow_html=True
             )
         else:
             # Summary strip
             _strong  = [
                 r for r in _with_edge
-                if scanner_entry_decision(r)[2]
+                if scanner_entry_decision(r)[1] == "PLAY"
             ]
             _lean    = [
                 r for r in _with_edge
-                if r not in _strong
-                and not r.get("line_verification_required")
-                and (r["adj"] >= 60 or r["edge_pct"] >= 3)
+                if scanner_entry_decision(r)[1] == "WATCH"
             ]
             _goblins = [r for r in _with_edge if r.get("is_goblin")]
             _over_count = sum(1 for r in _with_edge if r.get("side", "Over") == "Over")
@@ -25193,10 +25261,10 @@ if st.session_state.active_sport == "edge":
                 f"margin-bottom:1rem;font-family:JetBrains Mono,monospace;'>"
                 f"<div style='background:rgba(0,232,150,0.1);border:1px solid rgba(0,232,150,0.25);"
                 f"border-radius:8px;padding:6px 14px;font-size:0.65rem;color:#00e896;'>"
-                f"🔥 {len(_strong)} Strong plays</div>"
+                f"🔥 {len(_strong)} PLAY</div>"
                 f"<div style='background:rgba(255,193,7,0.1);border:1px solid rgba(255,193,7,0.25);"
                 f"border-radius:8px;padding:6px 14px;font-size:0.65rem;color:#ffc107;'>"
-                f"🟡 {len(_lean)} Lean plays</div>"
+                f"🟡 {len(_lean)} WATCH</div>"
                 f"<div style='background:rgba(255,61,92,0.1);border:1px solid rgba(255,61,92,0.25);"
                 f"border-radius:8px;padding:6px 14px;font-size:0.65rem;color:#ff3d5c;'>"
                 f"🔴 {len(_goblins)} reduced-payout lines</div>"
@@ -25355,18 +25423,19 @@ if st.session_state.active_sport == "edge":
                     if _reason_html else ""
                 )
                 _line_needs_verify = bool(_r.get("line_verification_required"))
-                _is_lean    = (not _line_needs_verify) and (not _is_strong) and (
-                    _r["adj"] >= 60 or _r["edge_pct"] >= 3
-                )
+                _is_lean = _edge_entry_action == "WATCH"
+                _is_pass = _edge_entry_action == "PASS"
                 _result_side = _r.get("side", "Over")
                 _tier_lbl   = ("Verify Line" if _line_needs_verify else
-                               f"Strong {_result_side}" if _is_strong else
+                               f"Strong {_result_side}" if _edge_entry_action == "PLAY" else
                                f"Lean {_result_side}" if _is_lean else "Edge Play")
+                if _is_pass and not _line_needs_verify:
+                    _tier_lbl = "Pass"
                 _tier_col   = ("#f97316" if _line_needs_verify else
-                               "#00e896" if _is_strong else
-                               "#ffc107" if _is_lean  else "#9aaec4")
+                               "#00e896" if _edge_entry_action == "PLAY" else
+                               "#ffc107" if _is_lean else "#9aaec4")
                 _tier_bg    = ("rgba(249,115,22,0.06)" if _line_needs_verify else
-                               "rgba(0,232,150,0.06)" if _is_strong else
+                               "rgba(0,232,150,0.06)" if _edge_entry_action == "PLAY" else
                                "rgba(255,193,7,0.05)" if _is_lean  else
                                "rgba(255,255,255,0.02)")
                 _border_col = (_tier_col + "33")
@@ -25770,15 +25839,21 @@ if st.session_state.active_sport == "edge":
                         "Sport":       _r["sport"],
                     }
                     st.button(
-                        "Verify PP line first" if _line_needs_verify else "➕ Add & Track",
+                        (
+                            "Verify PP line first" if _line_needs_verify else
+                            "Pass — analyze only" if _is_pass else
+                            "➕ Add & Track"
+                        ),
                         key=f"ep_{_btn_key_safe}",
                         use_container_width=True,
                         on_click=add_to_pick_list_and_tracker,
                         args=(_new_leg, _edge_tracker_entry),
-                        disabled=_line_needs_verify,
+                        disabled=_line_needs_verify or _is_pass,
                         help=(
                             "This result came from an older fallback slate. Confirm the current PrizePicks line or refresh the slate first."
-                            if _line_needs_verify else None
+                            if _line_needs_verify else
+                            "This prop did not clear the scanner's entry gate. Use Analyze to inspect it, but it cannot be added as a recommended leg."
+                            if _is_pass else None
                         ),
                     )
 
