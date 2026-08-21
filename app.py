@@ -21349,6 +21349,142 @@ if st.session_state.active_sport == "edge":
         return grade, color, reasons[:5]
 
 
+    def scanner_entry_decision(result: dict) -> Tuple[int, str, bool]:
+        """Return the scanner's final Entry Score, action, and strong-tier flag."""
+        adj = float(result.get("adj", 0) or 0)
+        confidence = int(result.get("confidence", 0) or 0)
+        edge_pct = float(result.get("edge_pct", adj - 55.0) or 0)
+        line_needs_verify = bool(result.get("line_verification_required"))
+        is_strong = (
+            adj >= 67
+            and edge_pct >= 7
+            and confidence >= 75
+            and "Watchlist" not in str(result.get("validation_label", ""))
+            and (
+                result.get("sport") != "MLB"
+                or str(result.get("trap_label", "Clean")) == "Clean"
+            )
+            and not line_needs_verify
+        )
+
+        base_score = int(round((adj * 0.70) + (confidence * 0.30)))
+        score = int(round(float(result.get("rank_score", base_score) or 0)))
+        if line_needs_verify:
+            score = min(score, 64)
+        elif not is_strong:
+            score = min(score, 79)
+        score = max(0, min(100, score))
+        action = "PLAY" if score >= 80 else "WATCH" if score >= 65 else "PASS"
+        return score, action, is_strong
+
+
+    def scanner_result_sort_key(result: dict, sort_field: str) -> tuple:
+        """Rank actionable picks first, then apply the user's metric within each band."""
+        entry_score, action, _ = scanner_entry_decision(result)
+        action_order = {"PLAY": 0, "WATCH": 1, "PASS": 2}
+        selected_value = float(result.get(sort_field, 0) or 0)
+        return (
+            action_order.get(action, 3),
+            1 if result.get("line_verification_required") else 0,
+            1 if result.get("is_goblin") or result.get("is_promo") else 0,
+            -selected_value,
+            -entry_score,
+            -float(result.get("rank_score", result.get("adj", 0)) or 0),
+            -float(result.get("adj", 0) or 0),
+            normalize_name(result.get("player", "")),
+        )
+
+
+    def render_edge_slate_audit(audit: dict, rejection_rows: list) -> None:
+        """Show scanner coverage and omissions without changing model output."""
+        if not audit:
+            return
+
+        attempted = int(audit.get("attempted", 0) or 0)
+        returned = int(audit.get("returned", 0) or 0)
+        omitted = int(audit.get("omitted", max(0, attempted - returned)) or 0)
+        execution_issues = int(audit.get("execution_issues", 0) or 0)
+        complete = attempted == returned + omitted and execution_issues == 0
+        status_label = "COMPLETE" if complete else "REVIEW"
+        status_color = "#00e896" if complete else "#ffc107"
+        filter_label = (
+            f"{audit.get('sport', '')} · {audit.get('market_filter', '')} · "
+            f"{audit.get('side_filter', '')}"
+        )
+
+        st.markdown(
+            f"<div style='margin:0.85rem 0 0.55rem;padding:0.8rem 0.9rem;"
+            f"border:1px solid rgba(255,255,255,0.08);border-left:3px solid {status_color};"
+            f"background:#151a20;border-radius:8px;'>"
+            f"<div style='display:flex;justify-content:space-between;align-items:center;"
+            f"gap:10px;flex-wrap:wrap;margin-bottom:0.65rem;'>"
+            f"<span style='font-family:Plus Jakarta Sans,sans-serif;font-size:0.85rem;"
+            f"font-weight:800;color:#f0f4f8;'>Slate Coverage Audit</span>"
+            f"<span style='font-family:JetBrains Mono,monospace;font-size:0.56rem;"
+            f"font-weight:800;letter-spacing:0.1em;color:{status_color};'>{status_label}</span>"
+            f"</div>"
+            f"<div style='display:grid;grid-template-columns:repeat(auto-fit,minmax(92px,1fr));"
+            f"gap:6px;'>"
+            f"<div><div style='font-size:0.52rem;color:#6b7f96;'>SPORT ROWS</div>"
+            f"<div style='font-size:1rem;font-weight:800;color:#f0f4f8;'>{int(audit.get('sport_rows', 0) or 0)}</div></div>"
+            f"<div><div style='font-size:0.52rem;color:#6b7f96;'>ANALYZED</div>"
+            f"<div style='font-size:1rem;font-weight:800;color:#f0f4f8;'>{attempted}</div></div>"
+            f"<div><div style='font-size:0.52rem;color:#6b7f96;'>RETURNED</div>"
+            f"<div style='font-size:1rem;font-weight:800;color:#00c4cc;'>{returned}</div></div>"
+            f"<div><div style='font-size:0.52rem;color:#6b7f96;'>PLAY</div>"
+            f"<div style='font-size:1rem;font-weight:800;color:#00e896;'>{int(audit.get('play', 0) or 0)}</div></div>"
+            f"<div><div style='font-size:0.52rem;color:#6b7f96;'>WATCH</div>"
+            f"<div style='font-size:1rem;font-weight:800;color:#ffc107;'>{int(audit.get('watch', 0) or 0)}</div></div>"
+            f"<div><div style='font-size:0.52rem;color:#6b7f96;'>MODEL OMITTED</div>"
+            f"<div style='font-size:1rem;font-weight:800;color:{'#ff3d5c' if omitted else '#9aaec4'};'>{omitted}</div></div>"
+            f"</div>"
+            f"<div style='font-family:JetBrains Mono,monospace;font-size:0.55rem;"
+            f"color:#6b7f96;margin-top:0.6rem;'>{filter_label}</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+        with st.expander("View slate coverage details", expanded=False):
+            stages = audit.get("stages", []) or []
+            if stages:
+                st.dataframe(
+                    pd.DataFrame(stages),
+                    hide_index=True,
+                    use_container_width=True,
+                )
+
+            rejection_counts = audit.get("rejection_counts", {}) or {}
+            if rejection_counts:
+                st.markdown("**Model omissions by reason**")
+                st.dataframe(
+                    pd.DataFrame(
+                        [
+                            {"Reason": reason, "Props": count}
+                            for reason, count in sorted(
+                                rejection_counts.items(),
+                                key=lambda item: (-item[1], item[0]),
+                            )
+                        ]
+                    ),
+                    hide_index=True,
+                    use_container_width=True,
+                )
+
+            if rejection_rows:
+                st.markdown("**Omitted prop lines**")
+                st.dataframe(
+                    pd.DataFrame(rejection_rows[:200]),
+                    hide_index=True,
+                    use_container_width=True,
+                )
+                if len(rejection_rows) > 200:
+                    st.caption(
+                        f"Showing 200 of {len(rejection_rows)} omitted prop lines."
+                    )
+            elif attempted:
+                st.caption("Every analyzed prop line returned a model result.")
+
+
     def build_mlb_best_entry(candidates: list, target_size: int = 3) -> dict:
         """
         Build a conservative MLB entry from validated Edge Scanner results.
@@ -24303,6 +24439,8 @@ if st.session_state.active_sport == "edge":
             st.session_state["edge_has_scanned"] = False
             st.session_state["edge_scan_summary"] = ""
             st.session_state["edge_scan_rejections"] = {}
+            st.session_state["edge_scan_audit"] = {}
+            st.session_state["edge_scan_rejection_rows"] = []
             st.toast("Cache cleared", icon="✅")
             st.rerun()
 
@@ -24311,6 +24449,8 @@ if st.session_state.active_sport == "edge":
         st.session_state["edge_has_scanned"] = True
         st.session_state["edge_scan_summary"] = ""
         st.session_state["edge_scan_rejections"] = {}
+        st.session_state["edge_scan_audit"] = {}
+        st.session_state["edge_scan_rejection_rows"] = []
         st.session_state["_edge_last_stat_filter"] = _edge_stat
         st.session_state["_edge_last_side_filter"] = _edge_side
 
@@ -24343,10 +24483,34 @@ if st.session_state.active_sport == "edge":
             )
 
         if not _all_props:
+            _empty_audit = {
+                "sport": _edge_sport,
+                "market_filter": _edge_stat,
+                "side_filter": _edge_side,
+                "sport_rows": 0,
+                "attempted": 0,
+                "returned": 0,
+                "omitted": 0,
+                "play": 0,
+                "watch": 0,
+                "pass": 0,
+                "execution_issues": 1 if _fetch_err_text else 0,
+                "stages": [
+                    {
+                        "Stage": "PrizePicks fetch",
+                        "Rows remaining": 0,
+                        "Removed here": 0,
+                        "What happened": _fetch_err_text or "No current rows returned",
+                    }
+                ],
+                "rejection_counts": {},
+            }
+            st.session_state["edge_scan_audit"] = _empty_audit
+            render_edge_slate_audit(_empty_audit, [])
             fetch_all_pp_props.clear()
             if "currently lists 0" in _fetch_err_text:
                 st.caption(
-                    "The scanner is ready. No current PrizePicks MLB lines are available to analyze, "
+                    f"The scanner is ready. No current PrizePicks {_edge_sport} lines are available to analyze, "
                     "so PropIQ is not substituting stale or cross-sport props."
                 )
             else:
@@ -24360,10 +24524,32 @@ if st.session_state.active_sport == "edge":
 
         # ── Filter BEFORE analysis — only pass matching props to threads ──
         _filtered = _all_props
+        _audit_stages = [
+            {
+                "Stage": "Fetched slate",
+                "Rows remaining": len(_all_props),
+                "Removed here": 0,
+                "What happened": "All parsed PrizePicks rows",
+            }
+        ]
+
+        def _record_audit_stage(stage: str, before: int, after: int, note: str) -> None:
+            _audit_stages.append(
+                {
+                    "Stage": stage,
+                    "Rows remaining": after,
+                    "Removed here": max(0, before - after),
+                    "What happened": note,
+                }
+            )
 
         # Sport-specific scanner
+        _before_filter = len(_filtered)
         _filtered = [p for p in _filtered if p["sport"] == _edge_sport]
         _raw_sport_count = len(_filtered)
+        _record_audit_stage(
+            "Sport filter", _before_filter, len(_filtered), f"Kept {_edge_sport} rows"
+        )
 
         # Stat filter — applied BEFORE threading so we don't spin up
         # 484 threads for 20 actual props
@@ -24389,7 +24575,12 @@ if st.session_state.active_sport == "edge":
             "All Stats":            lambda s: True,
         }
         _stat_fn = _STAT_MAP.get(_edge_stat, lambda s: True)
+        _before_filter = len(_filtered)
         _filtered = [p for p in _filtered if _stat_fn(p["stat"])]
+        _record_audit_stage(
+            "Market filter", _before_filter, len(_filtered), f"Kept {_edge_stat}"
+        )
+        _before_filter = len(_filtered)
         if _edge_sport == "MLB":
             _filtered = [
                 p for p in _filtered
@@ -24410,13 +24601,33 @@ if st.session_state.active_sport == "edge":
                 if is_wnba_supported_prop(p.get("stat", ""))
                 and is_sane_wnba_prop_line(p.get("stat", ""), p.get("line"))
             ]
+        _record_audit_stage(
+            "Line and role validation",
+            _before_filter,
+            len(_filtered),
+            "Removed impossible lines and incompatible player roles",
+        )
 
         # The scanner has no demon-market mode. Exclude those harder alternate
         # lines explicitly, including when reading a slate saved by older code.
+        _before_filter = len(_filtered)
         _filtered = [p for p in _filtered if not p.get("is_demon", False)]
+        _record_audit_stage(
+            "Demon exclusion",
+            _before_filter,
+            len(_filtered),
+            "Removed harder alternate lines",
+        )
+
+        _reduced_available = sum(
+            1 for p in _filtered
+            if p.get("is_goblin") or p.get("is_promo") or p.get("adjusted_odds")
+        )
+        _standard_available = len(_filtered) - _reduced_available
 
         # Standard lines are the default board. Reduced-payout variants can be
         # inspected explicitly, but should never be mistaken for equal-value bets.
+        _before_filter = len(_filtered)
         if not _include_goblin:
             _filtered = [
                 p for p in _filtered
@@ -24425,10 +24636,21 @@ if st.session_state.active_sport == "edge":
                     or p.get("adjusted_odds")
                 )
             ]
+        _record_audit_stage(
+            "Payout filter",
+            _before_filter,
+            len(_filtered),
+            (
+                f"Available before filter: {_standard_available} standard, "
+                f"{_reduced_available} reduced; reduced lines "
+                f"{'included' if _include_goblin else 'excluded'}"
+            ),
+        )
 
         # Deduplicate deterministically: preserve one standard and one optional
         # reduced row per player, market, and event. For multiple reduced rows,
         # keep the lowest live Over line.
+        _before_filter = len(_filtered)
         _deduped = {}
         for p in _filtered:
             _norm_stat = (
@@ -24462,10 +24684,17 @@ if st.session_state.active_sport == "edge":
             elif pp_projection_recency_key(p) > pp_projection_recency_key(existing):
                 _deduped[_k] = p
         _filtered = list(_deduped.values())
+        _record_audit_stage(
+            "Projection deduplication",
+            _before_filter,
+            len(_filtered),
+            "Kept the newest standard line and lowest live reduced line per event",
+        )
 
         # Reduced-payout lines are favorable only to the Over. Under scans use
         # the standard full-payout line; All-sides scans retain both variants
         # and evaluate a reduced line as Over-only.
+        _before_filter = len(_filtered)
         if _edge_side == "Unders":
             _filtered = [
                 p for p in _filtered
@@ -24474,6 +24703,12 @@ if st.session_state.active_sport == "edge":
                     or p.get("adjusted_odds")
                 )
             ]
+        _record_audit_stage(
+            "Direction compatibility",
+            _before_filter,
+            len(_filtered),
+            "Reduced-payout rows are unavailable for Under scans",
+        )
         # When reduced lines are enabled, preserve one standard and one lowest
         # reduced variant. They are different payout products and should be
         # compared explicitly rather than allowing the easier line to replace
@@ -24488,7 +24723,27 @@ if st.session_state.active_sport == "edge":
                 _wnba_market_counts[_market] = _wnba_market_counts.get(_market, 0) + 1
         _wnba_supported_count = sum(_wnba_market_counts.values())
 
+        _scan_audit = {
+            "sport": _edge_sport,
+            "market_filter": _edge_stat,
+            "side_filter": _edge_side,
+            "include_reduced": bool(_include_goblin),
+            "fetched_total": len(_all_props),
+            "sport_rows": _raw_sport_count,
+            "attempted": len(_filtered),
+            "returned": 0,
+            "omitted": 0,
+            "play": 0,
+            "watch": 0,
+            "pass": 0,
+            "execution_issues": 0,
+            "stages": _audit_stages,
+            "rejection_counts": {},
+        }
+
         if not _filtered:
+            st.session_state["edge_scan_audit"] = _scan_audit
+            render_edge_slate_audit(_scan_audit, [])
             st.warning("No props found matching your filters. Try broadening the sport or stat filter.")
             st.stop()
 
@@ -24509,6 +24764,7 @@ if st.session_state.active_sport == "edge":
         _status  = st.empty()
         _results = []
         _rejection_counts = {}
+        _rejection_rows = []
 
         import concurrent.futures as _cfe
 
@@ -24656,16 +24912,26 @@ if st.session_state.active_sport == "edge":
                 try:
                     _res = _fut.result(timeout=12)
                     if _res and _res.get("_rejected"):
-                        _reject_label = (
+                        _reject_detail = (
                             (_res.get("reject_details") or [None])[0]
                             or _res.get("reject_reason")
                             or "model validation"
                         )
                         _reject_label = re.sub(
-                            r"\s*\([^)]*\)", "", str(_reject_label)
+                            r"\s*\([^)]*\)", "", str(_reject_detail)
                         ).strip()
                         _rejection_counts[_reject_label] = (
                             _rejection_counts.get(_reject_label, 0) + 1
+                        )
+                        _rejection_rows.append(
+                            {
+                                "Player": _prop_ref.get("player", ""),
+                                "Market": _prop_ref.get("stat", ""),
+                                "Line": _prop_ref.get("line", ""),
+                                "Model side": _res.get("side", _edge_side),
+                                "Reason": _reject_label,
+                                "Details": str(_reject_detail),
+                            }
                         )
                         continue
                     if _res:
@@ -24724,8 +24990,40 @@ if st.session_state.active_sport == "edge":
                             - _res["rank_penalty"],
                             1,
                         )
+                        _entry_score, _entry_action, _ = scanner_entry_decision(_res)
+                        _res["entry_score"] = _entry_score
+                        _res["entry_action"] = _entry_action
                         _results.append(_res)
+                    else:
+                        _reject_label = "No model result"
+                        _rejection_counts[_reject_label] = (
+                            _rejection_counts.get(_reject_label, 0) + 1
+                        )
+                        _rejection_rows.append(
+                            {
+                                "Player": _prop_ref.get("player", ""),
+                                "Market": _prop_ref.get("stat", ""),
+                                "Line": _prop_ref.get("line", ""),
+                                "Model side": _edge_side,
+                                "Reason": _reject_label,
+                                "Details": "No candidate returned; inspect Runtime Diagnostics for a recorded model error",
+                            }
+                        )
                 except Exception as _future_err:
+                    _reject_label = "Model execution error"
+                    _rejection_counts[_reject_label] = (
+                        _rejection_counts.get(_reject_label, 0) + 1
+                    )
+                    _rejection_rows.append(
+                        {
+                            "Player": _prop_ref.get("player", ""),
+                            "Market": _prop_ref.get("stat", ""),
+                            "Line": _prop_ref.get("line", ""),
+                            "Model side": _edge_side,
+                            "Reason": _reject_label,
+                            "Details": str(_future_err)[:240],
+                        }
+                    )
                     record_debug_error(
                         f"edge.future.{_prop_ref.get('player', 'unknown')}",
                         _future_err,
@@ -24734,6 +25032,12 @@ if st.session_state.active_sport == "edge":
         _prog.empty()
         _status.empty()
         st.session_state.edge_results = _results
+        _action_counts = {"PLAY": 0, "WATCH": 0, "PASS": 0}
+        for _result in _results:
+            _entry_score, _entry_action, _ = scanner_entry_decision(_result)
+            _result["entry_score"] = _entry_score
+            _result["entry_action"] = _entry_action
+            _action_counts[_entry_action] = _action_counts.get(_entry_action, 0) + 1
         if _edge_sport == "MLB":
             _slate_bits = f"{_mlb_k_count} K props, {_mlb_hfs_count} Hitter FS props"
         elif _edge_sport == "WNBA":
@@ -24749,6 +25053,40 @@ if st.session_state.active_sport == "edge":
             if _top_rejections else ""
         )
         st.session_state["edge_scan_rejections"] = _rejection_counts
+        _scan_audit.update(
+            {
+                "returned": len(_results),
+                "omitted": sum(_rejection_counts.values()),
+                "play": _action_counts.get("PLAY", 0),
+                "watch": _action_counts.get("WATCH", 0),
+                "pass": _action_counts.get("PASS", 0),
+                "execution_issues": (
+                    _rejection_counts.get("No model result", 0)
+                    + _rejection_counts.get("Model execution error", 0)
+                ),
+                "rejection_counts": dict(_rejection_counts),
+            }
+        )
+        _scan_audit["stages"] = list(_scan_audit.get("stages", [])) + [
+            {
+                "Stage": "Model analysis",
+                "Rows remaining": len(_results),
+                "Removed here": sum(_rejection_counts.values()),
+                "What happened": "Each eligible prop line was evaluated by the sport model",
+            },
+            {
+                "Stage": "Action grading",
+                "Rows remaining": len(_results),
+                "Removed here": 0,
+                "What happened": (
+                    f"{_action_counts.get('PLAY', 0)} PLAY, "
+                    f"{_action_counts.get('WATCH', 0)} WATCH, "
+                    f"{_action_counts.get('PASS', 0)} PASS"
+                ),
+            },
+        ]
+        st.session_state["edge_scan_audit"] = _scan_audit
+        st.session_state["edge_scan_rejection_rows"] = _rejection_rows
         st.session_state["edge_scan_summary"] = (
             f"Analyzed {len(_filtered)} matching prop lines ({_edge_side.lower()}) · "
             f"{len(_results)} model candidates returned "
@@ -24791,6 +25129,12 @@ if st.session_state.active_sport == "edge":
     elif _edge_side == "Unders":
         _results = [r for r in _results if r.get("side") == "Under"]
 
+    if st.session_state.get("edge_has_scanned"):
+        render_edge_slate_audit(
+            st.session_state.get("edge_scan_audit", {}) or {},
+            st.session_state.get("edge_scan_rejection_rows", []) or [],
+        )
+
     if _results:
         if st.session_state.get("edge_has_scanned"):
             st.caption(
@@ -24816,13 +25160,11 @@ if st.session_state.active_sport == "edge":
                 r["edge_pct"] = round(_edge_pct, 1)
                 _with_edge.append(r)
 
-        # Current verified lines rank ahead of stale fallback lines.
-        _with_edge.sort(key=lambda r: (
-            1 if r.get("line_verification_required") else 0,
-            -float(r.get("rank_score", r.get("adj", 0)) or 0),
-            -r["adj"],
-            1 if r.get("is_goblin") or r.get("is_promo") else 0,
-        ))
+        # Keep the working set in final-action order. A WATCH or PASS must not
+        # outrank a PLAY simply because its raw model probability is larger.
+        _with_edge.sort(
+            key=lambda result: scanner_result_sort_key(result, "rank_score")
+        )
 
         if not _with_edge:
             st.markdown(
@@ -24835,14 +25177,7 @@ if st.session_state.active_sport == "edge":
             # Summary strip
             _strong  = [
                 r for r in _with_edge
-                if r["adj"] >= 67 and r["edge_pct"] >= 7
-                and int(r.get("confidence", 0) or 0) >= 75
-                and "Watchlist" not in str(r.get("validation_label", ""))
-                and (
-                    r.get("sport") != "MLB"
-                    or str(r.get("trap_label", "Clean")) == "Clean"
-                )
-                and not r.get("line_verification_required")
+                if scanner_entry_decision(r)[2]
             ]
             _lean    = [
                 r for r in _with_edge
@@ -24996,18 +25331,21 @@ if st.session_state.active_sport == "edge":
             _edge_sort_field = _edge_sort_fields.get(_edge_sort, "rank_score")
             _display_edge_results = sorted(
                 _with_edge,
-                key=lambda result: (
-                    1 if result.get("line_verification_required") else 0,
-                    1 if result.get("is_goblin") or result.get("is_promo") else 0,
-                    -float(result.get(_edge_sort_field, 0) or 0),
-                    -float(result.get("rank_score", result.get("adj", 0)) or 0),
+                key=lambda result: scanner_result_sort_key(
+                    result, _edge_sort_field
                 ),
             )
-            st.caption(f"Sorted by {_edge_sort.lower()} · current standard lines shown first")
+            st.caption(
+                f"PLAY first · WATCH second · PASS last · "
+                f"sorted by {_edge_sort.lower()} within each group"
+            )
 
             # Render each result as a compact row. Supporting signals expand on demand.
             for _r in _display_edge_results:
                 _grade_lbl, _grade_col, _reason_list = scanner_grade_and_reasons(_r)
+                _edge_entry_score, _edge_entry_action, _is_strong = (
+                    scanner_entry_decision(_r)
+                )
                 _reason_html = "".join(
                     f"<span class='edge-pill-v55'>{_why}</span>"
                     for _why in _reason_list
@@ -25017,16 +25355,6 @@ if st.session_state.active_sport == "edge":
                     if _reason_html else ""
                 )
                 _line_needs_verify = bool(_r.get("line_verification_required"))
-                _is_strong  = (
-                    _r["adj"] >= 67 and _r["edge_pct"] >= 7
-                    and int(_r.get("confidence", 0) or 0) >= 75
-                    and "Watchlist" not in str(_r.get("validation_label", ""))
-                    and (
-                        _r.get("sport") != "MLB"
-                        or str(_r.get("trap_label", "Clean")) == "Clean"
-                    )
-                    and not _r.get("line_verification_required")
-                )
                 _is_lean    = (not _line_needs_verify) and (not _is_strong) and (
                     _r["adj"] >= 60 or _r["edge_pct"] >= 3
                 )
@@ -25066,18 +25394,6 @@ if st.session_state.active_sport == "edge":
                 _edge_color_class = "green" if _r["edge_pct"] >= 7 else ("yellow" if _r["edge_pct"] >= 3 else "")
                 _conf_val = int(_r.get("confidence", _r["adj"]) or 0)
                 _conf_color_class = "green" if _conf_val >= 80 else ("yellow" if _conf_val >= 65 else "")
-                _edge_entry_base = int(round((float(_r["adj"]) * 0.70) + (_conf_val * 0.30)))
-                _edge_entry_score = int(round(float(
-                    _r.get("rank_score", _edge_entry_base)
-                )))
-                if _line_needs_verify:
-                    _edge_entry_score = min(_edge_entry_score, 64)
-                elif not _is_strong:
-                    _edge_entry_score = min(_edge_entry_score, 79)
-                _edge_entry_action = (
-                    "PLAY" if _edge_entry_score >= 80 else
-                    "WATCH" if _edge_entry_score >= 65 else "PASS"
-                )
                 _risk_pills = ""
                 _viewed_key = (
                     f"{str(_r.get('sport', '')).lower()}|{normalize_name(_r.get('player', ''))}|"
