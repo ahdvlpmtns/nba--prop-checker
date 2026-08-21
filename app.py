@@ -11954,6 +11954,7 @@ def render_runtime_diagnostics() -> None:
         "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_SERVICE_KEY", "SUPABASE_KEY",
         "SUPABASE_ANON_KEY", "NEXT_PUBLIC_SUPABASE_ANON_KEY",
     )
+    _odds_key_status = masked_env_status("THE_ODDS_API_KEY", "ODDS_API_KEY")
     _diag_pills = [
         runtime_status_pill(
             "Supabase URL",
@@ -11965,10 +11966,16 @@ def render_runtime_diagnostics() -> None:
             "ok" if _sb_key_status != "missing" else "warn",
             _sb_key_status,
         ),
+        runtime_status_pill(
+            "Odds API Key",
+            "ok" if _odds_key_status != "missing" else "info",
+            _odds_key_status if _odds_key_status != "missing" else "optional · missing",
+        ),
     ]
     for _name, _label in [
         ("prizepicks", "PrizePicks"),
         ("pp_slate", "Slate Cache"),
+        ("sportsbook_market", "Sportsbook Market"),
         ("supabase", "Supabase Cache"),
         ("nba_logs", "NBA Logs"),
         ("nba_context", "NBA Context"),
@@ -21130,6 +21137,412 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
     return props
 
 
+# ── Independent sportsbook confirmation ────────────────────────────────
+
+ODDS_API_SPORT_KEYS = {
+    "MLB": "baseball_mlb",
+    "WNBA": "basketball_wnba",
+}
+
+ODDS_API_MARKET_KEYS = {
+    ("MLB", "Strikeouts"): "pitcher_strikeouts",
+    ("WNBA", "Points"): "player_points",
+    ("WNBA", "Rebounds"): "player_rebounds",
+    ("WNBA", "Assists"): "player_assists",
+    ("WNBA", "3-Pointers Made"): "player_threes",
+    ("WNBA", "Pts + Reb + Ast"): "player_points_rebounds_assists",
+    ("WNBA", "Points + Rebounds"): "player_points_rebounds",
+    ("WNBA", "Points + Assists"): "player_points_assists",
+    ("WNBA", "Rebounds + Assists"): "player_rebounds_assists",
+}
+
+_ODDS_TEAM_ALIASES = {
+    # MLB
+    "arizona diamondbacks": "ARI", "ari": "ARI", "az": "ARI",
+    "atlanta braves": "ATL", "atl": "ATL",
+    "baltimore orioles": "BAL", "bal": "BAL",
+    "boston red sox": "BOS", "bos": "BOS",
+    "chicago cubs": "CHC", "chc": "CHC",
+    "chicago white sox": "CWS", "cws": "CWS", "chw": "CWS",
+    "cincinnati reds": "CIN", "cin": "CIN",
+    "cleveland guardians": "CLE", "cle": "CLE",
+    "colorado rockies": "COL", "col": "COL",
+    "detroit tigers": "DET", "det": "DET",
+    "houston astros": "HOU", "hou": "HOU",
+    "kansas city royals": "KC", "kc": "KC", "kcr": "KC",
+    "los angeles angels": "LAA", "laa": "LAA",
+    "los angeles dodgers": "LAD", "lad": "LAD",
+    "miami marlins": "MIA", "mia": "MIA",
+    "milwaukee brewers": "MIL", "mil": "MIL",
+    "minnesota twins": "MIN", "min": "MIN",
+    "new york mets": "NYM", "nym": "NYM",
+    "new york yankees": "NYY", "nyy": "NYY",
+    "athletics": "ATH", "oakland athletics": "ATH", "ath": "ATH", "oak": "ATH",
+    "philadelphia phillies": "PHI", "phi": "PHI",
+    "pittsburgh pirates": "PIT", "pit": "PIT",
+    "san diego padres": "SD", "sd": "SD", "sdp": "SD",
+    "san francisco giants": "SF", "sf": "SF", "sfg": "SF",
+    "seattle mariners": "SEA", "sea": "SEA",
+    "st louis cardinals": "STL", "stl": "STL",
+    "tampa bay rays": "TB", "tb": "TB", "tbr": "TB",
+    "texas rangers": "TEX", "tex": "TEX",
+    "toronto blue jays": "TOR", "tor": "TOR",
+    "washington nationals": "WSH", "wsh": "WSH", "wsn": "WSH",
+    # WNBA
+    "atlanta dream": "ATL", "chicago sky": "CHI", "chi": "CHI",
+    "connecticut sun": "CON", "con": "CON",
+    "dallas wings": "DAL", "dal": "DAL",
+    "golden state valkyries": "GSV", "gsv": "GSV", "gs": "GSV",
+    "indiana fever": "IND", "ind": "IND",
+    "los angeles sparks": "LAS", "las": "LAS", "la": "LAS",
+    "las vegas aces": "LVA", "lva": "LVA", "lv": "LVA",
+    "minnesota lynx": "MIN", "new york liberty": "NYL", "nyl": "NYL",
+    "phoenix mercury": "PHX", "phx": "PHX",
+    "seattle storm": "SEA", "washington mystics": "WSH",
+}
+
+
+def canonical_odds_team(value: str) -> str:
+    """Normalize full team names and provider abbreviations for event matching."""
+    token = re.sub(r"[^a-z0-9 ]+", " ", str(value or "").lower())
+    token = re.sub(r"\s+", " ", token).strip()
+    return _ODDS_TEAM_ALIASES.get(token, str(value or "").strip().upper())
+
+
+def american_odds_implied_probability(price) -> Optional[float]:
+    """Convert American odds to their raw implied probability."""
+    try:
+        value = float(price)
+        if value == 0:
+            return None
+        if value > 0:
+            return 100.0 / (value + 100.0)
+        return abs(value) / (abs(value) + 100.0)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
+def _parse_iso_utc(value: str) -> Optional[datetime]:
+    try:
+        parsed = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            from datetime import timezone as _timezone
+            parsed = parsed.replace(tzinfo=_timezone.utc)
+        return parsed
+    except (TypeError, ValueError):
+        return None
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_odds_api_events(sport_key: str, _api_key: str) -> List[dict]:
+    response = requests.get(
+        f"https://api.the-odds-api.com/v4/sports/{sport_key}/events",
+        params={"apiKey": _api_key, "dateFormat": "iso"},
+        timeout=12,
+    )
+    if not response.ok:
+        raise RuntimeError(f"Odds API events HTTP {response.status_code}")
+    payload = response.json()
+    return payload if isinstance(payload, list) else []
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_odds_api_event_markets(sport_key: str, event_id: str,
+                                  market_keys: Tuple[str, ...],
+                                  regions: str, _api_key: str) -> dict:
+    response = requests.get(
+        f"https://api.the-odds-api.com/v4/sports/{sport_key}/events/{event_id}/odds",
+        params={
+            "apiKey": _api_key,
+            "regions": regions,
+            "markets": ",".join(market_keys),
+            "oddsFormat": "american",
+            "dateFormat": "iso",
+        },
+        timeout=15,
+    )
+    if not response.ok:
+        raise RuntimeError(f"Odds API event markets HTTP {response.status_code}")
+    payload = response.json()
+    return payload if isinstance(payload, dict) else {}
+
+
+def _odds_result_team_tokens(result: dict) -> set:
+    values = [
+        result.get("pp_team"), result.get("pitcher_team"),
+        result.get("player_team"), result.get("team"), result.get("opp"),
+    ]
+    return {canonical_odds_team(value) for value in values if value and value != "TBD"}
+
+
+def match_odds_api_event(result: dict, events: List[dict]) -> Optional[dict]:
+    """Match an analyzed prop to an Odds API event using teams, then start time."""
+    result_teams = _odds_result_team_tokens(result)
+    result_time = _parse_iso_utc(
+        result.get("game_datetime") or result.get("start_time") or ""
+    )
+    ranked = []
+    for event in events or []:
+        event_teams = {
+            canonical_odds_team(event.get("home_team", "")),
+            canonical_odds_team(event.get("away_team", "")),
+        }
+        overlap = len(result_teams.intersection(event_teams))
+        if result_teams and overlap == 0:
+            continue
+        event_time = _parse_iso_utc(event.get("commence_time", ""))
+        delta_hours = (
+            abs((event_time - result_time).total_seconds()) / 3600.0
+            if event_time and result_time else 999.0
+        )
+        if overlap < 2 and delta_hours > 18:
+            continue
+        ranked.append((overlap, -delta_hours, event))
+    if not ranked:
+        return None
+    ranked.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return ranked[0][2]
+
+
+def _sportsbook_player_matches(candidate: str, player_name: str) -> bool:
+    left = normalize_name(candidate or "")
+    right = normalize_name(player_name or "")
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    left_parts = left.split()
+    right_parts = right.split()
+    return (
+        len(left_parts) >= 2 and len(right_parts) >= 2
+        and left_parts[-1] == right_parts[-1]
+        and left_parts[0][:1] == right_parts[0][:1]
+    )
+
+
+def extract_sportsbook_confirmation(event_odds: dict, result: dict,
+                                     market_key: str) -> dict:
+    """Build line consensus and a no-vig side probability for one prop."""
+    import statistics
+
+    player_name = result.get("player", "")
+    offerings = []
+    for bookmaker in event_odds.get("bookmakers", []) or []:
+        book_key = bookmaker.get("key") or bookmaker.get("title") or "book"
+        for market in bookmaker.get("markets", []) or []:
+            if market.get("key") != market_key:
+                continue
+            grouped = {}
+            for outcome in market.get("outcomes", []) or []:
+                side = str(outcome.get("name", "")).strip().title()
+                description = outcome.get("description") or outcome.get("participant") or ""
+                if side not in ("Over", "Under"):
+                    continue
+                if not _sportsbook_player_matches(description, player_name):
+                    continue
+                try:
+                    point = float(outcome.get("point"))
+                except (TypeError, ValueError):
+                    continue
+                grouped.setdefault(point, {})[side] = outcome.get("price")
+            for point, prices in grouped.items():
+                over_raw = american_odds_implied_probability(prices.get("Over"))
+                under_raw = american_odds_implied_probability(prices.get("Under"))
+                if over_raw is None or under_raw is None or over_raw + under_raw <= 0:
+                    continue
+                offerings.append({
+                    "book": str(book_key),
+                    "point": point,
+                    "over_no_vig": over_raw / (over_raw + under_raw),
+                })
+
+    if not offerings:
+        return {
+            "sportsbook_status": "No matching market",
+            "sportsbook_grade": "Unavailable",
+            "sportsbook_note": "No comparable sportsbook player market was found",
+            "sportsbook_available": False,
+        }
+
+    pp_line = float(result.get("line", 0) or 0)
+    consensus_line = float(statistics.median([row["point"] for row in offerings]))
+    exact = [row for row in offerings if abs(row["point"] - pp_line) < 0.01]
+    selected = exact
+    if not selected:
+        nearest_delta = min(abs(row["point"] - pp_line) for row in offerings)
+        selected = [
+            row for row in offerings
+            if abs(abs(row["point"] - pp_line) - nearest_delta) < 0.01
+        ]
+
+    over_probability = float(statistics.median(
+        [row["over_no_vig"] for row in selected]
+    ))
+    side = str(result.get("side", "Over"))
+    side_probability = over_probability if side == "Over" else 1.0 - over_probability
+    book_count = len({row["book"] for row in selected})
+    all_book_count = len({row["book"] for row in offerings})
+    line_gap = (
+        consensus_line - pp_line if side == "Over" else pp_line - consensus_line
+    )
+
+    if book_count < 2:
+        grade = "Limited Market"
+    elif line_gap <= -0.5 or side_probability <= 0.47:
+        grade = "Market Disagrees"
+    elif line_gap >= 0.5 and side_probability >= 0.50:
+        grade = "Confirmed Value"
+    elif side_probability >= 0.56:
+        grade = "Market Supports"
+    else:
+        grade = "Neutral"
+
+    exact_text = "exact line" if exact else f"nearest line {selected[0]['point']:g}"
+    return {
+        "sportsbook_status": "Matched",
+        "sportsbook_grade": grade,
+        "sportsbook_available": True,
+        "sportsbook_consensus_line": round(consensus_line, 2),
+        "sportsbook_line_gap": round(line_gap, 2),
+        "sportsbook_side_probability": round(side_probability * 100, 1),
+        "sportsbook_book_count": book_count,
+        "sportsbook_all_book_count": all_book_count,
+        "sportsbook_exact_line": bool(exact),
+        "sportsbook_note": (
+            f"{book_count} book{'s' if book_count != 1 else ''} at {exact_text} · "
+            f"no-vig {side} {side_probability:.0%} · consensus line {consensus_line:g}"
+        ),
+    }
+
+
+def enrich_edge_results_with_sportsbook_market(results: List[dict]) -> List[dict]:
+    """Attach optional sportsbook confirmation without changing model probability."""
+    api_key = get_config_value("THE_ODDS_API_KEY", "ODDS_API_KEY")
+    regions = get_config_value("THE_ODDS_API_REGIONS", "ODDS_API_REGIONS") or "us"
+    try:
+        max_calls = max(1, min(int(get_config_value("THE_ODDS_API_MAX_EVENTS") or 16), 30))
+    except (TypeError, ValueError):
+        max_calls = 16
+
+    defaults = {
+        "sportsbook_status": "Not configured" if not api_key else "Not matched",
+        "sportsbook_grade": "Unavailable",
+        "sportsbook_available": False,
+        "sportsbook_note": (
+            "Optional sportsbook confirmation is not configured"
+            if not api_key else "No comparable sportsbook market was matched"
+        ),
+    }
+    for result in results:
+        for key, value in defaults.items():
+            result[key] = value
+
+    if not results:
+        set_runtime_metric(
+            "sportsbook_market", "info", "No model results required confirmation",
+        )
+        return results
+    if not api_key:
+        set_runtime_metric(
+            "sportsbook_market", "info",
+            "Optional · add THE_ODDS_API_KEY to enable independent confirmation",
+        )
+        return results
+
+    preliminary = []
+    for result in results:
+        market = ODDS_API_MARKET_KEYS.get((result.get("sport"), result.get("stat")))
+        if not market:
+            result["sportsbook_status"] = "Unsupported market"
+            result["sportsbook_note"] = "No directly comparable sportsbook market"
+            continue
+        if result.get("entry_action") not in ("PLAY", "WATCH"):
+            result["sportsbook_status"] = "Model pass"
+            result["sportsbook_note"] = "Sportsbook lookup skipped for a model PASS"
+            continue
+        preliminary.append((result, market))
+
+    events_by_sport = {}
+    for sport in sorted({result.get("sport") for result, _ in preliminary}):
+        sport_key = ODDS_API_SPORT_KEYS.get(sport)
+        if not sport_key:
+            continue
+        try:
+            events_by_sport[sport] = fetch_odds_api_events(sport_key, api_key)
+        except Exception as err:
+            record_debug_error(f"odds_api.events.{sport.lower()}", err)
+            events_by_sport[sport] = []
+
+    grouped = {}
+    for result, market in preliminary:
+        event = match_odds_api_event(result, events_by_sport.get(result.get("sport"), []))
+        if not event or not event.get("id"):
+            result["sportsbook_status"] = "No matching event"
+            result["sportsbook_note"] = "Sportsbook event could not be matched safely"
+            continue
+        result["sportsbook_event_id"] = event["id"]
+        key = (result.get("sport"), str(event["id"]))
+        bucket = grouped.setdefault(key, {"markets": set(), "results": []})
+        bucket["markets"].add(market)
+        bucket["results"].append((result, market))
+
+    ordered_groups = sorted(
+        grouped.items(),
+        key=lambda item: max(
+            float(result.get("rank_score", 0) or 0)
+            for result, _ in item[1]["results"]
+        ),
+        reverse=True,
+    )
+    matched = 0
+    queried = 0
+    for index, ((sport, event_id), bucket) in enumerate(ordered_groups):
+        if index >= max_calls:
+            for result, _ in bucket["results"]:
+                result["sportsbook_status"] = "Scan limit"
+                result["sportsbook_note"] = "Optional sportsbook request limit reached"
+            continue
+        sport_key = ODDS_API_SPORT_KEYS[sport]
+        try:
+            payload = fetch_odds_api_event_markets(
+                sport_key, event_id, tuple(sorted(bucket["markets"])), regions, api_key
+            )
+            queried += 1
+            for result, market in bucket["results"]:
+                result.update(extract_sportsbook_confirmation(payload, result, market))
+                if result.get("sportsbook_available"):
+                    matched += 1
+        except Exception as err:
+            record_debug_error(f"odds_api.market.{sport.lower()}", err)
+            for result, _ in bucket["results"]:
+                result["sportsbook_status"] = "Fetch failed"
+                result["sportsbook_note"] = f"Sportsbook fetch failed: {type(err).__name__}"
+
+    grade_adjustment = {
+        "Confirmed Value": 3,
+        "Market Supports": 1,
+        "Neutral": -2,
+        "Limited Market": -3,
+        "Market Disagrees": -12,
+    }
+    for result in results:
+        base_rank = float(
+            result.get("market_base_rank_score", result.get("rank_score", 0)) or 0
+        )
+        result["market_base_rank_score"] = base_rank
+        adjustment = grade_adjustment.get(result.get("sportsbook_grade"), 0)
+        result["sportsbook_rank_adjustment"] = adjustment
+        result["rank_score"] = round(base_rank + adjustment, 1)
+
+    status = "ok" if matched else "warn"
+    set_runtime_metric(
+        "sportsbook_market", status,
+        f"{matched}/{len(preliminary)} comparable props matched · {queried} event calls",
+        fetched_at=datetime.utcnow().isoformat() + "Z",
+    )
+    return results
+
+
 if st.session_state.active_sport == "edge":
 
     st.markdown("<div id='edge-scanner-controls' class='analyzer-scroll-anchor'></div>", unsafe_allow_html=True)
@@ -21359,6 +21772,8 @@ if st.session_state.active_sport == "edge":
         hard_risk = str(result.get("trap_label", "")).strip() in (
             "Trap Risk", "Do Not Force"
         )
+        sportsbook_available = bool(result.get("sportsbook_available"))
+        sportsbook_grade = str(result.get("sportsbook_grade", "Unavailable"))
         is_strong = (
             adj >= 67
             and edge_pct >= 7
@@ -21379,6 +21794,12 @@ if st.session_state.active_sport == "edge":
             score = min(score, 64)
         elif line_needs_verify:
             score = min(score, 64)
+        elif sportsbook_available and sportsbook_grade == "Market Disagrees":
+            score = min(score, 64)
+            is_strong = False
+        elif sportsbook_available and sportsbook_grade in ("Neutral", "Limited Market"):
+            score = min(score, 79)
+            is_strong = False
         elif not is_strong:
             score = min(score, 79)
         score = max(0, min(100, score))
@@ -24320,6 +24741,8 @@ if st.session_state.active_sport == "edge":
                 "stat": market,
                 "line": line,
                 "side": side,
+                "pp_team": team,
+                "player_team": player.get("team") or team,
                 "adj": round(probability * 100, 1),
                 "confidence": int(model["confidence"]),
                 "raw_adj": round(float(model["calibrated"]) * 100, 1),
@@ -24489,6 +24912,11 @@ if st.session_state.active_sport == "edge":
                 fetch_all_pp_props.clear()
             except Exception:
                 st.cache_data.clear()
+            try:
+                fetch_odds_api_events.clear()
+                fetch_odds_api_event_markets.clear()
+            except Exception:
+                pass
             clear_pp_slate_cache(_edge_sport)
             st.session_state.edge_results = []
             st.session_state["edge_has_scanned"] = False
@@ -25008,6 +25436,10 @@ if st.session_state.active_sport == "edge":
                         _res["is_promo"] = bool(_prop_ref.get("is_promo", False))
                         _res["adjusted_odds"] = bool(_prop_ref.get("adjusted_odds", False))
                         _res["odds_type"] = _prop_ref.get("odds_type", "standard")
+                        _res["start_time"] = _prop_ref.get("start_time", "")
+                        _res["game_id"] = _prop_ref.get("game_id", "")
+                        _res["projection_id"] = _prop_ref.get("projection_id", "")
+                        _res["pp_team"] = _res.get("pp_team") or _prop_ref.get("team", "")
                         _res["base_line"] = _prop_ref.get("base_line", _prop_ref.get("line"))
                         _res["line_source"] = _prop_ref.get("line_source", "line_score")
                         _res["slate_source"] = _prop_ref.get("slate_source", "live")
@@ -25099,6 +25531,8 @@ if st.session_state.active_sport == "edge":
 
         _prog.empty()
         _status.empty()
+        with st.spinner("Checking independent sportsbook markets..."):
+            _results = enrich_edge_results_with_sportsbook_market(_results)
         st.session_state.edge_results = _results
         _action_counts = {"PLAY": 0, "WATCH": 0, "PASS": 0}
         for _result in _results:
@@ -25141,6 +25575,18 @@ if st.session_state.active_sport == "edge":
                 "Rows remaining": len(_results),
                 "Removed here": sum(_rejection_counts.values()),
                 "What happened": "Each eligible prop line was evaluated by the sport model",
+            },
+            {
+                "Stage": "Sportsbook confirmation",
+                "Rows remaining": len(_results),
+                "Removed here": 0,
+                "What happened": (
+                    f"{sum(1 for result in _results if result.get('sportsbook_available'))} matched · "
+                    f"{sum(1 for result in _results if result.get('sportsbook_grade') in ('Confirmed Value', 'Market Supports'))} supported · "
+                    f"{sum(1 for result in _results if result.get('sportsbook_grade') == 'Market Disagrees')} disagreed"
+                    if get_config_value("THE_ODDS_API_KEY", "ODDS_API_KEY")
+                    else "Optional independent sportsbook check is not configured"
+                ),
             },
             {
                 "Stage": "Action grading",
@@ -25256,6 +25702,15 @@ if st.session_state.active_sport == "edge":
             _goblins = [r for r in _with_edge if r.get("is_goblin")]
             _over_count = sum(1 for r in _with_edge if r.get("side", "Over") == "Over")
             _under_count = sum(1 for r in _with_edge if r.get("side") == "Under")
+            _market_confirmed = sum(
+                1 for r in _with_edge
+                if r.get("sportsbook_grade") in ("Confirmed Value", "Market Supports")
+            )
+            _market_enabled = bool(get_config_value("THE_ODDS_API_KEY", "ODDS_API_KEY"))
+            _market_summary = (
+                f"{_market_confirmed} sportsbook-confirmed"
+                if _market_enabled else "Sportsbook check optional · off"
+            )
             st.markdown(
                 f"<div style='display:flex;gap:12px;flex-wrap:wrap;"
                 f"margin-bottom:1rem;font-family:JetBrains Mono,monospace;'>"
@@ -25271,6 +25726,9 @@ if st.session_state.active_sport == "edge":
                 f"<div style='background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);"
                 f"border-radius:8px;padding:6px 14px;font-size:0.65rem;color:#6b7f96;'>"
                 f"{_over_count} Overs · {_under_count} Unders</div>"
+                f"<div style='background:rgba(0,196,204,0.08);border:1px solid rgba(0,196,204,0.22);"
+                f"border-radius:8px;padding:6px 14px;font-size:0.65rem;color:#40d9e0;'>"
+                f"{_market_summary}</div>"
                 f"</div>",
                 unsafe_allow_html=True
             )
@@ -25578,6 +26036,20 @@ if st.session_state.active_sport == "edge":
                     _open_line = _r.get("market_open_line")
                     _market_text = f"{_open_line} → {_r['line']} ({_move:+.1f})" if _open_line is not None else f"{_move:+.1f}"
                     _ctx_pills += f"<span class='edge-pill-v55 accent'>Market {_market_text}</span>"
+                if _r.get("sportsbook_available"):
+                    _sb_grade = _r.get("sportsbook_grade", "Neutral")
+                    _sb_cls = (
+                        "accent" if _sb_grade in ("Confirmed Value", "Market Supports")
+                        else "warn" if _sb_grade in ("Market Disagrees", "Limited Market")
+                        else ""
+                    )
+                    _sb_line = _r.get("sportsbook_consensus_line")
+                    _sb_prob = _r.get("sportsbook_side_probability")
+                    _sb_books = int(_r.get("sportsbook_book_count", 0) or 0)
+                    _ctx_pills += (
+                        f"<span class='edge-pill-v55 {_sb_cls}'>Sportsbooks: {_sb_grade} · "
+                        f"line {_sb_line:g} · {_sb_prob:.0f}% no-vig · {_sb_books} books</span>"
+                    )
 
                 st.markdown(
                     f"<details class='edge-card-v55 {_card_class}'>"
@@ -25655,6 +26127,10 @@ if st.session_state.active_sport == "edge":
                             ["Log freshness", f"{_r.get('stale_days', 0)} day(s) since latest game"],
                             ["Freshness probability factor", f"{float(_r.get('freshness_factor', 1.0) or 1.0):.0%}"],
                             ["Evidence reliability", f"{float(_r.get('reliability', 0)):.1f}%"],
+                            ["Independent sportsbook market", (
+                                f"{_r.get('sportsbook_grade')} · {_r.get('sportsbook_note')}"
+                                if _r.get("sportsbook_available") else _r.get("sportsbook_note", "Unavailable")
+                            )],
                             ["PrizePicks line variant", (
                                 "Lowest Goblin · adjusted payout"
                                 if _r.get("is_goblin") else
@@ -25747,6 +26223,10 @@ if st.session_state.active_sport == "edge":
                             ["Post-break readiness", " | ".join(_r.get("readiness_notes") or []) or "Normal rotation"],
                             ["Days since last start", str(_r.get("days_since_last", "Unavailable"))],
                             ["Evidence reliability", f"{float(_r.get('reliability', 0)):.1f}%"],
+                            ["Independent sportsbook market", (
+                                f"{_r.get('sportsbook_grade')} · {_r.get('sportsbook_note')}"
+                                if _r.get("sportsbook_available") else _r.get("sportsbook_note", "Unavailable")
+                            )],
                             ["PrizePicks line source", (
                                 "Lowest Goblin · adjusted payout"
                                 if _r.get("is_goblin") else
