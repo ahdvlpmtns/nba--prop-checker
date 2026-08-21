@@ -6129,6 +6129,8 @@ for key, default in [
     ("wnba_jump_player", None), ("wnba_jump_line", None),
     ("wnba_jump_side", "Over"), ("wnba_jump_stat", "Points"),
     ("runtime_debug_errors", []), ("runtime_metrics", {}),
+    ("model_predictions", []), ("model_predictions_loaded", False),
+    ("model_learning_settle_date", ""),
     ("active_view", _default_active_view),
     ("last_analyzer_sport", _default_analyzer_sport),
     ("edge_return_available", False), ("edge_viewed", []),
@@ -6550,6 +6552,820 @@ def _parse_numeric_value(value, default: Optional[float] = None) -> Optional[flo
         return float(value)
     except Exception:
         return default
+
+
+MODEL_LEARNING_VERSION = "propiq-v8.1-learning-1"
+LEARNING_WNBA_STAT_COLUMNS = {
+    "Points": "PTS", "Rebounds": "REB", "Assists": "AST",
+    "3-Pointers Made": "3PM", "Pts + Reb + Ast": "PRA",
+    "Points + Rebounds": "PR", "Points + Assists": "PA",
+    "Rebounds + Assists": "RA",
+}
+
+
+def _learning_wnba_team(value: str) -> str:
+    cleaned = re.sub(r"[^A-Z]", "", str(value or "").upper())
+    aliases = {
+        "LA": "LAS", "LOSANGELESSPARKS": "LAS",
+        "NY": "NYL", "NEWYORKLIBERTY": "NYL",
+        "LV": "LVA", "LASVEGASACES": "LVA",
+        "GS": "GSV", "GSW": "GSV", "GOLDENSTATEVALKYRIES": "GSV",
+        "WAS": "WAS", "WSH": "WAS", "WSN": "WAS",
+        "WASHINGTONMYSTICS": "WAS", "PHO": "PHX", "PHOENIXMERCURY": "PHX",
+    }
+    return aliases.get(cleaned, cleaned)
+
+
+def _learning_json_safe(value):
+    """Convert model evidence into compact JSON-safe values."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(k): _learning_json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_learning_json_safe(v) for v in value]
+    if hasattr(value, "isoformat"):
+        try:
+            return value.isoformat()
+        except Exception:
+            pass
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+    return str(value)
+
+
+def _learning_prediction_key(scan_id: str, result: dict) -> str:
+    import hashlib
+    raw = "|".join([
+        str(scan_id), str(result.get("sport", "")),
+        normalize_name(result.get("player", "")),
+        str(result.get("stat", "")), str(result.get("side", "")),
+        str(result.get("line", "")), str(result.get("odds_type", "standard")),
+        str(result.get("game_id") or result.get("game_pk") or result.get("start_time") or ""),
+    ])
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def build_model_prediction_rows(results: list, scan_id: str,
+                                session_id: str = "") -> list:
+    """Freeze every scanner decision into a durable, model-versioned row."""
+    now_iso = datetime.utcnow().isoformat() + "Z"
+    rows = []
+    for result in results or []:
+        try:
+            probability = float(result.get("adj", 0) or 0)
+            if not 0 <= probability <= 100:
+                continue
+            line = float(result.get("line"))
+        except (TypeError, ValueError):
+            continue
+
+        game_date = str(result.get("game_date") or result.get("pp_game_date") or "")[:10]
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", game_date):
+            game_date = None
+        game_datetime = result.get("game_datetime") or result.get("start_time") or None
+        projected_edge = _parse_numeric_value(result.get("projection_gap"), None)
+        projected_value = _parse_numeric_value(result.get("projection"), None)
+        if projected_value is None and projected_edge is not None:
+            projected_value = (
+                line + projected_edge
+                if str(result.get("side", "Over")) == "Over"
+                else line - projected_edge
+            )
+
+        risk_flags = []
+        for key in ("trap_reasons", "validation_reasons", "model_flags", "quality_gate_reasons"):
+            risk_flags.extend(str(item) for item in (result.get(key) or []) if item)
+        for label_key in ("trap_label", "validation_label"):
+            label = str(result.get(label_key, "") or "")
+            if label and label not in ("Clean", "Validated", "Validated Strong"):
+                risk_flags.append(label)
+        risk_flags = list(dict.fromkeys(risk_flags))[:12]
+
+        signal_keys = (
+            "raw_adj", "calibrated_base", "reliability", "avg", "l3", "samples",
+            "edge_raw", "projection_gap", "projection_prob", "pc", "pc_expected",
+            "pc_ceiling", "expected_bf", "pitcher_kbf", "matchup_kbf", "opp_k",
+            "recent_opp_k", "handed_opp_k", "avg_ip", "pa_avg", "expected_fs",
+            "defense_label", "defense_allowed", "defense_games", "role_label",
+            "position_group", "role_matchup_label", "injury_status", "rest_days",
+            "stale_days", "freshness_factor", "confidence_parts", "market_signal",
+            "market_move", "market_open_move", "sportsbook_note", "rank_score",
+            "rank_penalty", "rank_penalties", "line_verification_required",
+            "starter_id_verified", "context_validation",
+        )
+        signal_snapshot = {
+            key: _learning_json_safe(result.get(key))
+            for key in signal_keys if result.get(key) is not None
+        }
+        event_id = str(
+            result.get("game_pk") or result.get("event_id")
+            or result.get("game_id") or ""
+        ) or None
+        try:
+            event_key = pp_event_key(result)
+        except Exception:
+            event_key = ""
+        player_id = result.get("pitcher_id") or result.get("player_id")
+        team = result.get("pp_team") or result.get("pitcher_team") or result.get("player_team")
+        reduced = bool(
+            result.get("is_goblin") or result.get("is_promo")
+            or result.get("adjusted_odds")
+        )
+        rows.append({
+            "prediction_key": _learning_prediction_key(scan_id, result),
+            "scan_id": str(scan_id),
+            "session_id": str(session_id or ""),
+            "source": "edge_scanner",
+            "model_version": str(result.get("model_version") or MODEL_LEARNING_VERSION),
+            "shadow_version": result.get("shadow_version"),
+            "sport": str(result.get("sport", "")).upper(),
+            "player": str(result.get("player", "")),
+            "player_id": str(player_id) if player_id else None,
+            "team": str(team or ""),
+            "opponent": str(result.get("opp", "") or ""),
+            "market": str(result.get("stat", "")),
+            "line": line,
+            "side": str(result.get("side", "Over")),
+            "odds_type": str(result.get("odds_type", "standard")),
+            "is_reduced": reduced,
+            "event_id": event_id,
+            "event_key": event_key or None,
+            "game_date": game_date,
+            "game_datetime": game_datetime,
+            "probability": round(probability, 2),
+            "evidence_quality": _parse_numeric_value(result.get("confidence"), None),
+            "consistency": _parse_numeric_value(result.get("cons"), None),
+            "reliability": _parse_numeric_value(result.get("reliability"), None),
+            "entry_score": _parse_numeric_value(result.get("entry_score"), None),
+            "action": str(result.get("entry_action", "PASS")),
+            "verdict": str(result.get("tier", "")),
+            "historical_average": _parse_numeric_value(result.get("avg"), None),
+            "projected_value": projected_value,
+            "projected_edge": projected_edge,
+            "sportsbook_grade": str(result.get("sportsbook_grade", "Unavailable")),
+            "sportsbook_line": _parse_numeric_value(result.get("sportsbook_consensus_line"), None),
+            "sportsbook_probability": _parse_numeric_value(result.get("sportsbook_side_probability"), None),
+            "sportsbook_books": int(result.get("sportsbook_book_count", 0) or 0),
+            "shadow_probability": _parse_numeric_value(result.get("shadow_probability"), None),
+            "line_verified": bool(
+                not result.get("line_verification_required")
+                and result.get("slate_source", "live") == "live"
+            ),
+            "slate_source": str(result.get("slate_source", "live")),
+            "risk_flags": risk_flags,
+            "signal_snapshot": signal_snapshot,
+            "status": "Pending",
+            "result": "Pending",
+            "created_at": now_iso,
+            "updated_at": now_iso,
+        })
+    return rows
+
+
+def save_model_prediction_batch(results: list, scan_id: str,
+                                session_id: str = "") -> int:
+    """Persist scanner decisions to Supabase and always retain a session fallback."""
+    rows = build_model_prediction_rows(results, scan_id, session_id)
+    if not rows:
+        return 0
+
+    local = st.session_state.setdefault("model_predictions", [])
+    known = {row.get("prediction_key") for row in local}
+    local.extend(row for row in rows if row.get("prediction_key") not in known)
+
+    try:
+        sb = get_supabase_client()
+        if not sb:
+            set_runtime_metric(
+                "model_learning", "warn",
+                f"Session ledger only · {len(rows)} predictions · Supabase unavailable",
+            )
+            return len(rows)
+        import requests as _req
+        headers = {
+            **sb.hdrs,
+            "Prefer": "resolution=ignore-duplicates,return=minimal",
+        }
+        saved = 0
+        for offset in range(0, len(rows), 250):
+            chunk = rows[offset:offset + 250]
+            response = _req.post(
+                f"{sb.url}/rest/v1/model_predictions?on_conflict=prediction_key",
+                headers=headers, json=chunk, timeout=12,
+            )
+            if not response.ok:
+                detail = f"HTTP {response.status_code}: {response.text[:180]}"
+                record_debug_error("model_learning.save", detail)
+                set_runtime_metric(
+                    "model_learning", "warn",
+                    "Ledger table unavailable · run supabase_model_predictions.sql",
+                )
+                return len(rows)
+            saved += len(chunk)
+        set_runtime_metric(
+            "model_learning", "ok",
+            f"Saved {saved} scanner decisions · model {MODEL_LEARNING_VERSION}",
+            fetched_at=datetime.utcnow().isoformat() + "Z",
+        )
+        return saved
+    except Exception as err:
+        record_debug_error("model_learning.save", err)
+        set_runtime_metric("model_learning", "warn", "Session ledger active · durable save failed")
+        return len(rows)
+
+
+def load_model_predictions(limit: int = 2500, force: bool = False) -> list:
+    """Load the shared model ledger and merge any unsaved session snapshots."""
+    if not force and st.session_state.get("model_predictions_loaded"):
+        return st.session_state.get("model_predictions", []) or []
+    server_rows = []
+    try:
+        sb = get_supabase_client()
+        if sb:
+            import requests as _req
+            response = _req.get(
+                f"{sb.url}/rest/v1/model_predictions"
+                f"?select=*&order=created_at.desc&limit={max(1, min(int(limit), 5000))}",
+                headers=sb.hdrs, timeout=12,
+            )
+            if response.ok and isinstance(response.json(), list):
+                server_rows = response.json()
+            elif response.status_code not in (404, 400):
+                record_debug_error(
+                    "model_learning.load",
+                    f"HTTP {response.status_code}: {response.text[:180]}",
+                )
+    except Exception as err:
+        record_debug_error("model_learning.load", err)
+
+    merged = {}
+    for row in (st.session_state.get("model_predictions", []) or []) + server_rows:
+        key = row.get("prediction_key")
+        if key and key not in merged:
+            merged[key] = row
+        elif key:
+            current = merged[key]
+            current_updated = str(current.get("updated_at", ""))
+            row_updated = str(row.get("updated_at", ""))
+            merged[key] = (
+                {**current, **row}
+                if row_updated >= current_updated else
+                {**row, **current}
+            )
+    rows = sorted(
+        merged.values(), key=lambda row: str(row.get("created_at", "")), reverse=True
+    )
+    st.session_state.model_predictions = rows
+    st.session_state.model_predictions_loaded = True
+    return rows
+
+
+def update_model_prediction_row(row: dict, updates: dict) -> bool:
+    """Update one local prediction and its durable row when configured."""
+    row.update(updates)
+    row["updated_at"] = datetime.utcnow().isoformat() + "Z"
+    try:
+        sb = get_supabase_client()
+        if not sb:
+            return False
+        import requests as _req
+        from urllib.parse import quote as _quote
+        if row.get("id"):
+            selector = f"id=eq.{_quote(str(row['id']), safe='')}"
+        else:
+            selector = f"prediction_key=eq.{_quote(str(row.get('prediction_key', '')), safe='')}"
+        payload = {**updates, "updated_at": row["updated_at"]}
+        response = _req.patch(
+            f"{sb.url}/rest/v1/model_predictions?{selector}",
+            headers={**sb.hdrs, "Prefer": "return=minimal"},
+            json=payload, timeout=8,
+        )
+        return response.ok
+    except Exception as err:
+        record_debug_error("model_learning.update", err)
+        return False
+
+
+@st.cache_data(ttl=21600, show_spinner=False)
+def _learning_find_mlb_player_id(player_name: str) -> Optional[str]:
+    try:
+        response = requests.get(
+            "https://statsapi.mlb.com/api/v1/people/search",
+            params={"names": player_name, "sportIds": 1}, timeout=10,
+        )
+        if not response.ok:
+            return None
+        candidates = response.json().get("people", []) or []
+        target = normalize_name(player_name)
+        exact = next(
+            (p for p in candidates if normalize_name(p.get("fullName", "")) == target),
+            None,
+        )
+        best = exact or (candidates[0] if len(candidates) == 1 else None)
+        return str(best.get("id")) if best and best.get("id") else None
+    except Exception:
+        return None
+
+
+def _learning_hitter_fantasy_score(stats: dict) -> float:
+    hits = float(stats.get("hits", 0) or 0)
+    doubles = float(stats.get("doubles", 0) or 0)
+    triples = float(stats.get("triples", 0) or 0)
+    homers = float(stats.get("homeRuns", 0) or 0)
+    singles = max(0.0, hits - doubles - triples - homers)
+    return (
+        singles * 3 + doubles * 5 + triples * 8 + homers * 10
+        + float(stats.get("runs", 0) or 0) * 2
+        + float(stats.get("rbi", stats.get("runsBattedIn", 0)) or 0) * 2
+        + float(stats.get("baseOnBalls", 0) or 0) * 2
+        + float(stats.get("hitByPitch", 0) or 0) * 2
+        + float(stats.get("stolenBases", 0) or 0) * 5
+    )
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _learning_mlb_event_final(event_id: str) -> bool:
+    if not event_id:
+        return False
+    try:
+        response = requests.get(
+            f"https://statsapi.mlb.com/api/v1.1/game/{event_id}/feed/live",
+            timeout=10,
+        )
+        if not response.ok:
+            return False
+        status = (response.json().get("gameData", {}) or {}).get("status", {}) or {}
+        state = " ".join(str(status.get(key, "")) for key in (
+            "abstractGameState", "detailedState", "statusCode",
+        )).lower()
+        return "final" in state or "game over" in state or "completed" in state
+    except Exception:
+        return False
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _learning_wnba_event_final(event_id: str) -> bool:
+    if not event_id:
+        return False
+    try:
+        response = requests.get(
+            "https://site.api.espn.com/apis/site/v2/sports/basketball/wnba/summary",
+            params={"event": event_id}, headers=ESPN_HEADERS, timeout=10,
+        )
+        if not response.ok:
+            return False
+        data = response.json()
+        competition = ((data.get("header", {}) or {}).get("competitions") or [{}])[0]
+        status_type = ((competition.get("status", {}) or {}).get("type", {}) or {})
+        status_name = str(status_type.get("name", "")).lower()
+        return bool(status_type.get("completed")) or "final" in status_name
+    except Exception:
+        return False
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def _learning_mlb_actual(player_id: str, player_name: str, market: str,
+                         game_date: str, event_id: str = "") -> Optional[float]:
+    """Return an MLB result only when the expected game can be matched safely."""
+    pid = str(player_id or "") or str(_learning_find_mlb_player_id(player_name) or "")
+    if not pid or not game_date or not event_id:
+        return None
+    if not _learning_mlb_event_final(str(event_id)):
+        return None
+    group = "hitting" if market == "Hitter Fantasy Score" else "pitching"
+    try:
+        season = int(str(game_date)[:4])
+        response = requests.get(
+            f"https://statsapi.mlb.com/api/v1/people/{pid}/stats",
+            params={"stats": "gameLog", "group": group, "season": season, "gameType": "R"},
+            timeout=12,
+        )
+        if not response.ok:
+            return None
+        matches = []
+        for block in response.json().get("stats", []) or []:
+            for split in block.get("splits", []) or []:
+                if str(split.get("date", ""))[:10] != str(game_date)[:10]:
+                    continue
+                game = split.get("game", {}) or {}
+                game_pk = str(game.get("gamePk") or split.get("gamePk") or "")
+                matches.append((game_pk, split.get("stat", {}) or {}))
+        if event_id:
+            exact = [stats for game_pk, stats in matches if game_pk == str(event_id)]
+            if len(exact) != 1:
+                return None
+            matches = [(str(event_id), exact[0])]
+        if len(matches) != 1:
+            return None
+        stats = matches[0][1]
+        if market == "Hitter Fantasy Score":
+            return float(_learning_hitter_fantasy_score(stats))
+        return float(stats.get("strikeOuts", 0) or 0)
+    except Exception as err:
+        record_debug_error("model_learning.mlb_settle", err)
+        return None
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def _learning_wnba_actual(player_id: str, market: str, game_date: str,
+                          event_id: str = "", opponent: str = "") -> Optional[float]:
+    """Return a WNBA box-score value for the exact scheduled game."""
+    column = LEARNING_WNBA_STAT_COLUMNS.get(market)
+    if not player_id or not column or not game_date or not event_id:
+        return None
+    if not _learning_wnba_event_final(str(event_id)):
+        return None
+    try:
+        response = requests.get(
+            "https://site.web.api.espn.com/apis/common/v3/sports/basketball/wnba/"
+            f"athletes/{player_id}/gamelog",
+            params={"season": int(str(game_date)[:4])},
+            headers=ESPN_HEADERS, timeout=12,
+        )
+        if not response.ok:
+            return None
+        data = response.json()
+        names = data.get("names", []) or []
+        positions = {str(name): i for i, name in enumerate(names)}
+        event_meta = data.get("events", {}) or {}
+        matches = []
+
+        def value(stats, name, default=0.0):
+            try:
+                return float(str(stats[positions[name]]).split("-")[0])
+            except Exception:
+                return default
+
+        for season_type in data.get("seasonTypes", []) or []:
+            for category in season_type.get("categories", []) or []:
+                for event in category.get("events", []) or []:
+                    eid = str(event.get("eventId", "") or "")
+                    meta = event_meta.get(eid, {}) if isinstance(event_meta, dict) else {}
+                    game_stamp = pd.to_datetime(
+                        meta.get("gameDate", ""), utc=True, errors="coerce"
+                    )
+                    if pd.isna(game_stamp):
+                        continue
+                    try:
+                        game_day = game_stamp.tz_convert(
+                            "America/New_York"
+                        ).date().isoformat()
+                    except Exception:
+                        game_day = game_stamp.date().isoformat()
+                    if game_day != str(game_date)[:10]:
+                        continue
+                    opp = str((meta.get("opponent") or {}).get("abbreviation", "")).upper()
+                    if opponent and opp and _learning_wnba_team(opp) != _learning_wnba_team(opponent):
+                        continue
+                    stats = event.get("stats", []) or []
+                    pts = value(stats, "points")
+                    reb = value(stats, "totalRebounds")
+                    ast = value(stats, "assists")
+                    values = {
+                        "PTS": pts, "REB": reb, "AST": ast,
+                        "3PM": value(stats, "threePointFieldGoalsMade-threePointFieldGoalsAttempted"),
+                        "PRA": pts + reb + ast, "PR": pts + reb,
+                        "PA": pts + ast, "RA": reb + ast,
+                    }
+                    matches.append((eid, values[column]))
+        if event_id:
+            exact = [actual for eid, actual in matches if eid == str(event_id)]
+            if len(exact) == 1:
+                return float(exact[0])
+            return None
+        return float(matches[0][1]) if len(matches) == 1 else None
+    except Exception as err:
+        record_debug_error("model_learning.wnba_settle", err)
+        return None
+
+
+def _learning_pick_result(actual: float, line: float, side: str) -> str:
+    if abs(float(actual) - float(line)) < 1e-9:
+        return "Push"
+    if str(side).lower() == "under":
+        return "Hit" if float(actual) < float(line) else "Miss"
+    return "Hit" if float(actual) > float(line) else "Miss"
+
+
+def _learning_closing_line(row: dict) -> Tuple[Optional[float], Optional[str], Optional[str]]:
+    """Use the last matching pregame PrizePicks snapshot as the closing line."""
+    try:
+        rows = get_pp_line_history_from_supabase(
+            row.get("player", ""), row.get("market", ""), limit=100,
+            sport=row.get("sport", "MLB"),
+        )
+        if not rows:
+            return None, None, None
+        event_key = str(row.get("event_key") or "")
+        if not event_key:
+            return None, None, None
+        odds_type = str(row.get("odds_type") or "standard").lower()
+        game_time = pd.to_datetime(row.get("game_datetime"), utc=True, errors="coerce")
+        eligible = []
+        for item in rows:
+            item_odds = str(item.get("odds_type") or "standard").lower()
+            if item_odds != odds_type:
+                continue
+            source = str(item.get("source") or "")
+            if not source.endswith(f"|{event_key}"):
+                continue
+            stamp = pd.to_datetime(item.get("snapshot_at"), utc=True, errors="coerce")
+            if pd.isna(stamp) or (pd.notna(game_time) and stamp > game_time):
+                continue
+            eligible.append((stamp, item))
+        if not eligible:
+            return None, None, None
+        _, latest = max(eligible, key=lambda pair: pair[0])
+        return (
+            float(latest.get("line")),
+            str(latest.get("source") or "prizepicks"),
+            str(latest.get("snapshot_at") or ""),
+        )
+    except Exception:
+        return None, None, None
+
+
+def settle_model_predictions(predictions: list, max_events: int = 40) -> dict:
+    """Settle pending prediction groups against their exact scheduled game."""
+    try:
+        import pytz
+        today = datetime.now(pytz.timezone("America/New_York")).date()
+    except Exception:
+        today = datetime.now().date()
+    groups = {}
+    for row in predictions or []:
+        if str(row.get("status", "Pending")) != "Pending":
+            continue
+        game_stamp = pd.to_datetime(row.get("game_date"), errors="coerce")
+        if pd.isna(game_stamp):
+            continue
+        game_day = game_stamp.date()
+        if game_day > today or (today - game_day).days > 45:
+            continue
+        key = (
+            row.get("sport"), row.get("player_id"), row.get("player"),
+            row.get("game_date"), row.get("event_id"), row.get("market"),
+            row.get("opponent"),
+        )
+        groups.setdefault(key, []).append(row)
+
+    updated = 0
+    unresolved = 0
+    pushes = 0
+    for index, (_, rows) in enumerate(groups.items()):
+        if index >= max_events:
+            break
+        sample = rows[0]
+        sport = str(sample.get("sport", "")).upper()
+        if sport == "MLB":
+            actual = _learning_mlb_actual(
+                sample.get("player_id", ""), sample.get("player", ""),
+                sample.get("market", ""), sample.get("game_date", ""),
+                sample.get("event_id", ""),
+            )
+        elif sport == "WNBA":
+            actual = _learning_wnba_actual(
+                sample.get("player_id", ""), sample.get("market", ""),
+                sample.get("game_date", ""), sample.get("event_id", ""),
+                sample.get("opponent", ""),
+            )
+        else:
+            actual = None
+        if actual is None:
+            unresolved += len(rows)
+            continue
+
+        for row in rows:
+            result = _learning_pick_result(actual, float(row.get("line", 0)), row.get("side", "Over"))
+            probability = float(row.get("probability", 50) or 50) / 100.0
+            outcome = 1.0 if result == "Hit" else 0.0 if result == "Miss" else None
+            closing_line, closing_source, closing_at = _learning_closing_line(row)
+            updates = {
+                "status": "Settled",
+                "result": result,
+                "actual_value": round(float(actual), 3),
+                "brier_score": round((probability - outcome) ** 2, 6) if outcome is not None else None,
+                "settled_at": datetime.utcnow().isoformat() + "Z",
+                "closing_line": closing_line,
+                "closing_line_source": closing_source,
+                "closing_line_captured_at": closing_at,
+            }
+            update_model_prediction_row(row, updates)
+            updated += 1
+            if result == "Push":
+                pushes += 1
+    set_runtime_metric(
+        "model_learning", "ok" if updated or not groups else "info",
+        f"Settlement checked {min(len(groups), max_events)} events · "
+        f"{updated} rows settled · {unresolved} unresolved",
+        fetched_at=datetime.utcnow().isoformat() + "Z",
+    )
+    return {
+        "events_checked": min(len(groups), max_events),
+        "updated": updated, "unresolved": unresolved, "pushes": pushes,
+    }
+
+
+def _learning_evaluation_rows(predictions: list) -> list:
+    """Normalize settled ledger rows for calibration and closing-line analysis."""
+    rows = []
+    for item in predictions or []:
+        result = str(item.get("result", item.get("status", "Pending")))
+        if result not in ("Hit", "Miss"):
+            continue
+        probability = _parse_numeric_value(item.get("probability"), None)
+        if probability is None or not 0 <= probability <= 100:
+            continue
+        probability /= 100.0
+        line = _parse_numeric_value(item.get("line"), None)
+        closing = _parse_numeric_value(item.get("closing_line"), None)
+        side = str(item.get("side", "Over"))
+        clv = None
+        if line is not None and closing is not None:
+            clv = (closing - line) * (-1.0 if side.lower() == "under" else 1.0)
+        actual = 1.0 if result == "Hit" else 0.0
+        rows.append({
+            "player": str(item.get("player", "")),
+            "sport": str(item.get("sport", "Unknown") or "Unknown").upper(),
+            "market": str(item.get("market", "Unknown") or "Unknown"),
+            "side": side,
+            "action": str(item.get("action", "PASS") or "PASS").upper(),
+            "model_version": str(item.get("model_version", "Unknown") or "Unknown"),
+            "sportsbook_grade": str(item.get("sportsbook_grade", "Unavailable") or "Unavailable"),
+            "prob": probability,
+            "actual": actual,
+            "result": result,
+            "brier": (probability - actual) ** 2,
+            "evidence": _parse_numeric_value(item.get("evidence_quality"), None),
+            "entry_score": _parse_numeric_value(item.get("entry_score"), None),
+            "shadow_probability": _parse_numeric_value(
+                item.get("shadow_probability"), None
+            ),
+            "line": line,
+            "closing_line": closing,
+            "clv": clv,
+            "game_date": str(item.get("game_date", "") or ""),
+        })
+    return rows
+
+
+def _learning_group_summary(rows: list, label: str) -> Optional[dict]:
+    if not rows:
+        return None
+    n = len(rows)
+    predicted = sum(row["prob"] for row in rows) / n
+    actual = sum(row["actual"] for row in rows) / n
+    return {
+        "Segment": label,
+        "N": n,
+        "Predicted": f"{predicted:.1%}",
+        "Actual": f"{actual:.1%}",
+        "Gap": f"{actual - predicted:+.1%}",
+        "Brier": f"{sum(row['brier'] for row in rows) / n:.3f}",
+    }
+
+
+def render_model_learning_dashboard(predictions: list) -> None:
+    """Show selection coverage, calibration, CLV, and segment performance."""
+    st.markdown(
+        "<div class='section-header'>Model Learning Loop</div>",
+        unsafe_allow_html=True,
+    )
+    if not predictions:
+        st.markdown(
+            "<div class='pick-list-empty'><strong style='color:var(--text);'>"
+            "No scanner decisions recorded yet</strong><br>Run an Edge scan to begin "
+            "capturing every PLAY, WATCH, and PASS. Durable history requires the "
+            "model_predictions Supabase table.</div>",
+            unsafe_allow_html=True,
+        )
+        return
+
+    versions = sorted({str(row.get("model_version", "Unknown")) for row in predictions}, reverse=True)
+    sports = sorted({str(row.get("sport", "Unknown")).upper() for row in predictions})
+    filter_a, filter_b = st.columns(2)
+    with filter_a:
+        sport_filter = st.selectbox(
+            "Learning sport", ["All sports"] + sports, key="learning_sport_filter"
+        )
+    with filter_b:
+        version_filter = st.selectbox(
+            "Model version", versions, key="learning_model_version_filter"
+        )
+
+    filtered = [
+        row for row in predictions
+        if str(row.get("model_version", "Unknown")) == version_filter
+        and (
+            sport_filter == "All sports"
+            or str(row.get("sport", "Unknown")).upper() == sport_filter
+        )
+    ]
+    graded = _learning_evaluation_rows(filtered)
+    pending = sum(1 for row in filtered if str(row.get("status", "Pending")) == "Pending")
+    pushes = sum(1 for row in filtered if str(row.get("result", "")) == "Push")
+    action_counts = {
+        action: sum(1 for row in filtered if str(row.get("action", "PASS")).upper() == action)
+        for action in ("PLAY", "WATCH", "PASS")
+    }
+
+    if graded:
+        predicted = sum(row["prob"] for row in graded) / len(graded)
+        actual = sum(row["actual"] for row in graded) / len(graded)
+        gap = actual - predicted
+        brier = sum(row["brier"] for row in graded) / len(graded)
+    else:
+        predicted = actual = gap = brier = None
+
+    st.markdown(
+        f"<div class='workspace-summary-grid'>"
+        f"<div class='workspace-summary-item'><span>Captured</span><strong>{len(filtered)}</strong></div>"
+        f"<div class='workspace-summary-item'><span>Settled</span><strong>{len(graded)}</strong></div>"
+        f"<div class='workspace-summary-item'><span>Actual hit</span><strong>{f'{actual:.1%}' if actual is not None else '—'}</strong></div>"
+        f"<div class='workspace-summary-item'><span>Model average</span><strong>{f'{predicted:.1%}' if predicted is not None else '—'}</strong></div>"
+        f"<div class='workspace-summary-item'><span>Calibration gap</span><strong>{f'{gap:+.1%}' if gap is not None else '—'}</strong></div>"
+        f"<div class='workspace-summary-item'><span>Brier score</span><strong>{f'{brier:.3f}' if brier is not None else '—'}</strong></div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        f"Selection coverage: {action_counts['PLAY']} PLAY · {action_counts['WATCH']} WATCH · "
+        f"{action_counts['PASS']} PASS · {pending} pending · {pushes} push. "
+        "The probability is tested against outcomes; evidence quality is retained as a separate data-quality grade."
+    )
+
+    if not graded:
+        st.info(
+            "Predictions are being captured. Calibration appears after completed games are matched "
+            "to official MLB or WNBA results."
+        )
+        return
+
+    if len(graded) < 20:
+        st.warning(
+            f"Only {len(graded)} graded predictions are available. Treat every segment as provisional until it has at least 20 outcomes."
+        )
+
+    band_specs = [
+        ("Below 50%", 0.00, 0.50), ("50–59%", 0.50, 0.60),
+        ("60–69%", 0.60, 0.70),
+        ("70–79%", 0.70, 0.80), ("80–89%", 0.80, 0.90),
+        ("90%+", 0.90, 1.01),
+    ]
+    calibration_rows = [
+        summary for label, low, high in band_specs
+        if (summary := _learning_group_summary(
+            [row for row in graded if low <= row["prob"] < high], label
+        ))
+    ]
+    st.markdown("**Calibration By Hit Chance**")
+    st.dataframe(pd.DataFrame(calibration_rows), use_container_width=True, hide_index=True)
+
+    segment_rows = []
+    segment_specs = []
+    for field, prefix in (
+        ("sport", "Sport"), ("market", "Market"), ("side", "Side"),
+        ("action", "Action"), ("sportsbook_grade", "Market check"),
+    ):
+        for value in sorted({row[field] for row in graded}):
+            segment_specs.append((f"{prefix}: {value}", field, value))
+    for label, field, value in segment_specs:
+        summary = _learning_group_summary(
+            [row for row in graded if row[field] == value], label
+        )
+        if summary:
+            segment_rows.append(summary)
+    st.markdown("**Performance By Segment**")
+    st.dataframe(pd.DataFrame(segment_rows), use_container_width=True, hide_index=True)
+
+    clv_rows = [row for row in graded if row["clv"] is not None]
+    if clv_rows:
+        average_clv = sum(row["clv"] for row in clv_rows) / len(clv_rows)
+        favorable = sum(1 for row in clv_rows if row["clv"] > 0) / len(clv_rows)
+        st.caption(
+            f"Closing-line capture: {len(clv_rows)} matched lines · average directional movement "
+            f"{average_clv:+.2f} · favorable {favorable:.0%}. Positive means the scanned line was better than the last pregame line."
+        )
+    else:
+        st.caption(
+            "Closing-line capture is waiting for matching pregame PrizePicks line-history snapshots."
+        )
+
+    shadow_rows = [
+        (row, row["shadow_probability"] / 100.0)
+        for row in graded if row.get("shadow_probability") is not None
+    ]
+    if shadow_rows:
+        active_brier = sum(row["brier"] for row, _ in shadow_rows) / len(shadow_rows)
+        shadow_brier = sum((prob - row["actual"]) ** 2 for row, prob in shadow_rows) / len(shadow_rows)
+        st.caption(
+            f"Shadow model: {len(shadow_rows)} shared outcomes · active Brier {active_brier:.3f} · "
+            f"shadow Brier {shadow_brier:.3f}. Lower is better."
+        )
 
 
 def _mlb_backtest_rows(tracker_entries: list) -> list:
@@ -7005,6 +7821,11 @@ def render_results_page() -> None:
     import html as _html
 
     tracker = st.session_state.get("tracker", []) or []
+    predictions = load_model_predictions()
+    settle_key = _cache_date()
+    if st.session_state.get("model_learning_settle_date") != settle_key:
+        settle_model_predictions(predictions, max_events=40)
+        st.session_state.model_learning_settle_date = settle_key
     hits = sum(1 for entry in tracker if entry.get("Result") == "Hit")
     misses = sum(1 for entry in tracker if entry.get("Result") == "Miss")
     pending = sum(1 for entry in tracker if entry.get("Result", "Pending") == "Pending")
@@ -7014,13 +7835,40 @@ def render_results_page() -> None:
     st.markdown(
         "<div id='workspace-top' class='workspace-page-head'><div>"
         "<h1>Results</h1>"
-        "<p>Settle tracked picks and use actual outcomes to judge calibration. This is the evidence layer behind future model tuning.</p>"
+        "<p>Measure every scanner decision against official outcomes, then inspect your manually tracked picks.</p>"
         "</div></div>",
+        unsafe_allow_html=True,
+    )
+
+    learning_a, learning_b = st.columns([2, 1])
+    with learning_a:
+        if st.button(
+            "Refresh model outcomes", key="learning_refresh_outcomes",
+            use_container_width=True,
+        ):
+            with st.spinner("Matching completed MLB and WNBA games..."):
+                outcome_stats = settle_model_predictions(predictions, max_events=120)
+            st.toast(
+                f"Settled {outcome_stats['updated']} prediction rows · "
+                f"{outcome_stats['unresolved']} still pending"
+            )
+            st.rerun()
+    with learning_b:
+        if st.button(
+            "Reload ledger", key="learning_reload_ledger", use_container_width=True
+        ):
+            load_model_predictions(force=True)
+            st.rerun()
+
+    render_model_learning_dashboard(predictions)
+
+    st.markdown(
+        "<div class='section-header'>Manually Tracked Picks</div>",
         unsafe_allow_html=True,
     )
     st.markdown(
         f"<div class='workspace-summary-grid'>"
-        f"<div class='workspace-summary-item'><span>Win rate</span><strong>{f'{win_rate:.0%}' if win_rate is not None else '—'}</strong></div>"
+        f"<div class='workspace-summary-item'><span>Tracked win rate</span><strong>{f'{win_rate:.0%}' if win_rate is not None else '—'}</strong></div>"
         f"<div class='workspace-summary-item'><span>Hit</span><strong style='color:var(--green);'>{hits}</strong></div>"
         f"<div class='workspace-summary-item'><span>Miss</span><strong style='color:var(--red);'>{misses}</strong></div>"
         f"<div class='workspace-summary-item'><span>Pending</span><strong>{pending}</strong></div>"
@@ -7031,7 +7879,7 @@ def render_results_page() -> None:
     if not tracker:
         st.markdown(
             "<div class='pick-list-empty'><strong style='color:var(--text);'>No tracked picks yet</strong><br>"
-            "Use Add & Track from an analyzer or Edge result. Tracked outcomes will appear here.</div>",
+            "Use Add & Track from an analyzer or Edge result. The learning ledger above still records every scanner decision automatically.</div>",
             unsafe_allow_html=True,
         )
         return
@@ -11976,6 +12824,7 @@ def render_runtime_diagnostics() -> None:
         ("prizepicks", "PrizePicks"),
         ("pp_slate", "Slate Cache"),
         ("sportsbook_market", "Sportsbook Market"),
+        ("model_learning", "Model Learning"),
         ("supabase", "Supabase Cache"),
         ("nba_logs", "NBA Logs"),
         ("nba_context", "NBA Context"),
@@ -24021,7 +24870,10 @@ if st.session_state.active_sport == "edge":
     @st.cache_data(ttl=900, show_spinner=False)
     def _scanner_get_hitter_game_context(team_abbr: str) -> dict:
         """Next scheduled game for a hitter's team."""
-        empty = {"opp": "TBD", "home_team": "", "game_date": "", "side": "", "opp_pitcher": ""}
+        empty = {
+            "opp": "TBD", "home_team": "", "game_date": "", "side": "",
+            "opp_pitcher": "", "game_pk": "", "game_datetime": "",
+        }
         team_abbr = _scanner_norm_mlb_team(team_abbr)
         if not team_abbr:
             return empty
@@ -24056,6 +24908,8 @@ if st.session_state.active_sport == "edge":
                             "opp": opp or "TBD",
                             "home_team": home,
                             "game_date": d.strftime("%Y-%m-%d"),
+                            "game_pk": str(game.get("gamePk", "") or ""),
+                            "game_datetime": game.get("gameDate", ""),
                             "side": side,
                             "opp_pitcher": opp_pitcher,
                         }
@@ -24224,6 +25078,8 @@ if st.session_state.active_sport == "edge":
             return {
                 "sport": "MLB",
                 "player": basic.get("name") or player_name,
+                "player_id": basic.get("id"),
+                "player_team": team_abbr,
                 "stat": _stat_label,
                 "line": line,
                 "side": side,
@@ -24246,6 +25102,8 @@ if st.session_state.active_sport == "edge":
                 "projection_prob": round(proj_prob * 100, 1) if proj_prob is not None else None,
                 "opp": opp,
                 "game_date": game.get("game_date", ""),
+                "game_pk": game.get("game_pk", ""),
+                "game_datetime": game.get("game_datetime", ""),
                 "park": park,
                 "trap_label": trap_label,
                 "trap_reasons": trap_reasons[:3],
@@ -24738,6 +25596,8 @@ if st.session_state.active_sport == "edge":
             return {
                 "sport": "WNBA",
                 "player": player.get("name") or player_name,
+                "player_id": player.get("id"),
+                "event_id": game.get("event_id", ""),
                 "stat": market,
                 "line": line,
                 "side": side,
@@ -24928,6 +25788,9 @@ if st.session_state.active_sport == "edge":
             st.rerun()
 
     if _run_edge:
+        import uuid as _learning_uuid
+        _learning_scan_id = str(_learning_uuid.uuid4())
+        st.session_state["_edge_learning_scan_id"] = _learning_scan_id
         st.session_state.edge_results = []
         st.session_state["edge_has_scanned"] = True
         st.session_state["edge_scan_summary"] = ""
@@ -25533,13 +26396,18 @@ if st.session_state.active_sport == "edge":
         _status.empty()
         with st.spinner("Checking independent sportsbook markets..."):
             _results = enrich_edge_results_with_sportsbook_market(_results)
-        st.session_state.edge_results = _results
         _action_counts = {"PLAY": 0, "WATCH": 0, "PASS": 0}
         for _result in _results:
             _entry_score, _entry_action, _ = scanner_entry_decision(_result)
             _result["entry_score"] = _entry_score
             _result["entry_action"] = _entry_action
             _action_counts[_entry_action] = _action_counts.get(_entry_action, 0) + 1
+        _ledger_saved = save_model_prediction_batch(
+            _results,
+            st.session_state.get("_edge_learning_scan_id", _learning_scan_id),
+            st.session_state.get("session_id", ""),
+        )
+        st.session_state.edge_results = _results
         if _edge_sport == "MLB":
             _slate_bits = f"{_mlb_k_count} K props, {_mlb_hfs_count} Hitter FS props"
         elif _edge_sport == "WNBA":
@@ -25596,6 +26464,14 @@ if st.session_state.active_sport == "edge":
                     f"{_action_counts.get('PLAY', 0)} PLAY, "
                     f"{_action_counts.get('WATCH', 0)} WATCH, "
                     f"{_action_counts.get('PASS', 0)} PASS"
+                ),
+            },
+            {
+                "Stage": "Learning ledger",
+                "Rows remaining": len(_results),
+                "Removed here": 0,
+                "What happened": (
+                    f"{_ledger_saved} PLAY/WATCH/PASS decisions frozen for calibration"
                 ),
             },
         ]
