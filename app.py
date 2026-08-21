@@ -9860,6 +9860,214 @@ def pp_event_key(row: dict) -> str:
     return ""
 
 
+def entry_event_key(row: dict) -> str:
+    """Best available event identity for entry-correlation checks."""
+    row = row or {}
+    for field in ("game_id", "game_pk", "event_id"):
+        value = str(row.get(field, "") or "").strip()
+        if value:
+            return f"{field}:{value}"
+
+    start = pd.to_datetime(
+        row.get("game_datetime") or row.get("start_time"),
+        utc=True,
+        errors="coerce",
+    )
+    if pd.notna(start):
+        return f"start:{start.isoformat()}"
+
+    game_date = str(row.get("game_date") or row.get("pp_game_date") or "")[:10]
+    team = str(
+        row.get("pp_team") or row.get("pitcher_team")
+        or row.get("player_team") or row.get("team") or ""
+    ).strip().upper()
+    opponent = str(row.get("opp") or row.get("opponent") or "").strip().upper()
+    teams = sorted(value for value in (team, opponent) if value and value not in ("TBD", "—"))
+    if game_date and len(teams) == 2:
+        return f"date:{game_date}|{'-'.join(teams)}"
+    return ""
+
+
+def conservative_entry_leg_probability(row: dict) -> dict:
+    """Shrink a leg's calibrated probability according to evidence quality."""
+    row = row or {}
+    probability = _parse_numeric_value(row.get("adj"), None)
+    if probability is None:
+        probability = _parse_numeric_value(row.get("probability"), 50.0)
+    probability = float(probability or 50.0)
+    if probability <= 1.0:
+        probability *= 100.0
+    raw = max(0.01, min(0.99, probability / 100.0))
+
+    confidence = _parse_numeric_value(row.get("confidence"), 60.0)
+    reliability = _parse_numeric_value(row.get("reliability"), confidence)
+    confidence = max(0.0, min(100.0, float(confidence or 0.0)))
+    reliability = max(0.0, min(100.0, float(reliability or confidence)))
+    evidence = min(confidence, reliability) / 100.0
+
+    # The underlying prop probability is already calibrated. This is a small,
+    # explicit entry-level haircut for incomplete evidence, not a second model.
+    evidence_factor = 0.88 + (0.12 * evidence)
+    reasons = []
+    action = str(row.get("entry_action") or row.get("action") or "").upper()
+    verdict = str(row.get("verdict") or row.get("tier") or "")
+    if action == "WATCH" or "Lean" in verdict:
+        evidence_factor *= 0.975
+        reasons.append("watch-level leg")
+    if row.get("line_verification_required"):
+        evidence_factor *= 0.94
+        reasons.append("line needs verification")
+    if row.get("is_goblin") or row.get("is_promo") or row.get("adjusted_odds"):
+        evidence_factor *= 0.96
+        reasons.append("reduced-payout line")
+
+    conservative = 0.50 + ((raw - 0.50) * evidence_factor)
+    conservative = max(0.01, min(0.99, conservative))
+    return {
+        "raw": raw,
+        "conservative": conservative,
+        "confidence": confidence,
+        "reliability": reliability,
+        "evidence_factor": evidence_factor,
+        "reasons": reasons,
+    }
+
+
+def entry_correlation_guardrail(legs: list) -> dict:
+    """Apply an uncertainty haircut only to legs that share an actual game."""
+    same_event_pairs = 0
+    same_team_pairs = 0
+    same_player_pairs = 0
+    unknown_events = 0
+    event_keys = [entry_event_key(leg) for leg in (legs or [])]
+    unknown_events = sum(1 for key in event_keys if not key)
+
+    for left in range(len(legs or [])):
+        for right in range(left + 1, len(legs or [])):
+            a = legs[left] or {}
+            b = legs[right] or {}
+            same_event = bool(event_keys[left] and event_keys[left] == event_keys[right])
+            if not same_event:
+                continue
+            same_event_pairs += 1
+            team_a = str(
+                a.get("pp_team") or a.get("pitcher_team")
+                or a.get("player_team") or a.get("team") or ""
+            ).strip().upper()
+            team_b = str(
+                b.get("pp_team") or b.get("pitcher_team")
+                or b.get("player_team") or b.get("team") or ""
+            ).strip().upper()
+            if team_a and team_a == team_b:
+                same_team_pairs += 1
+            if normalize_name(a.get("player", "")) == normalize_name(b.get("player", "")):
+                same_player_pairs += 1
+
+    factor = 0.92 ** same_event_pairs
+    factor *= 0.96 ** same_team_pairs
+    factor *= 0.85 ** same_player_pairs
+    factor = max(0.72, min(1.0, factor))
+    if same_player_pairs:
+        label = "Same-player overlap"
+    elif same_event_pairs:
+        label = "Same-game guardrail"
+    elif unknown_events:
+        label = "Independent · some games unverified"
+    else:
+        label = "Different games"
+    return {
+        "factor": factor,
+        "label": label,
+        "same_event_pairs": same_event_pairs,
+        "same_team_pairs": same_team_pairs,
+        "same_player_pairs": same_player_pairs,
+        "unknown_events": unknown_events,
+    }
+
+
+def entry_exact_hit_distribution(probabilities: list) -> list:
+    """Poisson-binomial distribution for exact hit counts."""
+    distribution = [1.0]
+    for probability in probabilities or []:
+        p = max(0.0, min(1.0, float(probability)))
+        updated = [0.0] * (len(distribution) + 1)
+        for hits, mass in enumerate(distribution):
+            updated[hits] += mass * (1.0 - p)
+            updated[hits + 1] += mass * p
+        distribution = updated
+    return distribution
+
+
+def evaluate_entry_payout(legs: list, payout_tiers: Optional[dict] = None) -> dict:
+    """Evaluate joint chance, break-even payout, and optional expected return."""
+    legs = list(legs or [])
+    leg_models = [conservative_entry_leg_probability(leg) for leg in legs]
+    raw_joint = 1.0
+    independent_joint = 1.0
+    for model in leg_models:
+        raw_joint *= model["raw"]
+        independent_joint *= model["conservative"]
+
+    correlation = entry_correlation_guardrail(legs)
+    conservative_joint = independent_joint * correlation["factor"]
+    conservative_joint = max(0.0001, min(0.9999, conservative_joint)) if legs else 0.0
+    break_even = (1.0 / conservative_joint) if conservative_joint else None
+    distribution = entry_exact_hit_distribution(
+        [model["conservative"] for model in leg_models]
+    )
+
+    clean_tiers = {}
+    for hits, multiplier in (payout_tiers or {}).items():
+        try:
+            hit_count = int(hits)
+            payout = max(0.0, float(multiplier))
+        except (TypeError, ValueError):
+            continue
+        if 0 <= hit_count < len(distribution) and payout > 0:
+            clean_tiers[hit_count] = payout
+
+    payout_entered = bool(clean_tiers)
+    expected_return = None
+    expected_profit = None
+    value_label = "ENTER PAYOUT"
+    if payout_entered:
+        expected_return = sum(
+            distribution[hits] * multiplier
+            for hits, multiplier in clean_tiers.items()
+        )
+        # Unknown same-game dependence should never make an entry look better.
+        expected_return *= correlation["factor"]
+        expected_profit = expected_return - 1.0
+        if expected_profit >= 0.08:
+            value_label = "VALUE"
+        elif expected_profit >= 0.0:
+            value_label = "THIN"
+        else:
+            value_label = "NEGATIVE"
+
+    avg_confidence = (
+        sum(model["confidence"] for model in leg_models) / len(leg_models)
+        if leg_models else 0.0
+    )
+    return {
+        "legs": legs,
+        "leg_models": leg_models,
+        "raw_joint": raw_joint,
+        "independent_joint": independent_joint,
+        "conservative_joint": conservative_joint,
+        "break_even_multiplier": break_even,
+        "correlation": correlation,
+        "distribution": distribution,
+        "payout_tiers": clean_tiers,
+        "payout_entered": payout_entered,
+        "expected_return": expected_return,
+        "expected_profit": expected_profit,
+        "value_label": value_label,
+        "avg_confidence": avg_confidence,
+        "min_confidence": min((model["confidence"] for model in leg_models), default=0.0),
+    }
+
+
 def get_pp_displayed_line(attributes: dict) -> dict:
     """Return the line PrizePicks displays, including active promo overrides."""
     attrs = attributes or {}
@@ -12953,18 +13161,17 @@ with st.sidebar:
                     st.session_state.parlay_legs.pop(_i)
                     st.rerun()
 
-        # Combined stats
-        _combined_prob = 1.0
-        for _l in _legs:
-            _combined_prob *= (_l["adj"] / 100.0)
+        # Entry-level view: calibrated legs receive a small evidence haircut,
+        # while only picks from the same actual game receive a correlation guardrail.
+        _pick_entry_eval = evaluate_entry_payout(_legs)
+        _combined_prob = _pick_entry_eval["conservative_joint"]
         _combined_pct = round(_combined_prob * 100, 1)
-        _decimal = round(1.0 / max(_combined_prob, 0.001), 2)
-        _american = (f"+{round((_decimal-1)*100)}"
-                     if _decimal >= 2.0
-                     else f"-{round(100/max(_decimal-1,0.001))}")
+        _break_even = _pick_entry_eval.get("break_even_multiplier") or 0.0
 
         _all_strong = all("Strong" in l["verdict"] for l in _legs)
-        _correlated = len(set(l["sport"] for l in _legs)) == 1 and len(_legs) > 2
+        _correlated = bool(
+            _pick_entry_eval.get("correlation", {}).get("same_event_pairs", 0)
+        )
         if _combined_pct >= 20 and _all_strong: _risk="parlay-risk-low";  _rlbl="✅ Strong"
         elif _combined_pct >= 8:                _risk="parlay-risk-medium";_rlbl="🟡 Moderate"
         else:                                   _risk="parlay-risk-high";  _rlbl="🔴 Risky"
@@ -12977,15 +13184,17 @@ with st.sidebar:
             f"<div class='parlay-summary'>"
             f"<div style='display:flex;justify-content:space-between;align-items:center;'>"
             f"<div><div style='font-family:JetBrains Mono,monospace;font-size:0.52rem;"
-            f"color:#6b7f96;'>COMBINED</div>"
+            f"color:#6b7f96;'>CONSERVATIVE ALL-HIT CHANCE</div>"
             f"<div class='parlay-odds'>{_combined_pct}%</div></div>"
             f"<div style='text-align:right;'>"
-            f"<div style='font-family:JetBrains Mono,monospace;font-size:0.52rem;color:#6b7f96;'>ODDS</div>"
+            f"<div style='font-family:JetBrains Mono,monospace;font-size:0.52rem;color:#6b7f96;'>BREAK-EVEN PAYOUT</div>"
             f"<div style='font-family:Plus Jakarta Sans,sans-serif;font-size:1.1rem;"
-            f"font-weight:800;color:#f0f4f8;'>{_american}</div></div></div>"
+            f"font-weight:800;color:#f0f4f8;'>{_break_even:.2f}x</div></div></div>"
             f"<div style='margin-top:8px;display:flex;gap:5px;flex-wrap:wrap;'>"
             f"<span class='parlay-risk-badge {_risk}'>{_rlbl}</span>"
             f"{_correlated_badge}"
+            f"<span class='parlay-risk-badge' style='color:#9aaec4;border:1px solid rgba(255,255,255,0.1);'>"
+            f"{_pick_entry_eval.get('correlation', {}).get('label', 'Different games')}</span>"
             f"</div></div>",
             unsafe_allow_html=True
         )
@@ -12996,7 +13205,10 @@ with st.sidebar:
                 f"{'🟢' if 'Strong Over' in l['verdict'] else '🟡' if 'Lean Over' in l['verdict'] else '🔴' if 'Strong Under' in l['verdict'] else '🟠'} "
                 f"{l['player']} {l['side']} {l['line']} ({l['adj']}%)"
                 for l in _legs
-            ] + [f"Combined: {_combined_pct}% · {_american}", "#PropIQ #PrizePicks"]
+            ] + [
+                f"Conservative all-hit chance: {_combined_pct}% · break-even payout {_break_even:.2f}x",
+                "#PropIQ #PrizePicks",
+            ]
             st.code("\n".join(_pl), language=None)
 
         if st.button("🗑️ Clear Parlay", key="clear_all_parlay", use_container_width=True):
@@ -22935,107 +23147,131 @@ if st.session_state.active_sport == "edge":
                 st.caption("Every analyzed prop line returned a model result.")
 
 
-    def build_mlb_best_entry(candidates: list, target_size: int = 3) -> dict:
-        """
-        Build a conservative MLB entry from validated Edge Scanner results.
-        Prioritizes confidence, projection support, and clean validation while
-        avoiding duplicate players and stacking too much watchlist risk.
-        """
+    def build_best_entry(candidates: list, sport: str,
+                         target_size: int = 2) -> dict:
+        """Choose the strongest standard-payout combination for one sport."""
+        import itertools
+
+        sport = str(sport or "").upper()
+        target_size = max(2, min(4, int(target_size or 2)))
         eligible = []
-        for r in candidates:
-            if r.get("sport") != "MLB":
+        exclusions = {}
+
+        def exclude(reason: str) -> None:
+            exclusions[reason] = exclusions.get(reason, 0) + 1
+
+        for result in candidates or []:
+            if str(result.get("sport", "")).upper() != sport:
                 continue
-            if r.get("line_verification_required"):
+            if result.get("line_verification_required"):
+                exclude("line needs verification")
                 continue
-            if r.get("is_goblin"):
+            if (
+                result.get("is_goblin") or result.get("is_promo")
+                or result.get("adjusted_odds")
+                or str(result.get("odds_type", "standard")).lower() != "standard"
+            ):
+                exclude("reduced-payout line")
+                continue
+            if str(result.get("sportsbook_grade", "")) == "Market Disagrees":
+                exclude("sportsbook market disagrees")
+                continue
+
+            entry_score, action, _ = scanner_entry_decision(result)
+            trap = str(result.get("trap_label", "Clean") or "Clean")
+            if action not in ("PLAY", "WATCH") or trap in ("Do Not Force", "Trap Risk"):
+                exclude("not actionable")
                 continue
             try:
-                adj = float(r.get("adj", 0) or 0)
-                conf = float(r.get("confidence", 0) or 0)
-                edge_pct = float(r.get("edge_pct", adj - 55.0) or 0)
-                edge_raw = float(r.get("edge_raw", 0) or 0)
-                cons = float(r.get("cons", 0) or 0)
-                reliability = float(r.get("reliability", 0) or 0)
-            except Exception:
+                adj = float(result.get("adj", 0) or 0)
+                confidence = float(result.get("confidence", 0) or 0)
+            except (TypeError, ValueError):
+                exclude("invalid probability")
                 continue
-            trap = str(r.get("trap_label", "Clean") or "Clean")
-            validation = str(r.get("validation_label", "") or "")
-            risk_reasons = list(r.get("validation_reasons", []) or []) + list(r.get("trap_reasons", []) or [])
-            is_watch = trap != "Clean" or "Watchlist" in validation or bool(risk_reasons)
-            if trap in ("Do Not Force", "Trap Risk"):
+            if adj < 55 or confidence < 55:
+                exclude("below entry floor")
                 continue
-            if adj < 60 or conf < 65 or edge_pct < 3:
-                continue
-            if is_mlb_strikeout_prop(r.get("stat", "")):
-                if not r.get("starter_id_verified"):
+
+            if sport == "MLB" and is_mlb_strikeout_prop(result.get("stat", "")):
+                if not result.get("starter_id_verified"):
+                    exclude("starter not verified")
                     continue
-                gap = r.get("projection_gap")
-                if gap is not None and float(gap) < 0.75:
+                projection_gap = _parse_numeric_value(result.get("projection_gap"), None)
+                if projection_gap is not None and projection_gap < 0.75:
+                    exclude("strikeout cushion below 0.75")
                     continue
-            score = (
-                conf * 1.15 +
-                edge_pct * 3.2 +
-                adj * 0.35 +
-                cons * 0.15 +
-                reliability * 0.12 +
-                min(max(edge_raw, 0), 4.0) * 4.0
+
+            context_validation = result.get("context_validation") or {}
+            if sport == "WNBA" and isinstance(context_validation, dict):
+                if context_validation.get("hard_invalid") or context_validation.get("verified") is False:
+                    exclude("WNBA game context unverified")
+                    continue
+
+            is_watch = action == "WATCH"
+            eligible.append({
+                **result,
+                "_entry_score": int(entry_score),
+                "_entry_action": action,
+                "_entry_watch": is_watch,
+            })
+
+        best = None
+        best_key = None
+        for combination in itertools.combinations(eligible, target_size):
+            player_keys = [normalize_name(row.get("player", "")) for row in combination]
+            if len(set(player_keys)) != target_size:
+                continue
+            watch_count = sum(1 for row in combination if row.get("_entry_watch"))
+            if watch_count > 1:
+                continue
+
+            evaluation = evaluate_entry_payout(list(combination))
+            market_support = sum(
+                1 for row in combination
+                if row.get("sportsbook_grade") in ("Confirmed Value", "Market Supports")
             )
-            score += float(r.get("rank_score", 0) or 0) * 0.35
-            if is_watch:
-                score -= 18
-            if "Validated Strong" in validation:
-                score += 10
-            elif "Validated" in validation:
-                score += 4
-            market_move = float(r.get("market_open_move") or 0)
-            if (
-                (r.get("side", "Over") == "Over" and market_move > 0)
-                or (r.get("side") == "Under" and market_move < 0)
-            ):
-                score += 3
-            eligible.append({**r, "_entry_score": round(score, 2), "_entry_watch": is_watch})
+            min_entry_score = min(row.get("_entry_score", 0) for row in combination)
+            avg_entry_score = sum(row.get("_entry_score", 0) for row in combination) / target_size
+            rank_key = (
+                evaluation["conservative_joint"],
+                -evaluation["correlation"]["same_event_pairs"],
+                min_entry_score,
+                avg_entry_score,
+                market_support,
+                evaluation["avg_confidence"],
+            )
+            if best_key is None or rank_key > best_key:
+                best_key = rank_key
+                best = {
+                    **evaluation,
+                    "legs": list(combination),
+                    "watch_count": watch_count,
+                    "market_support": market_support,
+                    "min_entry_score": min_entry_score,
+                    "avg_entry_score": avg_entry_score,
+                }
 
-        eligible.sort(key=lambda x: x["_entry_score"], reverse=True)
-        selected = []
-        seen_players = set()
-        watch_count = 0
-        for r in eligible:
-            player_key = normalize_name(r.get("player", ""))
-            if player_key in seen_players:
-                continue
-            if r.get("_entry_watch") and watch_count >= 1:
-                continue
-            selected.append(r)
-            seen_players.add(player_key)
-            if r.get("_entry_watch"):
-                watch_count += 1
-            if len(selected) >= target_size:
-                break
+        if not best:
+            return {
+                "legs": [],
+                "eligible_count": len(eligible),
+                "exclusions": exclusions,
+                "risk": "N/A",
+            }
 
-        if len(selected) < 2:
-            selected = []
-            seen_players = set()
-            for r in eligible:
-                player_key = normalize_name(r.get("player", ""))
-                if player_key in seen_players:
-                    continue
-                selected.append(r)
-                seen_players.add(player_key)
-                if len(selected) >= 2:
-                    break
-
-        combined = 1.0
-        avg_conf = 0.0
-        if selected:
-            for r in selected:
-                combined *= max(0.01, min(0.99, float(r.get("adj", 0) or 0) / 100.0))
-            avg_conf = sum(float(r.get("confidence", 0) or 0) for r in selected) / len(selected)
-        risk = "Low" if selected and avg_conf >= 80 and watch_count == 0 else ("Medium" if selected else "N/A")
+        correlation_pairs = best["correlation"]["same_event_pairs"]
+        if correlation_pairs or best["watch_count"]:
+            risk = "Medium"
+        elif best["min_confidence"] >= 78 and best["min_entry_score"] >= 75:
+            risk = "Low"
+        else:
+            risk = "Medium"
         return {
-            "legs": selected,
-            "combined": combined,
-            "avg_conf": avg_conf,
-            "watch_count": watch_count,
+            **best,
+            "combined": best["conservative_joint"],
+            "avg_conf": best["avg_confidence"],
+            "eligible_count": len(eligible),
+            "exclusions": exclusions,
             "risk": risk,
         }
 
@@ -26750,118 +26986,244 @@ if st.session_state.active_sport == "edge":
                 unsafe_allow_html=True
             )
 
-            # ── Best Entry Builder: MLB-only recommended combo ────────────
-            if _edge_sport == "MLB":
-                _verified_entry_pool = [
-                    result for result in _with_edge
-                    if not result.get("line_verification_required")
-                ]
-                _best_entry = build_mlb_best_entry(_verified_entry_pool, target_size=3)
+            # ── Payout-aware Best Entry Builder ───────────────────────────
+            if _edge_sport in ("MLB", "WNBA"):
+                _entry_control_1, _entry_control_2 = st.columns(2)
+                with _entry_control_1:
+                    _entry_target_size = st.selectbox(
+                        "Entry legs",
+                        [2, 3],
+                        index=0,
+                        key=f"best_entry_size_{_edge_sport.lower()}",
+                    )
+                with _entry_control_2:
+                    _entry_payout_format = st.selectbox(
+                        "Payout format",
+                        ["All legs must hit", "Flex / partial hits"],
+                        key=f"best_entry_format_{_edge_sport.lower()}",
+                    )
+
+                _best_entry = build_best_entry(
+                    _with_edge,
+                    sport=_edge_sport,
+                    target_size=_entry_target_size,
+                )
                 _best_legs = _best_entry.get("legs", [])
-                if len(_best_legs) >= 2:
-                    _best_combined = _best_entry.get("combined", 0.0)
-                    _best_avg_conf = _best_entry.get("avg_conf", 0.0)
+                if len(_best_legs) == _entry_target_size:
+                    import html as _entry_html
+
+                    _best_combined = float(_best_entry.get("conservative_joint", 0) or 0)
+                    _best_raw_joint = float(_best_entry.get("raw_joint", 0) or 0)
+                    _best_avg_conf = float(_best_entry.get("avg_confidence", 0) or 0)
+                    _best_break_even = float(_best_entry.get("break_even_multiplier", 0) or 0)
                     _best_risk = _best_entry.get("risk", "Medium")
+                    _best_corr = _best_entry.get("correlation", {}) or {}
                     _best_risk_col = "#00e896" if _best_risk == "Low" else "#ffc107"
                     _best_rows = ""
-                    for _bi, _leg in enumerate(_best_legs, start=1):
-                        _leg_watch = " · Watchlist" if _leg.get("_entry_watch") else ""
-                        _leg_side = _leg.get("side", "Over")
+                    for _bi, (_leg, _leg_model) in enumerate(
+                        zip(_best_legs, _best_entry.get("leg_models", [])),
+                        start=1,
+                    ):
+                        _leg_watch = " · WATCH" if _leg.get("_entry_watch") else " · PLAY"
+                        _leg_side = _entry_html.escape(str(_leg.get("side", "Over")))
+                        _leg_player = _entry_html.escape(str(_leg.get("player", "")))
+                        _leg_stat = _entry_html.escape(str(_leg.get("stat", "")))
+                        _leg_opp = _entry_html.escape(str(_leg.get("opp", "TBD")))
+                        _leg_line = _entry_html.escape(str(_leg.get("line", "")))
                         _best_rows += (
                             f"<div style='display:grid;grid-template-columns:24px minmax(0,1fr) auto;"
-                            f"gap:8px;align-items:center;padding:7px 0;border-top:1px solid rgba(255,255,255,0.055);'>"
+                            f"gap:8px;align-items:center;padding:8px 0;border-top:1px solid rgba(255,255,255,0.055);'>"
                             f"<div style='font-family:JetBrains Mono,monospace;color:#6b7f96;font-size:0.62rem;'>#{_bi}</div>"
                             f"<div style='min-width:0;'>"
                             f"<div style='font-family:Plus Jakarta Sans,sans-serif;color:#f0f4f8;font-weight:900;font-size:0.88rem;"
-                            f"white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'>{_leg.get('player')}</div>"
+                            f"white-space:nowrap;overflow:hidden;text-overflow:ellipsis;'>{_leg_player}</div>"
                             f"<div style='font-family:JetBrains Mono,monospace;color:#7d93ab;font-size:0.55rem;margin-top:2px;'>"
-                            f"{_leg.get('stat')} {_leg_side} {_leg.get('line')} · vs {_leg.get('opp', 'TBD')}{_leg_watch}</div>"
+                            f"{_leg_stat} {_leg_side} {_leg_line} · vs {_leg_opp}{_leg_watch}</div>"
                             f"</div>"
                             f"<div style='text-align:right;font-family:JetBrains Mono,monospace;'>"
-                            f"<div style='color:#00e896;font-weight:900;font-size:0.8rem;'>{_leg.get('adj')}%</div>"
-                            f"<div style='color:#6b7f96;font-size:0.5rem;'>Quality {_leg.get('confidence')}</div>"
+                            f"<div style='color:#00e896;font-weight:900;font-size:0.8rem;'>{_leg_model['conservative']:.0%}</div>"
+                            f"<div style='color:#6b7f96;font-size:0.5rem;'>model {_leg_model['raw']:.0%} · evidence {_leg_model['confidence']:.0f}</div>"
                             f"</div></div>"
                         )
+
                     st.markdown(
                         f"<div style='background:linear-gradient(135deg,rgba(0,196,204,0.10),rgba(255,255,255,0.025));"
                         f"border:1px solid rgba(0,196,204,0.22);border-radius:14px;padding:1rem 1.1rem;"
-                        f"margin:0 0 1rem 0;box-shadow:0 12px 34px rgba(0,0,0,0.34);'>"
+                        f"margin:0 0 0.75rem 0;box-shadow:0 12px 34px rgba(0,0,0,0.34);'>"
                         f"<div style='display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;'>"
                         f"<div>"
                         f"<div style='font-family:JetBrains Mono,monospace;color:#00c4cc;font-size:0.56rem;"
-                        f"font-weight:900;letter-spacing:0.16em;text-transform:uppercase;'>Best Entry Builder</div>"
+                        f"font-weight:900;letter-spacing:0.16em;text-transform:uppercase;'>Payout-Aware Entry</div>"
                         f"<div style='font-family:Plus Jakarta Sans,sans-serif;color:#f0f4f8;font-weight:900;"
-                        f"font-size:1.05rem;margin-top:3px;'>Recommended MLB {_best_legs and len(_best_legs)}-leg entry</div>"
+                        f"font-size:1.05rem;margin-top:3px;'>Recommended {_edge_sport} {len(_best_legs)}-leg entry</div>"
                         f"<div style='font-family:JetBrains Mono,monospace;color:#7d93ab;font-size:0.62rem;margin-top:4px;'>"
-                        f"Built from validated scanner results · duplicate players avoided · watchlist risk limited</div>"
+                        f"Standard-payout lines only · duplicate players blocked · game correlation checked</div>"
                         f"</div>"
                         f"<div style='display:flex;gap:8px;flex-wrap:wrap;'>"
-                        f"<span class='edge-pill-v55 accent'>Combined {_best_combined:.1%}</span>"
-                        f"<span class='edge-pill-v55'>Avg quality {_best_avg_conf:.0f}</span>"
+                        f"<span class='edge-pill-v55 accent'>All-hit {_best_combined:.1%}</span>"
+                        f"<span class='edge-pill-v55'>All-hit BE {_best_break_even:.2f}x</span>"
+                        f"<span class='edge-pill-v55'>Avg evidence {_best_avg_conf:.0f}</span>"
                         f"<span class='edge-pill-v55' style='color:{_best_risk_col};border-color:{_best_risk_col}55;'>Risk {_best_risk}</span>"
                         f"</div></div>"
-                        f"<div style='margin-top:0.7rem;'>{_best_rows}</div>"
+                        f"<div style='font-family:JetBrains Mono,monospace;color:#6b7f96;font-size:0.55rem;margin-top:0.65rem;'>"
+                        f"Raw product {_best_raw_joint:.1%} → conservative {_best_combined:.1%} · "
+                        f"{_entry_html.escape(str(_best_corr.get('label', 'Different games')))}</div>"
+                        f"<div style='margin-top:0.55rem;'>{_best_rows}</div>"
                         f"</div>",
                         unsafe_allow_html=True,
                     )
-                    if st.button("➕ Add Recommended Entry", key="add_best_mlb_entry", use_container_width=True):
+
+                    _payout_tiers = {}
+                    if _entry_payout_format == "All legs must hit":
+                        _full_payout = st.number_input(
+                            "Displayed total-return multiplier",
+                            min_value=0.0,
+                            value=0.0,
+                            step=0.1,
+                            format="%.2f",
+                            key=f"best_entry_full_payout_{_edge_sport.lower()}_{_entry_target_size}",
+                            help="Enter the exact total payout shown on the slip, including the stake. Example: enter 3.0 for a 3x total return.",
+                        )
+                        if _full_payout > 0:
+                            _payout_tiers[_entry_target_size] = _full_payout
+                    else:
+                        _payout_col_1, _payout_col_2 = st.columns(2)
+                        with _payout_col_1:
+                            _full_payout = st.number_input(
+                                f"{_entry_target_size}/{_entry_target_size} total return",
+                                min_value=0.0,
+                                value=0.0,
+                                step=0.1,
+                                format="%.2f",
+                                key=f"best_entry_flex_full_{_edge_sport.lower()}_{_entry_target_size}",
+                            )
+                        with _payout_col_2:
+                            _partial_payout = st.number_input(
+                                f"{_entry_target_size - 1}/{_entry_target_size} total return",
+                                min_value=0.0,
+                                value=0.0,
+                                step=0.1,
+                                format="%.2f",
+                                key=f"best_entry_flex_partial_{_edge_sport.lower()}_{_entry_target_size}",
+                                help="Enter zero when this result pays nothing.",
+                            )
+                        if _full_payout > 0:
+                            _payout_tiers[_entry_target_size] = _full_payout
+                        if _partial_payout > 0:
+                            _payout_tiers[_entry_target_size - 1] = _partial_payout
+
+                    _payout_eval = evaluate_entry_payout(_best_legs, _payout_tiers)
+                    if _payout_eval.get("payout_entered"):
+                        _value_label = _payout_eval.get("value_label", "THIN")
+                        _value_color = {
+                            "VALUE": "#00e896",
+                            "THIN": "#ffc107",
+                            "NEGATIVE": "#ff3d5c",
+                        }.get(_value_label, "#9aaec4")
+                        _expected_return = float(_payout_eval.get("expected_return", 0) or 0)
+                        _expected_profit = float(_payout_eval.get("expected_profit", 0) or 0)
+                        st.markdown(
+                            f"<div style='background:{_value_color}0d;border:1px solid {_value_color}55;"
+                            f"border-left:4px solid {_value_color};border-radius:10px;padding:0.8rem 1rem;margin-bottom:0.75rem;'>"
+                            f"<div style='display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;'>"
+                            f"<div><div style='font-family:JetBrains Mono,monospace;font-size:0.55rem;color:#7d93ab;'>PAYOUT CHECK</div>"
+                            f"<div style='font-family:Plus Jakarta Sans,sans-serif;font-size:1.1rem;font-weight:900;color:{_value_color};'>"
+                            f"{_value_label}</div></div>"
+                            f"<div style='text-align:right;font-family:JetBrains Mono,monospace;'>"
+                            f"<div style='font-size:0.78rem;color:#f0f4f8;'>Expected return {_expected_return:.2f} per 1.00</div>"
+                            f"<div style='font-size:0.58rem;color:{_value_color};'>{_expected_profit:+.1%} modeled margin</div>"
+                            f"</div></div>"
+                            f"<div style='font-family:JetBrains Mono,monospace;font-size:0.55rem;color:#6b7f96;margin-top:5px;'>"
+                            f"Uses conservative leg probabilities and the displayed payout. This is a model estimate, not a guaranteed return.</div>"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
+                    else:
+                        if _entry_payout_format == "All legs must hit":
+                            st.caption(
+                                f"Enter the exact payout shown on the slip to compare it with the "
+                                f"{_best_break_even:.2f}x break-even requirement."
+                            )
+                        else:
+                            st.caption(
+                                "Enter the exact full-hit and partial-hit returns shown on the slip. "
+                                f"The {_best_break_even:.2f}x figure above is the all-hit-only reference."
+                            )
+
+                    if st.button(
+                        "➕ Add Recommended Entry",
+                        key=f"add_best_entry_{_edge_sport.lower()}_{_entry_target_size}",
+                        use_container_width=True,
+                    ):
                         import datetime as _dt_best_entry
                         for _leg in _best_legs:
                             _leg_side = _leg.get("side", "Over")
-                            _is_strong_leg = (
-                                float(_leg.get("adj", 0) or 0) >= 67
-                                and float(_leg.get("edge_pct", 0) or 0) >= 7
-                                and int(_leg.get("confidence", 0) or 0) >= 75
-                                and not _leg.get("_entry_watch")
-                            )
                             _tier_leg = (
-                                f"Strong {_leg_side}" if _is_strong_leg
+                                f"Strong {_leg_side}"
+                                if _leg.get("_entry_action") == "PLAY"
                                 else f"Lean {_leg_side}"
                             )
                             _new_leg = {
-                                "player":     _leg["player"],
-                                "prop":       f"{_leg['stat']} {_leg_side}",
-                                "line":       _leg["line"],
-                                "side":       _leg_side,
-                                "verdict":    _tier_leg,
+                                "player": _leg["player"],
+                                "prop": f"{_leg['stat']} {_leg_side}",
+                                "stat": _leg.get("stat", ""),
+                                "line": _leg["line"],
+                                "side": _leg_side,
+                                "verdict": _tier_leg,
                                 "confidence": int(_leg.get("confidence", 0) or 0),
-                                "adj":        _leg["adj"],
-                                "sport":      "MLB",
-                                "added":      _dt_best_entry.datetime.now().strftime("%I:%M %p"),
+                                "reliability": float(_leg.get("reliability", 0) or 0),
+                                "adj": _leg["adj"],
+                                "sport": _edge_sport,
+                                "entry_score": int(_leg.get("_entry_score", 0) or 0),
+                                "entry_action": _leg.get("_entry_action", "WATCH"),
+                                "game_id": _leg.get("game_id", ""),
+                                "game_pk": _leg.get("game_pk", ""),
+                                "event_id": _leg.get("event_id", ""),
+                                "game_datetime": _leg.get("game_datetime", ""),
+                                "start_time": _leg.get("start_time", ""),
+                                "game_date": _leg.get("game_date", ""),
+                                "pp_team": _leg.get("pp_team", ""),
+                                "opp": _leg.get("opp", ""),
+                                "odds_type": _leg.get("odds_type", "standard"),
+                                "added": _dt_best_entry.datetime.now().strftime("%I:%M %p"),
                             }
+                            _risk_flags = (
+                                (_leg.get("validation_reasons", []) or [])
+                                + (_leg.get("trap_reasons", []) or [])
+                                + (_leg.get("model_flags", []) or [])
+                                + (_leg.get("quality_gate_reasons", []) or [])
+                            )
                             _entry = {
-                                "Player":      _leg["player"],
-                                "Line":        f"{_leg['line']} {_leg_side}",
-                                "Opponent":    _leg.get("opp", "—"),
-                                "Matchup":     _leg["stat"],
-                                "Venue":       f"Best Entry · Edge Scanner · date:{_leg.get('game_date', '')}",
-                                "Avg PTS":     float(_leg.get("avg", 0) or 0),
-                                "Hit Rate":    f"{float(_leg.get('raw_adj', _leg['adj']) or 0):.1f}%",
-                                "Adjusted":    f"{float(_leg.get('adj', 0) or 0):.1f}%",
+                                "Player": _leg["player"],
+                                "Line": f"{_leg['line']} {_leg_side}",
+                                "Opponent": _leg.get("opp", "—"),
+                                "Matchup": _leg["stat"],
+                                "Venue": f"Best Entry · Edge Scanner · date:{_leg.get('game_date', '')}",
+                                "Avg PTS": float(_leg.get("avg", 0) or 0),
+                                "Hit Rate": f"{float(_leg.get('raw_adj', _leg['adj']) or 0):.1f}%",
+                                "Adjusted": f"{float(_leg.get('adj', 0) or 0):.1f}%",
                                 "Consistency": f"{float(_leg.get('cons', 0) or 0):.1f}%",
-                                "Confidence":  int(_leg.get("confidence", 0) or 0),
-                                "Edge":        float(_leg.get("edge_raw", 0) or 0),
-                                "Sample":      int(_leg.get("samples", 0) or 0),
-                                "Risk Flags":  " | ".join(
-                                    (_leg.get("validation_reasons", []) or []) +
-                                    (_leg.get("trap_reasons", []) or [])
-                                ),
-                                "Trap":        _leg.get("trap_label", ""),
-                                "Validation":  _leg.get("validation_label", ""),
-                                "Verdict":     _tier_leg,
-                                "Result":      "Pending",
-                                "Sport":       "MLB",
+                                "Confidence": int(_leg.get("confidence", 0) or 0),
+                                "Edge": float(_leg.get("edge_raw", 0) or 0),
+                                "Sample": int(_leg.get("samples", 0) or 0),
+                                "Risk Flags": " | ".join(dict.fromkeys(str(flag) for flag in _risk_flags if flag)),
+                                "Trap": _leg.get("trap_label", ""),
+                                "Validation": _leg.get("validation_label", ""),
+                                "Verdict": _tier_leg,
+                                "Result": "Pending",
+                                "Sport": _edge_sport,
                             }
                             add_to_pick_list_and_tracker(_new_leg, _entry)
                         st.toast(f"Added {len(_best_legs)} recommended legs.", icon="✅")
                         st.rerun()
                 elif _with_edge:
+                    _eligible_count = int(_best_entry.get("eligible_count", 0) or 0)
                     st.markdown(
-                        "<div style='background:rgba(255,193,7,0.06);border:1px solid rgba(255,193,7,0.2);"
-                        "border-radius:12px;padding:0.8rem 1rem;margin-bottom:1rem;"
-                        "font-family:JetBrains Mono,monospace;font-size:0.66rem;color:#ffc107;'>"
-                        "Best Entry Builder: not enough clean MLB legs for a recommended entry. "
-                        "Use individual cards only.</div>",
+                        f"<div style='background:rgba(255,193,7,0.06);border:1px solid rgba(255,193,7,0.2);"
+                        f"border-radius:12px;padding:0.8rem 1rem;margin-bottom:1rem;"
+                        f"font-family:JetBrains Mono,monospace;font-size:0.66rem;color:#ffc107;'>"
+                        f"No clean {_entry_target_size}-leg {_edge_sport} entry is available. "
+                        f"{_eligible_count} standard-payout leg(s) cleared the safety filters; the builder will not force a combination.</div>",
                         unsafe_allow_html=True,
                     )
 
