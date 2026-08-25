@@ -7170,6 +7170,84 @@ def settle_model_predictions(predictions: list, max_events: int = 40) -> dict:
     }
 
 
+def _learning_decision_key(item: dict) -> tuple:
+    """Identity for one independently gradable prop decision across rescans."""
+    item = item or {}
+    event_identity = str(
+        item.get("event_id") or item.get("event_key") or ""
+    ).strip()
+    if not event_identity:
+        game_date = str(item.get("game_date") or "")[:10]
+        team = str(item.get("team") or "").strip().upper()
+        opponent = str(item.get("opponent") or "").strip().upper()
+        matchup = "-".join(sorted(value for value in (team, opponent) if value))
+        event_identity = f"{game_date}|{matchup}" if game_date or matchup else ""
+    if not event_identity:
+        # Rows without any game identity cannot be safely collapsed.
+        event_identity = str(item.get("prediction_key") or item.get("scan_id") or id(item))
+
+    line = _parse_numeric_value(item.get("line"), None)
+    line_key = f"{line:.3f}" if line is not None else str(item.get("line", ""))
+    return (
+        str(item.get("model_version", "Unknown")),
+        str(item.get("sport", "")).upper(),
+        event_identity,
+        str(item.get("player_id") or normalize_name(item.get("player", ""))),
+        str(item.get("market", "")),
+        line_key,
+        str(item.get("side", "Over")).lower(),
+        str(item.get("odds_type", "standard")).lower(),
+    )
+
+
+def _learning_unique_prediction_rows(predictions: list) -> list:
+    """Keep the final valid pregame snapshot for each unique prop decision."""
+    grouped = {}
+    for item in predictions or []:
+        created = pd.to_datetime(item.get("created_at"), utc=True, errors="coerce")
+        game_time_raw = str(item.get("game_datetime") or "").strip()
+        game_time = pd.to_datetime(game_time_raw, utc=True, errors="coerce")
+        has_explicit_time = bool(
+            re.search(r"T\d{1,2}:\d{2}|\s\d{1,2}:\d{2}", game_time_raw)
+        )
+        if (
+            has_explicit_time and pd.notna(created)
+            and pd.notna(game_time) and created > game_time
+        ):
+            # A post-start refresh is useful operational history, but it is not
+            # an honest pregame forecast and must not enter calibration.
+            continue
+        grouped.setdefault(_learning_decision_key(item), []).append(item)
+
+    unique = []
+    outcome_fields = (
+        "status", "result", "actual_value", "settled_at", "brier_score",
+        "closing_line", "closing_line_source", "closing_line_captured_at",
+    )
+    for rows in grouped.values():
+        def created_rank(row: dict) -> int:
+            stamp = pd.to_datetime(row.get("created_at"), utc=True, errors="coerce")
+            return int(stamp.value) if pd.notna(stamp) else 0
+
+        selected = dict(max(rows, key=created_rank))
+        settled_rows = [
+            row for row in rows
+            if str(row.get("result", row.get("status", ""))) in ("Hit", "Miss", "Push")
+        ]
+        if settled_rows:
+            outcome_source = max(settled_rows, key=created_rank)
+            for field in outcome_fields:
+                if outcome_source.get(field) is not None:
+                    selected[field] = outcome_source.get(field)
+        unique.append(selected)
+
+    return sorted(
+        unique,
+        key=lambda row: str(row.get("created_at", "")),
+        reverse=True,
+    )
+
+
 def _learning_evaluation_rows(predictions: list) -> list:
     """Normalize settled ledger rows for calibration and closing-line analysis."""
     rows = []
@@ -7213,17 +7291,38 @@ def _learning_evaluation_rows(predictions: list) -> list:
     return rows
 
 
+def _learning_wilson_interval(hits: float, n: int,
+                              z: float = 1.96) -> Tuple[float, float]:
+    """95% Wilson interval for a binary hit rate without extra dependencies."""
+    if n <= 0:
+        return 0.0, 1.0
+    proportion = max(0.0, min(1.0, float(hits) / n))
+    denominator = 1.0 + ((z ** 2) / n)
+    center = (proportion + ((z ** 2) / (2.0 * n))) / denominator
+    margin = (
+        z * (
+            ((proportion * (1.0 - proportion) / n) + ((z ** 2) / (4.0 * n ** 2)))
+            ** 0.5
+        ) / denominator
+    )
+    return max(0.0, center - margin), min(1.0, center + margin)
+
+
 def _learning_group_summary(rows: list, label: str) -> Optional[dict]:
     if not rows:
         return None
     n = len(rows)
     predicted = sum(row["prob"] for row in rows) / n
-    actual = sum(row["actual"] for row in rows) / n
+    hits = sum(row["actual"] for row in rows)
+    actual = hits / n
+    interval_low, interval_high = _learning_wilson_interval(hits, n)
     return {
         "Segment": label,
         "N": n,
+        "Sample": "Usable" if n >= 40 else "Provisional" if n >= 15 else "Thin",
         "Predicted": f"{predicted:.1%}",
         "Actual": f"{actual:.1%}",
+        "Actual 95% range": f"{interval_low:.1%}–{interval_high:.1%}",
         "Gap": f"{actual - predicted:+.1%}",
         "Brier": f"{sum(row['brier'] for row in rows) / n:.3f}",
     }
@@ -7265,11 +7364,20 @@ def render_model_learning_dashboard(predictions: list) -> None:
             or str(row.get("sport", "Unknown")).upper() == sport_filter
         )
     ]
-    graded = _learning_evaluation_rows(filtered)
-    pending = sum(1 for row in filtered if str(row.get("status", "Pending")) == "Pending")
-    pushes = sum(1 for row in filtered if str(row.get("result", "")) == "Push")
+    unique_filtered = _learning_unique_prediction_rows(filtered)
+    snapshot_graded = _learning_evaluation_rows(filtered)
+    graded = _learning_evaluation_rows(unique_filtered)
+    repeated_snapshots = max(0, len(filtered) - len(unique_filtered))
+    pending = sum(
+        1 for row in unique_filtered
+        if str(row.get("status", "Pending")) == "Pending"
+    )
+    pushes = sum(1 for row in unique_filtered if str(row.get("result", "")) == "Push")
     action_counts = {
-        action: sum(1 for row in filtered if str(row.get("action", "PASS")).upper() == action)
+        action: sum(
+            1 for row in unique_filtered
+            if str(row.get("action", "PASS")).upper() == action
+        )
         for action in ("PLAY", "WATCH", "PASS")
     }
 
@@ -7278,24 +7386,33 @@ def render_model_learning_dashboard(predictions: list) -> None:
         actual = sum(row["actual"] for row in graded) / len(graded)
         gap = actual - predicted
         brier = sum(row["brier"] for row in graded) / len(graded)
+        baseline_brier = actual * (1.0 - actual)
+        brier_skill = (
+            1.0 - (brier / baseline_brier)
+            if baseline_brier > 0 else None
+        )
     else:
-        predicted = actual = gap = brier = None
+        predicted = actual = gap = brier = baseline_brier = brier_skill = None
 
     st.markdown(
         f"<div class='workspace-summary-grid'>"
-        f"<div class='workspace-summary-item'><span>Captured</span><strong>{len(filtered)}</strong></div>"
-        f"<div class='workspace-summary-item'><span>Settled</span><strong>{len(graded)}</strong></div>"
+        f"<div class='workspace-summary-item'><span>Captured snapshots</span><strong>{len(filtered)}</strong></div>"
+        f"<div class='workspace-summary-item'><span>Unique decisions</span><strong>{len(unique_filtered)}</strong></div>"
+        f"<div class='workspace-summary-item'><span>Settled unique</span><strong>{len(graded)}</strong></div>"
         f"<div class='workspace-summary-item'><span>Actual hit</span><strong>{f'{actual:.1%}' if actual is not None else '—'}</strong></div>"
         f"<div class='workspace-summary-item'><span>Model average</span><strong>{f'{predicted:.1%}' if predicted is not None else '—'}</strong></div>"
         f"<div class='workspace-summary-item'><span>Calibration gap</span><strong>{f'{gap:+.1%}' if gap is not None else '—'}</strong></div>"
         f"<div class='workspace-summary-item'><span>Brier score</span><strong>{f'{brier:.3f}' if brier is not None else '—'}</strong></div>"
+        f"<div class='workspace-summary-item'><span>Brier skill</span><strong>{f'{brier_skill:+.1%}' if brier_skill is not None else '—'}</strong></div>"
         f"</div>",
         unsafe_allow_html=True,
     )
     st.caption(
-        f"Selection coverage: {action_counts['PLAY']} PLAY · {action_counts['WATCH']} WATCH · "
+        f"Unique-decision coverage: {action_counts['PLAY']} PLAY · {action_counts['WATCH']} WATCH · "
         f"{action_counts['PASS']} PASS · {pending} pending · {pushes} push. "
-        "The probability is tested against outcomes; evidence quality is retained as a separate data-quality grade."
+        f"{repeated_snapshots} repeated scan snapshots are retained for history but excluded from headline calibration; "
+        f"{len(snapshot_graded)} settled snapshots collapse to {len(graded)} unique settled decisions. "
+        "The latest valid pregame snapshot represents each unique prop."
     )
 
     if not graded:
@@ -7305,9 +7422,20 @@ def render_model_learning_dashboard(predictions: list) -> None:
         )
         return
 
-    if len(graded) < 20:
+    if len(graded) < 40:
         st.warning(
-            f"Only {len(graded)} graded predictions are available. Treat every segment as provisional until it has at least 20 outcomes."
+            f"Only {len(graded)} unique graded decisions are available. Treat the headline as provisional until at least 40 are settled, and do not retune an individual segment before it has 30."
+        )
+    elif len(graded) < 100:
+        st.info(
+            f"{len(graded)} unique decisions are enough for monitoring, but not a durable probability retune. "
+            "Wait for at least 100 unique outcomes overall and 30 within the affected segment before changing model weights."
+        )
+    if baseline_brier is not None:
+        st.caption(
+            f"Brier benchmark: {baseline_brier:.3f} from always predicting this sample's "
+            f"{actual:.1%} base hit rate · model skill {brier_skill:+.1%}. Higher skill is better; "
+            "a negative value means the probability model did not beat the constant-rate baseline."
         )
 
     band_specs = [
@@ -7341,6 +7469,90 @@ def render_model_learning_dashboard(predictions: list) -> None:
             segment_rows.append(summary)
     st.markdown("**Performance By Segment**")
     st.dataframe(pd.DataFrame(segment_rows), use_container_width=True, hide_index=True)
+
+    action_groups = {
+        action: [row for row in graded if row["action"] == action]
+        for action in ("PLAY", "WATCH", "PASS")
+    }
+    play_rows = action_groups["PLAY"]
+    watch_rows = action_groups["WATCH"]
+    pass_rows = action_groups["PASS"]
+    if play_rows and len(play_rows) < 20:
+        st.info(
+            f"PLAY is promising, but only {len(play_rows)} unique settled decisions are available. "
+            "Keep the current gate until this reaches at least 20; do not loosen it from an early winning streak."
+        )
+    if len(watch_rows) >= 15 and len(pass_rows) >= 15:
+        watch_actual = sum(row["actual"] for row in watch_rows) / len(watch_rows)
+        pass_actual = sum(row["actual"] for row in pass_rows) / len(pass_rows)
+        watch_predicted = sum(row["prob"] for row in watch_rows) / len(watch_rows)
+        if watch_actual + 0.05 < pass_actual or watch_predicted - watch_actual >= 0.08:
+            st.warning(
+                f"Action-order audit: WATCH hit {watch_actual:.1%} versus PASS {pass_actual:.1%}, "
+                f"and WATCH was predicted at {watch_predicted:.1%}. The ranking gate needs more "
+                "unique outcomes before it should drive entry construction."
+            )
+
+    def report_table(title: str, rows: list) -> list:
+        lines = [title]
+        if not rows:
+            return lines + ["No settled rows available."]
+        columns = [
+            "Segment", "N", "Sample", "Predicted", "Actual",
+            "Actual 95% range", "Gap", "Brier",
+        ]
+        lines.append(" | ".join(columns))
+        for row in rows:
+            lines.append(" | ".join(str(row.get(column, "")) for column in columns))
+        return lines
+
+    report_lines = [
+        "PROPIQ SCANNER LEARNING REPORT",
+        "",
+        "FILTERS",
+        f"Sport: {sport_filter}",
+        f"Model version: {version_filter}",
+        "Evaluation unit: latest valid pregame snapshot per unique prop",
+        "",
+        "COVERAGE",
+        f"Captured snapshots: {len(filtered)}",
+        f"Unique decisions: {len(unique_filtered)}",
+        f"Settled snapshots: {len(snapshot_graded)}",
+        f"Settled unique decisions: {len(graded)}",
+        f"Repeated snapshots excluded: {repeated_snapshots}",
+        f"Pending unique decisions: {pending}",
+        f"Pushes: {pushes}",
+        "",
+        "HEADLINE",
+        f"Actual hit rate: {actual:.1%}" if actual is not None else "Actual hit rate: N/A",
+        f"Model average: {predicted:.1%}" if predicted is not None else "Model average: N/A",
+        f"Calibration gap: {gap:+.1%}" if gap is not None else "Calibration gap: N/A",
+        f"Brier score: {brier:.3f}" if brier is not None else "Brier score: N/A",
+        f"Constant-rate Brier baseline: {baseline_brier:.3f}" if baseline_brier is not None else "Constant-rate Brier baseline: N/A",
+        f"Brier skill vs baseline: {brier_skill:+.1%}" if brier_skill is not None else "Brier skill vs baseline: N/A",
+        "",
+    ]
+    report_lines.extend(report_table("CALIBRATION BY HIT CHANCE", calibration_rows))
+    report_lines.append("")
+    report_lines.extend(report_table("PERFORMANCE BY SEGMENT", segment_rows))
+    report_text = "\n".join(report_lines)
+
+    with st.expander("Copy scanner performance report", expanded=False):
+        st.caption(
+            "Tap the copy icon in the report below, then paste the complete text into this chat."
+        )
+        st.code(report_text, language=None)
+        st.download_button(
+            "Download report as text",
+            data=report_text,
+            file_name=(
+                f"propiq-scanner-report-{str(sport_filter).lower().replace(' ', '-')}-"
+                f"{_cache_date()}.txt"
+            ),
+            mime="text/plain",
+            key="download_scanner_learning_report",
+            use_container_width=True,
+        )
 
     clv_rows = [row for row in graded if row["clv"] is not None]
     if clv_rows:
