@@ -6638,7 +6638,10 @@ def build_model_prediction_rows(results: list, scan_id: str,
             )
 
         risk_flags = []
-        for key in ("trap_reasons", "validation_reasons", "model_flags", "quality_gate_reasons"):
+        for key in (
+            "trap_reasons", "validation_reasons", "model_flags",
+            "quality_gate_reasons", "entry_decision_reasons",
+        ):
             risk_flags.extend(str(item) for item in (result.get(key) or []) if item)
         for label_key in ("trap_label", "validation_label"):
             label = str(result.get(label_key, "") or "")
@@ -6656,6 +6659,7 @@ def build_model_prediction_rows(results: list, scan_id: str,
             "stale_days", "freshness_factor", "confidence_parts", "market_signal",
             "market_move", "market_open_move", "sportsbook_note", "rank_score",
             "rank_penalty", "rank_penalties", "line_verification_required",
+            "entry_decision_reasons",
             "starter_id_verified", "context_validation",
         )
         signal_snapshot = {
@@ -7267,6 +7271,17 @@ def _learning_evaluation_rows(predictions: list) -> list:
         if line is not None and closing is not None:
             clv = (closing - line) * (-1.0 if side.lower() == "under" else 1.0)
         actual = 1.0 if result == "Hit" else 0.0
+        signal_snapshot = item.get("signal_snapshot", {}) or {}
+        risk_flags = item.get("risk_flags", []) or []
+        if not isinstance(signal_snapshot, dict):
+            signal_snapshot = {}
+        if not isinstance(risk_flags, list):
+            risk_flags = [str(risk_flags)]
+        decision_reasons = signal_snapshot.get("entry_decision_reasons", []) or []
+        if not isinstance(decision_reasons, list):
+            decision_reasons = [str(decision_reasons)]
+        odds_type = str(item.get("odds_type", "standard") or "standard").lower()
+        is_reduced = bool(item.get("is_reduced")) or odds_type != "standard"
         rows.append({
             "player": str(item.get("player", "")),
             "sport": str(item.get("sport", "Unknown") or "Unknown").upper(),
@@ -7275,6 +7290,15 @@ def _learning_evaluation_rows(predictions: list) -> list:
             "action": str(item.get("action", "PASS") or "PASS").upper(),
             "model_version": str(item.get("model_version", "Unknown") or "Unknown"),
             "sportsbook_grade": str(item.get("sportsbook_grade", "Unavailable") or "Unavailable"),
+            "odds_type": odds_type,
+            "line_type": "Reduced payout" if is_reduced else "Standard payout",
+            "is_reduced": is_reduced,
+            "risk_flags": [str(flag) for flag in risk_flags if flag],
+            "rank_penalties": [
+                str(flag) for flag in (signal_snapshot.get("rank_penalties", []) or [])
+                if flag
+            ],
+            "decision_reasons": [str(reason) for reason in decision_reasons if reason],
             "prob": probability,
             "actual": actual,
             "result": result,
@@ -7288,6 +7312,7 @@ def _learning_evaluation_rows(predictions: list) -> list:
             "closing_line": closing,
             "clv": clv,
             "game_date": str(item.get("game_date", "") or ""),
+            "created_at": str(item.get("created_at", "") or ""),
         })
     return rows
 
@@ -7327,6 +7352,171 @@ def _learning_group_summary(rows: list, label: str) -> Optional[dict]:
         "Gap": f"{actual - predicted:+.1%}",
         "Brier": f"{sum(row['brier'] for row in rows) / n:.3f}",
     }
+
+
+LEARNING_SHADOW_CALIBRATOR_VERSION = "rolling-beta-v1"
+
+
+def _learning_row_day(row: dict) -> str:
+    """Stable day key used to prevent same-day outcomes leaking into calibration."""
+    for value in (row.get("game_date"), row.get("created_at")):
+        stamp = pd.to_datetime(value, utc=True, errors="coerce")
+        if pd.notna(stamp):
+            return stamp.strftime("%Y-%m-%d")
+    return "9999-12-31"
+
+
+def _learning_rolling_shadow_calibration(rows: list) -> list:
+    """Out-of-sample beta-bin calibration using only earlier game days."""
+    chronological = sorted(
+        (dict(row) for row in (rows or [])),
+        key=lambda row: (_learning_row_day(row), row.get("created_at", "")),
+    )
+    by_day = {}
+    for row in chronological:
+        by_day.setdefault(_learning_row_day(row), []).append(row)
+
+    history = []
+    evaluated = []
+    for day in sorted(by_day):
+        day_rows = by_day[day]
+        for row in day_rows:
+            if len(history) < 40:
+                continue
+
+            same_sport_market = [
+                prior for prior in history
+                if prior["sport"] == row["sport"]
+                and prior["market"] == row["market"]
+                and prior["line_type"] == row["line_type"]
+            ]
+            same_sport = [
+                prior for prior in history
+                if prior["sport"] == row["sport"]
+                and prior["line_type"] == row["line_type"]
+            ]
+            same_line_type = [
+                prior for prior in history
+                if prior["line_type"] == row["line_type"]
+            ]
+            if len(same_sport_market) >= 25:
+                cohort = same_sport_market
+                scope = f"{row['sport']} · {row['market']} · {row['line_type']}"
+            elif len(same_sport) >= 35:
+                cohort = same_sport
+                scope = f"{row['sport']} · {row['line_type']}"
+            elif len(same_line_type) >= 35:
+                cohort = same_line_type
+                scope = row["line_type"]
+            else:
+                # Standard and reduced-payout lines have different selection
+                # profiles and must never calibrate one another.
+                continue
+
+            neighborhood = [
+                prior for prior in cohort
+                if abs(float(prior["prob"]) - float(row["prob"])) <= 0.10
+            ]
+            training = neighborhood if len(neighborhood) >= 15 else cohort
+            if len(training) < 30:
+                continue
+
+            prior_strength = 20.0
+            hits = sum(float(prior["actual"]) for prior in training)
+            probability = float(row["prob"])
+            calibrated = (hits + (prior_strength * probability)) / (
+                len(training) + prior_strength
+            )
+            calibrated = max(
+                0.35,
+                min(0.95, max(probability - 0.12, min(probability + 0.12, calibrated))),
+            )
+            evaluated.append({
+                **row,
+                "shadow_prob": calibrated,
+                "shadow_brier": (calibrated - float(row["actual"])) ** 2,
+                "shadow_train_n": len(training),
+                "shadow_scope": scope,
+            })
+        # Outcomes from one date become eligible only after every forecast on
+        # that date has been scored, preventing same-day lookahead.
+        history.extend(day_rows)
+    return evaluated
+
+
+def _learning_normalize_gate_reason(reason: str) -> str:
+    text = str(reason or "").strip().lower()
+    if not text:
+        return ""
+    if "reduced payout" in text or "goblin" in text or "promo" in text:
+        return "Reduced-payout penalty"
+    if "line verification" in text or "verify line" in text:
+        return "Line verification gate"
+    if "evidence quality" in text or "confidence" in text:
+        return "Evidence-quality floor"
+    if "model verdict" in text:
+        return "Underlying model verdict Pass"
+    if "hard risk" in text or "trap" in text or "do not force" in text:
+        return "Trap / hard-risk gate"
+    if "small k cushion" in text or "thin k cushion" in text:
+        return "Strikeout cushion gate"
+    if "starter" in text:
+        return "Starter-verification gate"
+    if "short leash" in text or "pitch count" in text or "workload" in text:
+        return "Role / workload gate"
+    if "independent market" in text or "sportsbook" in text:
+        return "Independent-market gate"
+    if "validation" in text or "context" in text or "roster" in text:
+        return "Context-validation gate"
+    if "model chance" in text or "probability" in text:
+        return "Model-chance floor"
+    if "entry score" in text or "ranking penalty" in text:
+        return "Entry-score / ranking gate"
+    return "Other recorded risk"
+
+
+def _learning_pass_gate_reasons(row: dict) -> list:
+    """Recover exact new gate reasons and sensible categories for legacy rows."""
+    reasons = []
+    for reason in row.get("decision_reasons", []) or []:
+        normalized = _learning_normalize_gate_reason(reason)
+        if normalized:
+            reasons.append(normalized)
+    for reason in row.get("rank_penalties", []) or []:
+        normalized = _learning_normalize_gate_reason(f"Ranking penalty: {reason}")
+        if normalized:
+            reasons.append(normalized)
+    for reason in row.get("risk_flags", []) or []:
+        normalized = _learning_normalize_gate_reason(reason)
+        if normalized and normalized != "Other recorded risk":
+            reasons.append(normalized)
+
+    evidence = row.get("evidence")
+    entry_score = row.get("entry_score")
+    if evidence is not None and float(evidence) < 55:
+        reasons.append("Evidence-quality floor")
+    if float(row.get("prob", 0) or 0) < 0.55:
+        reasons.append("Model-chance floor")
+    if not reasons and entry_score is not None and float(entry_score) < 65:
+        reasons.append("Entry-score / ranking gate")
+    if not reasons:
+        reasons.append("Unclassified legacy gate")
+    return list(dict.fromkeys(reasons))
+
+
+def _learning_pass_reason_rows(rows: list) -> list:
+    pass_rows = [row for row in (rows or []) if row.get("action") == "PASS"]
+    grouped = {}
+    for row in pass_rows:
+        for reason in _learning_pass_gate_reasons(row):
+            grouped.setdefault(reason, []).append(row)
+    summaries = []
+    for reason, reason_rows in grouped.items():
+        summary = _learning_group_summary(reason_rows, reason)
+        if summary:
+            summary["PASS share"] = f"{len(reason_rows) / len(pass_rows):.0%}" if pass_rows else "—"
+            summaries.append(summary)
+    return sorted(summaries, key=lambda row: (-int(row["N"]), row["Segment"]))
 
 
 def render_model_learning_dashboard(predictions: list) -> None:
@@ -7395,6 +7585,14 @@ def render_model_learning_dashboard(predictions: list) -> None:
     else:
         predicted = actual = gap = brier = baseline_brier = brier_skill = None
 
+    rolling_shadow = _learning_rolling_shadow_calibration(graded)
+    if rolling_shadow:
+        shadow_active_brier = sum(row["brier"] for row in rolling_shadow) / len(rolling_shadow)
+        shadow_brier = sum(row["shadow_brier"] for row in rolling_shadow) / len(rolling_shadow)
+        shadow_delta = shadow_active_brier - shadow_brier
+    else:
+        shadow_active_brier = shadow_brier = shadow_delta = None
+
     st.markdown(
         f"<div class='workspace-summary-grid'>"
         f"<div class='workspace-summary-item'><span>Captured snapshots</span><strong>{len(filtered)}</strong></div>"
@@ -7439,6 +7637,28 @@ def render_model_learning_dashboard(predictions: list) -> None:
             "a negative value means the probability model did not beat the constant-rate baseline."
         )
 
+    st.markdown("**Out-of-Sample Rolling Calibrator**")
+    st.markdown(
+        f"<div class='workspace-summary-grid'>"
+        f"<div class='workspace-summary-item'><span>Shadow coverage</span><strong>{len(rolling_shadow)}</strong></div>"
+        f"<div class='workspace-summary-item'><span>Active Brier</span><strong>{f'{shadow_active_brier:.3f}' if shadow_active_brier is not None else '—'}</strong></div>"
+        f"<div class='workspace-summary-item'><span>Shadow Brier</span><strong>{f'{shadow_brier:.3f}' if shadow_brier is not None else '—'}</strong></div>"
+        f"<div class='workspace-summary-item'><span>Improvement</span><strong style='color:{'var(--green)' if shadow_delta is not None and shadow_delta > 0 else 'var(--red)'};'>{f'{shadow_delta:+.3f}' if shadow_delta is not None else '—'}</strong></div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+    if rolling_shadow:
+        st.caption(
+            f"{LEARNING_SHADOW_CALIBRATOR_VERSION} grades each decision using only outcomes from earlier game days. "
+            f"Positive improvement means the shadow probability beat the live probability on the same {len(rolling_shadow)} outcomes. "
+            "It remains report-only until it has at least 100 out-of-sample decisions and a lower Brier score."
+        )
+    else:
+        st.caption(
+            "The shadow calibrator begins after 40 earlier settled decisions are available. "
+            "It never changes live scanner probabilities automatically."
+        )
+
     band_specs = [
         ("Below 50%", 0.00, 0.50), ("50–59%", 0.50, 0.60),
         ("60–69%", 0.60, 0.70),
@@ -7458,7 +7678,8 @@ def render_model_learning_dashboard(predictions: list) -> None:
     segment_specs = []
     for field, prefix in (
         ("sport", "Sport"), ("market", "Market"), ("side", "Side"),
-        ("action", "Action"), ("sportsbook_grade", "Market check"),
+        ("action", "Action"), ("line_type", "Line type"),
+        ("sportsbook_grade", "Market check"),
     ):
         for value in sorted({row[field] for row in graded}):
             segment_specs.append((f"{prefix}: {value}", field, value))
@@ -7478,6 +7699,67 @@ def render_model_learning_dashboard(predictions: list) -> None:
     play_rows = action_groups["PLAY"]
     watch_rows = action_groups["WATCH"]
     pass_rows = action_groups["PASS"]
+    recommended_rows = play_rows + watch_rows
+    recommendation_rows = [
+        summary for summary in (
+            _learning_group_summary(recommended_rows, "Recommended: PLAY + WATCH"),
+            _learning_group_summary(pass_rows, "Not recommended: PASS"),
+        ) if summary
+    ]
+    st.markdown("**Recommendation Separation**")
+    st.dataframe(
+        pd.DataFrame(recommendation_rows), use_container_width=True, hide_index=True
+    )
+
+    pass_reason_rows = _learning_pass_reason_rows(graded)
+    st.markdown("**PASS Gate Audit**")
+    if pass_reason_rows:
+        pass_columns = [
+            "Segment", "N", "PASS share", "Sample", "Predicted", "Actual",
+            "Actual 95% range", "Gap", "Brier",
+        ]
+        st.dataframe(
+            pd.DataFrame(pass_reason_rows)[pass_columns],
+            use_container_width=True,
+            hide_index=True,
+        )
+        st.caption(
+            "A PASS can carry more than one gate reason, so rows overlap. New scans store exact gate reasons; "
+            "older decisions are reconstructed from their saved evidence, rank penalties, and risk flags."
+        )
+        with st.expander("Inspect settled PASS decisions", expanded=False):
+            pass_detail_rows = [
+                {
+                    "Date": row.get("game_date", ""),
+                    "Sport": row.get("sport", ""),
+                    "Player": row.get("player", ""),
+                    "Market": row.get("market", ""),
+                    "Line type": row.get("line_type", ""),
+                    "Model chance": f"{float(row.get('prob', 0)):.1%}",
+                    "Evidence": (
+                        f"{float(row['evidence']):.0f}"
+                        if row.get("evidence") is not None else "—"
+                    ),
+                    "Entry score": (
+                        f"{float(row['entry_score']):.0f}"
+                        if row.get("entry_score") is not None else "—"
+                    ),
+                    "Gate reasons": " | ".join(_learning_pass_gate_reasons(row)),
+                    "Result": row.get("result", ""),
+                }
+                for row in sorted(
+                    pass_rows,
+                    key=lambda item: (item.get("game_date", ""), item.get("player", "")),
+                    reverse=True,
+                )
+            ]
+            st.dataframe(
+                pd.DataFrame(pass_detail_rows),
+                use_container_width=True,
+                hide_index=True,
+            )
+    else:
+        st.caption("No settled PASS decisions are available for gate analysis.")
     if play_rows and len(play_rows) < 20:
         st.info(
             f"PLAY is promising, but only {len(play_rows)} unique settled decisions are available. "
@@ -7531,11 +7813,30 @@ def render_model_learning_dashboard(predictions: list) -> None:
         f"Brier score: {brier:.3f}" if brier is not None else "Brier score: N/A",
         f"Constant-rate Brier baseline: {baseline_brier:.3f}" if baseline_brier is not None else "Constant-rate Brier baseline: N/A",
         f"Brier skill vs baseline: {brier_skill:+.1%}" if brier_skill is not None else "Brier skill vs baseline: N/A",
+        f"Rolling shadow version: {LEARNING_SHADOW_CALIBRATOR_VERSION}",
+        f"Rolling shadow shared outcomes: {len(rolling_shadow)}",
+        f"Rolling shadow active Brier: {shadow_active_brier:.3f}" if shadow_active_brier is not None else "Rolling shadow active Brier: N/A",
+        f"Rolling shadow Brier: {shadow_brier:.3f}" if shadow_brier is not None else "Rolling shadow Brier: N/A",
+        f"Rolling shadow improvement: {shadow_delta:+.3f}" if shadow_delta is not None else "Rolling shadow improvement: N/A",
         "",
     ]
     report_lines.extend(report_table("CALIBRATION BY HIT CHANCE", calibration_rows))
     report_lines.append("")
     report_lines.extend(report_table("PERFORMANCE BY SEGMENT", segment_rows))
+    report_lines.append("")
+    report_lines.extend(report_table("RECOMMENDATION SEPARATION", recommendation_rows))
+    report_lines.append("")
+    report_lines.append("PASS GATE AUDIT")
+    if pass_reason_rows:
+        pass_columns = [
+            "Segment", "N", "PASS share", "Sample", "Predicted", "Actual",
+            "Actual 95% range", "Gap", "Brier",
+        ]
+        report_lines.append(" | ".join(pass_columns))
+        for row in pass_reason_rows:
+            report_lines.append(" | ".join(str(row.get(column, "")) for column in pass_columns))
+    else:
+        report_lines.append("No settled PASS decisions available.")
     report_text = "\n".join(report_lines)
 
     with st.expander("Copy scanner performance report", expanded=False):
@@ -23721,6 +24022,17 @@ if st.session_state.active_sport == "edge":
         )
         sportsbook_available = bool(result.get("sportsbook_available"))
         sportsbook_grade = str(result.get("sportsbook_grade", "Unavailable"))
+        decision_reasons = []
+        if model_pass:
+            decision_reasons.append("Model verdict is Pass")
+        if confidence < 55:
+            decision_reasons.append("Evidence quality below 55")
+        if hard_risk:
+            decision_reasons.append(f"Hard risk gate: {result.get('trap_label')}")
+        if line_needs_verify:
+            decision_reasons.append("Line verification required")
+        for penalty in result.get("rank_penalties", []) or []:
+            decision_reasons.append(f"Ranking penalty: {penalty}")
         is_strong = (
             adj >= 67
             and edge_pct >= 7
@@ -23744,13 +24056,23 @@ if st.session_state.active_sport == "edge":
         elif sportsbook_available and sportsbook_grade == "Market Disagrees":
             score = min(score, 64)
             is_strong = False
+            decision_reasons.append("Independent market disagrees")
         elif sportsbook_available and sportsbook_grade in ("Neutral", "Limited Market"):
             score = min(score, 79)
             is_strong = False
+            decision_reasons.append(f"Independent market: {sportsbook_grade}")
         elif not is_strong:
             score = min(score, 79)
         score = max(0, min(100, score))
         action = "PLAY" if score >= 80 else "WATCH" if score >= 65 else "PASS"
+        if action == "PASS" and not decision_reasons:
+            if adj < 55:
+                decision_reasons.append("Model chance below 55")
+            elif edge_pct < 0:
+                decision_reasons.append("Directional margin below zero")
+            else:
+                decision_reasons.append("Entry score below 65")
+        result["entry_decision_reasons"] = list(dict.fromkeys(decision_reasons))
         return score, action, is_strong
 
 
