@@ -6131,6 +6131,7 @@ for key, default in [
     ("runtime_debug_errors", []), ("runtime_metrics", {}),
     ("model_predictions", []), ("model_predictions_loaded", False),
     ("model_learning_settle_date", ""),
+    ("entry_ledger", []), ("entry_ledger_loaded", False),
     ("active_view", _default_active_view),
     ("last_analyzer_sport", _default_analyzer_sport),
     ("edge_return_available", False), ("edge_viewed", []),
@@ -8028,16 +8029,120 @@ def render_pick_list_page() -> None:
                 st.rerun()
 
 
+def render_entry_roi_dashboard(entries: list) -> None:
+    """Show normalized realized returns for exact entries the user marked entered."""
+    import html as _html
+
+    entries = list(entries or [])
+    settled_entries = [entry for entry in entries if entry.get("status") == "Settled"]
+    pending_entries = [entry for entry in entries if entry.get("status") == "Pending"]
+    review_entries = [entry for entry in entries if entry.get("status") == "Needs review"]
+    total_stake = sum(float(entry.get("stake", 1) or 1) for entry in settled_entries)
+    total_return = sum(float(entry.get("realized_return", 0) or 0) for entry in settled_entries)
+    total_profit = total_return - total_stake
+    roi = (total_profit / total_stake) if total_stake else None
+    positive = sum(
+        1 for entry in settled_entries if float(entry.get("realized_profit", 0) or 0) > 0
+    )
+    positive_rate = positive / len(settled_entries) if settled_entries else None
+
+    st.markdown(
+        "<div class='section-header'>Entered-Slip ROI</div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f"<div class='workspace-summary-grid'>"
+        f"<div class='workspace-summary-item'><span>Realized ROI</span><strong style='color:{'var(--green)' if roi is not None and roi >= 0 else 'var(--red)'};'>{f'{roi:+.1%}' if roi is not None else '—'}</strong></div>"
+        f"<div class='workspace-summary-item'><span>Profit</span><strong>{total_profit:+.2f}u</strong></div>"
+        f"<div class='workspace-summary-item'><span>Positive return</span><strong>{f'{positive_rate:.0%}' if positive_rate is not None else '—'}</strong></div>"
+        f"<div class='workspace-summary-item'><span>Tracked</span><strong>{len(entries)}</strong></div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        "Returns are normalized to a 1-unit stake using the exact payout entered in the builder. "
+        f"{len(settled_entries)} settled · {len(pending_entries)} pending · {len(review_entries)} push review."
+    )
+
+    if not entries:
+        st.markdown(
+            "<div class='pick-list-empty'><strong style='color:var(--text);'>No exact entries tracked yet</strong><br>"
+            "Enter the displayed payout in Edge, then use Track as Entered after submitting that exact slip.</div>",
+            unsafe_allow_html=True,
+        )
+        return
+
+    table_rows = []
+    report_lines = [
+        "PROPIQ ENTERED-SLIP ROI REPORT",
+        "",
+        f"Tracked entries: {len(entries)}",
+        f"Settled entries: {len(settled_entries)}",
+        f"Pending entries: {len(pending_entries)}",
+        f"Push review: {len(review_entries)}",
+        f"Settled stake: {total_stake:.2f}u",
+        f"Settled return: {total_return:.2f}u",
+        f"Realized profit: {total_profit:+.2f}u",
+        f"Realized ROI: {roi:+.1%}" if roi is not None else "Realized ROI: N/A",
+        "",
+        "ENTRY HISTORY",
+    ]
+    for entry in entries[:100]:
+        legs = entry.get("legs", []) or []
+        leg_label = " + ".join(
+            f"{leg.get('player', '')} {leg.get('side', '')} {leg.get('line', '')}"
+            for leg in legs
+        )
+        expected_profit = _parse_numeric_value(entry.get("expected_profit"), None)
+        actual_profit = _parse_numeric_value(entry.get("realized_profit"), None)
+        table_rows.append({
+            "Date": str(entry.get("created_at", ""))[:10],
+            "Sport": entry.get("sport", ""),
+            "Entry": leg_label,
+            "Payout": f"{float(entry.get('displayed_full_payout', 0) or 0):.2f}x",
+            "Expected": f"{expected_profit:+.1%}" if expected_profit is not None else "—",
+            "Actual": f"{actual_profit:+.2f}u" if actual_profit is not None else "—",
+            "Status": entry.get("result", entry.get("status", "Pending")),
+        })
+        report_lines.append(
+            f"{str(entry.get('created_at', ''))[:10]} | {entry.get('sport', '')} | "
+            f"{leg_label} | payout {float(entry.get('displayed_full_payout', 0) or 0):.2f}x | "
+            f"expected {expected_profit:+.1%} | " if expected_profit is not None else
+            f"{str(entry.get('created_at', ''))[:10]} | {entry.get('sport', '')} | "
+            f"{leg_label} | payout {float(entry.get('displayed_full_payout', 0) or 0):.2f}x | expected N/A | "
+        )
+        report_lines[-1] += (
+            f"actual {actual_profit:+.2f}u | {entry.get('result', entry.get('status', 'Pending'))}"
+            if actual_profit is not None else
+            f"actual pending | {entry.get('result', entry.get('status', 'Pending'))}"
+        )
+
+    with st.expander("Entered-slip history", expanded=False):
+        st.dataframe(pd.DataFrame(table_rows), use_container_width=True, hide_index=True)
+        report_text = "\n".join(report_lines)
+        st.code(report_text, language=None)
+        st.download_button(
+            "Download ROI report",
+            data=report_text,
+            file_name=f"propiq-entry-roi-{_cache_date()}.txt",
+            mime="text/plain",
+            key="download_entry_roi_report",
+            use_container_width=True,
+        )
+
+
 def render_results_page() -> None:
     """Tracked-pick outcomes and calibration live outside the analyzers."""
     import html as _html
 
     tracker = st.session_state.get("tracker", []) or []
     predictions = load_model_predictions()
+    entered_slips = load_entry_ledger()
     settle_key = _cache_date()
     if st.session_state.get("model_learning_settle_date") != settle_key:
         settle_model_predictions(predictions, max_events=40)
         st.session_state.model_learning_settle_date = settle_key
+    settle_entry_ledger(entered_slips, predictions)
     hits = sum(1 for entry in tracker if entry.get("Result") == "Hit")
     misses = sum(1 for entry in tracker if entry.get("Result") == "Miss")
     pending = sum(1 for entry in tracker if entry.get("Result", "Pending") == "Pending")
@@ -8060,9 +8165,10 @@ def render_results_page() -> None:
         ):
             with st.spinner("Matching completed MLB and WNBA games..."):
                 outcome_stats = settle_model_predictions(predictions, max_events=120)
+                entry_stats = settle_entry_ledger(entered_slips, predictions)
             st.toast(
                 f"Settled {outcome_stats['updated']} prediction rows · "
-                f"{outcome_stats['unresolved']} still pending"
+                f"{entry_stats['settled']} entries · {outcome_stats['unresolved']} still pending"
             )
             st.rerun()
     with learning_b:
@@ -8070,8 +8176,10 @@ def render_results_page() -> None:
             "Reload ledger", key="learning_reload_ledger", use_container_width=True
         ):
             load_model_predictions(force=True)
+            load_entry_ledger(force=True)
             st.rerun()
 
+    render_entry_roi_dashboard(entered_slips)
     render_model_learning_dashboard(predictions)
 
     st.markdown(
@@ -10277,6 +10385,350 @@ def evaluate_entry_payout(legs: list, payout_tiers: Optional[dict] = None) -> di
         "value_label": value_label,
         "avg_confidence": avg_confidence,
         "min_confidence": min((model["confidence"] for model in leg_models), default=0.0),
+    }
+
+
+def _entry_ledger_key(scan_id: str, legs: list, payout_tiers: dict) -> str:
+    """Stable identity for one exact entered slip and its displayed payout."""
+    import hashlib
+    import json
+
+    leg_keys = sorted(
+        _learning_prediction_key(scan_id, leg)
+        for leg in (legs or [])
+    )
+    tiers = {
+        str(int(hits)): round(float(multiplier), 4)
+        for hits, multiplier in (payout_tiers or {}).items()
+        if float(multiplier or 0) > 0
+    }
+    payload = {
+        "model_version": MODEL_LEARNING_VERSION,
+        "scan_id": str(scan_id or ""),
+        "legs": leg_keys,
+        "payout_tiers": tiers,
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def build_entry_ledger_row(
+    legs: list,
+    payout_evaluation: dict,
+    payout_format: str,
+    scan_id: str,
+    session_id: str = "",
+) -> Optional[dict]:
+    """Freeze an exact payout-aware entry for later ROI settlement."""
+    legs = list(legs or [])
+    payout_evaluation = payout_evaluation or {}
+    clean_tiers = payout_evaluation.get("payout_tiers", {}) or {}
+    if not legs or not clean_tiers:
+        return None
+
+    now_iso = datetime.utcnow().isoformat() + "Z"
+    leg_snapshots = []
+    for leg in legs:
+        player_id = leg.get("pitcher_id") or leg.get("player_id")
+        team = (
+            leg.get("pp_team") or leg.get("pitcher_team")
+            or leg.get("player_team") or leg.get("team") or ""
+        )
+        market = str(leg.get("stat") or leg.get("market") or "")
+        leg_snapshots.append({
+            "prediction_key": _learning_prediction_key(scan_id, leg),
+            "sport": str(leg.get("sport", "")).upper(),
+            "player": str(leg.get("player", "")),
+            "player_id": str(player_id) if player_id else None,
+            "team": str(team),
+            "opponent": str(leg.get("opp") or leg.get("opponent") or ""),
+            "market": market,
+            "line": float(leg.get("line", 0) or 0),
+            "side": str(leg.get("side", "Over")),
+            "odds_type": str(leg.get("odds_type", "standard")),
+            "event_id": str(
+                leg.get("game_pk") or leg.get("event_id")
+                or leg.get("game_id") or ""
+            ),
+            "event_key": entry_event_key(leg),
+            "game_date": str(leg.get("game_date") or leg.get("pp_game_date") or "")[:10],
+            "game_datetime": leg.get("game_datetime") or leg.get("start_time"),
+            "probability": round(float(leg.get("adj", 0) or 0), 2),
+            "evidence_quality": _parse_numeric_value(leg.get("confidence"), None),
+            "reliability": _parse_numeric_value(leg.get("reliability"), None),
+            "entry_score": _parse_numeric_value(
+                leg.get("_entry_score", leg.get("entry_score")), None
+            ),
+            "action": str(leg.get("_entry_action") or leg.get("entry_action") or ""),
+            "result": "Pending",
+            "actual_value": None,
+        })
+
+    sport_values = sorted({leg.get("sport", "") for leg in leg_snapshots if leg.get("sport")})
+    sport = sport_values[0] if len(sport_values) == 1 else "MIXED"
+    tiers_json = {str(int(hits)): float(value) for hits, value in clean_tiers.items()}
+    correlation = payout_evaluation.get("correlation", {}) or {}
+    full_payout = float(tiers_json.get(str(len(legs)), 0) or 0)
+    return {
+        "entry_key": _entry_ledger_key(scan_id, legs, clean_tiers),
+        "scan_id": str(scan_id or ""),
+        "session_id": str(session_id or ""),
+        "source": "edge_entry_builder",
+        "model_version": MODEL_LEARNING_VERSION,
+        "sport": sport,
+        "entry_size": len(legs),
+        "payout_format": str(payout_format or "all_hit"),
+        "payout_tiers": tiers_json,
+        "displayed_full_payout": full_payout,
+        "stake": 1.0,
+        "raw_probability": round(float(payout_evaluation.get("raw_joint", 0) or 0) * 100, 3),
+        "conservative_probability": round(
+            float(payout_evaluation.get("conservative_joint", 0) or 0) * 100, 3
+        ),
+        "break_even_multiplier": _parse_numeric_value(
+            payout_evaluation.get("break_even_multiplier"), None
+        ),
+        "expected_return": _parse_numeric_value(
+            payout_evaluation.get("expected_return"), None
+        ),
+        "expected_profit": _parse_numeric_value(
+            payout_evaluation.get("expected_profit"), None
+        ),
+        "value_label": str(payout_evaluation.get("value_label", "")),
+        "correlation_factor": _parse_numeric_value(correlation.get("factor"), 1.0),
+        "correlation_label": str(correlation.get("label", "")),
+        "legs": leg_snapshots,
+        "status": "Pending",
+        "result": "Pending",
+        "hits": 0,
+        "misses": 0,
+        "pushes": 0,
+        "realized_multiplier": None,
+        "realized_return": None,
+        "realized_profit": None,
+        "created_at": now_iso,
+        "updated_at": now_iso,
+    }
+
+
+def save_entry_ledger_row(row: Optional[dict]) -> dict:
+    """Save one entered slip to Supabase with a session fallback."""
+    if not row or not row.get("entry_key"):
+        return {"saved": False, "durable": False, "duplicate": False}
+
+    local = st.session_state.setdefault("entry_ledger", [])
+    existing = next(
+        (item for item in local if item.get("entry_key") == row.get("entry_key")),
+        None,
+    )
+    if existing:
+        return {"saved": True, "durable": bool(existing.get("id")), "duplicate": True}
+    local.insert(0, row)
+
+    try:
+        sb = get_supabase_client()
+        if not sb:
+            set_runtime_metric(
+                "entry_ledger", "warn",
+                "Entry saved for this session · Supabase unavailable",
+            )
+            return {"saved": True, "durable": False, "duplicate": False}
+        import requests as _req
+        response = _req.post(
+            f"{sb.url}/rest/v1/entry_ledger?on_conflict=entry_key",
+            headers={
+                **sb.hdrs,
+                "Prefer": "resolution=ignore-duplicates,return=representation",
+            },
+            json=row,
+            timeout=12,
+        )
+        if response.ok:
+            saved_rows = response.json() if response.content else []
+            if isinstance(saved_rows, list) and saved_rows:
+                row.update(saved_rows[0])
+            set_runtime_metric(
+                "entry_ledger", "ok", "Exact entry and payout saved for ROI tracking",
+                fetched_at=datetime.utcnow().isoformat() + "Z",
+            )
+            return {"saved": True, "durable": True, "duplicate": False}
+        record_debug_error(
+            "entry_ledger.save",
+            f"HTTP {response.status_code}: {response.text[:180]}",
+        )
+        set_runtime_metric(
+            "entry_ledger", "warn",
+            "Session-only entry · run supabase_entry_ledger.sql",
+        )
+    except Exception as err:
+        record_debug_error("entry_ledger.save", err)
+    return {"saved": True, "durable": False, "duplicate": False}
+
+
+def load_entry_ledger(limit: int = 1000, force: bool = False) -> list:
+    """Load entered slips and merge them with any session-only entries."""
+    if not force and st.session_state.get("entry_ledger_loaded"):
+        return st.session_state.get("entry_ledger", []) or []
+    server_rows = []
+    try:
+        sb = get_supabase_client()
+        if sb:
+            import requests as _req
+            response = _req.get(
+                f"{sb.url}/rest/v1/entry_ledger"
+                f"?select=*&order=created_at.desc&limit={max(1, min(int(limit), 2500))}",
+                headers=sb.hdrs,
+                timeout=12,
+            )
+            if response.ok and isinstance(response.json(), list):
+                server_rows = response.json()
+            elif response.status_code not in (400, 404):
+                record_debug_error(
+                    "entry_ledger.load",
+                    f"HTTP {response.status_code}: {response.text[:180]}",
+                )
+    except Exception as err:
+        record_debug_error("entry_ledger.load", err)
+
+    merged = {}
+    for row in (st.session_state.get("entry_ledger", []) or []) + server_rows:
+        key = row.get("entry_key")
+        if not key:
+            continue
+        current = merged.get(key)
+        if not current or str(row.get("updated_at", "")) >= str(current.get("updated_at", "")):
+            merged[key] = {**(current or {}), **row}
+    rows = sorted(
+        merged.values(), key=lambda item: str(item.get("created_at", "")), reverse=True
+    )
+    st.session_state.entry_ledger = rows
+    st.session_state.entry_ledger_loaded = True
+    return rows
+
+
+def update_entry_ledger_row(row: dict, updates: dict) -> bool:
+    """Update a local entered slip and its durable copy."""
+    row.update(updates)
+    row["updated_at"] = datetime.utcnow().isoformat() + "Z"
+    try:
+        sb = get_supabase_client()
+        if not sb:
+            return False
+        import requests as _req
+        from urllib.parse import quote as _quote
+        selector = (
+            f"id=eq.{_quote(str(row['id']), safe='')}"
+            if row.get("id") else
+            f"entry_key=eq.{_quote(str(row.get('entry_key', '')), safe='')}"
+        )
+        response = _req.patch(
+            f"{sb.url}/rest/v1/entry_ledger?{selector}",
+            headers={**sb.hdrs, "Prefer": "return=minimal"},
+            json={**updates, "updated_at": row["updated_at"]},
+            timeout=10,
+        )
+        return response.ok
+    except Exception as err:
+        record_debug_error("entry_ledger.update", err)
+        return False
+
+
+def _entry_leg_identity(row: dict) -> tuple:
+    """Fallback identity when an older entry lacks a direct prediction key."""
+    row = row or {}
+    event = str(row.get("event_id") or row.get("event_key") or row.get("game_date") or "")
+    return (
+        str(row.get("sport", "")).upper(),
+        str(row.get("player_id") or normalize_name(row.get("player", ""))),
+        event,
+        str(row.get("market") or row.get("stat") or ""),
+        round(float(row.get("line", 0) or 0), 3),
+        str(row.get("side", "Over")),
+        str(row.get("odds_type", "standard")),
+    )
+
+
+def settle_entry_ledger(entries: list, predictions: list) -> dict:
+    """Settle entered slips from their frozen pregame prediction rows."""
+    by_key = {
+        row.get("prediction_key"): row
+        for row in (predictions or []) if row.get("prediction_key")
+    }
+    by_identity = {}
+    for prediction in predictions or []:
+        by_identity.setdefault(_entry_leg_identity(prediction), prediction)
+
+    settled_count = 0
+    review_count = 0
+    pending_count = 0
+    for entry in entries or []:
+        if str(entry.get("status", "Pending")) != "Pending":
+            continue
+        resolved_legs = []
+        all_resolved = True
+        for leg in entry.get("legs", []) or []:
+            prediction = by_key.get(leg.get("prediction_key"))
+            if not prediction:
+                prediction = by_identity.get(_entry_leg_identity(leg))
+            if not prediction or str(prediction.get("status", "Pending")) != "Settled":
+                all_resolved = False
+                resolved_legs.append(leg)
+                continue
+            resolved_legs.append({
+                **leg,
+                "result": str(prediction.get("result", "Pending")),
+                "actual_value": prediction.get("actual_value"),
+                "settled_at": prediction.get("settled_at"),
+            })
+
+        if not all_resolved or not resolved_legs:
+            pending_count += 1
+            continue
+
+        hits = sum(1 for leg in resolved_legs if leg.get("result") == "Hit")
+        misses = sum(1 for leg in resolved_legs if leg.get("result") == "Miss")
+        pushes = sum(1 for leg in resolved_legs if leg.get("result") == "Push")
+        common = {
+            "legs": resolved_legs,
+            "hits": hits,
+            "misses": misses,
+            "pushes": pushes,
+            "settled_at": datetime.utcnow().isoformat() + "Z",
+        }
+        if pushes:
+            update_entry_ledger_row(entry, {
+                **common,
+                "status": "Needs review",
+                "result": "Push payout review",
+            })
+            review_count += 1
+            continue
+
+        tiers = entry.get("payout_tiers", {}) or {}
+        multiplier = float(tiers.get(str(hits), tiers.get(hits, 0)) or 0)
+        stake = float(entry.get("stake", 1.0) or 1.0)
+        realized_return = stake * multiplier
+        realized_profit = realized_return - stake
+        if realized_profit > 1e-9:
+            result = "Won" if hits == len(resolved_legs) else "Partial payout"
+        elif abs(realized_profit) <= 1e-9:
+            result = "Break-even"
+        else:
+            result = "Lost"
+        update_entry_ledger_row(entry, {
+            **common,
+            "status": "Settled",
+            "result": result,
+            "realized_multiplier": round(multiplier, 4),
+            "realized_return": round(realized_return, 4),
+            "realized_profit": round(realized_profit, 4),
+        })
+        settled_count += 1
+
+    return {
+        "settled": settled_count,
+        "needs_review": review_count,
+        "pending": pending_count,
     }
 
 
@@ -19895,6 +20347,15 @@ if st.session_state.active_sport == "mlb":
 # ═══════════════════════════════════════════════════════
 
 WNBA_ANALYZER_SITE = "https://site.api.espn.com/apis/site/v2/sports/basketball/wnba"
+WNBA_ANALYZER_COMMON = "https://site.web.api.espn.com/apis/common/v3/sports/basketball/wnba"
+# ESPN team IDs are stable. This catalog is used only when ESPN's team-index
+# endpoint is unavailable; individual roster responses still verify every player.
+WNBA_TEAM_CATALOG = (
+    ("20", "ATL"), ("19", "CHI"), ("18", "CON"), ("3", "DAL"),
+    ("129689", "GSV"), ("5", "IND"), ("17", "LVA"), ("6", "LAS"),
+    ("8", "MIN"), ("9", "NYL"), ("11", "PHX"), ("132052", "POR"),
+    ("14", "SEA"), ("131935", "TOR"), ("16", "WAS"),
+)
 WNBA_STAT_COLUMNS = {
     "Points": "PTS",
     "Rebounds": "REB",
@@ -20031,6 +20492,38 @@ def _wnba_resolve_roster_players(found: list) -> list:
     return sorted(resolved, key=lambda p: normalize_name(p["name"]))
 
 
+def _wnba_roster_athletes(payload: dict) -> list:
+    """Read athletes from either ESPN site-v2 or common-v3 roster JSON."""
+    direct = payload.get("athletes", []) or []
+    if direct:
+        athletes = []
+        for group in direct:
+            if not isinstance(group, dict):
+                continue
+            athletes.extend(group.get("items") or [group])
+        return [athlete for athlete in athletes if isinstance(athlete, dict)]
+
+    groups = payload.get("positionGroups", []) or []
+    all_group = next(
+        (
+            group for group in groups
+            if str(group.get("type") or group.get("displayName") or "").lower() == "all"
+        ),
+        None,
+    )
+    source_groups = [all_group] if all_group else groups
+    athletes = []
+    seen = set()
+    for group in source_groups:
+        for athlete in (group or {}).get("athletes", []) or []:
+            player_id = str((athlete or {}).get("id", "") or "")
+            if not isinstance(athlete, dict) or not player_id or player_id in seen:
+                continue
+            seen.add(player_id)
+            athletes.append(athlete)
+    return athletes
+
+
 @st.cache_data(ttl=21600, show_spinner=False)
 def _wnba_get_players_cached(_date: str) -> list:
     """Load a complete roster set; exceptions prevent Streamlit from caching failures."""
@@ -20056,21 +20549,38 @@ def _wnba_get_players_cached(_date: str) -> list:
             errors.append(f"season scoreboard: {err}")
 
     if not teams:
-        raise RuntimeError("; ".join(errors) or "ESPN returned no WNBA teams")
+        teams = [
+            {"id": team_id, "abbr": _wnba_norm_team(abbr)}
+            for team_id, abbr in WNBA_TEAM_CATALOG
+        ]
+        errors.append("team index unavailable; used verified ESPN team IDs")
 
     import concurrent.futures as _wnba_futures
 
     def fetch_roster(team):
         team_id = team["id"]
         team_abbr = team["abbr"]
+        endpoint_errors = []
         try:
             roster = _wnba_request_json(
                 f"{WNBA_ANALYZER_SITE}/teams/{team_id}/roster",
                 params={"limit": 100},
             )
+            if _wnba_roster_athletes(roster):
+                return team, roster, "site-v2", ""
         except Exception as err:
-            return team, {}, f"{team_abbr}: {err}"
-        return team, roster, ""
+            endpoint_errors.append(f"site-v2 {err}")
+        try:
+            roster = _wnba_request_json(
+                f"{WNBA_ANALYZER_COMMON}/teams/{team_id}/roster",
+                params={"limit": 100},
+            )
+            if _wnba_roster_athletes(roster):
+                return team, roster, "common-v3", ""
+            endpoint_errors.append("common-v3 returned no athletes")
+        except Exception as err:
+            endpoint_errors.append(f"common-v3 {err}")
+        return team, {}, "", f"{team_abbr}: {'; '.join(endpoint_errors)}"
 
     found = []
     roster_failures = []
@@ -20085,50 +20595,43 @@ def _wnba_get_players_cached(_date: str) -> list:
             except Exception as err:
                 roster_failures.append(str(err)[:160])
 
-    for team, roster, roster_error in roster_results:
+    for team, roster, roster_source, roster_error in roster_results:
         team_id = team["id"]
         team_abbr = team["abbr"]
         if roster_error:
             roster_failures.append(roster_error)
             continue
-        for group in roster.get("athletes", []) or []:
-            if not isinstance(group, dict):
+        for athlete in _wnba_roster_athletes(roster):
+            player_id = str(athlete.get("id", "") or "")
+            name = athlete.get("displayName") or athlete.get("fullName") or ""
+            if not player_id or not name:
                 continue
-            items = group.get("items") or [group]
-            for athlete in items:
-                if not isinstance(athlete, dict):
-                    continue
-                player_id = str(athlete.get("id", "") or "")
-                name = athlete.get("displayName") or athlete.get("fullName") or ""
-                if not player_id or not name:
-                    continue
-                position = str(
-                    (athlete.get("position", {}) or {}).get("abbreviation", "") or ""
-                ).upper()
-                athlete_team = athlete.get("team", {}) or {}
-                nested_team = _wnba_norm_team(
-                    athlete_team.get("abbreviation", "")
-                    if isinstance(athlete_team, dict) else ""
-                )
-                nested_team_id = str(
-                    athlete_team.get("id", "")
-                    if isinstance(athlete_team, dict) else ""
-                )
-                found.append({
-                    "id": player_id,
-                    "name": name,
-                    "team": team_abbr,
-                    "team_id": team_id,
-                    "position": position,
-                    "position_group": _wnba_position_group(position),
-                    "active": bool(athlete.get("active", True)),
-                    "nested_team": nested_team,
-                    "nested_team_id": nested_team_id,
-                })
+            position = str(
+                (athlete.get("position", {}) or {}).get("abbreviation", "") or ""
+            ).upper()
+            status = athlete.get("status", {}) or {}
+            is_active = (
+                bool(athlete.get("active"))
+                if athlete.get("active") is not None else
+                str(status.get("type", "active")).lower() not in ("inactive", "out")
+            )
+            found.append({
+                "id": player_id,
+                "name": name,
+                "team": team_abbr,
+                "team_id": team_id,
+                "position": position,
+                "position_group": _wnba_position_group(position),
+                "active": is_active,
+                # Membership in a team-specific ESPN roster is the team proof.
+                "nested_team": team_abbr,
+                "nested_team_id": team_id,
+                "roster_source": roster_source,
+            })
 
     resolved = _wnba_resolve_roster_players(found)
     if not resolved:
-        detail = "; ".join(roster_failures[:5])
+        detail = "; ".join((errors + roster_failures)[:6])
         raise RuntimeError(detail or "ESPN returned no WNBA athletes")
     return resolved
 
@@ -20145,9 +20648,16 @@ def wnba_get_players(force_refresh: bool = False) -> list:
         players = _wnba_get_players_cached(_cache_date())
         st.session_state["wnba_roster_last_good"] = players
         status = "ok" if len(players) >= 100 else "warn"
+        source_counts = {}
+        for player in players:
+            source = str(player.get("roster_source", "ESPN") or "ESPN")
+            source_counts[source] = source_counts.get(source, 0) + 1
+        source_detail = ", ".join(
+            f"{source} {count}" for source, count in sorted(source_counts.items())
+        )
         set_runtime_metric(
             "wnba_rosters", status,
-            f"{len(players)} ESPN roster players loaded",
+            f"{len(players)} ESPN roster players loaded · {source_detail}",
             fetched_at=datetime.utcnow().isoformat() + "Z",
         )
         return players
@@ -27362,11 +27872,35 @@ if st.session_state.active_sport == "edge":
                                 f"The {_best_break_even:.2f}x figure above is the all-hit-only reference."
                             )
 
-                    if st.button(
-                        "➕ Add Recommended Entry",
-                        key=f"add_best_entry_{_edge_sport.lower()}_{_entry_target_size}",
-                        use_container_width=True,
-                    ):
+                    _entry_payout_ready = bool(
+                        _payout_eval.get("payout_entered")
+                        and float(_payout_tiers.get(_entry_target_size, 0) or 0) > 0
+                    )
+                    _entry_add_col, _entry_track_col = st.columns(2)
+                    with _entry_add_col:
+                        _add_entry_clicked = st.button(
+                            "Add legs to Picks",
+                            key=f"add_best_entry_{_edge_sport.lower()}_{_entry_target_size}",
+                            use_container_width=True,
+                        )
+                    with _entry_track_col:
+                        _track_entry_clicked = st.button(
+                            "Track as Entered",
+                            key=f"track_best_entry_{_edge_sport.lower()}_{_entry_target_size}",
+                            use_container_width=True,
+                            disabled=not _entry_payout_ready,
+                            help=(
+                                "Use only after submitting this exact entry and payout."
+                                if _entry_payout_ready else
+                                "Enter the exact full-hit payout first."
+                            ),
+                        )
+                    st.caption(
+                        "Track as Entered records this exact combination and displayed payout for realized ROI. "
+                        "Only tap it after submitting the matching slip."
+                    )
+
+                    if _add_entry_clicked or _track_entry_clicked:
                         import datetime as _dt_best_entry
                         for _leg in _best_legs:
                             _leg_side = _leg.get("side", "Over")
@@ -27426,7 +27960,33 @@ if st.session_state.active_sport == "edge":
                                 "Sport": _edge_sport,
                             }
                             add_to_pick_list_and_tracker(_new_leg, _entry)
-                        st.toast(f"Added {len(_best_legs)} recommended legs.", icon="✅")
+                        if _track_entry_clicked:
+                            _entry_ledger_row = build_entry_ledger_row(
+                                _best_legs,
+                                _payout_eval,
+                                (
+                                    "all_hit"
+                                    if _entry_payout_format == "All legs must hit"
+                                    else "flex"
+                                ),
+                                st.session_state.get("_edge_learning_scan_id", ""),
+                                st.session_state.get("session_id", ""),
+                            )
+                            _entry_save = save_entry_ledger_row(_entry_ledger_row)
+                            if _entry_save.get("duplicate"):
+                                st.toast("This exact entry is already being tracked.", icon="✅")
+                            elif _entry_save.get("durable"):
+                                st.toast(
+                                    f"Entry tracked with {len(_best_legs)} legs and exact payout.",
+                                    icon="✅",
+                                )
+                            else:
+                                st.toast(
+                                    "Entry tracked for this session. Run the entry-ledger SQL for durable ROI history.",
+                                    icon="⚠️",
+                                )
+                        else:
+                            st.toast(f"Added {len(_best_legs)} recommended legs.", icon="✅")
                         st.rerun()
                 elif _with_edge:
                     _eligible_count = int(_best_entry.get("eligible_count", 0) or 0)
