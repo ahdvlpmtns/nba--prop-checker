@@ -6555,13 +6555,26 @@ def _parse_numeric_value(value, default: Optional[float] = None) -> Optional[flo
         return default
 
 
-MODEL_LEARNING_VERSION = "propiq-v8.1-learning-1"
+MODEL_LEARNING_VERSION = "propiq-v8.2-economic-gate-1"
 LEARNING_WNBA_STAT_COLUMNS = {
     "Points": "PTS", "Rebounds": "REB", "Assists": "AST",
     "3-Pointers Made": "3PM", "Pts + Reb + Ast": "PRA",
     "Points + Rebounds": "PR", "Points + Assists": "PA",
     "Rebounds + Assists": "RA",
 }
+
+
+def is_reduced_payout_line(result: dict) -> bool:
+    """Return True when a prop is not a standard full-payout line."""
+    odds_type = str(result.get("odds_type", "standard") or "standard").lower()
+    return bool(
+        result.get("is_reduced")
+        or result.get("is_goblin")
+        or result.get("is_demon")
+        or result.get("is_promo")
+        or result.get("adjusted_odds")
+        or odds_type != "standard"
+    )
 
 
 def _learning_wnba_team(value: str) -> str:
@@ -6676,10 +6689,7 @@ def build_model_prediction_rows(results: list, scan_id: str,
             event_key = ""
         player_id = result.get("pitcher_id") or result.get("player_id")
         team = result.get("pp_team") or result.get("pitcher_team") or result.get("player_team")
-        reduced = bool(
-            result.get("is_goblin") or result.get("is_promo")
-            or result.get("adjusted_odds")
-        )
+        reduced = is_reduced_payout_line(result)
         rows.append({
             "prediction_key": _learning_prediction_key(scan_id, result),
             "scan_id": str(scan_id),
@@ -7519,6 +7529,51 @@ def _learning_pass_reason_rows(rows: list) -> list:
     return sorted(summaries, key=lambda row: (-int(row["N"]), row["Segment"]))
 
 
+def _learning_pair_rows(rows: list, first_field: str, first_label: str,
+                        second_field: str, second_label: str) -> list:
+    """Summarize two dimensions together so mixed cohorts cannot hide drift."""
+    grouped = {}
+    for row in rows or []:
+        first = str(row.get(first_field, "Unknown") or "Unknown")
+        second = str(row.get(second_field, "Unknown") or "Unknown")
+        grouped.setdefault((first, second), []).append(row)
+    summaries = []
+    for (first, second), group_rows in grouped.items():
+        summary = _learning_group_summary(
+            group_rows,
+            f"{first_label}: {first} × {second_label}: {second}",
+        )
+        if summary:
+            summaries.append(summary)
+    return sorted(summaries, key=lambda row: (-int(row["N"]), row["Segment"]))
+
+
+def _learning_line_type_gate_rows(rows: list) -> list:
+    """Split overlapping PASS-gate outcomes by payout type."""
+    pass_rows = [row for row in (rows or []) if row.get("action") == "PASS"]
+    line_type_totals = {}
+    grouped = {}
+    for row in pass_rows:
+        line_type = str(row.get("line_type", "Unknown") or "Unknown")
+        line_type_totals[line_type] = line_type_totals.get(line_type, 0) + 1
+        for reason in _learning_pass_gate_reasons(row):
+            grouped.setdefault((line_type, reason), []).append(row)
+
+    summaries = []
+    for (line_type, reason), group_rows in grouped.items():
+        summary = _learning_group_summary(
+            group_rows,
+            f"{line_type} × {reason}",
+        )
+        if summary:
+            denominator = line_type_totals.get(line_type, 0)
+            summary["PASS share"] = (
+                f"{len(group_rows) / denominator:.0%}" if denominator else "—"
+            )
+            summaries.append(summary)
+    return sorted(summaries, key=lambda row: (-int(row["N"]), row["Segment"]))
+
+
 def render_model_learning_dashboard(predictions: list) -> None:
     """Show selection coverage, calibration, CLV, and segment performance."""
     st.markdown(
@@ -7711,6 +7766,41 @@ def render_model_learning_dashboard(predictions: list) -> None:
         pd.DataFrame(recommendation_rows), use_container_width=True, hide_index=True
     )
 
+    line_action_rows = _learning_pair_rows(
+        graded, "line_type", "Line type", "action", "Action"
+    )
+    line_sport_rows = _learning_pair_rows(
+        graded, "line_type", "Line type", "sport", "Sport"
+    )
+    line_gate_rows = _learning_line_type_gate_rows(graded)
+    st.markdown("**Economic Separation Audit**")
+    st.caption(
+        "Standard and adjusted-payout lines are evaluated separately. Hit rate alone does not "
+        "measure value when the payout changes, so only standard lines can receive a scanner "
+        "PLAY or WATCH without an exact payout check."
+    )
+    st.dataframe(
+        pd.DataFrame(line_action_rows), use_container_width=True, hide_index=True
+    )
+    with st.expander("Line type by sport and PASS gate", expanded=False):
+        st.markdown("**Line Type × Sport**")
+        st.dataframe(
+            pd.DataFrame(line_sport_rows), use_container_width=True, hide_index=True
+        )
+        st.markdown("**Line Type × PASS Gate**")
+        if line_gate_rows:
+            line_gate_columns = [
+                "Segment", "N", "PASS share", "Sample", "Predicted", "Actual",
+                "Actual 95% range", "Gap", "Brier",
+            ]
+            st.dataframe(
+                pd.DataFrame(line_gate_rows)[line_gate_columns],
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.caption("No settled PASS decisions are available by line type.")
+
     pass_reason_rows = _learning_pass_reason_rows(graded)
     st.markdown("**PASS Gate Audit**")
     if pass_reason_rows:
@@ -7825,6 +7915,24 @@ def render_model_learning_dashboard(predictions: list) -> None:
     report_lines.extend(report_table("PERFORMANCE BY SEGMENT", segment_rows))
     report_lines.append("")
     report_lines.extend(report_table("RECOMMENDATION SEPARATION", recommendation_rows))
+    report_lines.append("")
+    report_lines.extend(report_table("LINE TYPE BY ACTION", line_action_rows))
+    report_lines.append("")
+    report_lines.extend(report_table("LINE TYPE BY SPORT", line_sport_rows))
+    report_lines.append("")
+    report_lines.append("LINE TYPE BY PASS GATE")
+    if line_gate_rows:
+        line_gate_columns = [
+            "Segment", "N", "PASS share", "Sample", "Predicted", "Actual",
+            "Actual 95% range", "Gap", "Brier",
+        ]
+        report_lines.append(" | ".join(line_gate_columns))
+        for row in line_gate_rows:
+            report_lines.append(
+                " | ".join(str(row.get(column, "")) for column in line_gate_columns)
+            )
+    else:
+        report_lines.append("No settled PASS decisions available by line type.")
     report_lines.append("")
     report_lines.append("PASS GATE AUDIT")
     if pass_reason_rows:
@@ -24015,6 +24123,7 @@ if st.session_state.active_sport == "edge":
         adj = float(result.get("adj", 0) or 0)
         confidence = int(result.get("confidence", 0) or 0)
         edge_pct = float(result.get("edge_pct", adj - 55.0) or 0)
+        reduced_payout = is_reduced_payout_line(result)
         line_needs_verify = bool(result.get("line_verification_required"))
         model_pass = str(result.get("tier", "")).strip().lower() == "pass"
         hard_risk = str(result.get("trap_label", "")).strip() in (
@@ -24031,6 +24140,10 @@ if st.session_state.active_sport == "edge":
             decision_reasons.append(f"Hard risk gate: {result.get('trap_label')}")
         if line_needs_verify:
             decision_reasons.append("Line verification required")
+        if reduced_payout:
+            decision_reasons.append(
+                "Reduced payout requires exact payout evaluation"
+            )
         for penalty in result.get("rank_penalties", []) or []:
             decision_reasons.append(f"Ranking penalty: {penalty}")
         is_strong = (
@@ -24043,6 +24156,7 @@ if st.session_state.active_sport == "edge":
                 or str(result.get("trap_label", "Clean")) == "Clean"
             )
             and not line_needs_verify
+            and not reduced_payout
             and not model_pass
             and not hard_risk
         )
@@ -24063,6 +24177,12 @@ if st.session_state.active_sport == "edge":
             decision_reasons.append(f"Independent market: {sportsbook_grade}")
         elif not is_strong:
             score = min(score, 79)
+        if reduced_payout:
+            # An easier line is not automatically a better entry. Without the
+            # exact displayed payout there is no economic break-even test, so
+            # keep the model read visible but do not issue PLAY/WATCH.
+            score = min(score, 64)
+            is_strong = False
         score = max(0, min(100, score))
         action = "PLAY" if score >= 80 else "WATCH" if score >= 65 else "PASS"
         if action == "PASS" and not decision_reasons:
@@ -24141,6 +24261,8 @@ if st.session_state.active_sport == "edge":
             f"<div style='font-size:1rem;font-weight:800;color:#00e896;'>{int(audit.get('play', 0) or 0)}</div></div>"
             f"<div><div style='font-size:0.52rem;color:#6b7f96;'>WATCH</div>"
             f"<div style='font-size:1rem;font-weight:800;color:#ffc107;'>{int(audit.get('watch', 0) or 0)}</div></div>"
+            f"<div><div style='font-size:0.52rem;color:#6b7f96;'>PAYOUT CHECK</div>"
+            f"<div style='font-size:1rem;font-weight:800;color:#f97316;'>{int(audit.get('payout_check', 0) or 0)}</div></div>"
             f"<div><div style='font-size:0.52rem;color:#6b7f96;'>MODEL OMITTED</div>"
             f"<div style='font-size:1rem;font-weight:800;color:{'#ff3d5c' if omitted else '#9aaec4'};'>{omitted}</div></div>"
             f"</div>"
@@ -24210,11 +24332,7 @@ if st.session_state.active_sport == "edge":
             if result.get("line_verification_required"):
                 exclude("line needs verification")
                 continue
-            if (
-                result.get("is_goblin") or result.get("is_promo")
-                or result.get("adjusted_odds")
-                or str(result.get("odds_type", "standard")).lower() != "standard"
-            ):
+            if is_reduced_payout_line(result):
                 exclude("reduced-payout line")
                 continue
             if str(result.get("sportsbook_grade", "")) == "Market Disagrees":
@@ -27734,10 +27852,7 @@ if st.session_state.active_sport == "edge":
                             _res.get("line_verification_required", False)
                             or _prop_ref.get("line_verification_required", False)
                         )
-                        _reduced_payout = bool(
-                            _res.get("is_goblin") or _res.get("is_promo")
-                            or _res.get("adjusted_odds")
-                        )
+                        _reduced_payout = is_reduced_payout_line(_res)
                         _rank_penalties = []
                         if _reduced_payout:
                             _rank_penalties.append(("reduced payout", 8))
@@ -27823,6 +27938,9 @@ if st.session_state.active_sport == "edge":
             _result["entry_score"] = _entry_score
             _result["entry_action"] = _entry_action
             _action_counts[_entry_action] = _action_counts.get(_entry_action, 0) + 1
+        _adjusted_line_count = sum(
+            1 for _result in _results if is_reduced_payout_line(_result)
+        )
         _ledger_saved = save_model_prediction_batch(
             _results,
             st.session_state.get("_edge_learning_scan_id", _learning_scan_id),
@@ -27851,6 +27969,7 @@ if st.session_state.active_sport == "edge":
                 "play": _action_counts.get("PLAY", 0),
                 "watch": _action_counts.get("WATCH", 0),
                 "pass": _action_counts.get("PASS", 0),
+                "payout_check": _adjusted_line_count,
                 "execution_issues": sum(
                     count for reason, count in _rejection_counts.items()
                     if reason == "No model result" or "execution" in reason.lower()
@@ -27884,7 +28003,8 @@ if st.session_state.active_sport == "edge":
                 "What happened": (
                     f"{_action_counts.get('PLAY', 0)} PLAY, "
                     f"{_action_counts.get('WATCH', 0)} WATCH, "
-                    f"{_action_counts.get('PASS', 0)} PASS"
+                    f"{_action_counts.get('PASS', 0)} PASS · "
+                    f"{_adjusted_line_count} adjusted lines require payout check"
                 ),
             },
             {
@@ -27965,11 +28085,23 @@ if st.session_state.active_sport == "edge":
         # because PrizePicks payouts and model noise make raw 50% too loose.
         _breakeven = 55.0
         _with_edge = []
+        _payout_check_results = []
         for r in _results:
             _edge_pct = r["adj"] - _breakeven
+            r["edge_pct"] = round(_edge_pct, 1)
             _, _result_action, _ = scanner_entry_decision(r)
-            if _edge_pct >= _min_edge_val and _result_action in ("PLAY", "WATCH"):
-                r["edge_pct"] = round(_edge_pct, 1)
+            if _edge_pct < _min_edge_val:
+                continue
+            if is_reduced_payout_line(r):
+                _reduced_model_read = (
+                    str(r.get("tier", "")).strip().lower() != "pass"
+                    and int(r.get("confidence", 0) or 0) >= 55
+                    and str(r.get("trap_label", "")) not in ("Trap Risk", "Do Not Force")
+                    and not r.get("line_verification_required")
+                )
+                if _reduced_model_read:
+                    _payout_check_results.append(r)
+            elif _result_action in ("PLAY", "WATCH"):
                 _with_edge.append(r)
 
         # Keep the working set in final-action order. A WATCH or PASS must not
@@ -27977,13 +28109,63 @@ if st.session_state.active_sport == "edge":
         _with_edge.sort(
             key=lambda result: scanner_result_sort_key(result, "rank_score")
         )
+        _payout_check_results.sort(
+            key=lambda result: (
+                -float(result.get("adj", 0) or 0),
+                -float(result.get("confidence", 0) or 0),
+                normalize_name(result.get("player", "")),
+            )
+        )
+
+        if _payout_check_results:
+            with st.expander(
+                f"Payout Check · {len(_payout_check_results)} adjusted line(s)",
+                expanded=False,
+            ):
+                st.warning(
+                    "These lines may be easier to hit, but their payout is reduced or otherwise "
+                    "adjusted. They cannot be graded PLAY or WATCH until the exact displayed slip "
+                    "payout is compared with the modeled break-even return."
+                )
+                _payout_rows = []
+                for _payout_result in _payout_check_results:
+                    _payout_type = (
+                        "Goblin / reduced"
+                        if _payout_result.get("is_goblin") else
+                        "Demon / adjusted"
+                        if _payout_result.get("is_demon") else
+                        "Promo / adjusted"
+                        if _payout_result.get("is_promo") or _payout_result.get("adjusted_odds") else
+                        str(_payout_result.get("odds_type", "Adjusted")).title()
+                    )
+                    _payout_rows.append({
+                        "Player": _payout_result.get("player", ""),
+                        "Market": _payout_result.get("stat", ""),
+                        "Direction": _payout_result.get("side", "Over"),
+                        "Line": _payout_result.get("line", ""),
+                        "Model chance": f"{float(_payout_result.get('adj', 0) or 0):.1f}%",
+                        "Evidence": f"{float(_payout_result.get('confidence', 0) or 0):.0f}/100",
+                        "Model margin": f"{float(_payout_result.get('edge_pct', 0) or 0):+.1f}%",
+                        "Line type": _payout_type,
+                        "Action": "PAYOUT CHECK",
+                    })
+                st.dataframe(
+                    pd.DataFrame(_payout_rows),
+                    hide_index=True,
+                    use_container_width=True,
+                )
+                st.caption(
+                    "Model chance describes the leg. Value depends on the complete entry payout, "
+                    "so these lines are excluded from Best Entry and the primary recommendations."
+                )
 
         if not _with_edge:
             st.markdown(
                 "<div style='text-align:center;color:#6b7f96;font-family:JetBrains Mono,"
-                "monospace;font-size:0.75rem;padding:2rem;'>No PLAY or WATCH results "
+                "monospace;font-size:0.75rem;padding:2rem;'>No standard-payout PLAY or WATCH results "
                 f"cleared the minimum {_edge_min} model-margin threshold. PASS results "
-                "remain counted in the Slate Coverage Audit but are hidden from this board.</div>",
+                "remain counted in the Slate Coverage Audit. Adjusted lines, when present, "
+                "are shown separately under Payout Check.</div>",
                 unsafe_allow_html=True
             )
         else:
@@ -27996,7 +28178,6 @@ if st.session_state.active_sport == "edge":
                 r for r in _with_edge
                 if scanner_entry_decision(r)[1] == "WATCH"
             ]
-            _goblins = [r for r in _with_edge if r.get("is_goblin")]
             _over_count = sum(1 for r in _with_edge if r.get("side", "Over") == "Over")
             _under_count = sum(1 for r in _with_edge if r.get("side") == "Under")
             _market_confirmed = sum(
@@ -28019,7 +28200,7 @@ if st.session_state.active_sport == "edge":
                 f"🟡 {len(_lean)} WATCH</div>"
                 f"<div style='background:rgba(255,61,92,0.1);border:1px solid rgba(255,61,92,0.25);"
                 f"border-radius:8px;padding:6px 14px;font-size:0.65rem;color:#ff3d5c;'>"
-                f"🔴 {len(_goblins)} reduced-payout lines</div>"
+                f"{len(_payout_check_results)} payout checks separated</div>"
                 f"<div style='background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);"
                 f"border-radius:8px;padding:6px 14px;font-size:0.65rem;color:#6b7f96;'>"
                 f"{_over_count} Overs · {_under_count} Unders</div>"
