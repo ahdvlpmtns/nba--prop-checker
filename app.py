@@ -6556,7 +6556,7 @@ def _parse_numeric_value(value, default: Optional[float] = None) -> Optional[flo
         return default
 
 
-MODEL_LEARNING_VERSION = "propiq-v8.5-mlb-k-scope-fix-1"
+MODEL_LEARNING_VERSION = "propiq-v8.5-mlb-k-shared-model-1"
 LEARNING_WNBA_STAT_COLUMNS = {
     "Points": "PTS", "Rebounds": "REB", "Assists": "AST",
     "3-Pointers Made": "3PM", "Pts + Reb + Ast": "PRA",
@@ -11347,6 +11347,53 @@ def mlb_pitcher_prop_verdict(adj: float, edge: float, side: str,
         if adj >= 0.56 and edge <= -0.5:
             return "Lean Under"
     return "Pass"
+
+
+def mlb_count_side_prob(
+    expected: Optional[float],
+    line: float,
+    side: str,
+    observed_mean: Optional[float] = None,
+    observed_variance: Optional[float] = None,
+) -> Optional[float]:
+    """Push-aware Poisson/negative-binomial probability for MLB count props."""
+    if expected is None or expected <= 0:
+        return None
+    try:
+        import math
+        mu = max(0.05, float(expected))
+        over_cutoff = int(math.floor(float(line)))
+        under_cutoff = int(math.ceil(float(line)) - 1)
+        cutoff = under_cutoff if str(side).lower() == "under" else over_cutoff
+        if cutoff < 0:
+            return 0.0 if str(side).lower() == "under" else 1.0
+
+        use_nb = False
+        variance = None
+        if observed_variance is not None:
+            variance = max(0.0, float(observed_variance))
+            reference_mean = max(0.05, float(observed_mean or mu))
+            variance = mu * max(1.0, variance / reference_mean)
+            use_nb = variance > mu + 0.20
+
+        cdf = 0.0
+        if use_nb:
+            r = max(0.25, (mu * mu) / max(variance - mu, 1e-6))
+            p = r / (r + mu)
+            for k in range(cutoff + 1):
+                log_pmf = (
+                    math.lgamma(k + r) - math.lgamma(r) - math.lgamma(k + 1)
+                    + (r * math.log(p)) + (k * math.log(1.0 - p))
+                )
+                cdf += math.exp(log_pmf)
+        else:
+            for k in range(cutoff + 1):
+                cdf += math.exp(-mu) * (mu ** k) / math.factorial(k)
+        if side == "Over":
+            return max(0.01, min(0.99, 1.0 - cdf))
+        return max(0.01, min(0.99, cdf))
+    except Exception:
+        return None
 
 
 def is_mlb_strikeout_prop(stat: str) -> bool:
@@ -16719,57 +16766,6 @@ if st.session_state.active_sport == "mlb":
         # Pre-anchor cap: projection anchors can still finish higher, but the
         # raw signal stack should not pin at 95% before realism checks run.
         return max(0.05,min(0.92,adj))
-
-    def mlb_count_side_prob(
-        expected: Optional[float],
-        line: float,
-        side: str,
-        observed_mean: Optional[float] = None,
-        observed_variance: Optional[float] = None,
-    ) -> Optional[float]:
-        """
-        Convert expected strikeouts into a win probability. Use a negative-
-        binomial count model when recent outcomes are overdispersed; otherwise
-        retain Poisson. Exact integer-line outcomes are pushes, not wins.
-        """
-        if expected is None or expected <= 0:
-            return None
-        try:
-            import math
-            mu = max(0.05, float(expected))
-            over_cutoff = int(math.floor(float(line)))
-            under_cutoff = int(math.ceil(float(line)) - 1)
-            cutoff = under_cutoff if str(side).lower() == "under" else over_cutoff
-            if cutoff < 0:
-                return 0.0 if str(side).lower() == "under" else 1.0
-
-            use_nb = False
-            variance = None
-            if observed_variance is not None:
-                variance = max(0.0, float(observed_variance))
-                reference_mean = max(0.05, float(observed_mean or mu))
-                # Scale the observed dispersion ratio to tonight's expected mean.
-                variance = mu * max(1.0, variance / reference_mean)
-                use_nb = variance > mu + 0.20
-
-            cdf = 0.0
-            if use_nb:
-                r = max(0.25, (mu * mu) / max(variance - mu, 1e-6))
-                p = r / (r + mu)
-                for k in range(cutoff + 1):
-                    log_pmf = (
-                        math.lgamma(k + r) - math.lgamma(r) - math.lgamma(k + 1)
-                        + (r * math.log(p)) + (k * math.log(1.0 - p))
-                    )
-                    cdf += math.exp(log_pmf)
-            else:
-                for k in range(cutoff + 1):
-                    cdf += math.exp(-mu) * (mu ** k) / math.factorial(k)
-            if side == "Over":
-                return max(0.01, min(0.99, 1.0 - cdf))
-            return max(0.01, min(0.99, cdf))
-        except Exception:
-            return None
 
     def mlb_poisson_side_prob(expected: Optional[float], line: float, side: str) -> Optional[float]:
         """Backward-compatible stable-count wrapper."""
