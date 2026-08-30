@@ -6556,7 +6556,7 @@ def _parse_numeric_value(value, default: Optional[float] = None) -> Optional[flo
         return default
 
 
-MODEL_LEARNING_VERSION = "propiq-v8.5-mlb-k-slate-debug-1"
+MODEL_LEARNING_VERSION = "propiq-v8.5-mlb-k-scope-fix-1"
 LEARNING_WNBA_STAT_COLUMNS = {
     "Points": "PTS", "Rebounds": "REB", "Assists": "AST",
     "3-Pointers Made": "3PM", "Pts + Reb + Ast": "PRA",
@@ -11315,6 +11315,38 @@ def normalize_mlb_pitcher_prop_stat(stat: str) -> str:
     if "inning" in s and "strike" not in s:
         return "Outs Recorded"
     return str(stat or "")
+
+
+def mlb_pitcher_prop_verdict(adj: float, edge: float, side: str,
+                             pc_ceiling: Optional[float] = None,
+                             line: Optional[float] = None) -> str:
+    """Shared MLB pitcher verdict used by both Analyze and Edge."""
+    ceiling_capped = (
+        pc_ceiling is not None
+        and line is not None
+        and float(pc_ceiling) <= float(line)
+    )
+    if side == "Over":
+        if not ceiling_capped:
+            if adj >= 0.72 and edge >= 0.75:
+                return "Strong Over"
+            if adj >= 0.64 and edge >= 1.75:
+                return "Strong Over"
+        if adj >= 0.63 and edge > 0:
+            return "Lean Over"
+        if adj >= 0.56 and edge >= 0.5:
+            return "Lean Over"
+    else:
+        if not ceiling_capped:
+            if adj >= 0.72 and edge <= -0.75:
+                return "Strong Under"
+            if adj >= 0.64 and edge <= -1.75:
+                return "Strong Under"
+        if adj >= 0.63 and edge < 0:
+            return "Lean Under"
+        if adj >= 0.56 and edge <= -0.5:
+            return "Lean Under"
+    return "Pass"
 
 
 def is_mlb_strikeout_prop(stat: str) -> bool:
@@ -17369,31 +17401,6 @@ if st.session_state.active_sport == "mlb":
         except Exception:
             return empty
 
-    def mlb_verdict(adj, edge, side, pc_ceiling=None, line=None):
-        """
-        Verdict based on adjusted hit rate (primary) + edge as secondary factor.
-        pc_ceiling: estimated max Ks from pitch count — caps verdict if below line.
-        """
-        # Pitch count hard cap — if ceiling ≤ line, maximum verdict is Lean
-        _ceiling_capped = (pc_ceiling is not None and line is not None and
-                           pc_ceiling <= line)
-
-        if side == "Over":
-            if not _ceiling_capped:
-                if adj >= 0.72 and edge >= 0.75: return "Strong Over"
-                if adj >= 0.64 and edge >= 1.75: return "Strong Over"
-            # A Lean still requires tonight's projection to support the side.
-            # Historical streaks cannot rescue a projection below the line.
-            if adj >= 0.63 and edge > 0:       return "Lean Over"
-            if adj >= 0.56 and edge >= 0.5:    return "Lean Over"
-        else:
-            if not _ceiling_capped:
-                if adj >= 0.72 and edge <= -0.75: return "Strong Under"
-                if adj >= 0.64 and edge <= -1.75: return "Strong Under"
-            if adj >= 0.63 and edge < 0:       return "Lean Under"
-            if adj >= 0.56 and edge <= -0.5:   return "Lean Under"
-        return "Pass"
-
     # ── MLB UI ────────────────────────────────────────────────
     st.markdown("<div id='mlb-analyzer-controls' class='analyzer-scroll-anchor'></div>", unsafe_allow_html=True)
     render_navigation_scroll_target("mlb-analyzer-controls")
@@ -19382,9 +19389,11 @@ if st.session_state.active_sport == "mlb":
             if adj < _adj_before_volatility - 0.001:
                 _volatility_note = f"Volatility capped rate from {_adj_before_volatility:.0%} to {adj:.0%}"
 
-            tier = mlb_verdict(adj, _verdict_edge, mlb_side,
-                              pc_ceiling=_pc_outs_ceiling if _is_outs_prop else _pc_k_ceiling,
-                              line=mlb_line)
+            tier = mlb_pitcher_prop_verdict(
+                adj, _verdict_edge, mlb_side,
+                pc_ceiling=_pc_outs_ceiling if _is_outs_prop else _pc_k_ceiling,
+                line=mlb_line,
+            )
 
             # Data quality is deliberately independent of pick direction and
             # probability. Entry Score blends this coverage/reliability grade
@@ -24956,12 +24965,22 @@ if st.session_state.active_sport == "edge":
                 )
                 lines.append(f"   action_reason={'; '.join(str(reason) for reason in reasons)}")
                 for side_result in result.get("side_evaluations", []) or []:
+                    side_reason = (
+                        side_result.get("reject_reason")
+                        or "; ".join(
+                            str(detail)
+                            for detail in side_result.get("reject_details", []) or []
+                        )
+                        or "; ".join(
+                            side_result.get("validation_reasons", []) or ["none"]
+                        )
+                    )
                     lines.append(
                         f"   side_check {side_result.get('side')}: "
                         f"{side_result.get('entry_action')} · tier={side_result.get('tier') or 'N/A'} · "
                         f"chance={side_result.get('model_chance')} · evidence={side_result.get('evidence')} · "
                         f"projection_gap={side_result.get('projection_gap')} · "
-                        f"reason={side_result.get('reject_reason') or '; '.join(side_result.get('validation_reasons', []) or ['none'])}"
+                        f"reason={side_reason}"
                     )
             if len(model_results) > 250:
                 lines.append(f"- {len(model_results) - 250} additional model results omitted from this text log")
@@ -26857,7 +26876,7 @@ if st.session_state.active_sport == "edge":
                 float(_pc_expected) - float(line)
                 if _pc_expected is not None else float(_edge)
             )
-            _tier = mlb_verdict(
+            _tier = mlb_pitcher_prop_verdict(
                 _adj, _verdict_edge, side,
                 pc_ceiling=_pc_ceiling, line=line,
             )
@@ -27066,7 +27085,15 @@ if st.session_state.active_sport == "edge":
             }
         except Exception as err:
             record_debug_error(f"mlb.edge.shared_model.{pitcher_name}", err)
-            return None
+            return {
+                "_rejected": True,
+                "reject_reason": "model execution error",
+                "reject_details": [f"{type(err).__name__}: {str(err)[:300]}"],
+                "player": pitcher_name,
+                "stat": normalize_mlb_pitcher_prop_stat(stat),
+                "line": line,
+                "side": side,
+            }
 
 
     @st.cache_data(ttl=7200, show_spinner=False)
@@ -28506,6 +28533,7 @@ if st.session_state.active_sport == "edge":
                                 "side": result.get("side", _side),
                                 "rejected": bool(result.get("_rejected")),
                                 "reject_reason": result.get("reject_reason", ""),
+                                "reject_details": result.get("reject_details", []),
                                 "tier": result.get("tier", ""),
                                 "model_chance": result.get("adj"),
                                 "evidence": result.get("confidence"),
@@ -28621,7 +28649,17 @@ if st.session_state.active_sport == "edge":
                     f"{str(prop.get('sport', 'edge')).lower()}.edge.model.{prop.get('player', 'unknown')}",
                     _model_err,
                 )
-                return None
+                return {
+                    "_rejected": True,
+                    "reject_reason": "model execution error",
+                    "reject_details": [
+                        f"{type(_model_err).__name__}: {str(_model_err)[:300]}"
+                    ],
+                    "player": prop.get("player", ""),
+                    "stat": prop.get("stat", ""),
+                    "line": prop.get("line"),
+                    "side": _edge_side,
+                }
 
         _total = max(len(_filtered), 1)
         _done  = 0
