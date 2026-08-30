@@ -6556,7 +6556,7 @@ def _parse_numeric_value(value, default: Optional[float] = None) -> Optional[flo
         return default
 
 
-MODEL_LEARNING_VERSION = "propiq-v8.5-mlb-k-shared-model-1"
+MODEL_LEARNING_VERSION = "propiq-v8.5-mlb-k-payout-visibility-1"
 LEARNING_WNBA_STAT_COLUMNS = {
     "Points": "PTS", "Rebounds": "REB", "Assists": "AST",
     "3-Pointers Made": "3PM", "Pts + Reb + Ast": "PRA",
@@ -24626,12 +24626,16 @@ if st.session_state.active_sport == "edge":
         return grade, color, reasons[:5]
 
 
-    def scanner_entry_decision(result: dict) -> Tuple[int, str, bool]:
-        """Return the scanner's final Entry Score, action, and strong-tier flag."""
+    def scanner_entry_decision(
+        result: dict,
+        apply_payout_gate: bool = True,
+    ) -> Tuple[int, str, bool]:
+        """Return Entry Score/action, optionally before the payout-value gate."""
         adj = float(result.get("adj", 0) or 0)
         confidence = int(result.get("confidence", 0) or 0)
         edge_pct = float(result.get("edge_pct", adj - 55.0) or 0)
         reduced_payout = is_reduced_payout_line(result)
+        payout_blocks_action = reduced_payout and apply_payout_gate
         line_needs_verify = bool(result.get("line_verification_required"))
         tier_label = str(result.get("tier", "")).strip().lower()
         model_pass = tier_label == "pass"
@@ -24650,7 +24654,7 @@ if st.session_state.active_sport == "edge":
             decision_reasons.append(f"Hard risk gate: {result.get('trap_label')}")
         if line_needs_verify:
             decision_reasons.append("Line verification required")
-        if reduced_payout:
+        if payout_blocks_action:
             decision_reasons.append(
                 "Reduced payout requires exact payout evaluation"
             )
@@ -24666,7 +24670,7 @@ if st.session_state.active_sport == "edge":
                 or str(result.get("trap_label", "Clean")) == "Clean"
             )
             and not line_needs_verify
-            and not reduced_payout
+            and not payout_blocks_action
             and not model_pass
             and model_strong
             and not hard_risk
@@ -24683,7 +24687,8 @@ if st.session_state.active_sport == "edge":
         ):
             score = base_score
         else:
-            score = int(round(float(result.get("rank_score", base_score) or 0)))
+            rank_key = "rank_score" if apply_payout_gate else "model_rank_score"
+            score = int(round(float(result.get(rank_key, base_score) or 0)))
         if model_pass or confidence < 55 or hard_risk:
             score = min(score, 64)
         elif line_needs_verify:
@@ -24698,7 +24703,7 @@ if st.session_state.active_sport == "edge":
             decision_reasons.append(f"Independent market: {sportsbook_grade}")
         elif not is_strong:
             score = min(score, 79)
-        if reduced_payout:
+        if payout_blocks_action:
             # An easier line is not automatically a better entry. Without the
             # exact displayed payout there is no economic break-even test, so
             # keep the model read visible but do not issue PLAY/WATCH.
@@ -24886,6 +24891,7 @@ if st.session_state.active_sport == "edge":
             f"True model omissions: {int(audit.get('omitted', 0) or 0)}",
             f"Actions: {int(audit.get('play', 0) or 0)} PLAY · "
             f"{int(audit.get('watch', 0) or 0)} WATCH · "
+            f"{int(audit.get('payout_check', 0) or 0)} PAYOUT CHECK · "
             f"{int(audit.get('pass', 0) or 0)} PASS",
             f"Current dropdown view matches: {int(view_context.get('view_matches', 0) or 0)}",
             "",
@@ -24919,7 +24925,20 @@ if st.session_state.active_sport == "edge":
                 result["edge_pct"] = round(
                     float(result.get("adj", 0) or 0) - 55.0, 1
                 )
+                model_entry_score, model_action, _ = scanner_entry_decision(
+                    result, apply_payout_gate=False
+                )
                 entry_score, action, _ = scanner_entry_decision(result)
+                payout_check = bool(
+                    is_reduced_payout_line(result)
+                    and model_action in ("PLAY", "WATCH")
+                    and not result.get("line_verification_required")
+                    and str(result.get("trap_label", "")) not in (
+                        "Trap Risk", "Do Not Force"
+                    )
+                )
+                display_action = "PAYOUT CHECK" if payout_check else action
+                display_score = model_entry_score if payout_check else entry_score
                 reasons = (
                     result.get("entry_decision_reasons", [])
                     or result.get("validation_reasons", [])
@@ -24928,9 +24947,14 @@ if st.session_state.active_sport == "edge":
                 )
                 lines.append(
                     f"{index}. {result.get('player', '')} · {result.get('stat', '')} "
-                    f"{result.get('side', '')} {result.get('line')} · {action} · "
-                    f"Entry {entry_score}/100"
+                    f"{result.get('side', '')} {result.get('line')} · {display_action} · "
+                    f"{'Model entry' if payout_check else 'Entry'} {display_score}/100"
                 )
+                if payout_check:
+                    lines.append(
+                        f"   model_grade={model_action} · final_value_action=PAYOUT CHECK · "
+                        "exact slip payout required"
+                    )
                 lines.append(
                     f"   tier={result.get('tier', 'N/A')} · model_chance={float(result.get('adj', 0) or 0):.1f}% · "
                     f"evidence={int(result.get('confidence', 0) or 0)}/100 · "
@@ -25018,7 +25042,7 @@ if st.session_state.active_sport == "edge":
             "- adjusted_odds is preserved as raw PrizePicks metadata, but does not by itself mean reduced payout.",
             "- STANDARD requires odds_type=standard with no Goblin, Demon, promo, or alternate line source.",
             "- REJECTED means the prop could not be modeled safely; PASS means it was modeled but did not clear the action gate.",
-            "- The primary board displays only standard-payout PLAY and WATCH results that clear the selected model-margin filter.",
+            "- Standard lines receive final PLAY/WATCH/PASS actions; qualifying reduced lines remain visible as PAYOUT CHECK with their underlying model grade.",
         ])
         return "\n".join(lines)
 
@@ -28755,11 +28779,28 @@ if st.session_state.active_sport == "edge":
                         _res["payout_rank_penalty"] = 8 if _reduced_payout else 0
                         _res["rank_penalties"] = [name for name, _ in _rank_penalties]
                         _res["rank_penalty"] = sum(value for _, value in _rank_penalties)
-                        _res["rank_score"] = round(
+                        _res["model_rank_penalty"] = max(
+                            0, _res["rank_penalty"] - _res["payout_rank_penalty"]
+                        )
+                        _weighted_rank_base = (
                             float(_res.get("adj", 0) or 0) * 0.70
                             + float(_res.get("confidence", 0) or 0) * 0.30
-                            - _res["rank_penalty"],
+                        )
+                        _res["rank_score"] = round(
+                            _weighted_rank_base - _res["rank_penalty"],
                             1,
+                        )
+                        _res["model_rank_score"] = round(
+                            _weighted_rank_base - _res["model_rank_penalty"],
+                            1,
+                        )
+                        _model_entry_score, _model_entry_action, _ = (
+                            scanner_entry_decision(_res, apply_payout_gate=False)
+                        )
+                        _res["model_entry_score"] = _model_entry_score
+                        _res["model_entry_action"] = _model_entry_action
+                        _res["model_entry_reasons"] = list(
+                            _res.get("entry_decision_reasons", []) or []
                         )
                         _entry_score, _entry_action, _ = scanner_entry_decision(_res)
                         _res["entry_score"] = _entry_score
@@ -28804,15 +28845,34 @@ if st.session_state.active_sport == "edge":
         _status.empty()
         with st.spinner("Checking independent sportsbook markets..."):
             _results = enrich_edge_results_with_sportsbook_market(_results)
-        _action_counts = {"PLAY": 0, "WATCH": 0, "PASS": 0}
+        _action_counts = {"PLAY": 0, "WATCH": 0, "PASS": 0, "PAYOUT CHECK": 0}
         for _result in _results:
+            _model_entry_score, _model_entry_action, _ = scanner_entry_decision(
+                _result, apply_payout_gate=False
+            )
+            _result["model_entry_score"] = _model_entry_score
+            _result["model_entry_action"] = _model_entry_action
+            _result["model_entry_reasons"] = list(
+                _result.get("entry_decision_reasons", []) or []
+            )
             _entry_score, _entry_action, _ = scanner_entry_decision(_result)
             _result["entry_score"] = _entry_score
             _result["entry_action"] = _entry_action
-            _action_counts[_entry_action] = _action_counts.get(_entry_action, 0) + 1
-        _adjusted_line_count = sum(
+            _payout_check_required = bool(
+                is_reduced_payout_line(_result)
+                and _model_entry_action in ("PLAY", "WATCH")
+                and not _result.get("line_verification_required")
+                and str(_result.get("trap_label", "")) not in (
+                    "Trap Risk", "Do Not Force"
+                )
+            )
+            _result["payout_check_required"] = _payout_check_required
+            _counted_action = "PAYOUT CHECK" if _payout_check_required else _entry_action
+            _action_counts[_counted_action] = _action_counts.get(_counted_action, 0) + 1
+        _reduced_line_count = sum(
             1 for _result in _results if is_reduced_payout_line(_result)
         )
+        _payout_check_count = _action_counts.get("PAYOUT CHECK", 0)
         _ledger_saved = save_model_prediction_batch(
             _results,
             st.session_state.get("_edge_learning_scan_id", _learning_scan_id),
@@ -28841,7 +28901,8 @@ if st.session_state.active_sport == "edge":
                 "play": _action_counts.get("PLAY", 0),
                 "watch": _action_counts.get("WATCH", 0),
                 "pass": _action_counts.get("PASS", 0),
-                "payout_check": _adjusted_line_count,
+                "payout_check": _payout_check_count,
+                "reduced_lines": _reduced_line_count,
                 "execution_issues": sum(
                     count for reason, count in _rejection_counts.items()
                     if reason == "No model result" or "execution" in reason.lower()
@@ -28875,8 +28936,9 @@ if st.session_state.active_sport == "edge":
                 "What happened": (
                     f"{_action_counts.get('PLAY', 0)} PLAY, "
                     f"{_action_counts.get('WATCH', 0)} WATCH, "
+                    f"{_action_counts.get('PAYOUT CHECK', 0)} PAYOUT CHECK, "
                     f"{_action_counts.get('PASS', 0)} PASS · "
-                    f"{_adjusted_line_count} adjusted lines require payout check"
+                    f"{_reduced_line_count} reduced lines analyzed"
                 ),
             },
             {
@@ -28980,13 +29042,17 @@ if st.session_state.active_sport == "edge":
         for r in _results:
             _edge_pct = r["adj"] - _breakeven
             r["edge_pct"] = round(_edge_pct, 1)
+            _model_score, _model_action, _ = scanner_entry_decision(
+                r, apply_payout_gate=False
+            )
+            r["model_entry_score"] = _model_score
+            r["model_entry_action"] = _model_action
             _, _result_action, _ = scanner_entry_decision(r)
             if _edge_pct < _min_edge_val:
                 continue
             if is_reduced_payout_line(r):
                 _reduced_model_read = (
-                    str(r.get("tier", "")).strip().lower() != "pass"
-                    and int(r.get("confidence", 0) or 0) >= 55
+                    _model_action in ("PLAY", "WATCH")
                     and str(r.get("trap_label", "")) not in ("Trap Risk", "Do Not Force")
                     and not r.get("line_verification_required")
                 )
@@ -29004,6 +29070,10 @@ if st.session_state.active_sport == "edge":
         )
         _payout_check_results.sort(
             key=lambda result: (
+                {"PLAY": 0, "WATCH": 1}.get(
+                    str(result.get("model_entry_action", "")), 2
+                ),
+                -float(result.get("model_entry_score", 0) or 0),
                 -float(result.get("adj", 0) or 0),
                 -float(result.get("confidence", 0) or 0),
                 normalize_name(result.get("player", "")),
@@ -29012,13 +29082,13 @@ if st.session_state.active_sport == "edge":
 
         if _payout_check_results:
             with st.expander(
-                f"Payout Check · {len(_payout_check_results)} adjusted line(s)",
-                expanded=False,
+                f"Reduced-line model candidates · {len(_payout_check_results)} payout check(s)",
+                expanded=bool(_include_goblin),
             ):
                 st.warning(
-                    "These lines may be easier to hit, but their payout is reduced or otherwise "
-                    "adjusted. They cannot be graded PLAY or WATCH until the exact displayed slip "
-                    "payout is compared with the modeled break-even return."
+                    "These are genuine model-qualified legs, but their PrizePicks payout is reduced. "
+                    "MODEL PLAY/WATCH grades the leg's hit profile; PAYOUT CHECK means the exact slip "
+                    "return must still be compared before entering."
                 )
                 _payout_rows = []
                 for _payout_result in _payout_check_results:
@@ -29036,11 +29106,13 @@ if st.session_state.active_sport == "edge":
                         "Market": _payout_result.get("stat", ""),
                         "Direction": _payout_result.get("side", "Over"),
                         "Line": _payout_result.get("line", ""),
+                        "Model entry": f"{int(_payout_result.get('model_entry_score', 0) or 0)}/100",
+                        "Model grade": _payout_result.get("model_entry_action", "WATCH"),
                         "Model chance": f"{float(_payout_result.get('adj', 0) or 0):.1f}%",
                         "Evidence": f"{float(_payout_result.get('confidence', 0) or 0):.0f}/100",
                         "Model margin": f"{float(_payout_result.get('edge_pct', 0) or 0):+.1f}%",
                         "Line type": _payout_type,
-                        "Action": "PAYOUT CHECK",
+                        "Value action": "PAYOUT CHECK",
                     })
                 st.dataframe(
                     pd.DataFrame(_payout_rows),
@@ -29058,7 +29130,7 @@ if st.session_state.active_sport == "edge":
                 "monospace;font-size:0.75rem;padding:2rem;'>No standard-payout PLAY or WATCH results "
                 f"cleared the minimum {_edge_min} model-margin threshold. PASS results "
                 "remain counted in the Slate Coverage Audit. Adjusted lines, when present, "
-                "are shown separately under Payout Check.</div>",
+                "are shown above as expanded reduced-line model candidates when that option is enabled.</div>",
                 unsafe_allow_html=True
             )
             if _pass_diagnostics:
