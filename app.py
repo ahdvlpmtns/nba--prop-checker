@@ -6126,6 +6126,7 @@ for key, default in [
     ("defense_data", None), ("tracker", []), ("active_tab", "player"),
     ("recent_players", []), ("supabase_loaded", False), ("show_share", False),
     ("active_sport", _default_active_sport), ("edge_results", []), ("edge_running", False), ("edge_manual_props", []), ("edge_manual_props", []), ("edge_jump_player", None), ("edge_jump_pitcher", None), ("edge_jump_line", None), ("edge_jump_side", "Over"), ("edge_jump_prop", "Strikeouts"),
+    ("edge_scan_input_rows", []), ("edge_scanner_debug_report", ""),
     ("wnba_jump_player", None), ("wnba_jump_line", None),
     ("wnba_jump_side", "Over"), ("wnba_jump_stat", "Points"),
     ("runtime_debug_errors", []), ("runtime_metrics", {}),
@@ -6555,7 +6556,7 @@ def _parse_numeric_value(value, default: Optional[float] = None) -> Optional[flo
         return default
 
 
-MODEL_LEARNING_VERSION = "propiq-v8.4-mlb-k-scanner-integrity-1"
+MODEL_LEARNING_VERSION = "propiq-v8.5-mlb-k-slate-debug-1"
 LEARNING_WNBA_STAT_COLUMNS = {
     "Points": "PTS", "Rebounds": "REB", "Assists": "AST",
     "3-Pointers Made": "3PM", "Pts + Reb + Ast": "PRA",
@@ -6567,13 +6568,16 @@ LEARNING_WNBA_STAT_COLUMNS = {
 def is_reduced_payout_line(result: dict) -> bool:
     """Return True when a prop is not a standard full-payout line."""
     odds_type = str(result.get("odds_type", "standard") or "standard").lower()
+    line_source = str(result.get("line_source", "line_score") or "line_score").lower()
     return bool(
         result.get("is_reduced")
         or result.get("is_goblin")
         or result.get("is_demon")
         or result.get("is_promo")
-        or result.get("adjusted_odds")
         or odds_type != "standard"
+        or line_source in (
+            "flash_sale_line_score", "discounted_line_score", "promo_line_score"
+        )
     )
 
 
@@ -10608,8 +10612,8 @@ def delete_from_supabase(row_id: str) -> bool:
 
 PP_FRESH_SLATE_MINUTES = 5
 PP_VERIFY_LINE_AFTER_MINUTES = 15
-PP_LINE_SELECTION_VERSION = 3
-PP_CACHE_MIN_LINE_SELECTION_VERSION = 2
+PP_LINE_SELECTION_VERSION = 4
+PP_CACHE_MIN_LINE_SELECTION_VERSION = 4
 
 
 def pp_event_key(row: dict) -> str:
@@ -10681,7 +10685,7 @@ def conservative_entry_leg_probability(row: dict) -> dict:
     if row.get("line_verification_required"):
         evidence_factor *= 0.94
         reasons.append("line needs verification")
-    if row.get("is_goblin") or row.get("is_promo") or row.get("adjusted_odds"):
+    if is_reduced_payout_line(row):
         evidence_factor *= 0.96
         reasons.append("reduced-payout line")
 
@@ -22648,10 +22652,7 @@ def wnba_analyze_prop(logs: pd.DataFrame, stat: str, line: float, side: str,
         historical_line_gap >= anomaly_threshold
         and (relative_line_gap >= 0.30 or projection_z_gap >= 1.60)
     )
-    reduced_payout_line = bool(
-        market_context.get("is_goblin") or market_context.get("is_promo")
-        or market_context.get("adjusted_odds")
-    )
+    reduced_payout_line = is_reduced_payout_line(market_context)
     line_verified = bool(market_context.get("line_verified", False))
     line_verification_required = bool(line_anomaly and not line_verified)
     line_type_note = "reduced-payout promo/alternate market" if reduced_payout_line else "standard full-game market"
@@ -23815,14 +23816,11 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
                 "group_key": a.get("group_key") or "",
                 "line_selection_version": PP_LINE_SELECTION_VERSION,
             }
-            # Keep full-payout standard rows separate from every adjusted-payout
-            # variant. PrizePicks may report a promo as odds_type=standard, so
-            # odds_type alone is not sufficient to identify the real base line.
-            variant_key = (
-                "reduced"
-                if entry["is_goblin"] or entry["is_promo"] or entry["adjusted_odds"]
-                else "standard"
-            )
+            # `adjusted_odds` is now also true on ordinary two-way standard
+            # rows. PrizePicks' explicit odds type, promo flag, and line source
+            # determine payout class; the legacy boolean alone does not.
+            entry["is_reduced"] = is_reduced_payout_line(entry)
+            variant_key = "reduced" if entry["is_reduced"] else "standard"
             event_key = pp_event_key(entry) or "upcoming"
             key = (expected_sport, normalize_name(name), market, event_key)
             buckets.setdefault(key, {"standard": [], "reduced": []})[variant_key].append(entry)
@@ -24829,6 +24827,201 @@ if st.session_state.active_sport == "edge":
                     )
             elif attempted:
                 st.caption("Every analyzed prop line returned a model result.")
+
+
+    def build_edge_scanner_debug_report(
+        audit: dict,
+        input_rows: list,
+        model_results: list,
+        rejection_rows: list,
+        fetch_debug: list,
+        view_context: dict,
+        runtime_errors: Optional[list] = None,
+    ) -> str:
+        """Build a complete, copyable explanation of one scanner run."""
+        audit = audit or {}
+        input_rows = input_rows or []
+        model_results = model_results or []
+        rejection_rows = rejection_rows or []
+        view_context = view_context or {}
+        runtime_errors = runtime_errors or []
+        lines = [
+            "PROPIQ EDGE SCANNER DEBUGGER",
+            "",
+            "RUN",
+            f"Generated UTC: {datetime.utcnow().isoformat(timespec='seconds')}Z",
+            f"Model version: {MODEL_LEARNING_VERSION}",
+            f"Sport: {view_context.get('sport', audit.get('sport', ''))}",
+            f"Market: {view_context.get('market', audit.get('market_filter', ''))}",
+            f"Side filter: {view_context.get('side', audit.get('side_filter', ''))}",
+            f"Minimum model margin: {view_context.get('minimum_margin', 'Any edge')}",
+            f"Include reduced-payout lines: {bool(view_context.get('include_reduced', False))}",
+            "",
+            "FETCH",
+        ]
+        if fetch_debug:
+            lines.extend(f"- {note}" for note in fetch_debug)
+        else:
+            lines.append("- No live-fetch notes; a valid cache may have been used")
+
+        lines.extend(["", "SLATE PIPELINE"])
+        for stage in audit.get("stages", []) or []:
+            lines.append(
+                f"- {stage.get('Stage', '')}: {stage.get('Rows remaining', 0)} remaining; "
+                f"{stage.get('Removed here', 0)} removed | {stage.get('What happened', '')}"
+            )
+
+        lines.extend([
+            "",
+            "COVERAGE",
+            f"Fetched rows: {int(audit.get('fetched_total', 0) or 0)}",
+            f"Sport rows: {int(audit.get('sport_rows', 0) or 0)}",
+            f"Eligible lines analyzed: {int(audit.get('attempted', 0) or 0)}",
+            f"Model results returned: {int(audit.get('returned', 0) or 0)}",
+            f"True model omissions: {int(audit.get('omitted', 0) or 0)}",
+            f"Actions: {int(audit.get('play', 0) or 0)} PLAY · "
+            f"{int(audit.get('watch', 0) or 0)} WATCH · "
+            f"{int(audit.get('pass', 0) or 0)} PASS",
+            f"Current dropdown view matches: {int(view_context.get('view_matches', 0) or 0)}",
+            "",
+            "ELIGIBLE PRIZEPICKS LINES",
+        ])
+        if input_rows:
+            for index, row in enumerate(input_rows[:250], start=1):
+                lines.append(
+                    f"{index}. {row.get('player', '')} · {row.get('market', '')} "
+                    f"{row.get('line')} · {str(row.get('line_type', '')).upper()} · "
+                    f"team {row.get('team') or 'TBD'} · pos {row.get('position') or 'TBD'}"
+                )
+                lines.append(
+                    f"   odds_type={row.get('odds_type', 'standard')} · "
+                    f"adjusted_odds(raw API)={row.get('adjusted_odds_raw', False)} · "
+                    f"line_source={row.get('line_source', 'line_score')} · "
+                    f"start={row.get('start_time') or 'TBD'} · source={row.get('slate_source', 'live')}"
+                )
+                lines.append(
+                    f"   projection_id={row.get('projection_id') or 'TBD'} · "
+                    f"event={row.get('event_key') or 'TBD'}"
+                )
+            if len(input_rows) > 250:
+                lines.append(f"- {len(input_rows) - 250} additional eligible lines omitted from this text log")
+        else:
+            lines.append("- None survived the pre-model slate filters")
+
+        lines.extend(["", "MODEL RESULTS"])
+        if model_results:
+            for index, result in enumerate(model_results[:250], start=1):
+                result["edge_pct"] = round(
+                    float(result.get("adj", 0) or 0) - 55.0, 1
+                )
+                entry_score, action, _ = scanner_entry_decision(result)
+                reasons = (
+                    result.get("entry_decision_reasons", [])
+                    or result.get("validation_reasons", [])
+                    or result.get("trap_reasons", [])
+                    or ["No blocking reason"]
+                )
+                lines.append(
+                    f"{index}. {result.get('player', '')} · {result.get('stat', '')} "
+                    f"{result.get('side', '')} {result.get('line')} · {action} · "
+                    f"Entry {entry_score}/100"
+                )
+                lines.append(
+                    f"   tier={result.get('tier', 'N/A')} · model_chance={float(result.get('adj', 0) or 0):.1f}% · "
+                    f"evidence={int(result.get('confidence', 0) or 0)}/100 · "
+                    f"model_margin={float(result.get('edge_pct', 0) or 0):+.1f}%"
+                )
+                lines.append(
+                    f"   L{int(result.get('samples', 0) or 0)} avg={result.get('avg')} · "
+                    f"historical_directional_edge={float(result.get('edge_raw', 0) or 0):+.2f} · "
+                    f"projection={result.get('pc_expected')} · projection_gap={result.get('projection_gap')}"
+                )
+                lines.append(
+                    f"   opponent={result.get('opp') or 'TBD'} · probable={result.get('probable_name') or 'TBD'} · "
+                    f"starter_id_verified={bool(result.get('starter_id_verified'))} · "
+                    f"game={result.get('game_pk') or 'TBD'} · role={result.get('validation_label') or 'N/A'}"
+                )
+                lines.append(
+                    f"   payout={'REDUCED' if is_reduced_payout_line(result) else 'STANDARD'} · "
+                    f"odds_type={result.get('odds_type', 'standard')} · "
+                    f"adjusted_odds(raw API)={bool(result.get('adjusted_odds'))} · "
+                    f"line_verified={not bool(result.get('line_verification_required'))}"
+                )
+                lines.append(
+                    f"   validation={'; '.join(result.get('validation_reasons', []) or ['none'])}"
+                )
+                lines.append(
+                    f"   trap={result.get('trap_label', 'Clean')} | "
+                    f"{'; '.join(result.get('trap_reasons', []) or ['none'])}"
+                )
+                lines.append(f"   action_reason={'; '.join(str(reason) for reason in reasons)}")
+                for side_result in result.get("side_evaluations", []) or []:
+                    lines.append(
+                        f"   side_check {side_result.get('side')}: "
+                        f"{side_result.get('entry_action')} · tier={side_result.get('tier') or 'N/A'} · "
+                        f"chance={side_result.get('model_chance')} · evidence={side_result.get('evidence')} · "
+                        f"projection_gap={side_result.get('projection_gap')} · "
+                        f"reason={side_result.get('reject_reason') or '; '.join(side_result.get('validation_reasons', []) or ['none'])}"
+                    )
+            if len(model_results) > 250:
+                lines.append(f"- {len(model_results) - 250} additional model results omitted from this text log")
+        else:
+            lines.append("- No model result survived to the result ledger")
+
+        lines.extend(["", "REJECTED OR OMITTED LINES"])
+        if rejection_rows:
+            for index, row in enumerate(rejection_rows[:250], start=1):
+                lines.append(
+                    f"{index}. {row.get('Player', '')} · {row.get('Market', '')} "
+                    f"{row.get('Line')} · {row.get('Reason', '')} | {row.get('Details', '')}"
+                )
+            if len(rejection_rows) > 250:
+                lines.append(f"- {len(rejection_rows) - 250} additional omissions excluded from this text log")
+        else:
+            lines.append("- None")
+
+        lines.extend(["", "RUNTIME MODEL ERRORS"])
+        relevant_errors = [
+            error for error in runtime_errors
+            if any(
+                token in str(error.get("area", "")).lower()
+                for token in ("edge", "prizepicks", "mlb")
+            )
+        ]
+        if relevant_errors:
+            for error in relevant_errors[-20:]:
+                lines.append(
+                    f"- {error.get('time', '')} · {error.get('area', '')}: "
+                    f"{error.get('message', '')}"
+                )
+        else:
+            lines.append("- None recorded")
+
+        lines.extend([
+            "",
+            "INTERPRETATION",
+            "- adjusted_odds is preserved as raw PrizePicks metadata, but does not by itself mean reduced payout.",
+            "- STANDARD requires odds_type=standard with no Goblin, Demon, promo, or alternate line source.",
+            "- REJECTED means the prop could not be modeled safely; PASS means it was modeled but did not clear the action gate.",
+            "- The primary board displays only standard-payout PLAY and WATCH results that clear the selected model-margin filter.",
+        ])
+        return "\n".join(lines)
+
+
+    def render_edge_scanner_debugger(report: str, key_suffix: str = "main") -> None:
+        """Render the scanner log with native copy and download controls."""
+        report = str(report or "No scanner debug data is available.")
+        st.session_state["edge_scanner_debug_report"] = report
+        with st.expander("Copy Edge Scanner debugger", expanded=False):
+            st.code(report, language=None)
+            st.download_button(
+                "Download debug log",
+                data=report,
+                file_name="propiq-edge-scanner-debug.txt",
+                mime="text/plain",
+                key=f"download_edge_scanner_debug_{key_suffix}",
+                use_container_width=True,
+            )
 
 
     def build_best_entry(candidates: list, sport: str,
@@ -26802,6 +26995,7 @@ if st.session_state.active_sport == "edge":
                 "l3_k9": _l3_k9,
                 "pitcher_id": _data.get("player_id"),
                 "probable_id": _game_ctx.get("probable_id"),
+                "probable_name": _game_ctx.get("probable_name", ""),
                 "starter_id_verified": _starter_id_verified,
                 "pitcher_team": _game_ctx.get("pitcher_team", ""),
                 "pp_team": team,
@@ -27881,6 +28075,8 @@ if st.session_state.active_sport == "edge":
             st.session_state["edge_scan_rejections"] = {}
             st.session_state["edge_scan_audit"] = {}
             st.session_state["edge_scan_rejection_rows"] = []
+            st.session_state["edge_scan_input_rows"] = []
+            st.session_state["edge_scanner_debug_report"] = ""
             st.toast("Cache cleared", icon="✅")
             st.rerun()
 
@@ -27894,6 +28090,8 @@ if st.session_state.active_sport == "edge":
         st.session_state["edge_scan_rejections"] = {}
         st.session_state["edge_scan_audit"] = {}
         st.session_state["edge_scan_rejection_rows"] = []
+        st.session_state["edge_scan_input_rows"] = []
+        st.session_state["edge_scanner_debug_report"] = ""
         st.session_state["_edge_last_stat_filter"] = _edge_stat
         st.session_state["_edge_last_side_filter"] = _edge_side
 
@@ -27950,6 +28148,25 @@ if st.session_state.active_sport == "edge":
             }
             st.session_state["edge_scan_audit"] = _empty_audit
             render_edge_slate_audit(_empty_audit, [])
+            _empty_debug_report = build_edge_scanner_debug_report(
+                _empty_audit,
+                [],
+                [],
+                [],
+                st.session_state.get("edge_fetch_debug", []) or [
+                    _fetch_err_text or "No PrizePicks rows returned"
+                ],
+                {
+                    "sport": _edge_sport,
+                    "market": _edge_stat,
+                    "side": _edge_side,
+                    "minimum_margin": _edge_min,
+                    "include_reduced": _include_goblin,
+                    "view_matches": 0,
+                },
+                st.session_state.get("runtime_debug_errors", []) or [],
+            )
+            render_edge_scanner_debugger(_empty_debug_report, "empty_fetch")
             fetch_all_pp_props.clear()
             if "currently lists 0" in _fetch_err_text:
                 st.caption(
@@ -28063,8 +28280,7 @@ if st.session_state.active_sport == "edge":
         )
 
         _reduced_available = sum(
-            1 for p in _filtered
-            if p.get("is_goblin") or p.get("is_promo") or p.get("adjusted_odds")
+            1 for p in _filtered if is_reduced_payout_line(p)
         )
         _standard_available = len(_filtered) - _reduced_available
 
@@ -28073,11 +28289,7 @@ if st.session_state.active_sport == "edge":
         _before_filter = len(_filtered)
         if not _include_goblin:
             _filtered = [
-                p for p in _filtered
-                if not (
-                    p.get("is_goblin") or p.get("is_promo")
-                    or p.get("adjusted_odds")
-                )
+                p for p in _filtered if not is_reduced_payout_line(p)
             ]
         _record_audit_stage(
             "Payout filter",
@@ -28101,10 +28313,7 @@ if st.session_state.active_sport == "edge":
                 if _edge_sport == "MLB" else normalize_wnba_prop_stat(p.get("stat", ""))
             )
             p["stat"] = _norm_stat
-            _variant = (
-                "reduced" if p.get("is_goblin") or p.get("is_promo")
-                or p.get("adjusted_odds") else "standard"
-            )
+            _variant = "reduced" if is_reduced_payout_line(p) else "standard"
             _event_key = pp_event_key(p) or "upcoming"
             _k = (
                 f"{p['sport']}|{normalize_name(p['player'])}|{_norm_stat}|"
@@ -28140,11 +28349,7 @@ if st.session_state.active_sport == "edge":
         _before_filter = len(_filtered)
         if _edge_side == "Unders":
             _filtered = [
-                p for p in _filtered
-                if not (
-                    p.get("is_goblin") or p.get("is_promo")
-                    or p.get("adjusted_odds")
-                )
+                p for p in _filtered if not is_reduced_payout_line(p)
             ]
         _record_audit_stage(
             "Direction compatibility",
@@ -28183,10 +28388,47 @@ if st.session_state.active_sport == "edge":
             "stages": _audit_stages,
             "rejection_counts": {},
         }
+        st.session_state["edge_scan_input_rows"] = [
+            {
+                "player": p.get("player", ""),
+                "team": p.get("team", ""),
+                "position": p.get("pos", ""),
+                "market": p.get("stat", ""),
+                "line": p.get("line"),
+                "line_type": (
+                    "reduced" if is_reduced_payout_line(p) else "standard"
+                ),
+                "odds_type": p.get("odds_type", "standard"),
+                "adjusted_odds_raw": bool(p.get("adjusted_odds")),
+                "line_source": p.get("line_source", "line_score"),
+                "start_time": p.get("start_time", ""),
+                "event_key": pp_event_key(p),
+                "projection_id": p.get("projection_id", ""),
+                "slate_source": p.get("slate_source", "live"),
+            }
+            for p in _filtered
+        ]
 
         if not _filtered:
             st.session_state["edge_scan_audit"] = _scan_audit
             render_edge_slate_audit(_scan_audit, [])
+            _filtered_debug_report = build_edge_scanner_debug_report(
+                _scan_audit,
+                st.session_state.get("edge_scan_input_rows", []) or [],
+                [],
+                [],
+                st.session_state.get("edge_fetch_debug", []) or [],
+                {
+                    "sport": _edge_sport,
+                    "market": _edge_stat,
+                    "side": _edge_side,
+                    "minimum_margin": _edge_min,
+                    "include_reduced": _include_goblin,
+                    "view_matches": 0,
+                },
+                st.session_state.get("runtime_debug_errors", []) or [],
+            )
+            render_edge_scanner_debugger(_filtered_debug_report, "empty_filter")
             st.warning("No props found matching your filters. Try broadening the sport or stat filter.")
             st.stop()
 
@@ -28225,10 +28467,7 @@ if st.session_state.active_sport == "edge":
                 if prop["sport"] == "MLB":
                     # Normalize stat names — PrizePicks uses several pitcher labels
                     _norm_stat = normalize_mlb_pitcher_prop_stat(prop["stat"])
-                    _is_reduced = bool(
-                        prop.get("is_goblin") or prop.get("is_promo")
-                        or prop.get("adjusted_odds")
-                    )
+                    _is_reduced = is_reduced_payout_line(prop)
                     _requested_sides = (
                         ("Over",) if _is_reduced or _edge_side == "Overs" else
                         ("Under",) if _edge_side == "Unders" else
@@ -28262,6 +28501,32 @@ if st.session_state.active_sport == "edge":
                             result for result in _side_results
                             if result and not result.get("_rejected")
                         ]
+                        _side_evaluations = [
+                            {
+                                "side": result.get("side", _side),
+                                "rejected": bool(result.get("_rejected")),
+                                "reject_reason": result.get("reject_reason", ""),
+                                "tier": result.get("tier", ""),
+                                "model_chance": result.get("adj"),
+                                "evidence": result.get("confidence"),
+                                "entry_score": (
+                                    scanner_entry_decision(result)[0]
+                                    if result and not result.get("_rejected") else None
+                                ),
+                                "entry_action": (
+                                    scanner_entry_decision(result)[1]
+                                    if result and not result.get("_rejected") else "REJECTED"
+                                ),
+                                "projection": result.get("pc_expected"),
+                                "projection_gap": result.get("projection_gap"),
+                                "validation": result.get("validation_label", ""),
+                                "validation_reasons": result.get("validation_reasons", []),
+                                "trap": result.get("trap_label", ""),
+                                "trap_reasons": result.get("trap_reasons", []),
+                            }
+                            for _side, result in zip(_requested_sides, _side_results)
+                            if result
+                        ]
                         if _valid_results:
                             def _mlb_side_rank(result: dict) -> tuple:
                                 _score, _action, _ = scanner_entry_decision(result)
@@ -28271,11 +28536,18 @@ if st.session_state.active_sport == "edge":
                                     float(result.get("adj", 0) or 0),
                                     float(result.get("confidence", 0) or 0),
                                 )
-                            return max(
+                            _selected_result = max(
                                 _valid_results,
                                 key=_mlb_side_rank,
                             )
-                        return next((result for result in _side_results if result), None)
+                            _selected_result["side_evaluations"] = _side_evaluations
+                            return _selected_result
+                        _rejected_result = next(
+                            (result for result in _side_results if result), None
+                        )
+                        if _rejected_result:
+                            _rejected_result["side_evaluations"] = _side_evaluations
+                        return _rejected_result
                     if _norm_stat == "Hitter Fantasy Score":
                         _side_results = [
                             run_mlb_hitter_fantasy_edge_check(
@@ -28294,7 +28566,7 @@ if st.session_state.active_sport == "edge":
                 if prop["sport"] == "WNBA":
                     _market = normalize_wnba_prop_stat(prop.get("stat", ""))
                     if is_wnba_supported_prop(_market):
-                        if prop.get("is_goblin") or prop.get("is_promo") or prop.get("adjusted_odds"):
+                        if is_reduced_payout_line(prop):
                             # Reduced-payout lines are favorable only to the Over.
                             # Standard lines still evaluate both directions.
                             _requested_sides = ("Over",)
@@ -28326,7 +28598,7 @@ if st.session_state.active_sport == "edge":
                                         and bool(pp_event_key(prop))
                                         and not prop.get("is_goblin")
                                         and not prop.get("is_promo")
-                                        and not prop.get("adjusted_odds")
+                                        and not is_reduced_payout_line(prop)
                                     ),
                                 },
                             )
@@ -28593,6 +28865,9 @@ if st.session_state.active_sport == "edge":
 
     # ── Display Results ───────────────────────────────────────────────────
     _raw_edge_results = st.session_state.get("edge_results", []) or []
+    for _edge_result in _raw_edge_results:
+        if _edge_result.get("sport") == "MLB" and not _edge_result.get("opp"):
+            _edge_result["opp"] = "TBD"
     _results = _raw_edge_results
     _results = [
         r for r in _results
@@ -28609,8 +28884,6 @@ if st.session_state.active_sport == "edge":
                 and is_sane_wnba_prop_line(r.get("stat", ""), r.get("line"))
             )
         )
-        and r.get("opp")
-        and r.get("opp") not in ("?", "")
     ]
     if _edge_stat == "Strikeouts":
         _results = [r for r in _results if is_mlb_strikeout_prop(r.get("stat", ""))]
@@ -28631,6 +28904,23 @@ if st.session_state.active_sport == "edge":
             st.session_state.get("edge_scan_audit", {}) or {},
             st.session_state.get("edge_scan_rejection_rows", []) or [],
         )
+        _scanner_debug_report = build_edge_scanner_debug_report(
+            st.session_state.get("edge_scan_audit", {}) or {},
+            st.session_state.get("edge_scan_input_rows", []) or [],
+            _raw_edge_results,
+            st.session_state.get("edge_scan_rejection_rows", []) or [],
+            st.session_state.get("edge_fetch_debug", []) or [],
+            {
+                "sport": _edge_sport,
+                "market": _edge_stat,
+                "side": _edge_side,
+                "minimum_margin": _edge_min,
+                "include_reduced": _include_goblin,
+                "view_matches": len(_results),
+            },
+            st.session_state.get("runtime_debug_errors", []) or [],
+        )
+        render_edge_scanner_debugger(_scanner_debug_report, "results")
 
     if _results:
         if st.session_state.get("edge_has_scanned"):
@@ -29173,8 +29463,7 @@ if st.session_state.active_sport == "edge":
                     _promo_tag = f"<span class='edge-pill-v55 accent'>{_promo_text}</span>"
                 _standard_tag = (
                     "<span class='edge-pill-v55 accent'>Standard full-payout line</span>"
-                    if not _r.get("is_goblin") and not _r.get("is_promo")
-                    and not _r.get("adjusted_odds") else ""
+                    if not is_reduced_payout_line(_r) else ""
                 )
                 _bar_w = min(100, int(_r["adj"]))
                 _edge_raw_col = "#00e896" if _r["edge_raw"] > 0 else "#ff3d5c"
