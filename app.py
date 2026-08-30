@@ -6556,7 +6556,7 @@ def _parse_numeric_value(value, default: Optional[float] = None) -> Optional[flo
         return default
 
 
-MODEL_LEARNING_VERSION = "propiq-v8.5-mlb-k-payout-visibility-1"
+MODEL_LEARNING_VERSION = "propiq-v8.5-mlb-k-main-list-payout-1"
 LEARNING_WNBA_STAT_COLUMNS = {
     "Points": "PTS", "Rebounds": "REB", "Assists": "AST",
     "3-Pointers Made": "3PM", "Pts + Reb + Ast": "PRA",
@@ -24724,16 +24724,29 @@ if st.session_state.active_sport == "edge":
 
     def scanner_result_sort_key(result: dict, sort_field: str) -> tuple:
         """Rank actionable picks first, then apply the user's metric within each band."""
-        entry_score, action, _ = scanner_entry_decision(result)
+        if result.get("payout_check_required"):
+            entry_score = int(result.get("model_entry_score", 0) or 0)
+            action = str(result.get("model_entry_action", "PASS"))
+            if not entry_score or action not in ("PLAY", "WATCH"):
+                entry_score, action, _ = scanner_entry_decision(
+                    result, apply_payout_gate=False
+                )
+        else:
+            entry_score, action, _ = scanner_entry_decision(result)
         action_order = {"PLAY": 0, "WATCH": 1, "PASS": 2}
-        selected_value = float(result.get(sort_field, 0) or 0)
+        selected_key = (
+            "model_rank_score"
+            if result.get("payout_check_required") and sort_field == "rank_score"
+            else sort_field
+        )
+        selected_value = float(result.get(selected_key, 0) or 0)
         return (
             action_order.get(action, 3),
             1 if result.get("line_verification_required") else 0,
-            1 if result.get("is_goblin") or result.get("is_promo") else 0,
+            1 if result.get("payout_check_required") else 0,
             -selected_value,
             -entry_score,
-            -float(result.get("rank_score", result.get("adj", 0)) or 0),
+            -float(result.get(selected_key, result.get("adj", 0)) or 0),
             -float(result.get("adj", 0) or 0),
             normalize_name(result.get("player", "")),
         )
@@ -29057,6 +29070,7 @@ if st.session_state.active_sport == "edge":
                     and not r.get("line_verification_required")
                 )
                 if _reduced_model_read:
+                    r["payout_check_required"] = True
                     _payout_check_results.append(r)
             elif _result_action in ("PLAY", "WATCH"):
                 _with_edge.append(r)
@@ -29079,58 +29093,14 @@ if st.session_state.active_sport == "edge":
                 normalize_name(result.get("player", "")),
             )
         )
+        _main_edge_results = _with_edge + _payout_check_results
 
-        if _payout_check_results:
-            with st.expander(
-                f"Reduced-line model candidates · {len(_payout_check_results)} payout check(s)",
-                expanded=bool(_include_goblin),
-            ):
-                st.warning(
-                    "These are genuine model-qualified legs, but their PrizePicks payout is reduced. "
-                    "MODEL PLAY/WATCH grades the leg's hit profile; PAYOUT CHECK means the exact slip "
-                    "return must still be compared before entering."
-                )
-                _payout_rows = []
-                for _payout_result in _payout_check_results:
-                    _payout_type = (
-                        "Goblin / reduced"
-                        if _payout_result.get("is_goblin") else
-                        "Demon / adjusted"
-                        if _payout_result.get("is_demon") else
-                        "Promo / adjusted"
-                        if _payout_result.get("is_promo") or _payout_result.get("adjusted_odds") else
-                        str(_payout_result.get("odds_type", "Adjusted")).title()
-                    )
-                    _payout_rows.append({
-                        "Player": _payout_result.get("player", ""),
-                        "Market": _payout_result.get("stat", ""),
-                        "Direction": _payout_result.get("side", "Over"),
-                        "Line": _payout_result.get("line", ""),
-                        "Model entry": f"{int(_payout_result.get('model_entry_score', 0) or 0)}/100",
-                        "Model grade": _payout_result.get("model_entry_action", "WATCH"),
-                        "Model chance": f"{float(_payout_result.get('adj', 0) or 0):.1f}%",
-                        "Evidence": f"{float(_payout_result.get('confidence', 0) or 0):.0f}/100",
-                        "Model margin": f"{float(_payout_result.get('edge_pct', 0) or 0):+.1f}%",
-                        "Line type": _payout_type,
-                        "Value action": "PAYOUT CHECK",
-                    })
-                st.dataframe(
-                    pd.DataFrame(_payout_rows),
-                    hide_index=True,
-                    use_container_width=True,
-                )
-                st.caption(
-                    "Model chance describes the leg. Value depends on the complete entry payout, "
-                    "so these lines are excluded from Best Entry and the primary recommendations."
-                )
-
-        if not _with_edge:
+        if not _main_edge_results:
             st.markdown(
                 "<div style='text-align:center;color:#6b7f96;font-family:JetBrains Mono,"
-                "monospace;font-size:0.75rem;padding:2rem;'>No standard-payout PLAY or WATCH results "
+                "monospace;font-size:0.75rem;padding:2rem;'>No model-qualified PLAY or WATCH results "
                 f"cleared the minimum {_edge_min} model-margin threshold. PASS results "
-                "remain counted in the Slate Coverage Audit. Adjusted lines, when present, "
-                "are shown above as expanded reduced-line model candidates when that option is enabled.</div>",
+                "remain counted in the Slate Coverage Audit.</div>",
                 unsafe_allow_html=True
             )
             if _pass_diagnostics:
@@ -29175,17 +29145,25 @@ if st.session_state.active_sport == "edge":
         else:
             # Summary strip
             _strong  = [
-                r for r in _with_edge
-                if scanner_entry_decision(r)[1] == "PLAY"
+                r for r in _main_edge_results
+                if (
+                    r.get("model_entry_action")
+                    if r.get("payout_check_required")
+                    else scanner_entry_decision(r)[1]
+                ) == "PLAY"
             ]
             _lean    = [
-                r for r in _with_edge
-                if scanner_entry_decision(r)[1] == "WATCH"
+                r for r in _main_edge_results
+                if (
+                    r.get("model_entry_action")
+                    if r.get("payout_check_required")
+                    else scanner_entry_decision(r)[1]
+                ) == "WATCH"
             ]
-            _over_count = sum(1 for r in _with_edge if r.get("side", "Over") == "Over")
-            _under_count = sum(1 for r in _with_edge if r.get("side") == "Under")
+            _over_count = sum(1 for r in _main_edge_results if r.get("side", "Over") == "Over")
+            _under_count = sum(1 for r in _main_edge_results if r.get("side") == "Under")
             _market_confirmed = sum(
-                1 for r in _with_edge
+                1 for r in _main_edge_results
                 if r.get("sportsbook_grade") in ("Confirmed Value", "Market Supports")
             )
             _market_enabled = bool(get_config_value("THE_ODDS_API_KEY", "ODDS_API_KEY"))
@@ -29204,7 +29182,7 @@ if st.session_state.active_sport == "edge":
                 f"🟡 {len(_lean)} WATCH</div>"
                 f"<div style='background:rgba(255,61,92,0.1);border:1px solid rgba(255,61,92,0.25);"
                 f"border-radius:8px;padding:6px 14px;font-size:0.65rem;color:#ff3d5c;'>"
-                f"{len(_payout_check_results)} payout checks separated</div>"
+                f"{len(_payout_check_results)} reduced line(s) in list</div>"
                 f"<div style='background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);"
                 f"border-radius:8px;padding:6px 14px;font-size:0.65rem;color:#6b7f96;'>"
                 f"{_over_count} Overs · {_under_count} Unders</div>"
@@ -29214,6 +29192,12 @@ if st.session_state.active_sport == "edge":
                 f"</div>",
                 unsafe_allow_html=True
             )
+            if _payout_check_results:
+                st.caption(
+                    "Reduced-payout candidates are included in the main list with their underlying "
+                    "model PLAY/WATCH grade. They can be analyzed or tracked, but remain excluded "
+                    "from automatic Best Entry until the exact slip payout is evaluated."
+                )
 
             # ── Payout-aware Best Entry Builder ───────────────────────────
             if _edge_sport in ("MLB", "WNBA"):
@@ -29514,22 +29498,32 @@ if st.session_state.active_sport == "edge":
             }
             _edge_sort_field = _edge_sort_fields.get(_edge_sort, "rank_score")
             _display_edge_results = sorted(
-                _with_edge,
+                _main_edge_results,
                 key=lambda result: scanner_result_sort_key(
                     result, _edge_sort_field
                 ),
             )
             st.caption(
-                f"PLAY first · WATCH second · PASS last · "
+                f"PLAY first · WATCH second · standard lines before reduced lines within a grade · "
                 f"sorted by {_edge_sort.lower()} within each group"
             )
 
             # Render each result as a compact row. Supporting signals expand on demand.
             for _r in _display_edge_results:
                 _grade_lbl, _grade_col, _reason_list = scanner_grade_and_reasons(_r)
-                _edge_entry_score, _edge_entry_action, _is_strong = (
-                    scanner_entry_decision(_r)
-                )
+                _payout_check = bool(_r.get("payout_check_required"))
+                if _payout_check:
+                    _edge_entry_score = int(_r.get("model_entry_score", 0) or 0)
+                    _edge_entry_action = str(_r.get("model_entry_action", "WATCH"))
+                    if not _edge_entry_score or _edge_entry_action not in ("PLAY", "WATCH"):
+                        _edge_entry_score, _edge_entry_action, _ = scanner_entry_decision(
+                            _r, apply_payout_gate=False
+                        )
+                    _is_strong = _edge_entry_action == "PLAY"
+                else:
+                    _edge_entry_score, _edge_entry_action, _is_strong = (
+                        scanner_entry_decision(_r)
+                    )
                 _reason_html = "".join(
                     f"<span class='edge-pill-v55'>{_why}</span>"
                     for _why in _reason_list
@@ -29558,6 +29552,10 @@ if st.session_state.active_sport == "edge":
                 _goblin_tag = (
                     "<span class='edge-pill-v55 warn'>Lowest Goblin · adjusted payout</span>"
                     if _r.get("is_goblin") else ""
+                )
+                _payout_check_tag = (
+                    "<span class='edge-pill-v55 warn'>Reduced payout · check exact slip return</span>"
+                    if _payout_check else ""
                 )
                 _promo_tag = ""
                 if _r.get("is_promo"):
@@ -29686,7 +29684,7 @@ if st.session_state.active_sport == "edge":
                     f"{_projection_prob_pill}"
                     f"{_recent_k_pill}{_handed_k_pill}{_bf_pill}{_starter_pill}{_readiness_pill}"
                     f"{_defense_pill}{_injury_pill}"
-                    f"{_standard_tag}{_promo_tag}{_goblin_tag}{_risk_pills}"
+                    f"{_standard_tag}{_promo_tag}{_goblin_tag}{_payout_check_tag}{_risk_pills}"
                 )
                 if _r.get("market_snapshots"):
                     _move = float(_r.get("market_open_move") or _r.get("market_move") or 0)
@@ -29944,14 +29942,24 @@ if st.session_state.active_sport == "edge":
                     _new_leg = {
                         "player":     _r["player"],
                         "prop":       f"{_r['stat']} {_result_side}",
+                        "stat":       _r.get("stat", ""),
                         "line":       _r["line"],
                         "side":       _result_side,
                         "verdict":    _tier_lbl,
                         "confidence": _conf_val,
                         "adj":        _r["adj"],
                         "sport":      _r["sport"],
+                        "entry_score": _edge_entry_score,
+                        "entry_action": _edge_entry_action,
+                        "odds_type": _r.get("odds_type", "standard"),
+                        "reduced_payout": _payout_check,
                         "added":      _dt_edge.datetime.now().strftime("%I:%M %p"),
                     }
+                    _tracker_risk_flags = (
+                        (_r.get("validation_reasons", []) or [])
+                        + (_r.get("trap_reasons", []) or [])
+                        + (["Reduced payout line · verify exact slip return"] if _payout_check else [])
+                    )
                     _edge_tracker_entry = {
                         "Player":      _r["player"],
                         "Line":        f"{_r['line']} {_result_side}",
@@ -29965,10 +29973,7 @@ if st.session_state.active_sport == "edge":
                         "Confidence":  int(_r.get("confidence", 0) or 0),
                         "Edge":        float(_r.get("edge_raw", 0) or 0),
                         "Sample":      int(_r.get("samples", 0) or 0),
-                        "Risk Flags":  " | ".join(
-                            (_r.get("validation_reasons", []) or []) +
-                            (_r.get("trap_reasons", []) or [])
-                        ),
+                        "Risk Flags":  " | ".join(dict.fromkeys(_tracker_risk_flags)),
                         "Trap":        _r.get("trap_label", ""),
                         "Validation":  _r.get("validation_label", ""),
                         "Verdict":     _tier_lbl,
