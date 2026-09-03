@@ -7140,7 +7140,15 @@ def settle_model_predictions(predictions: list, max_events: int = 40) -> dict:
     updated = 0
     unresolved = 0
     pushes = 0
-    for index, (_, rows) in enumerate(groups.items()):
+    # Old completed slates must be checked before today's pending/in-progress
+    # slate. Otherwise a large current slate can occupy every refresh slot and
+    # permanently starve yesterday's settleable decisions.
+    def _settlement_sort_key(item):
+        stamp = pd.to_datetime(item[1][0].get("game_date"), errors="coerce")
+        return (stamp.date() if pd.notna(stamp) else today, str(item[0]))
+
+    ordered_groups = sorted(groups.items(), key=_settlement_sort_key)
+    for index, (_, rows) in enumerate(ordered_groups):
         if index >= max_events:
             break
         sample = rows[0]
@@ -7184,12 +7192,12 @@ def settle_model_predictions(predictions: list, max_events: int = 40) -> dict:
                 pushes += 1
     set_runtime_metric(
         "model_learning", "ok" if updated or not groups else "info",
-        f"Settlement checked {min(len(groups), max_events)} events · "
+        f"Settlement checked {min(len(ordered_groups), max_events)} decisions · "
         f"{updated} rows settled · {unresolved} unresolved",
         fetched_at=datetime.utcnow().isoformat() + "Z",
     )
     return {
-        "events_checked": min(len(groups), max_events),
+        "events_checked": min(len(ordered_groups), max_events),
         "updated": updated, "unresolved": unresolved, "pushes": pushes,
     }
 
@@ -8583,20 +8591,6 @@ def render_results_page() -> None:
     """Tracked-pick outcomes and calibration live outside the analyzers."""
     import html as _html
 
-    tracker = st.session_state.get("tracker", []) or []
-    predictions = load_model_predictions()
-    entered_slips = load_entry_ledger()
-    settle_key = _cache_date()
-    if st.session_state.get("model_learning_settle_date") != settle_key:
-        settle_model_predictions(predictions, max_events=40)
-        st.session_state.model_learning_settle_date = settle_key
-    settle_entry_ledger(entered_slips, predictions)
-    hits = sum(1 for entry in tracker if entry.get("Result") == "Hit")
-    misses = sum(1 for entry in tracker if entry.get("Result") == "Miss")
-    pending = sum(1 for entry in tracker if entry.get("Result", "Pending") == "Pending")
-    settled = hits + misses
-    win_rate = hits / settled if settled else None
-
     st.markdown(
         "<div id='workspace-top' class='workspace-page-head'><div>"
         "<h1>Results</h1>"
@@ -8605,14 +8599,31 @@ def render_results_page() -> None:
         unsafe_allow_html=True,
     )
 
+    tracker = st.session_state.get("tracker", []) or []
+    with st.spinner("Loading results history..."):
+        predictions = load_model_predictions()
+        entered_slips = load_entry_ledger()
+    # Outcome settlement is intentionally user-triggered. Performing dozens of
+    # external API checks before rendering made this destination appear frozen.
+    try:
+        settle_entry_ledger(entered_slips, predictions)
+    except Exception as err:
+        record_debug_error("results.entry_settle", err)
+    hits = sum(1 for entry in tracker if entry.get("Result") == "Hit")
+    misses = sum(1 for entry in tracker if entry.get("Result") == "Miss")
+    pending = sum(1 for entry in tracker if entry.get("Result", "Pending") == "Pending")
+    pushes = sum(1 for entry in tracker if entry.get("Result") == "Push")
+    settled = hits + misses
+    win_rate = hits / settled if settled else None
+
     learning_a, learning_b = st.columns([2, 1])
     with learning_a:
         if st.button(
             "Refresh model outcomes", key="learning_refresh_outcomes",
             use_container_width=True,
         ):
-            with st.spinner("Matching completed MLB and WNBA games..."):
-                outcome_stats = settle_model_predictions(predictions, max_events=120)
+            with st.spinner("Checking the oldest unresolved MLB and WNBA decisions..."):
+                outcome_stats = settle_model_predictions(predictions, max_events=40)
                 entry_stats = settle_entry_ledger(entered_slips, predictions)
             st.toast(
                 f"Settled {outcome_stats['updated']} prediction rows · "
@@ -8627,8 +8638,25 @@ def render_results_page() -> None:
             load_entry_ledger(force=True)
             st.rerun()
 
-    render_entry_roi_dashboard(entered_slips)
-    render_model_learning_dashboard(predictions)
+    pending_predictions = sum(
+        1 for row in _learning_unique_prediction_rows(predictions)
+        if str(row.get("status", "Pending")) == "Pending"
+    )
+    st.caption(
+        f"Loaded {len(predictions)} prediction snapshots and {len(entered_slips)} entered slips · "
+        f"{pending_predictions} unique decisions await settlement. Outcome checks run only when you tap Refresh."
+    )
+
+    try:
+        render_entry_roi_dashboard(entered_slips)
+    except Exception as err:
+        record_debug_error("results.roi_dashboard", err)
+        st.error("Entered-slip history could not be rendered. Reload the ledger and retry.")
+    try:
+        render_model_learning_dashboard(predictions)
+    except Exception as err:
+        record_debug_error("results.learning_dashboard", err)
+        st.error("The model-learning report could not be rendered. Reload the ledger and retry.")
 
     st.markdown(
         "<div class='section-header'>Manually Tracked Picks</div>",
@@ -8640,6 +8668,7 @@ def render_results_page() -> None:
         f"<div class='workspace-summary-item'><span>Hit</span><strong style='color:var(--green);'>{hits}</strong></div>"
         f"<div class='workspace-summary-item'><span>Miss</span><strong style='color:var(--red);'>{misses}</strong></div>"
         f"<div class='workspace-summary-item'><span>Pending</span><strong>{pending}</strong></div>"
+        f"<div class='workspace-summary-item'><span>Push</span><strong>{pushes}</strong></div>"
         f"</div>",
         unsafe_allow_html=True,
     )
@@ -8678,7 +8707,10 @@ def render_results_page() -> None:
     ]
     for i, entry in visible_entries:
         result = str(entry.get("Result", "Pending"))
-        result_color = {"Hit": "#36d399", "Miss": "#f05d75", "Pending": "#748294"}.get(result, "#748294")
+        result_color = {
+            "Hit": "#36d399", "Miss": "#f05d75", "Push": "#40d9e0",
+            "Pending": "#748294",
+        }.get(result, "#748294")
         player = _html.escape(str(entry.get("Player", "Unknown player")))
         line = _html.escape(str(entry.get("Line", "—")))
         matchup = _html.escape(str(entry.get("Matchup", "Prop")))
@@ -8697,13 +8729,16 @@ def render_results_page() -> None:
             f"</div></div></div>",
             unsafe_allow_html=True,
         )
-        hit_col, miss_col, pending_col, remove_col = st.columns([2, 2, 2, 1])
+        hit_col, miss_col, push_col, pending_col, remove_col = st.columns([2, 2, 2, 2, 1])
         with hit_col:
             st.button("Hit", key=f"results_hit_{i}", use_container_width=True,
                       on_click=_set_tracker_result, args=(i, "Hit"))
         with miss_col:
             st.button("Miss", key=f"results_miss_{i}", use_container_width=True,
                       on_click=_set_tracker_result, args=(i, "Miss"))
+        with push_col:
+            st.button("Push", key=f"results_push_{i}", use_container_width=True,
+                      on_click=_set_tracker_result, args=(i, "Push"))
         with pending_col:
             st.button("Pending", key=f"results_pending_{i}", use_container_width=True,
                       on_click=_set_tracker_result, args=(i, "Pending"))
@@ -10525,6 +10560,51 @@ def save_logs_to_supabase(player_id: int, season: str, df: pd.DataFrame) -> bool
         return False
 
 
+def _tracker_metadata_value(entry: dict, field: str) -> str:
+    """Read tracker context from a direct field or its durable venue marker."""
+    direct = str(entry.get(field, "") or "").strip()
+    if direct:
+        return direct
+    token = {
+        "Sport": "sport", "Game Date": "date", "Event ID": "event",
+        "Player ID": "player_id", "Team": "team",
+    }.get(field)
+    if not token:
+        return ""
+    match = re.search(
+        rf"(?:^|[·|])\s*{re.escape(token)}\s*:\s*([^·|]+)",
+        str(entry.get("Venue", entry.get("venue", "")) or ""),
+        flags=re.IGNORECASE,
+    )
+    return match.group(1).strip() if match else ""
+
+
+def _tracker_sport(entry: dict) -> str:
+    """Recover a persisted tracker sport without guessing shared WNBA/NBA props."""
+    sport = _tracker_metadata_value(entry, "Sport").upper()
+    if sport in ("MLB", "WNBA", "NBA"):
+        return sport
+    matchup = str(entry.get("Matchup", entry.get("matchup", "")) or "")
+    return "MLB" if matchup in ("Strikeouts", "Hitter Fantasy Score") else "NBA"
+
+
+def _tracker_durable_venue(entry: dict) -> str:
+    """Encode fields absent from the legacy prop_tracker schema into venue."""
+    venue = str(entry.get("Venue", "") or "").strip()
+    metadata = []
+    for field, token in (
+        ("Sport", "sport"), ("Game Date", "date"), ("Event ID", "event"),
+        ("Player ID", "player_id"), ("Team", "team"),
+    ):
+        value = str(entry.get(field, "") or "").strip()
+        if value and not re.search(
+            rf"(?:^|[·|])\s*{re.escape(token)}\s*:", venue,
+            flags=re.IGNORECASE,
+        ):
+            metadata.append(f"{token}:{value}")
+    return " · ".join(metadata + ([venue] if venue else []))
+
+
 def load_tracker_from_supabase(session_id: str) -> list:
     """Load tracker entries for this session from Supabase."""
     try:
@@ -10537,8 +10617,7 @@ def load_tracker_from_supabase(session_id: str) -> list:
         entries = []
         for r in rows:
             matchup = r.get("matchup", "")
-            sport = "MLB" if matchup in ("Strikeouts", "Hitter Fantasy Score") else "NBA"
-            entries.append({
+            persisted = {
                 "id":          r.get("id"),
                 "Player":      r.get("player", ""),
                 "Line":        r.get("line", ""),
@@ -10551,8 +10630,13 @@ def load_tracker_from_supabase(session_id: str) -> list:
                 "Consistency": r.get("consistency", ""),
                 "Verdict":     r.get("verdict", ""),
                 "Result":      r.get("result", "Pending"),
-                "Sport":       sport,
-            })
+            }
+            persisted["Sport"] = _tracker_sport(persisted)
+            for field in ("Game Date", "Event ID", "Player ID", "Team"):
+                value = _tracker_metadata_value(persisted, field)
+                if value:
+                    persisted[field] = value
+            entries.append(persisted)
         return entries
     except Exception:
         return []
@@ -10570,7 +10654,7 @@ def save_to_supabase(session_id: str, entry: dict) -> str:
             "line":        entry.get("Line", ""),
             "opponent":    entry.get("Opponent", "—"),
             "matchup":     entry.get("Matchup", ""),
-            "venue":       entry.get("Venue", ""),
+            "venue":       _tracker_durable_venue(entry),
             "avg_pts":     float(entry.get("Avg PTS", 0)),
             "hit_rate":    entry.get("Hit Rate", ""),
             "adjusted":    entry.get("Adjusted", ""),
@@ -11995,7 +12079,7 @@ def clear_pp_slate_cache(sport_filter: str) -> None:
 def auto_detect_result(entry: dict) -> Optional[str]:
     """
     Check if a tracked prop has a result by looking at the player's
-    most recent game log. Returns 'Hit', 'Miss', or None if game
+    exact tracked game. Returns 'Hit', 'Miss', 'Push', or None if the game
     hasn't been played yet.
     """
     try:
@@ -12016,51 +12100,50 @@ def auto_detect_result(entry: dict) -> Optional[str]:
             return None
         side = parts[1] if len(parts) > 1 else "Over"
 
-        sport = str(entry.get("Sport", "")).upper()
+        sport = _tracker_sport(entry)
         prop = str(entry.get("Matchup", ""))
         is_mlb = sport == "MLB" or prop in ("Strikeouts", "Hitter Fantasy Score")
+        expected_date_text = _tracker_metadata_value(entry, "Game Date")[:10]
+        expected_date = pd.to_datetime(expected_date_text, errors="coerce")
+        event_id = _tracker_metadata_value(entry, "Event ID")
+        player_id = _tracker_metadata_value(entry, "Player ID")
 
         if is_mlb:
-            log_fn = (
-                globals().get("mlb_get_hitter_logs")
-                if prop == "Hitter Fantasy Score"
-                else globals().get("mlb_get_pitcher_logs")
+            # Results renders before the analyzer-local MLB helpers are defined.
+            # Use the always-available exact-event settlement path instead.
+            actual = _learning_mlb_actual(
+                player_id, player_name, prop, expected_date_text, event_id,
             )
-            if not callable(log_fn):
+            if actual is None:
                 return None
-            logs = log_fn(player_name, n=3)
-            if logs is None or logs.empty:
-                return None
-            date_col = "DATE"
-            stat_col = "FS" if prop == "Hitter Fantasy Score" else "K"
-            last_game_date = pd.to_datetime(logs.iloc[0][date_col], errors="coerce")
-            if pd.isna(last_game_date):
-                return None
-            venue_meta = str(entry.get("Venue", ""))
-            expected_match = re.search(r"date:(\d{4}-\d{2}-\d{2})", venue_meta)
-            if expected_match:
-                expected_date = pd.to_datetime(expected_match.group(1), errors="coerce")
-                if pd.notna(expected_date) and last_game_date.date() < expected_date.date():
-                    return None
-            import pytz
-            et = pytz.timezone("America/New_York")
-            if (_auto_datetime.now(et).date() - last_game_date.date()).days > 2:
-                return None
-            actual = pd.to_numeric(logs.iloc[0].get(stat_col), errors="coerce")
-            if pd.isna(actual):
-                return None
-            return (
-                "Hit" if actual >= line_val else "Miss"
-            ) if side == "Over" else (
-                "Hit" if actual <= line_val else "Miss"
+            return _learning_pick_result(actual, line_val, side)
+
+        if sport == "WNBA":
+            # Keep this normalization local because the full WNBA analyzer is
+            # intentionally not loaded on the standalone Results destination.
+            market_aliases = {
+                "3PT Made": "3-Pointers Made", "3-PT Made": "3-Pointers Made",
+                "Fantasy Score": "Pts + Reb + Ast", "PRA": "Pts + Reb + Ast",
+                "Points + Rebs": "Points + Rebounds",
+                "Points + Asts": "Points + Assists",
+                "Rebs + Asts": "Rebounds + Assists",
+            }
+            market = market_aliases.get(prop, prop)
+            actual = _learning_wnba_actual(
+                player_id, market, expected_date_text, event_id,
+                entry.get("Opponent", ""),
             )
+            if actual is None:
+                return None
+            return _learning_pick_result(actual, line_val, side)
 
         # Find NBA player ID
         nba_id, _ = nba_find_player(player_name)
         if not nba_id:
             return None
 
-        # Get most recent game log (uses cache)
+        # Get game logs (uses cache), then select the exact tracked game when
+        # durable metadata is available.
         from datetime import datetime, timedelta
         import pytz
         et  = pytz.timezone("America/New_York")
@@ -12068,7 +12151,16 @@ def auto_detect_result(entry: dict) -> Optional[str]:
 
         # Reuse the n=15 cache — just take head(1)
         _det_logs = nba_get_game_logs(nba_id, "2025-26", n=15, _date=_cache_date())
-        logs = _det_logs.head(1) if _det_logs is not None and not _det_logs.empty else _det_logs
+        logs = _det_logs.copy() if _det_logs is not None else _det_logs
+        if logs is None or logs.empty:
+            return None
+
+        logs["GAME_DATE"] = pd.to_datetime(logs["GAME_DATE"], errors="coerce")
+        logs = logs.dropna(subset=["GAME_DATE"])
+        if pd.notna(expected_date):
+            logs = logs[logs["GAME_DATE"].dt.date == expected_date.date()]
+        else:
+            logs = logs.head(1)
         if logs.empty:
             return None
 
@@ -12086,12 +12178,10 @@ def auto_detect_result(entry: dict) -> Optional[str]:
             return None
 
         # Determine result
-        if side == "Over":
-            return "Hit" if actual_pts >= line_val else "Miss"
-        else:
-            return "Hit" if actual_pts <= line_val else "Miss"
+        return _learning_pick_result(actual_pts, line_val, side)
 
-    except Exception:
+    except Exception as err:
+        record_debug_error("results.tracker_settle", err)
         return None
 
 
@@ -20201,6 +20291,10 @@ if st.session_state.active_sport == "mlb":
                         f"{'Home' if _tonight.get('pitcher_side') == 'home' else 'Away'} · "
                         f"{mlb_home or '?'} · date:{_tonight.get('game_date', '')}"
                     ),
+                    "Game Date": _tonight.get("game_date", ""),
+                    "Event ID": _tonight.get("game_pk", ""),
+                    "Player ID": _tonight.get("probable_id", ""),
+                    "Team": _tonight.get("pitcher_team", ""),
                     "Avg PTS": round(avg_val, 1), "Hit Rate": f"{whr:.1%}",
                     "Adjusted": f"{adj:.1%}", "Consistency": f"{cons:.1%}",
                     "Confidence": _sc, "Edge": round(edge, 2), "Sample": _n_starts,
@@ -23349,6 +23443,10 @@ if st.session_state.active_sport == "wnba":
         tracker_entry = {
             "Player": selected_name, "Line": f"{line:.1f} {side}", "Opponent": opp,
             "Matchup": matchup, "Venue": game.get("side", "TBD"),
+            "Game Date": game.get("game_date", ""),
+            "Event ID": game.get("event_id", ""),
+            "Player ID": player.get("id", ""),
+            "Team": player.get("team", ""),
             "Avg PTS": round(result["avg"], 1), "Hit Rate": f"{result['raw']:.1%}",
             "Adjusted": f"{result['probability']:.1%}", "Consistency": f"{result['consistency']:.1%}",
             "Confidence": result["confidence"], "Edge": round(result["edge"], 2),
@@ -29966,6 +30064,10 @@ if st.session_state.active_sport == "edge":
                         "Opponent":    _r.get("opp", "—"),
                         "Matchup":     _r["stat"],
                         "Venue":       f"Edge Scanner · { _r.get('park', 'Neutral') } · date:{_r.get('game_date', '')}",
+                        "Game Date":   _r.get("game_date", ""),
+                        "Event ID":    _r.get("event_id") or _r.get("game_pk") or _r.get("game_id", ""),
+                        "Player ID":   _r.get("player_id") or _r.get("pitcher_id", ""),
+                        "Team":        _r.get("pp_team") or _r.get("player_team") or _r.get("pitcher_team", ""),
                         "Avg PTS":     float(_r.get("avg", 0) or 0),
                         "Hit Rate":    f"{float(_r.get('raw_adj', _r['adj']) or 0):.1f}%",
                         "Adjusted":    f"{float(_r.get('adj', 0) or 0):.1f}%",
