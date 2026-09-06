@@ -6132,6 +6132,7 @@ for key, default in [
     ("runtime_debug_errors", []), ("runtime_metrics", {}),
     ("model_predictions", []), ("model_predictions_loaded", False),
     ("model_learning_settle_date", ""),
+    ("model_learning_settle_attempts", {}),
     ("entry_ledger", []), ("entry_ledger_loaded", False),
     ("active_view", _default_active_view),
     ("last_analyzer_sport", _default_analyzer_sport),
@@ -7144,18 +7145,40 @@ def settle_model_predictions(predictions: list, max_events: int = 40) -> dict:
     updated = 0
     unresolved = 0
     pushes = 0
-    # Old completed slates must be checked before today's pending/in-progress
-    # slate. Otherwise a large current slate can occupy every refresh slot and
-    # permanently starve yesterday's settleable decisions.
+    # Prefer completed current-model slates, but rotate unresolved groups to the
+    # back of their priority tier so a permanently unmatchable event cannot
+    # occupy every refresh batch.
+    attempts = st.session_state.setdefault("model_learning_settle_attempts", {})
+
+    def _settlement_attempt_key(group_key):
+        return "|".join(str(part or "") for part in group_key)
+
     def _settlement_sort_key(item):
+        group_key, rows = item
+        sample = rows[0]
         stamp = pd.to_datetime(item[1][0].get("game_date"), errors="coerce")
-        return (stamp.date() if pd.notna(stamp) else today, str(item[0]))
+        game_day = stamp.date() if pd.notna(stamp) else today
+        return (
+            0 if game_day < today else 1,
+            0 if str(sample.get("model_version", "")) == MODEL_LEARNING_VERSION else 1,
+            float(attempts.get(_settlement_attempt_key(group_key), 0.0) or 0.0),
+            game_day,
+            str(group_key),
+        )
 
     ordered_groups = sorted(groups.items(), key=_settlement_sort_key)
-    for index, (_, rows) in enumerate(ordered_groups):
+    checked_current = 0
+    updated_current = 0
+    for index, (group_key, rows) in enumerate(ordered_groups):
         if index >= max_events:
             break
         sample = rows[0]
+        attempts[_settlement_attempt_key(group_key)] = time.time()
+        is_current_model = (
+            str(sample.get("model_version", "")) == MODEL_LEARNING_VERSION
+        )
+        if is_current_model:
+            checked_current += 1
         sport = str(sample.get("sport", "")).upper()
         if sport == "MLB":
             actual = _learning_mlb_actual(
@@ -7192,17 +7215,28 @@ def settle_model_predictions(predictions: list, max_events: int = 40) -> dict:
             }
             update_model_prediction_row(row, updates)
             updated += 1
+            if is_current_model:
+                updated_current += 1
             if result == "Push":
                 pushes += 1
+    active_attempt_keys = {
+        _settlement_attempt_key(group_key) for group_key in groups
+    }
+    st.session_state.model_learning_settle_attempts = {
+        key: value for key, value in attempts.items() if key in active_attempt_keys
+    }
     set_runtime_metric(
         "model_learning", "ok" if updated or not groups else "info",
         f"Settlement checked {min(len(ordered_groups), max_events)} decisions · "
-        f"{updated} rows settled · {unresolved} unresolved",
+        f"{updated} rows settled · {unresolved} unresolved · "
+        f"current model {updated_current}/{checked_current} settled",
         fetched_at=datetime.utcnow().isoformat() + "Z",
     )
     return {
         "events_checked": min(len(ordered_groups), max_events),
         "updated": updated, "unresolved": unresolved, "pushes": pushes,
+        "current_checked": checked_current,
+        "current_updated": updated_current,
     }
 
 
@@ -7721,8 +7755,10 @@ def render_model_learning_dashboard(predictions: list) -> None:
 
     if not graded:
         st.info(
-            "Predictions are being captured. Calibration appears after completed games are matched "
-            "to official MLB or WNBA results."
+            f"Captured {len(unique_filtered)} unique {version_filter} decisions, with "
+            f"{pending} still pending and 0 settled. After the games are final, tap "
+            "Refresh model outcomes above. Each refresh checks up to 40 event groups; "
+            "repeat it while the pending count is falling, then use Reload ledger if needed."
         )
         return
 
