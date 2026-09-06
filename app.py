@@ -1038,7 +1038,6 @@ button[key="mobile_quick_analyze"] {
     /* Keep the sport switcher reachable as users scroll */
     button[key="sport_nba"],
     button[key="sport_mlb"],
-    button[key="sport_wnba"],
     button[key="sport_edge"] {
         position: sticky !important;
         top: 0 !important;
@@ -1416,13 +1415,11 @@ button[key="mobile_quick_analyze"] {
 /* Navigation buttons */
 button[key="sport_nba"],
 button[key="sport_mlb"],
-button[key="sport_wnba"],
 button[key="sport_edge"] {
     min-height: 48px !important;
 }
 button[data-testid="baseButton-primary"][key="sport_nba"],
 button[data-testid="baseButton-primary"][key="sport_mlb"],
-button[data-testid="baseButton-primary"][key="sport_wnba"],
 button[data-testid="baseButton-primary"][key="sport_edge"] {
     background: linear-gradient(135deg, #00d5df, #19e6b1) !important;
     color: #031115 !important;
@@ -1431,7 +1428,6 @@ button[data-testid="baseButton-primary"][key="sport_edge"] {
 }
 button[data-testid="baseButton-secondary"][key="sport_nba"],
 button[data-testid="baseButton-secondary"][key="sport_mlb"],
-button[data-testid="baseButton-secondary"][key="sport_wnba"],
 button[data-testid="baseButton-secondary"][key="sport_edge"] {
     background: rgba(255,255,255,0.045) !important;
     border: 1px solid rgba(255,255,255,0.10) !important;
@@ -2770,7 +2766,6 @@ body,
 /* Navigation feels like a segmented command bar */
 button[key="sport_nba"],
 button[key="sport_mlb"],
-button[key="sport_wnba"],
 button[key="sport_edge"] {
     min-height: 42px !important;
     border-radius: 7px !important;
@@ -2780,7 +2775,6 @@ button[key="sport_edge"] {
 }
 button[data-testid="baseButton-primary"][key="sport_nba"],
 button[data-testid="baseButton-primary"][key="sport_mlb"],
-button[data-testid="baseButton-primary"][key="sport_wnba"],
 button[data-testid="baseButton-primary"][key="sport_edge"] {
     background: #193a42 !important;
     color: #dffbfc !important;
@@ -2789,7 +2783,6 @@ button[data-testid="baseButton-primary"][key="sport_edge"] {
 }
 button[data-testid="baseButton-secondary"][key="sport_nba"],
 button[data-testid="baseButton-secondary"][key="sport_mlb"],
-button[data-testid="baseButton-secondary"][key="sport_wnba"],
 button[data-testid="baseButton-secondary"][key="sport_edge"] {
     background: rgba(16,21,27,0.88) !important;
     color: var(--text2) !important;
@@ -3048,7 +3041,6 @@ div[data-testid="stExpander"] {
     .score-card { min-width: 132px !important; }
     button[key="sport_nba"],
     button[key="sport_mlb"],
-    button[key="sport_wnba"],
     button[key="sport_edge"] {
         min-height: 44px !important;
         font-size: 0.76rem !important;
@@ -3651,7 +3643,6 @@ button[key="view_results"] {
     }
     button[key="sport_nba"],
     button[key="sport_mlb"],
-    button[key="sport_wnba"],
     button[key="sport_edge"] {
         position: static !important;
         top: auto !important;
@@ -3939,7 +3930,6 @@ ul[role="listbox"] li[aria-selected="true"] {
 
 /* High-value commands are clear without making every button look primary. */
 .st-key-mlb_analyze button,
-.st-key-wnba_analyze button,
 .st-key-fetch button,
 .st-key-run_edge_scanner button {
     min-height: 50px !important;
@@ -3950,7 +3940,6 @@ ul[role="listbox"] li[aria-selected="true"] {
     box-shadow: 0 7px 20px rgba(0,196,204,0.18) !important;
 }
 .st-key-mlb_analyze button:hover,
-.st-key-wnba_analyze button:hover,
 .st-key-fetch button:hover,
 .st-key-run_edge_scanner button:hover {
     background: #25cad3 !important;
@@ -4072,14 +4061,12 @@ div[data-testid="stAlert"] {
     .section-header { margin-top: 0.95rem !important; }
 
     /* Keep the paired prop controls paired instead of stacking into a tall form. */
-    div[data-testid="stHorizontalBlock"]:has(.st-key-mlb_line):has(.st-key-mlb_side),
-    div[data-testid="stHorizontalBlock"]:has(.st-key-wnba_stat_select):has(.st-key-wnba_line_input) {
+    div[data-testid="stHorizontalBlock"]:has(.st-key-mlb_line):has(.st-key-mlb_side) {
         display: grid !important;
         grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
         gap: 7px !important;
     }
-    div[data-testid="stHorizontalBlock"]:has(.st-key-mlb_line):has(.st-key-mlb_side) > div[data-testid="stColumn"],
-    div[data-testid="stHorizontalBlock"]:has(.st-key-wnba_stat_select):has(.st-key-wnba_line_input) > div[data-testid="stColumn"] {
+    div[data-testid="stHorizontalBlock"]:has(.st-key-mlb_line):has(.st-key-mlb_side) > div[data-testid="stColumn"] {
         width: 100% !important;
         min-width: 0 !important;
         flex: none !important;
@@ -4573,13 +4560,11 @@ ul[role="listbox"] li {
 
 /* Clear actions stay nearby without competing with Analyze. */
 .st-key-mlb_clear_pitcher,
-.st-key-wnba_clear_player,
 .st-key-clear_player_x {
     display: flex !important;
     justify-content: flex-end !important;
 }
 .st-key-mlb_clear_pitcher button,
-.st-key-wnba_clear_player button,
 .st-key-clear_player_x button {
     width: auto !important;
     min-height: 34px !important;
@@ -4593,7 +4578,6 @@ ul[role="listbox"] li {
     text-transform: none !important;
 }
 .st-key-mlb_clear_pitcher button:hover,
-.st-key-wnba_clear_player button:hover,
 .st-key-clear_player_x button:hover {
     color: #ffd7dd !important;
     background: rgba(240,108,125,0.08) !important;
@@ -4602,7 +4586,6 @@ ul[role="listbox"] li {
 }
 
 .st-key-mlb_analyze button,
-.st-key-wnba_analyze button,
 .st-key-fetch button,
 .st-key-run_edge_scanner button {
     min-height: 50px !important;
@@ -5938,7 +5921,6 @@ div[data-testid="stToast"] {
         font-size: 0.82rem !important;
     }
     .st-key-mlb_analyze,
-    .st-key-wnba_analyze,
     .st-key-analyze_prop_main,
     .st-key-run_edge_scanner {
         position: sticky !important;
@@ -5953,7 +5935,6 @@ div[data-testid="stToast"] {
         scroll-margin-bottom: var(--v8-safe-bottom) !important;
     }
     body:has(input:focus) .st-key-mlb_analyze,
-    body:has(input:focus) .st-key-wnba_analyze,
     body:has(input:focus) .st-key-analyze_prop_main,
     body:has(input:focus) .st-key-run_edge_scanner {
         position: static !important;
@@ -6096,7 +6077,8 @@ if "session_id" not in st.session_state:
     import uuid
     st.session_state.session_id = str(uuid.uuid4())
 
-_VALID_SPORTS = {"nba", "mlb", "wnba", "edge"}
+_ANALYZER_SPORTS = {"nba", "mlb"}
+_VALID_SPORTS = _ANALYZER_SPORTS | {"edge"}
 _VALID_VIEWS = {"analyze", "edge", "picks", "results"}
 try:
     _url_sport = st.query_params.get("sport", "")
@@ -6118,7 +6100,7 @@ _default_active_view = (
     "edge" if _default_active_sport == "edge" else "analyze"
 )
 _default_analyzer_sport = (
-    _default_active_sport if _default_active_sport in {"nba", "mlb", "wnba"} else "mlb"
+    _default_active_sport if _default_active_sport in _ANALYZER_SPORTS else "mlb"
 )
 
 for key, default in [
@@ -6127,8 +6109,6 @@ for key, default in [
     ("recent_players", []), ("supabase_loaded", False), ("show_share", False),
     ("active_sport", _default_active_sport), ("edge_results", []), ("edge_running", False), ("edge_manual_props", []), ("edge_manual_props", []), ("edge_jump_player", None), ("edge_jump_pitcher", None), ("edge_jump_line", None), ("edge_jump_side", "Over"), ("edge_jump_prop", "Strikeouts"),
     ("edge_scan_input_rows", []), ("edge_scanner_debug_report", ""),
-    ("wnba_jump_player", None), ("wnba_jump_line", None),
-    ("wnba_jump_side", "Over"), ("wnba_jump_stat", "Points"),
     ("runtime_debug_errors", []), ("runtime_metrics", {}),
     ("model_predictions", []), ("model_predictions_loaded", False),
     ("model_learning_settle_date", ""),
@@ -6140,6 +6120,18 @@ for key, default in [
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
+
+# WNBA is retired from the product surface. Keep its durable Supabase history
+# intact, but never restore a stale WNBA route or session shortlist.
+if str(st.session_state.get("active_sport", "")).lower() == "wnba":
+    st.session_state.active_sport = "mlb"
+if str(st.session_state.get("last_analyzer_sport", "")).lower() == "wnba":
+    st.session_state.last_analyzer_sport = "mlb"
+if "parlay_legs" in st.session_state:
+    st.session_state.parlay_legs = [
+        leg for leg in (st.session_state.get("parlay_legs", []) or [])
+        if str(leg.get("sport", "")).upper() != "WNBA"
+    ]
 
 
 def persist_active_sport(sport: str) -> None:
@@ -6300,7 +6292,7 @@ def player_typeahead(label: str, options: list, key: str,
         pinned_sport = str(
             sport or st.session_state.get("active_sport", "mlb")
         ).strip().lower()
-        if pinned_sport not in {"nba", "mlb", "wnba"}:
+        if pinned_sport not in _ANALYZER_SPORTS:
             pinned_sport = "mlb"
         previous = st.session_state.get(f"{key}__committed")
         selected = st.session_state.get(key)
@@ -6310,9 +6302,7 @@ def player_typeahead(label: str, options: list, key: str,
         st.session_state[f"{key}__committed"] = selected
         if selected == previous:
             return
-        if pinned_sport == "wnba":
-            st.session_state.pop("wnba_last_analysis", None)
-        elif pinned_sport == "nba":
+        if pinned_sport == "nba":
             st.session_state.logs = None
             st.session_state.ai_analysis = None
 
@@ -6386,13 +6376,13 @@ def navigate_to_view(view: str, target: str = "workspace-top") -> None:
     current_sport = str(st.session_state.get("active_sport", "mlb")).lower()
     if view == "analyze":
         analyzer_sport = str(st.session_state.get("last_analyzer_sport", "mlb")).lower()
-        if analyzer_sport not in {"nba", "mlb", "wnba"}:
+        if analyzer_sport not in _ANALYZER_SPORTS:
             analyzer_sport = "mlb"
         st.session_state.active_sport = analyzer_sport
         if target == "workspace-top":
             target = f"{analyzer_sport}-analyzer-controls"
     elif view == "edge":
-        if current_sport in {"nba", "mlb", "wnba"}:
+        if current_sport in _ANALYZER_SPORTS:
             st.session_state.last_analyzer_sport = current_sport
         st.session_state.active_sport = "edge"
         if target == "workspace-top":
@@ -6405,8 +6395,10 @@ def navigate_to_view(view: str, target: str = "workspace-top") -> None:
 def navigate_to_sport(sport: str, target: str) -> None:
     """Single-pass navigation callback used by tabs and analyzer links."""
     sport = str(sport or "").strip().lower()
-    if sport in {"nba", "mlb", "wnba"}:
-        st.session_state.last_analyzer_sport = sport
+    if sport not in _ANALYZER_SPORTS:
+        sport = "mlb"
+        target = "mlb-analyzer-controls"
+    st.session_state.last_analyzer_sport = sport
     st.session_state.active_view = "analyze"
     st.session_state.active_sport = sport
     st.session_state.active_tab = "player"
@@ -6434,18 +6426,15 @@ def open_edge_analyzer(sport: str, player: str, line: float,
         st.session_state.edge_jump_line = line
         st.session_state.edge_jump_side = side
         st.session_state.edge_jump_prop = stat
-    elif sport_key == "wnba":
-        st.session_state.wnba_jump_player = player
-        st.session_state.wnba_jump_line = line
-        st.session_state.wnba_jump_side = side
-        st.session_state.wnba_jump_stat = stat
+    else:
+        return
     navigate_to_sport(sport_key, target)
 
 
 def open_pick_list_analyzer(leg: dict) -> None:
     """Reopen a saved pick in the matching analyzer."""
     sport_key = str(leg.get("sport", "mlb") or "mlb").strip().lower()
-    if sport_key not in {"nba", "mlb", "wnba"}:
+    if sport_key not in _ANALYZER_SPORTS:
         sport_key = "mlb"
     player = str(leg.get("player", ""))
     side = str(leg.get("side", "Over") or "Over")
@@ -6464,11 +6453,6 @@ def open_pick_list_analyzer(leg: dict) -> None:
         st.session_state.edge_jump_line = line
         st.session_state.edge_jump_side = side
         st.session_state.edge_jump_prop = stat
-    else:
-        st.session_state.wnba_jump_player = player
-        st.session_state.wnba_jump_line = line
-        st.session_state.wnba_jump_side = side
-        st.session_state.wnba_jump_stat = stat
     navigate_to_sport(sport_key, f"{sport_key}-analyzer-controls")
 
 
@@ -7639,6 +7623,10 @@ def _learning_line_type_gate_rows(rows: list) -> list:
 
 def render_model_learning_dashboard(predictions: list) -> None:
     """Show selection coverage, calibration, CLV, and segment performance."""
+    predictions = [
+        row for row in (predictions or [])
+        if str(row.get("sport", "")).upper() != "WNBA"
+    ]
     st.markdown(
         "<div class='section-header'>Model Learning Loop</div>",
         unsafe_allow_html=True,
@@ -8529,7 +8517,14 @@ def render_entry_roi_dashboard(entries: list) -> None:
     """Show normalized realized returns for exact entries the user marked entered."""
     import html as _html
 
-    entries = list(entries or [])
+    entries = [
+        entry for entry in (entries or [])
+        if str(entry.get("sport", "")).upper() != "WNBA"
+        and not any(
+            str(leg.get("sport", "")).upper() == "WNBA"
+            for leg in (entry.get("legs", []) or [])
+        )
+    ]
     settled_entries = [entry for entry in entries if entry.get("status") == "Settled"]
     pending_entries = [entry for entry in entries if entry.get("status") == "Pending"]
     review_entries = [entry for entry in entries if entry.get("status") == "Needs review"]
@@ -8639,10 +8634,25 @@ def render_results_page() -> None:
         unsafe_allow_html=True,
     )
 
-    tracker = st.session_state.get("tracker", []) or []
+    tracker_store = st.session_state.get("tracker", []) or []
+    tracker_pairs = [
+        (index, entry) for index, entry in enumerate(tracker_store)
+        if str(entry.get("Sport", entry.get("sport", ""))).upper() != "WNBA"
+    ]
+    tracker = [entry for _, entry in tracker_pairs]
     with st.spinner("Loading results history..."):
-        predictions = load_model_predictions()
-        entered_slips = load_entry_ledger()
+        predictions = [
+            row for row in load_model_predictions()
+            if str(row.get("sport", "")).upper() != "WNBA"
+        ]
+        entered_slips = [
+            entry for entry in load_entry_ledger()
+            if str(entry.get("sport", "")).upper() != "WNBA"
+            and not any(
+                str(leg.get("sport", "")).upper() == "WNBA"
+                for leg in (entry.get("legs", []) or [])
+            )
+        ]
     # Outcome settlement is intentionally user-triggered. Performing dozens of
     # external API checks before rendering made this destination appear frozen.
     try:
@@ -8662,7 +8672,7 @@ def render_results_page() -> None:
             "Refresh model outcomes", key="learning_refresh_outcomes",
             use_container_width=True,
         ):
-            with st.spinner("Checking the oldest unresolved MLB and WNBA decisions..."):
+            with st.spinner("Checking the oldest unresolved MLB decisions..."):
                 outcome_stats = settle_model_predictions(predictions, max_events=40)
                 entry_stats = settle_entry_ledger(entered_slips, predictions)
             st.toast(
@@ -8729,20 +8739,20 @@ def render_results_page() -> None:
         if st.button("Refresh outcomes", key="results_refresh", use_container_width=True):
             updated = 0
             with st.spinner("Checking pending outcomes..."):
-                for i, entry in enumerate(tracker):
+                for tracker_index, entry in tracker_pairs:
                     if entry.get("Result", "Pending") != "Pending":
                         continue
                     detected = auto_detect_result(entry)
                     if detected:
-                        _set_tracker_result(i, detected)
-                        tracker[i]["auto_detected"] = True
+                        _set_tracker_result(tracker_index, detected)
+                        tracker_store[tracker_index]["auto_detected"] = True
                         updated += 1
             st.toast(f"Updated {updated} outcome{'s' if updated != 1 else ''}.")
             if updated:
                 st.rerun()
 
     visible_entries = [
-        (i, entry) for i, entry in enumerate(tracker)
+        (i, entry) for i, entry in tracker_pairs
         if sport_filter == "All sports" or str(entry.get("Sport", "Unknown") or "Unknown") == sport_filter
     ]
     for i, entry in visible_entries:
@@ -14241,7 +14251,7 @@ if _active_view == "edge" and st.session_state.active_sport != "edge":
     persist_active_sport("edge")
 elif _active_view == "analyze" and st.session_state.active_sport == "edge":
     _restore_sport = str(st.session_state.get("last_analyzer_sport", "mlb")).lower()
-    persist_active_sport(_restore_sport if _restore_sport in {"nba", "mlb", "wnba"} else "mlb")
+    persist_active_sport(_restore_sport if _restore_sport in _ANALYZER_SPORTS else "mlb")
 
 with st.container(key="workspace_navigation"):
     _nav1, _nav2, _nav3, _nav4 = st.columns(4)
@@ -14287,7 +14297,7 @@ if _active_view == "results":
 
 if _active_view == "analyze":
     with st.container(key="analyzer_sport_navigation"):
-        _sp1, _sp2, _sp3 = st.columns(3)
+        _sp1, _sp2 = st.columns(2)
         with _sp1:
             st.button(
                 "NBA", key="sport_nba", use_container_width=True,
@@ -14301,13 +14311,6 @@ if _active_view == "analyze":
                 icon=":material/sports_baseball:",
                 type="primary" if st.session_state.active_sport == "mlb" else "secondary",
                 on_click=navigate_to_sport, args=("mlb", "mlb-analyzer-controls"),
-            )
-        with _sp3:
-            st.button(
-                "WNBA", key="sport_wnba", use_container_width=True,
-                icon=":material/sports_basketball:",
-                type="primary" if st.session_state.active_sport == "wnba" else "secondary",
-                on_click=navigate_to_sport, args=("wnba", "wnba-analyzer-controls"),
             )
 
     if st.session_state.get("edge_return_available"):
@@ -14357,7 +14360,6 @@ def render_runtime_diagnostics() -> None:
         ("supabase", "Supabase Cache"),
         ("nba_logs", "NBA Logs"),
         ("nba_context", "NBA Context"),
-        ("wnba_rosters", "WNBA Rosters"),
     ]:
         _m = _metrics.get(_name, {})
         _detail = _m.get("detail", "not checked")
@@ -28614,35 +28616,21 @@ if st.session_state.active_sport == "edge":
         <div class='v55-kicker'>V8 Edge Board</div>
         <div class='v55-title'>Find the strongest available edges.</div>
         <div class='v55-subcopy'>
-            Scan MLB and WNBA lines, then rank the shortlist after calibration and risk checks.
+            Scan MLB lines, then rank the shortlist after calibration and risk checks.
         </div>
     </div>
     """, unsafe_allow_html=True)
 
     # Controls
     with st.container(key="edge_scanner_controls"):
-        _ec0, _ec1, _ec2, _ec3, _ec4, _ec5 = st.columns([0.7, 1.2, 0.8, 0.9, 1.05, 0.9])
-        with _ec0:
-            _edge_sport = st.selectbox(
-                "Sport",
-                ["MLB", "WNBA"],
-                key="edge_sport_filter",
-            )
+        _edge_sport = "MLB"
+        _ec1, _ec2, _ec3, _ec4, _ec5 = st.columns([1.2, 0.8, 0.9, 1.05, 0.9])
         with _ec1:
-            if _edge_sport == "MLB" and not st.session_state.get("mlb_edge_controls_v4"):
+            if not st.session_state.get("mlb_edge_controls_v4"):
                 st.session_state.edge_stat_filter = "Strikeouts"
                 st.session_state.edge_side_filter = "All sides"
                 st.session_state.mlb_edge_controls_v4 = True
-            if _edge_sport == "WNBA" and not st.session_state.get("wnba_edge_controls_v2"):
-                st.session_state.edge_stat_filter = "All WNBA Props"
-                st.session_state.edge_side_filter = "All sides"
-                st.session_state.wnba_edge_controls_v2 = True
-            _stat_options = (
-                ["All MLB Props", "Strikeouts", "Hitter Fantasy Score"]
-                if _edge_sport == "MLB" else
-                ["All WNBA Props", "Points", "Rebounds", "Assists", "3-Pointers Made",
-                 "Pts + Reb + Ast", "Points + Rebounds", "Points + Assists", "Rebounds + Assists"]
-            )
+            _stat_options = ["All MLB Props", "Strikeouts", "Hitter Fantasy Score"]
             if st.session_state.get("edge_stat_filter") not in _stat_options:
                 st.session_state.edge_stat_filter = _stat_options[0]
             _edge_stat = st.selectbox(
@@ -28863,22 +28851,6 @@ if st.session_state.active_sport == "edge":
             "Strikeouts":           is_mlb_strikeout_prop,
             "Hitter Fantasy Score":  is_mlb_hitter_fantasy_prop,
             "All MLB Props":         lambda s: normalize_mlb_pitcher_prop_stat(s) in ("Strikeouts", "Hitter Fantasy Score"),
-            "All WNBA Props":        is_wnba_supported_prop,
-            "Points":                lambda s: normalize_wnba_prop_stat(s) == "Points",
-            "Rebounds":             lambda s: normalize_wnba_prop_stat(s) == "Rebounds",
-            "Assists":              lambda s: normalize_wnba_prop_stat(s) == "Assists",
-            "3-Pointers Made":      lambda s: normalize_wnba_prop_stat(s) == "3-Pointers Made",
-            "Pts + Reb + Ast":      lambda s: normalize_wnba_prop_stat(s) == "Pts + Reb + Ast",
-            "Points + Rebounds":    lambda s: normalize_wnba_prop_stat(s) == "Points + Rebounds",
-            "Points + Assists":     lambda s: normalize_wnba_prop_stat(s) == "Points + Assists",
-            "Rebounds + Assists":   lambda s: normalize_wnba_prop_stat(s) == "Rebounds + Assists",
-            "Steals":               lambda s: "steal" in s.lower(),
-            "Blocks":               lambda s: "block" in s.lower(),
-            "Hits":                 lambda s: s.lower() == "hits",
-            "Total Bases":          lambda s: s.lower() == "total bases",
-            "Hits+Runs+RBIs":       lambda s: s.lower() in ("hits+runs+rbis", "h+r+rbi"),
-            "Earned Runs Allowed":  lambda s: s.lower() == "earned runs allowed",
-            "All Stats":            lambda s: True,
         }
         _stat_fn = _STAT_MAP.get(_edge_stat, lambda s: True)
         _before_filter = len(_filtered)
@@ -28887,26 +28859,19 @@ if st.session_state.active_sport == "edge":
             "Market filter", _before_filter, len(_filtered), f"Kept {_edge_stat}"
         )
         _before_filter = len(_filtered)
-        if _edge_sport == "MLB":
-            _filtered = [
-                p for p in _filtered
-                if is_sane_mlb_pitcher_prop_line(p.get("stat", ""), p.get("line"))
-                and (
-                    not is_mlb_strikeout_prop(p.get("stat", ""))
-                    or not p.get("pos")
-                    or str(p.get("pos", "")).upper() in ("P", "SP", "RP", "LHP", "RHP")
-                )
-                and (
-                    not is_mlb_hitter_fantasy_prop(p.get("stat", ""))
-                    or str(p.get("pos", "")).upper() not in ("P", "SP", "RP", "LHP", "RHP")
-                )
-            ]
-        else:
-            _filtered = [
-                p for p in _filtered
-                if is_wnba_supported_prop(p.get("stat", ""))
-                and is_sane_wnba_prop_line(p.get("stat", ""), p.get("line"))
-            ]
+        _filtered = [
+            p for p in _filtered
+            if is_sane_mlb_pitcher_prop_line(p.get("stat", ""), p.get("line"))
+            and (
+                not is_mlb_strikeout_prop(p.get("stat", ""))
+                or not p.get("pos")
+                or str(p.get("pos", "")).upper() in ("P", "SP", "RP", "LHP", "RHP")
+            )
+            and (
+                not is_mlb_hitter_fantasy_prop(p.get("stat", ""))
+                or str(p.get("pos", "")).upper() not in ("P", "SP", "RP", "LHP", "RHP")
+            )
+        ]
         _record_audit_stage(
             "Line and role validation",
             _before_filter,
@@ -28954,10 +28919,7 @@ if st.session_state.active_sport == "edge":
         _before_filter = len(_filtered)
         _deduped = {}
         for p in _filtered:
-            _norm_stat = (
-                normalize_mlb_pitcher_prop_stat(p.get("stat", ""))
-                if _edge_sport == "MLB" else normalize_wnba_prop_stat(p.get("stat", ""))
-            )
+            _norm_stat = normalize_mlb_pitcher_prop_stat(p.get("stat", ""))
             p["stat"] = _norm_stat
             _variant = "reduced" if is_reduced_payout_line(p) else "standard"
             _event_key = pp_event_key(p) or "upcoming"
@@ -29010,13 +28972,6 @@ if st.session_state.active_sport == "edge":
 
         _mlb_k_count = sum(1 for p in _filtered if p.get("sport") == "MLB" and is_mlb_strikeout_prop(p.get("stat", "")))
         _mlb_hfs_count = sum(1 for p in _filtered if p.get("sport") == "MLB" and is_mlb_hitter_fantasy_prop(p.get("stat", "")))
-        _wnba_market_counts = {}
-        for p in _filtered:
-            if p.get("sport") == "WNBA":
-                _market = normalize_wnba_prop_stat(p.get("stat", ""))
-                _wnba_market_counts[_market] = _wnba_market_counts.get(_market, 0) + 1
-        _wnba_supported_count = sum(_wnba_market_counts.values())
-
         _scan_audit = {
             "sport": _edge_sport,
             "market_filter": _edge_stat,
@@ -29086,8 +29041,6 @@ if st.session_state.active_sport == "edge":
             "All MLB Props": "Pitcher Strikeouts + Hitter Fantasy Score",
             "Strikeouts": "Pitcher Strikeouts",
             "Hitter Fantasy Score": "Hitter Fantasy Score",
-            "Points": "WNBA Points",
-            "All WNBA Props": "All supported WNBA props",
         }.get(_edge_stat, _edge_stat)
         st.info(f"Analyzing {len(_filtered)} props ({_pp_stat_actual}) — {_edge_sport}...")
 
@@ -29211,59 +29164,6 @@ if st.session_state.active_sport == "edge":
                         ) if _side_results else None
                     if _norm_stat not in ("Strikeouts", "Hitter Fantasy Score"):
                         return None
-                if prop["sport"] == "WNBA":
-                    _market = normalize_wnba_prop_stat(prop.get("stat", ""))
-                    if is_wnba_supported_prop(_market):
-                        if is_reduced_payout_line(prop):
-                            # Reduced-payout lines are favorable only to the Over.
-                            # Standard lines still evaluate both directions.
-                            _requested_sides = ("Over",)
-                        else:
-                            _requested_sides = (
-                                ("Over",) if _edge_side == "Overs" else
-                                ("Under",) if _edge_side == "Unders" else
-                                ("Over", "Under")
-                            )
-                        _sides = [
-                            run_wnba_edge_check(
-                                prop["player"], prop["line"], _market, _side,
-                                prop.get("team", ""),
-                                market_context={
-                                    "start_time": prop.get("start_time", ""),
-                                    "game_id": prop.get("game_id", ""),
-                                    "projection_id": prop.get("projection_id", ""),
-                                    "line_verification_required": bool(
-                                        prop.get("line_verification_required", False)
-                                    ),
-                                    "is_goblin": bool(prop.get("is_goblin")),
-                                    "is_promo": bool(prop.get("is_promo")),
-                                    "adjusted_odds": bool(prop.get("adjusted_odds")),
-                                    "odds_type": prop.get("odds_type", "standard"),
-                                    "source": "prizepicks",
-                                    "line_verified": bool(
-                                        prop.get("slate_source", "live") == "live"
-                                        and not prop.get("line_verification_required", False)
-                                        and bool(pp_event_key(prop))
-                                        and not prop.get("is_goblin")
-                                        and not prop.get("is_promo")
-                                        and not is_reduced_payout_line(prop)
-                                    ),
-                                },
-                            )
-                            for _side in _requested_sides
-                        ]
-                        _valid_sides = [
-                            result for result in _sides
-                            if result and not result.get("_rejected")
-                        ]
-                        if _valid_sides:
-                            return max(
-                                _valid_sides,
-                                key=lambda result: (
-                                    result["adj"], result["confidence"]
-                                ),
-                            )
-                        return next((result for result in _sides if result), None)
             except Exception as _model_err:
                 record_debug_error(
                     f"{str(prop.get('sport', 'edge')).lower()}.edge.model.{prop.get('player', 'unknown')}",
@@ -29564,12 +29464,7 @@ if st.session_state.active_sport == "edge":
             st.session_state.get("session_id", ""),
         )
         st.session_state.edge_results = _results
-        if _edge_sport == "MLB":
-            _slate_bits = f"{_mlb_k_count} K props, {_mlb_hfs_count} Hitter FS props"
-        elif _edge_sport == "WNBA":
-            _slate_bits = ", ".join(f"{count} {market}" for market, count in sorted(_wnba_market_counts.items()))
-        else:
-            _slate_bits = f"{_mlb_k_count} K props, {_mlb_hfs_count} Hitter FS props, {_wnba_supported_count} WNBA props"
+        _slate_bits = f"{_mlb_k_count} K props, {_mlb_hfs_count} Hitter FS props"
         _top_rejections = sorted(
             _rejection_counts.items(), key=lambda item: (-item[1], item[0])
         )[:3]
@@ -29664,28 +29559,13 @@ if st.session_state.active_sport == "edge":
     _results = [
         r for r in _results
         if r.get("sport") == _edge_sport
-        and (
-            (
-                r.get("sport") == "MLB"
-                and normalize_mlb_pitcher_prop_stat(r.get("stat", "")) in ("Strikeouts", "Hitter Fantasy Score")
-                and is_sane_mlb_pitcher_prop_line(r.get("stat", ""), r.get("line"))
-            )
-            or (
-                r.get("sport") == "WNBA"
-                and is_wnba_supported_prop(r.get("stat", ""))
-                and is_sane_wnba_prop_line(r.get("stat", ""), r.get("line"))
-            )
-        )
+        and normalize_mlb_pitcher_prop_stat(r.get("stat", "")) in ("Strikeouts", "Hitter Fantasy Score")
+        and is_sane_mlb_pitcher_prop_line(r.get("stat", ""), r.get("line"))
     ]
     if _edge_stat == "Strikeouts":
         _results = [r for r in _results if is_mlb_strikeout_prop(r.get("stat", ""))]
     elif _edge_stat == "Hitter Fantasy Score":
         _results = [r for r in _results if is_mlb_hitter_fantasy_prop(r.get("stat", ""))]
-    elif _edge_sport == "WNBA" and _edge_stat != "All WNBA Props":
-        _results = [
-            r for r in _results
-            if r.get("sport") == "WNBA" and normalize_wnba_prop_stat(r.get("stat", "")) == _edge_stat
-        ]
     if _edge_side == "Overs":
         _results = [r for r in _results if r.get("side", "Over") == "Over"]
     elif _edge_side == "Unders":
@@ -29883,7 +29763,7 @@ if st.session_state.active_sport == "edge":
                 )
 
             # ── Payout-aware Best Entry Builder ───────────────────────────
-            if _edge_sport in ("MLB", "WNBA"):
+            if _edge_sport == "MLB":
                 _entry_control_1, _entry_control_2 = st.columns(2)
                 with _entry_control_1:
                     _entry_target_size = st.selectbox(
@@ -30710,7 +30590,7 @@ if st.session_state.active_sport == "edge":
             "<div style='text-align:center;color:#6b7f96;font-family:JetBrains Mono,"
             "monospace;font-size:0.75rem;padding:2rem;'>"
             f"No Edge Scanner candidates to display. {_scan_summary}.{_filter_note} "
-            f"Try {'All WNBA Props' if _edge_sport == 'WNBA' else 'All MLB Props'}, "
+            "Try All MLB Props, "
             "set minimum edge to Any edge, or clear cache and scan again.</div>",
             unsafe_allow_html=True
         )
@@ -30725,7 +30605,7 @@ if st.session_state.active_sport == "edge":
             "color:#6b7f96;line-height:1.8;'>"
             "Hit <strong style='color:#00c4cc;'>Scan for Edge Plays</strong> to pull props "
             "from PrizePicks and rank only calibrated shortlist candidates.<br>"
-            "Best time to run: after starting lineups/probables and WNBA injury news are clearer."
+            "Best time to run: after probable starters and batting orders are clearer."
             "</div></div>",
             unsafe_allow_html=True
         )
