@@ -6005,6 +6005,243 @@ div[data-testid="stToast"] {
     .mlb-decision-card,
     .edge-card-v55 { animation: none !important; }
 }
+
+/* Analyzer interaction pass: one-tap submission, compact state, and safer sizing. */
+*, *::before, *::after { box-sizing: border-box; }
+.main .block-container,
+.block-container,
+[data-testid="stAppViewBlockContainer"],
+[data-testid="stHorizontalBlock"],
+[data-testid="stColumn"],
+.element-container,
+.unified-decision-card,
+.secondary-decision-details,
+.mlb-decision-card {
+    min-width: 0 !important;
+    max-width: 100% !important;
+}
+.st-key-analyzer_sport_navigation div[data-testid="stHorizontalBlock"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+}
+
+/* BaseWeb renders autocomplete menus in a portal, outside the input wrapper. */
+div[data-baseweb="popover"],
+div[data-baseweb="popover"] > div,
+div[data-baseweb="menu"],
+[role="listbox"] {
+    color: #e7f0f6 !important;
+    background: #0d151c !important;
+    border-color: rgba(114,226,231,0.22) !important;
+}
+[role="listbox"] [role="option"],
+div[data-baseweb="menu"] [role="option"] {
+    min-height: 46px !important;
+    color: #dce8ef !important;
+    background: #0d151c !important;
+}
+[role="listbox"] [role="option"]:hover,
+[role="listbox"] [role="option"][aria-selected="true"],
+div[data-baseweb="menu"] [role="option"]:hover {
+    color: #efffff !important;
+    background: #173038 !important;
+}
+
+.st-key-mlb_analyzer_form {
+    margin-bottom: 0.5rem !important;
+    padding: 0.8rem !important;
+    background: #0b1117 !important;
+    border: 1px solid var(--line-soft) !important;
+    border-radius: 8px !important;
+}
+.st-key-mlb_player_search_row div[data-testid="stHorizontalBlock"] {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) 48px !important;
+    gap: 7px !important;
+    align-items: end !important;
+}
+.st-key-mlb_player_search_row div[data-testid="stColumn"],
+.st-key-mlb_market_controls div[data-testid="stColumn"] {
+    width: 100% !important;
+    min-width: 0 !important;
+    padding: 0 !important;
+}
+.st-key-mlb_clear_pitcher button {
+    width: 48px !important;
+    min-width: 48px !important;
+    padding: 0 !important;
+    color: #9fb0bf !important;
+    background: #101820 !important;
+    border-color: var(--line-strong) !important;
+    box-shadow: none !important;
+}
+.st-key-mlb_market_controls div[data-testid="stHorizontalBlock"] {
+    gap: 8px !important;
+    align-items: end !important;
+}
+.mlb-analysis-summary {
+    display: grid;
+    gap: 5px;
+    min-width: 0;
+}
+.mlb-analysis-summary-kicker,
+.unified-decision-meta {
+    color: #72dfe4;
+    font-family: var(--font-mono) !important;
+    font-size: 0.57rem;
+    font-weight: 800;
+    line-height: 1.35;
+    text-transform: uppercase;
+}
+.mlb-analysis-summary strong {
+    color: var(--text);
+    font-family: var(--font-display) !important;
+    font-size: 1rem;
+    line-height: 1.25;
+}
+.mlb-analysis-summary span {
+    color: #8fa2b3;
+    font-size: 0.82rem;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+}
+.mlb-analysis-summary-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-top: 2px;
+}
+.mlb-analysis-summary-tags b,
+.unified-decision-meta {
+    display: inline-flex;
+    align-items: center;
+    width: fit-content;
+    min-height: 24px;
+    padding: 3px 7px;
+    color: #92a5b5;
+    background: #101820;
+    border: 1px solid var(--line-soft);
+    border-radius: 5px;
+    font-family: var(--font-mono) !important;
+    font-size: 0.56rem;
+    font-weight: 750;
+}
+.st-key-mlb_edit_analysis button {
+    color: #b9f5f7 !important;
+    background: #101820 !important;
+    border-color: rgba(114,226,231,0.25) !important;
+    box-shadow: none !important;
+}
+.analysis-progress {
+    position: relative;
+    margin: 0.5rem 0 0.75rem;
+    padding: 0.85rem 0.9rem 0.9rem;
+    overflow: hidden;
+    color: #a9bbc9;
+    background: #0d151c;
+    border: 1px solid var(--line-soft);
+    border-radius: 8px;
+    font-size: 0.82rem;
+    font-weight: 700;
+}
+.analysis-progress b {
+    display: block;
+    margin-bottom: 3px;
+    color: var(--text);
+    font-size: 0.9rem;
+}
+.analysis-progress::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    width: 42%;
+    height: 3px;
+    background: var(--accent);
+    animation: analyzer-progress 1.1s ease-in-out infinite alternate;
+}
+@keyframes analyzer-progress {
+    from { transform: translateX(-35%); }
+    to { transform: translateX(170%); }
+}
+.analyzer-scroll-anchor,
+.mlb-section-anchor { scroll-margin-top: 18px !important; }
+.unified-decision-meta { margin-top: 0.55rem; }
+
+/* The primary navigation already exposes Picks; keep this status in document flow. */
+.pick-tray-v63 {
+    position: static !important;
+    left: auto !important;
+    right: auto !important;
+    bottom: auto !important;
+    width: 100% !important;
+    margin: 0 0 0.6rem !important;
+    transform: none !important;
+}
+
+@media (max-width: 768px) {
+    .st-key-analyzer_sport_navigation div[data-testid="stHorizontalBlock"] {
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    }
+    .st-key-mlb_analyzer_form { padding: 0.65rem !important; }
+    .st-key-mlb_market_controls div[data-testid="stHorizontalBlock"] {
+        display: grid !important;
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+        gap: 8px !important;
+    }
+    .st-key-mlb_market_controls div[data-testid="stColumn"]:first-child {
+        grid-column: 1 / -1 !important;
+    }
+    .st-key-mlb_analysis_summary div[data-testid="stHorizontalBlock"] {
+        display: grid !important;
+        grid-template-columns: minmax(0, 1fr) auto !important;
+        gap: 8px !important;
+        align-items: center !important;
+    }
+    .st-key-mlb_analysis_summary div[data-testid="stColumn"] {
+        width: 100% !important;
+        min-width: 0 !important;
+        padding: 0 !important;
+    }
+    .st-key-mlb_edit_analysis button {
+        width: auto !important;
+        min-width: 76px !important;
+        min-height: 42px !important;
+        padding: 0.45rem 0.65rem !important;
+    }
+    /* Keep analytical cards scannable instead of stacking every metric singly. */
+    div[data-testid="stHorizontalBlock"]:has(.stat-card) {
+        display: grid !important;
+        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+        gap: 7px !important;
+    }
+    div[data-testid="stHorizontalBlock"]:has(.stat-card) > div[data-testid="stColumn"] {
+        width: 100% !important;
+        min-width: 0 !important;
+        padding: 0 !important;
+    }
+    .stat-card {
+        min-height: 104px !important;
+        margin-bottom: 0 !important;
+        padding: 0.72rem !important;
+    }
+    .stat-value { font-size: 1.45rem !important; }
+    .stat-hint { font-size: 0.68rem !important; line-height: 1.4 !important; }
+    .pick-tray-v63 { display: none !important; }
+}
+
+@media (min-width: 1100px) {
+    .st-key-workspace_navigation { width: 98px !important; }
+    .st-key-workspace_navigation button,
+    .st-key-workspace_navigation button p {
+        white-space: nowrap !important;
+        overflow: hidden !important;
+        word-break: normal !important;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .analysis-progress::after { animation: none !important; width: 100% !important; }
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -6023,6 +6260,7 @@ def render_entry_decision(
     probability_label: str = "Model chance",
     evidence_label: str = "Pick confidence",
     consistency_label: str = "Output stability",
+    line_type_label: Optional[str] = None,
 ) -> None:
     """Render one presentation-only decision index without changing model output."""
     import html as _html
@@ -6038,6 +6276,10 @@ def render_entry_decision(
     safe_probability_label = _html.escape(str(probability_label or "Model chance"))
     safe_evidence_label = _html.escape(str(evidence_label or "Pick confidence"))
     safe_consistency_label = _html.escape(str(consistency_label or "Output stability"))
+    line_type_meta = (
+        f"<div class='unified-decision-meta'>{_html.escape(str(line_type_label))}</div>"
+        if line_type_label else ""
+    )
     history_metric = ""
     if history_label and history_value:
         history_metric = (
@@ -6055,6 +6297,7 @@ def render_entry_decision(
         f"<div class='unified-decision-action'>{_html.escape(action)}</div>"
         f"<div class='unified-decision-direction'>{safe_direction}</div>"
         f"<div class='unified-decision-note'>{safe_note}</div>"
+        f"{line_type_meta}"
         f"</div>"
         f"<details class='unified-score-details'><summary>Supporting evidence</summary>"
         f"<div class='unified-decision-evidence'>"
@@ -6107,7 +6350,7 @@ for key, default in [
     ("logs", None), ("ai_analysis", None), ("ai_error", None),
     ("defense_data", None), ("tracker", []), ("active_tab", "player"),
     ("recent_players", []), ("supabase_loaded", False), ("show_share", False),
-    ("active_sport", _default_active_sport), ("edge_results", []), ("edge_running", False), ("edge_manual_props", []), ("edge_manual_props", []), ("edge_jump_player", None), ("edge_jump_pitcher", None), ("edge_jump_line", None), ("edge_jump_side", "Over"), ("edge_jump_prop", "Strikeouts"),
+    ("active_sport", _default_active_sport), ("edge_results", []), ("edge_running", False), ("edge_manual_props", []), ("edge_manual_props", []), ("edge_jump_player", None), ("edge_jump_pitcher", None), ("edge_jump_line", None), ("edge_jump_side", "Over"), ("edge_jump_prop", "Strikeouts"), ("edge_jump_line_type", "Line type unverified"),
     ("edge_scan_input_rows", []), ("edge_scanner_debug_report", ""),
     ("runtime_debug_errors", []), ("runtime_metrics", {}),
     ("model_predictions", []), ("model_predictions_loaded", False),
@@ -6117,6 +6360,7 @@ for key, default in [
     ("active_view", _default_active_view),
     ("last_analyzer_sport", _default_analyzer_sport),
     ("edge_return_available", False), ("edge_viewed", []),
+    ("mlb_analysis_request", None), ("mlb_analysis_editing", True),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
@@ -6305,6 +6549,9 @@ def player_typeahead(label: str, options: list, key: str,
         if pinned_sport == "nba":
             st.session_state.logs = None
             st.session_state.ai_analysis = None
+        elif pinned_sport == "mlb":
+            st.session_state.mlb_analysis_request = None
+            st.session_state.mlb_analysis_editing = True
 
     raw = st.selectbox(
         label,
@@ -6407,7 +6654,8 @@ def navigate_to_sport(sport: str, target: str) -> None:
 
 
 def open_edge_analyzer(sport: str, player: str, line: float,
-                       side: str, stat: str) -> None:
+                       side: str, stat: str,
+                       line_type: str = "Line type unverified") -> None:
     """Open an Edge result in its analyzer without an extra rerun."""
     sport_key = str(sport or "").strip().lower()
     target = f"{sport_key}-analyzer-controls"
@@ -6426,6 +6674,7 @@ def open_edge_analyzer(sport: str, player: str, line: float,
         st.session_state.edge_jump_line = line
         st.session_state.edge_jump_side = side
         st.session_state.edge_jump_prop = stat
+        st.session_state.edge_jump_line_type = line_type
     else:
         return
     navigate_to_sport(sport_key, target)
@@ -6453,6 +6702,12 @@ def open_pick_list_analyzer(leg: dict) -> None:
         st.session_state.edge_jump_line = line
         st.session_state.edge_jump_side = side
         st.session_state.edge_jump_prop = stat
+        st.session_state.edge_jump_line_type = (
+            leg.get("line_type")
+            or ("Reduced-payout line" if leg.get("reduced_payout") else "")
+            or ("Standard full-payout line" if leg.get("odds_type") else "")
+            or "Line type unverified"
+        )
     navigate_to_sport(sport_key, f"{sport_key}-analyzer-controls")
 
 
@@ -6466,6 +6721,44 @@ def clear_player_search(widget_key: str, sport: str,
     st.session_state.active_view = "analyze"
     st.session_state.active_sport = sport
     st.session_state.last_analyzer_sport = sport
+
+
+def commit_mlb_analysis(player: str, prop: str, line: float, side: str,
+                        line_type: str = "Manual line · payout unverified") -> None:
+    """Persist an MLB submission so one tap survives every following rerun."""
+    player = str(player or "").strip()
+    if not player:
+        return
+    prop = str(prop or "Strikeouts")
+    side = str(side or "Over")
+    st.session_state.mlb_analysis_request = {
+        "player": player,
+        "prop": prop,
+        "line": float(line),
+        "side": side,
+        "line_type": str(line_type or "Line type unverified"),
+    }
+    st.session_state.mlb_analysis_editing = False
+    st.session_state.active_view = "analyze"
+    st.session_state.active_sport = "mlb"
+    st.session_state.last_analyzer_sport = "mlb"
+    set_navigation_scroll_target("mlb-result")
+
+
+def edit_mlb_analysis() -> None:
+    """Restore a completed MLB request to editable controls."""
+    request = st.session_state.get("mlb_analysis_request") or {}
+    if not request:
+        st.session_state.mlb_analysis_editing = True
+        return
+    st.session_state.mlb_analysis_editing = True
+    st.session_state.mlb_pitcher_key = st.session_state.get("mlb_pitcher_key", 0) + 1
+    st.session_state["_mlb_prefill_name"] = request.get("player", "")
+    st.session_state["mlb_prop_type"] = request.get("prop", "Strikeouts")
+    st.session_state.pop("mlb_line", None)
+    st.session_state["_mlb_edit_line"] = float(request.get("line", 5.5))
+    st.session_state["mlb_side"] = request.get("side", "Over")
+    set_navigation_scroll_target("mlb-analyzer-controls")
 
 
 def select_recent_nba_player(player: str) -> None:
@@ -8309,6 +8602,8 @@ def render_sticky_pick_tray() -> None:
     """Fixed bottom shortlist status for mobile pick-board workflow."""
     legs = st.session_state.get("parlay_legs", []) or []
     count = len(legs)
+    if count == 0:
+        return
     confidences = []
     for leg in legs:
         try:
@@ -8322,10 +8617,7 @@ def render_sticky_pick_tray() -> None:
         if "watch" in str(leg.get("verdict", "")).lower()
         or "trap" in str(leg.get("verdict", "")).lower()
     )
-    if count == 0:
-        risk_label, risk_class = "Ready", ""
-        sub = "Add candidates from Edge or an analyzer"
-    elif weak or watch:
+    if weak or watch:
         risk_label, risk_class = "High", "high"
         sub = f"{count}/6 selected · review weak legs"
     elif avg_conf >= 80 and count <= 4:
@@ -8970,12 +9262,14 @@ NBA_TEAM_IDS = [
 @st.cache_data(ttl=21600, show_spinner=False)
 def espn_get_all_players(_date: str = None) -> List[dict]:
     """
-    Load all active NBA players by fetching each team roster from ESPN.
+    Load all active NBA players by fetching each team roster from ESPN in parallel.
     Returns list of {id, full_name, team_abbr}.
-    ESPN team roster endpoint is fast and always works.
+    The nba_api directory is a last-resort search fallback when ESPN is unavailable.
     """
-    all_players = []
-    for team_id in NBA_TEAM_IDS:
+    import concurrent.futures
+
+    def _fetch_team_roster(team_id: int) -> List[dict]:
+        team_players = []
         try:
             url  = f"{ESPN_SITE}/teams/{team_id}/roster"
             data = espn_get(url)
@@ -8985,14 +9279,36 @@ def espn_get_all_players(_date: str = None) -> List[dict]:
                     pid  = str(item.get("id", ""))
                     name = item.get("displayName") or item.get("fullName") or ""
                     if pid and name:
-                        all_players.append({
+                        team_players.append({
                             "id":         pid,
                             "full_name":  name,
                             "team_abbr":  team_abbr,
                         })
         except Exception:
-            continue
-    return all_players
+            pass
+        return team_players
+
+    all_players = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        for team_players in executor.map(_fetch_team_roster, NBA_TEAM_IDS):
+            all_players.extend(team_players)
+
+    if not all_players:
+        try:
+            all_players = [
+                {
+                    "id": str(player.get("id", "")),
+                    "full_name": player.get("full_name", ""),
+                    "team_abbr": "",
+                }
+                for player in nba_players.get_active_players()
+                if player.get("id") and player.get("full_name")
+            ]
+        except Exception:
+            return []
+
+    # ESPN can list two-way players in more than one roster. Keep one search row.
+    return list({player["id"]: player for player in all_players}.values())
 
 def espn_search_players(query: str) -> List[dict]:
     """Search loaded player list by name query."""
@@ -17958,10 +18274,19 @@ if st.session_state.active_sport == "mlb":
         return empty
 
 
-    def mlb_render_hitter_fantasy_analysis(player_name: str, line: float, side: str):
+    def mlb_render_hitter_fantasy_analysis(
+        player_name: str,
+        line: float,
+        side: str,
+        line_type: str = "Manual line · payout unverified",
+    ):
         """Render Hitter Fantasy Score analyzer."""
         _ph = st.empty()
-        _ph.markdown("<div style='font-family:JetBrains Mono,monospace;font-size:0.7rem;color:#6b7f96;padding:0.5rem 0;'>⏳ FETCHING HITTER GAME LOGS...</div>", unsafe_allow_html=True)
+        _ph.markdown(
+            "<div class='analysis-progress'><b>Preparing hitter analysis</b>"
+            "Loading recent games, opposing pitcher, platoon split, and park context.</div>",
+            unsafe_allow_html=True,
+        )
         logs = mlb_get_hitter_logs(player_name, n=12)
         basic = mlb_find_player_basic(player_name, hitter_only=True)
         ctx = mlb_get_team_next_game(basic.get("team", ""))
@@ -18140,6 +18465,8 @@ if st.session_state.active_sport == "mlb":
                 f"70% hit chance ({adj:.0%}) + 30% evidence ({score}/100) = "
                 f"{_hitter_entry_base}. Gate: {_hitter_entry_gate}."
             ),
+            evidence_label="Data quality",
+            line_type_label=line_type,
         )
         st.markdown(
             f"<details class='secondary-decision-details'><summary>Supporting analysis</summary>"
@@ -18181,6 +18508,7 @@ if st.session_state.active_sport == "mlb":
                 "player": player_name, "prop": f"Hitter Fantasy Score {side}",
                 "line": float(line), "side": side, "verdict": tier,
                 "confidence": score, "adj": round(adj * 100, 1),
+                "line_type": line_type, "reduced_payout": False,
                 "sport": "MLB", "added": __import__("datetime").datetime.now().strftime("%I:%M %p"),
             }
             _hitter_tracker = {
@@ -18190,6 +18518,7 @@ if st.session_state.active_sport == "mlb":
                 "Avg PTS": round(avg_fs, 1), "Hit Rate": f"{whr:.1%}",
                 "Adjusted": f"{adj:.1%}", "Consistency": f"{cons:.1%}",
                 "Confidence": score, "Edge": round(edge, 2), "Sample": len(vals),
+                "Line Type": line_type,
                 "Risk Flags": "Probable pitcher TBD" if not ctx.get("opp_pitcher") else "",
                 "Trap": _hitter_status, "Role": "Hitter", "Verdict": tier,
                 "Result": "Pending", "Sport": "MLB",
@@ -18208,7 +18537,7 @@ if st.session_state.active_sport == "mlb":
         with c3:
             st.markdown(f"<div class='stat-card'><div class='stat-label'>Avg Plate App.</div><div class='stat-value {'green' if avg_pa>=4 else 'yellow' if avg_pa>=3.5 else 'red'}'>{avg_pa:.1f}</div><div class='stat-hint'>Volume path matters most</div></div>", unsafe_allow_html=True)
         with c4:
-            st.markdown(f"<div class='stat-card'><div class='stat-label'>Confidence</div><div class='stat-value' style='color:{col};'>{score}</div><div class='stat-hint'>Fantasy score model</div></div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='stat-card'><div class='stat-label'>Data Quality</div><div class='stat-value' style='color:{col};'>{score}</div><div class='stat-hint'>Fantasy score evidence</div></div>", unsafe_allow_html=True)
 
         pitcher_quality = pitcher_profile.get("quality", "TBD")
         pitcher_stats = (
@@ -18260,75 +18589,164 @@ if st.session_state.active_sport == "mlb":
 
     _mlb_hitters = _mlb_fetch_hitter_list()
 
-    # Pre-fill pitcher if jumped from Edge Scanner
+    # Pre-fill and immediately submit an Edge result. Manual submissions use
+    # the same persistent request so the first tap cannot be lost to a rerun.
     _mlb_edge_jp = st.session_state.pop("edge_jump_pitcher", None)
     _mlb_jump_line = st.session_state.pop("edge_jump_line", None) if _mlb_edge_jp else None
     _mlb_jump_side = st.session_state.pop("edge_jump_side", "Over") if _mlb_edge_jp else "Over"
     _mlb_jump_prop = st.session_state.pop("edge_jump_prop", None) if _mlb_edge_jp else None
+    _mlb_jump_line_type = (
+        st.session_state.pop("edge_jump_line_type", "Line type unverified")
+        if _mlb_edge_jp else "Manual line · payout unverified"
+    )
+    _mlb_prop_default = "Hitter Fantasy Score" if _mlb_jump_prop == "Hitter Fantasy Score" else "Strikeouts"
+    _mlb_prop_options = ["Strikeouts", "Hitter Fantasy Score"]
     if _mlb_edge_jp:
         st.session_state.mlb_pitcher_key = st.session_state.get("mlb_pitcher_key", 0) + 1
         st.session_state["_mlb_prefill_name"] = _mlb_edge_jp
         st.session_state.pop("mlb_prop_type", None)
         st.session_state.pop("mlb_line", None)
         st.session_state.pop("mlb_side", None)
-    _mlb_prop_default = "Hitter Fantasy Score" if _mlb_jump_prop == "Hitter Fantasy Score" else "Strikeouts"
-    _mlb_prop_options = ["Strikeouts", "Hitter Fantasy Score"]
-    _mlb_prop_current = st.session_state.get("mlb_prop_type", _mlb_prop_default)
-    if _mlb_prop_current not in _mlb_prop_options:
-        _mlb_prop_current = _mlb_prop_default
-    _mlb_options = _mlb_hitters if _mlb_prop_current == "Hitter Fantasy Score" else _mlb_pitchers
-    _mlb_pf_name = st.session_state.get("_mlb_prefill_name", "")
-    _mlb_pf_idx  = (_mlb_options.index(_mlb_pf_name) + 1
-                    if _mlb_pf_name and _mlb_pf_name in _mlb_options else 0)
-    mlb_pitcher = player_typeahead(
-        "Player search",
-        _mlb_options,
-        key=f"mlb_player_sel_{_mlb_prop_current}_{st.session_state.get('mlb_pitcher_key', 0)}",
-        prefill=_mlb_pf_name if _mlb_pf_idx else None,
-        aliases={
-            "Shohei Othani": "Shohei Ohtani",
-            "Othani": "Shohei Ohtani",
-        },
-        noun="hitter" if _mlb_prop_current == "Hitter Fantasy Score" else "pitcher",
-        sport="mlb",
-    )
-    _mlb_market_col, _mlb_line_col, _mlb_side_col = st.columns([1.35, 1, 1])
-    with _mlb_market_col:
-        mlb_prop = st.selectbox(
-            "Prop market", _mlb_prop_options,
-            index=_mlb_prop_options.index(_mlb_prop_current),
-            key="mlb_prop_type",
-        )
-    with _mlb_line_col:
-        _mlb_line_default = float(_mlb_jump_line) if _mlb_jump_line is not None else 5.5
-        mlb_line = st.number_input(
-            "Line", min_value=0.5, max_value=30.0,
-            value=_mlb_line_default, step=0.5, key="mlb_line",
-        )
-    with _mlb_side_col:
-        _mlb_side_options = ["Over", "Under"]
-        _mlb_side_default = _mlb_jump_side if _mlb_jump_side in _mlb_side_options else "Over"
-        mlb_side = st.selectbox(
-            "Over / Under", _mlb_side_options,
-            index=_mlb_side_options.index(_mlb_side_default), key="mlb_side",
+        commit_mlb_analysis(
+            _mlb_edge_jp,
+            _mlb_prop_default,
+            float(_mlb_jump_line) if _mlb_jump_line is not None else 5.5,
+            _mlb_jump_side,
+            _mlb_jump_line_type,
         )
 
-    # Clear button
-    if mlb_pitcher:
-        _mlb_player_widget_key = (
-            f"mlb_player_sel_{mlb_prop}_{st.session_state.get('mlb_pitcher_key', 0)}"
+    _mlb_request = st.session_state.get("mlb_analysis_request") or {}
+    _mlb_compact_form = bool(
+        _mlb_request and not st.session_state.get("mlb_analysis_editing", True)
+    )
+
+    if _mlb_compact_form:
+        mlb_pitcher = str(_mlb_request.get("player", ""))
+        mlb_prop = str(_mlb_request.get("prop", "Strikeouts"))
+        mlb_line = float(_mlb_request.get("line", 5.5))
+        mlb_side = str(_mlb_request.get("side", "Over"))
+        _mlb_line_type_label = str(
+            _mlb_request.get("line_type", "Line type unverified")
         )
-        st.button(
-            "✕",
-            key="mlb_clear_pitcher",
-            help="Clear player selection",
-            on_click=clear_player_search,
-            args=(
-                _mlb_player_widget_key,
-                "mlb",
-                ("_mlb_prefill_name",),
-            ),
+    else:
+        _mlb_prop_current = st.session_state.get("mlb_prop_type", _mlb_prop_default)
+        if _mlb_prop_current not in _mlb_prop_options:
+            _mlb_prop_current = _mlb_prop_default
+        _mlb_options = (
+            _mlb_hitters if _mlb_prop_current == "Hitter Fantasy Score"
+            else _mlb_pitchers
         )
+        _mlb_pf_name = st.session_state.get("_mlb_prefill_name", "")
+        _mlb_pf_idx = (
+            _mlb_options.index(_mlb_pf_name) + 1
+            if _mlb_pf_name and _mlb_pf_name in _mlb_options else 0
+        )
+        with st.container(key="mlb_analyzer_form"):
+            with st.container(key="mlb_player_search_row"):
+                _mlb_search_col, _mlb_clear_col = st.columns([12, 1])
+                with _mlb_search_col:
+                    mlb_pitcher = player_typeahead(
+                        "Player search",
+                        _mlb_options,
+                        key=(
+                            f"mlb_player_sel_{_mlb_prop_current}_"
+                            f"{st.session_state.get('mlb_pitcher_key', 0)}"
+                        ),
+                        prefill=_mlb_pf_name if _mlb_pf_idx else None,
+                        aliases={
+                            "Shohei Othani": "Shohei Ohtani",
+                            "Othani": "Shohei Ohtani",
+                        },
+                        noun=(
+                            "hitter" if _mlb_prop_current == "Hitter Fantasy Score"
+                            else "pitcher"
+                        ),
+                        sport="mlb",
+                    )
+                with _mlb_clear_col:
+                    if mlb_pitcher:
+                        _mlb_player_widget_key = (
+                            f"mlb_player_sel_{_mlb_prop_current}_"
+                            f"{st.session_state.get('mlb_pitcher_key', 0)}"
+                        )
+                        st.button(
+                            "✕",
+                            key="mlb_clear_pitcher",
+                            help="Clear player selection",
+                            on_click=clear_player_search,
+                            args=(
+                                _mlb_player_widget_key,
+                                "mlb",
+                                (
+                                    "_mlb_prefill_name",
+                                    "_mlb_edit_line",
+                                    "mlb_analysis_request",
+                                    "mlb_analysis_editing",
+                                ),
+                            ),
+                        )
+
+            with st.container(key="mlb_market_controls"):
+                _mlb_market_col, _mlb_line_col, _mlb_side_col = st.columns([1.35, 1, 1])
+                with _mlb_market_col:
+                    mlb_prop = st.selectbox(
+                        "Prop market", _mlb_prop_options,
+                        index=_mlb_prop_options.index(_mlb_prop_current),
+                        key="mlb_prop_type",
+                    )
+                with _mlb_line_col:
+                    _mlb_line_default = (
+                        float(_mlb_jump_line) if _mlb_jump_line is not None
+                        else float(st.session_state.get("_mlb_edit_line", 5.5))
+                    )
+                    _mlb_line_kwargs = {}
+                    if "mlb_line" not in st.session_state:
+                        _mlb_line_kwargs["value"] = _mlb_line_default
+                    mlb_line = st.number_input(
+                        "Line", min_value=0.5, max_value=30.0,
+                        step=0.5, key="mlb_line", **_mlb_line_kwargs,
+                    )
+                    st.session_state.pop("_mlb_edit_line", None)
+                with _mlb_side_col:
+                    _mlb_side_options = ["Over", "Under"]
+                    _mlb_side_default = (
+                        _mlb_jump_side if _mlb_jump_side in _mlb_side_options
+                        else "Over"
+                    )
+                    mlb_side = st.selectbox(
+                        "Direction", _mlb_side_options,
+                        index=_mlb_side_options.index(_mlb_side_default),
+                        key="mlb_side",
+                    )
+
+            _mlb_line_type_label = "Manual line · payout unverified"
+            _mlb_btn_label = (
+                "Analyze hitter fantasy score"
+                if mlb_prop == "Hitter Fantasy Score"
+                else "Analyze pitcher strikeouts"
+            )
+            st.button(
+                _mlb_btn_label,
+                key="mlb_analyze",
+                use_container_width=True,
+                type="primary",
+                disabled=not bool(mlb_pitcher),
+                on_click=commit_mlb_analysis,
+                args=(
+                    mlb_pitcher,
+                    mlb_prop,
+                    float(mlb_line),
+                    mlb_side,
+                    _mlb_line_type_label,
+                ),
+            )
+
+            if not mlb_pitcher:
+                st.markdown(
+                    "<div style='color:#718397;font-size:0.78rem;margin-top:0.35rem;'>"
+                    "Start typing a player name, then choose a suggestion.</div>",
+                    unsafe_allow_html=True,
+                )
 
     if mlb_pitcher and mlb_prop == "Hitter Fantasy Score":
         _mlb_basic = mlb_find_player_basic(mlb_pitcher, hitter_only=True)
@@ -18339,7 +18757,38 @@ if st.session_state.active_sport == "mlb":
     mlb_opp  = _tonight.get("opp","")
     mlb_home = _tonight.get("home_team","")
 
-    if mlb_pitcher and _tonight:
+    if _mlb_compact_form:
+        _mlb_summary_context = "Next game context unavailable"
+        if _tonight:
+            _mlb_summary_context = (
+                f"{_tonight.get('game_date', 'Date TBD')} · vs {mlb_opp or 'TBD'} · "
+                f"{_tonight.get('venue', 'Venue TBD')}"
+            )
+        _mlb_safe = __import__("html")
+        with st.container(key="mlb_analysis_summary"):
+            _mlb_summary_col, _mlb_edit_col = st.columns([5, 1])
+            with _mlb_summary_col:
+                st.markdown(
+                    f"<div class='mlb-analysis-summary'>"
+                    f"<div class='mlb-analysis-summary-kicker'>Current analysis</div>"
+                    f"<strong>{_mlb_safe.escape(mlb_pitcher)}</strong>"
+                    f"<span>{_mlb_safe.escape(_mlb_summary_context)}</span>"
+                    f"<div class='mlb-analysis-summary-tags'>"
+                    f"<b>{_mlb_safe.escape(mlb_prop)}</b>"
+                    f"<b>{_mlb_safe.escape(mlb_side)} {mlb_line:g}</b>"
+                    f"<b>{_mlb_safe.escape(_mlb_line_type_label)}</b>"
+                    f"</div></div>",
+                    unsafe_allow_html=True,
+                )
+            with _mlb_edit_col:
+                st.button(
+                    "Edit",
+                    key="mlb_edit_analysis",
+                    help="Change player, market, line, or direction",
+                    on_click=edit_mlb_analysis,
+                    use_container_width=True,
+                )
+    elif mlb_pitcher and _tonight:
         if mlb_prop == "Hitter Fantasy Score":
             _od = f"vs {mlb_opp} · {_tonight.get('venue','')} · {_tonight.get('side','')}"
             if _tonight.get("opp_pitcher"):
@@ -18373,32 +18822,39 @@ if st.session_state.active_sport == "mlb":
             unsafe_allow_html=True
         )
 
-    _mlb_btn_label = "⚾  Analyze Hitter Fantasy Score" if mlb_prop == "Hitter Fantasy Score" else "⚾  Analyze Pitcher Prop"
-    mlb_fetch = st.button(_mlb_btn_label, key="mlb_analyze", use_container_width=True) or bool(_mlb_edge_jp)
+    mlb_fetch = bool(
+        _mlb_request and not st.session_state.get("mlb_analysis_editing", True)
+    )
 
-    if not mlb_pitcher:
+    if mlb_fetch:
         st.markdown(
-            "<div style='color:#6b7f96;font-family:JetBrains Mono,monospace;font-size:0.68rem;"
-            "margin-top:0.4rem;'>↑ Start typing a hitter or pitcher name — e.g. Judge, Ohtani, Skubal</div>",
-            unsafe_allow_html=True
+            "<div id='mlb-result' class='analyzer-scroll-anchor'></div>",
+            unsafe_allow_html=True,
         )
+        render_navigation_scroll_target("mlb-result")
 
     if mlb_fetch and mlb_pitcher and mlb_prop == "Hitter Fantasy Score":
-        mlb_render_hitter_fantasy_analysis(mlb_pitcher, mlb_line, mlb_side)
+        mlb_render_hitter_fantasy_analysis(
+            mlb_pitcher, mlb_line, mlb_side, _mlb_line_type_label
+        )
 
     if mlb_fetch and mlb_pitcher and mlb_prop == "Strikeouts":
         _stat = "K"
         _lbl  = "K"
 
         _mlb_ph = st.empty()
-        _mlb_ph.markdown("<div style='font-family:JetBrains Mono,monospace;font-size:0.7rem;"
-                         "color:#7d93ab;padding:0.5rem 0;'>STEP 1 OF 2 · FETCHING CURRENT GAME LOGS</div>",
-                         unsafe_allow_html=True)
+        _mlb_ph.markdown(
+            "<div class='analysis-progress'><b>Step 1 of 2 · Loading recent starts</b>"
+            "Building the current strikeout sample and workload history.</div>",
+            unsafe_allow_html=True,
+        )
         mlb_logs = mlb_get_pitcher_logs(mlb_pitcher, n=10)
 
-        _mlb_ph.markdown("<div style='font-family:JetBrains Mono,monospace;font-size:0.7rem;"
-                         "color:#36c6d3;padding:0.5rem 0;'>STEP 2 OF 2 · LOADING MATCHUP, ROLE, LINEUP, AND WEATHER</div>",
-                         unsafe_allow_html=True)
+        _mlb_ph.markdown(
+            "<div class='analysis-progress'><b>Step 2 of 2 · Building tonight's context</b>"
+            "Checking role, projected lineup, platoon, umpire, weather, and pitch-count path.</div>",
+            unsafe_allow_html=True,
+        )
 
         # Resolve pitcher hand first because opponent splits, switch hitters,
         # and batter K profiles all depend on it. This call is cached daily.
@@ -20286,6 +20742,7 @@ if st.session_state.active_sport == "mlb":
                 history_value=_recent_record,
                 evidence_label="Data quality",
                 consistency_label="K-output stability",
+                line_type_label=_mlb_line_type_label,
             )
 
             st.markdown(
@@ -20324,6 +20781,8 @@ if st.session_state.active_sport == "mlb":
                     "player": mlb_pitcher, "prop": f"{mlb_prop} {mlb_side}",
                     "line": mlb_line, "side": mlb_side, "verdict": tier,
                     "confidence": _sc, "adj": round(adj * 100, 1),
+                    "line_type": _mlb_line_type_label,
+                    "reduced_payout": "reduced" in _mlb_line_type_label.lower(),
                     "sport": "MLB", "added": __import__("datetime").datetime.now().strftime("%I:%M %p"),
                 }
                 _new_mlb_tracker = {
@@ -20340,6 +20799,7 @@ if st.session_state.active_sport == "mlb":
                     "Avg PTS": round(avg_val, 1), "Hit Rate": f"{whr:.1%}",
                     "Adjusted": f"{adj:.1%}", "Consistency": f"{cons:.1%}",
                     "Confidence": _sc, "Edge": round(edge, 2), "Sample": _n_starts,
+                    "Line Type": _mlb_line_type_label,
                     "Risk Flags": " | ".join(
                         (_role.get("summary", []) or []) +
                         (_trap.get("summary", []) if _trap else [])
@@ -20395,7 +20855,7 @@ if st.session_state.active_sport == "mlb":
                                 f"<div class='stat-value {_k9c}'>{_k9_display}</div>"
                                 f"<div class='stat-hint'>League avg 8.3 · {_k9_tier}</div></div>",unsafe_allow_html=True)
             with _c4:
-                st.markdown(f"<div class='stat-card'><div class='stat-label'>Confidence</div>"
+                st.markdown(f"<div class='stat-card'><div class='stat-label'>Data Quality</div>"
                             f"<div class='stat-value' style='color:{_cc};'>{_sc}</div>"
                             f"<div class='stat-hint'>{_mlb_core_loaded}/{_mlb_core_total} core inputs · {len(vals)} starts</div></div>",unsafe_allow_html=True)
 
@@ -30516,6 +30976,10 @@ if st.session_state.active_sport == "edge":
                         "entry_action": _edge_entry_action,
                         "odds_type": _r.get("odds_type", "standard"),
                         "reduced_payout": _payout_check,
+                        "line_type": (
+                            "Reduced-payout line" if _payout_check
+                            else "Standard full-payout line"
+                        ),
                         "added":      _dt_edge.datetime.now().strftime("%I:%M %p"),
                     }
                     _tracker_risk_flags = (
@@ -30576,6 +31040,10 @@ if st.session_state.active_sport == "edge":
                         args=(
                             _r["sport"], _r["player"], _r["line"],
                             _result_side, _r["stat"],
+                            (
+                                "Reduced-payout line" if _payout_check
+                                else "Standard full-payout line"
+                            ),
                         ),
                     )
 
