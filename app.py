@@ -6021,7 +6021,7 @@ div[data-testid="stToast"] {
     max-width: 100% !important;
 }
 .st-key-analyzer_sport_navigation div[data-testid="stHorizontalBlock"] {
-    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
 }
 
 /* BaseWeb renders autocomplete menus in a portal, outside the input wrapper. */
@@ -6180,7 +6180,7 @@ div[data-baseweb="menu"] [role="option"]:hover {
 
 @media (max-width: 768px) {
     .st-key-analyzer_sport_navigation div[data-testid="stHorizontalBlock"] {
-        grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+        grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
     }
     .st-key-mlb_analyzer_form { padding: 0.65rem !important; }
     .st-key-mlb_market_controls div[data-testid="stHorizontalBlock"] {
@@ -6312,6 +6312,660 @@ def render_entry_decision(
     )
 
 # ─────────────────────────────────────────────
+# NFL quarterback model and workspace
+# ─────────────────────────────────────────────
+
+NFL_MODEL_VERSION = "nfl-qb-v1-beta"
+NFL_MARKETS = {"Pass Attempts": "attempts", "Pass Completions": "completions", "Passing Yards": "passing_yards"}
+NFL_ESPN = "https://site.api.espn.com/apis/site/v2/sports/football/nfl"
+
+
+def nfl_market(value):
+    aliases = {
+        "pass attempts": "Pass Attempts", "passing attempts": "Pass Attempts",
+        "pass completions": "Pass Completions", "passing completions": "Pass Completions",
+        "completions": "Pass Completions", "pass yards": "Passing Yards", "passing yards": "Passing Yards",
+    }
+    return aliases.get(re.sub(r"\s+", " ", str(value).strip().lower()))
+
+
+def nfl_team(value):
+    value = str(value or "").upper().strip()
+    return {"WSH": "WAS", "JAC": "JAX", "LA": "LAR", "OAK": "LV", "SD": "LAC", "STL": "LAR"}.get(value, value)
+
+
+def nfl_name(value):
+    import unicodedata
+    return re.sub(r"[^a-z0-9]", "", unicodedata.normalize("NFKD", str(value)).encode("ascii", "ignore").decode().lower())
+
+
+def nfl_number(value, default=None):
+    try:
+        number = float(value)
+        return number if pd.notna(number) and abs(number) != float("inf") else default
+    except (ValueError, TypeError):
+        return default
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def nfl_json(url):
+    response = requests.get(url, timeout=12)
+    response.raise_for_status()
+    return response.json()
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def nfl_history(season):
+    """Join weekly statistics to verified kickoff times; never infer a missing game date."""
+    import io
+    import concurrent.futures
+    schedule_response = requests.get("https://raw.githubusercontent.com/nflverse/nfldata/master/data/games.csv", timeout=20)
+    schedule_response.raise_for_status()
+    games = pd.read_csv(io.StringIO(schedule_response.text), dtype={"away_qb_id": str, "home_qb_id": str})
+    dates = pd.to_datetime(games["gameday"].astype(str) + " " + games["gametime"].fillna(""), format="%Y-%m-%d %H:%M", errors="coerce")
+    games["kickoff"] = dates.dt.tz_localize("America/New_York", ambiguous="NaT", nonexistent="NaT").dt.tz_convert("UTC")
+
+    def fetch_year(year):
+        url = f"https://github.com/nflverse/nflverse-data/releases/download/stats_player/stats_player_week_{year}.csv"
+        try:
+            response = requests.get(url, timeout=25)
+            if response.status_code == 404:
+                response = requests.get(f"https://github.com/nflverse/nflverse-data/releases/download/player_stats/player_stats_{year}.csv", timeout=25)
+            response.raise_for_status()
+            frame = pd.read_csv(io.StringIO(response.text), low_memory=False)
+            frame = frame.rename(columns={"recent_team": "team", "opponent": "opponent_team", "sacks": "sacks_suffered", "rushing_attempts": "carries"})
+            required = {"player_id", "player_display_name", "season", "week", "season_type", "team", "attempts", "completions", "passing_yards", "carries", "sacks_suffered"}
+            if not required.issubset(frame.columns):
+                raise ValueError("Unexpected NFL weekly-stat schema")
+            if "game_id" not in frame:
+                lookup = pd.concat([games.assign(team=games["home_team"]), games.assign(team=games["away_team"])])
+                frame = frame.merge(lookup[["season", "week", "game_type", "team", "game_id"]], left_on=["season", "week", "season_type", "team"], right_on=["season", "week", "game_type", "team"], validate="many_to_one")
+            return frame, ""
+        except Exception as err:
+            return pd.DataFrame(), f"{year} statistics unavailable: {type(err).__name__}"
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+        fetched = list(pool.map(fetch_year, [season, season - 1, season - 2]))
+    frames = [frame for frame, _ in fetched if not frame.empty]
+    if not frames:
+        raise RuntimeError("NFL historical statistics could not be loaded.")
+    stats = pd.concat(frames, ignore_index=True).drop_duplicates(["game_id", "player_id"])
+    stats = stats.merge(games[["game_id", "kickoff", "home_team", "away_team", "home_qb_id", "away_qb_id", "home_score", "away_score"]], on="game_id", how="inner", validate="many_to_one")
+    stats = stats.loc[stats["season_type"].isin(["REG", "POST"]) & stats["kickoff"].notna() & stats["home_score"].notna() & stats["away_score"].notna()].copy()
+    for col in ["team", "opponent_team", "home_team", "away_team"]:
+        if col in stats:
+            stats[col] = stats[col].map(nfl_team)
+    stats["opponent_team"] = stats.apply(lambda r: r.away_team if r.team == r.home_team else r.home_team, axis=1)
+    stats["started"] = ((stats["team"] == stats["home_team"]) & (stats["player_id"] == stats["home_qb_id"])) | ((stats["team"] == stats["away_team"]) & (stats["player_id"] == stats["away_qb_id"]))
+    for col in ["attempts", "completions", "passing_yards", "carries", "sacks_suffered"]:
+        stats[col] = pd.to_numeric(stats[col], errors="coerce")
+    return {"stats": stats, "warnings": [note for _, note in fetched if note], "loaded_at": pd.Timestamp.now(tz="UTC").isoformat()}
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def nfl_board():
+    now = pd.Timestamp.now(tz="UTC")
+    start, end = now.strftime("%Y%m%d"), (now + pd.Timedelta(days=10)).strftime("%Y%m%d")
+    payload = nfl_json(f"{NFL_ESPN}/scoreboard?dates={start}-{end}&limit=100")
+    games = []
+    for event in payload.get("events", []):
+        if event.get("season", {}).get("type") not in (2, 3):
+            continue
+        comp = (event.get("competitions") or [{}])[0]
+        kickoff = pd.to_datetime(event.get("date"), utc=True, errors="coerce")
+        if pd.isna(kickoff) or kickoff <= now or comp.get("status", {}).get("type", {}).get("state") != "pre":
+            continue
+        teams = {r.get("homeAway"): r.get("team", {}) for r in comp.get("competitors", [])}
+        if not all(k in teams for k in ("home", "away")):
+            continue
+        odds = (comp.get("odds") or [{}])[0]
+        for venue, other in [("home", "away"), ("away", "home")]:
+            own = teams[venue]
+            spread = nfl_number(odds.get("pointSpread", {}).get(venue, {}).get("close", {}).get("line"))
+            games.append({"game_id": str(event["id"]), "kickoff": kickoff.isoformat(), "season": event["season"]["year"], "team": nfl_team(own.get("abbreviation")), "team_id": str(own["id"]), "opponent": nfl_team(teams[other].get("abbreviation")), "venue": venue, "spread": spread, "total": nfl_number(odds.get("overUnder")), "stadium": comp.get("venue", {}).get("fullName", "Unknown"), "indoor": comp.get("venue", {}).get("indoor"), "address": comp.get("venue", {}).get("address", {}), "weather": comp.get("weather", {}), "game_name": event.get("shortName", "")})
+    return sorted(games, key=lambda g: g["kickoff"])
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def nfl_directory():
+    import concurrent.futures
+    payload = nfl_json(f"{NFL_ESPN}/teams?limit=100")
+    teams = [t["team"] for s in payload.get("sports", []) for league in s.get("leagues", []) for t in league.get("teams", [])]
+
+    def fetch_team(team):
+        try:
+            roster = nfl_json(f"{NFL_ESPN}/teams/{team['id']}/roster")
+            athletes = [a for group in roster.get("athletes", []) for a in group.get("items", [])]
+            return [{"name": a.get("displayName", ""), "espn_id": str(a["id"]), "team": nfl_team(team["abbreviation"]), "team_id": str(team["id"]), "image": a.get("headshot", {}).get("href", ""), "status": a.get("status", {}).get("type", "unknown"), "injuries": a.get("injuries", [])} for a in athletes if a.get("position", {}).get("abbreviation") == "QB"], ""
+        except Exception:
+            return [], f"{team.get('abbreviation', '?')} roster unavailable"
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        rows = list(pool.map(fetch_team, teams))
+    return {"players": [p for players, _ in rows for p in players], "warnings": [note for _, note in rows if note]}
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def nfl_team_context(team_id):
+    """Read role and reported injuries without equating unlisted with confirmed healthy."""
+    out = {"starter_id": None, "starter_name": "Unavailable", "injuries": [], "availability_loaded": False, "key_player_ids": []}
+    try:
+        depth = nfl_json(f"{NFL_ESPN}/teams/{team_id}/depthcharts")
+        out["key_player_ids"] = list({str(p["athletes"][0]["id"]) for chart in depth.get("depthchart", []) for p in chart.get("positions", {}).values() if p.get("athletes")})
+        starters = [p["athletes"][0] for chart in depth.get("depthchart", []) for p in chart.get("positions", {}).values() if p.get("position", {}).get("abbreviation") == "QB" and p.get("athletes")]
+        ids = {str(p["id"]) for p in starters}
+        if len(ids) == 1:
+            out.update(starter_id=str(starters[0]["id"]), starter_name=starters[0].get("displayName", "QB1"))
+    except Exception:
+        pass
+    try:
+        roster = nfl_json(f"{NFL_ESPN}/teams/{team_id}/roster")
+        for group in roster.get("athletes", []):
+            for a in group.get("items", []):
+                position = a.get("position", {}).get("abbreviation", "")
+                for injury in a.get("injuries", []):
+                    out["injuries"].append({"id": str(a.get("id", "")), "name": a.get("displayName", ""), "position": position, "status": injury.get("status", "Unknown")})
+        out["availability_loaded"] = bool(roster.get("athletes"))
+    except Exception:
+        pass
+    return out
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def nfl_weather(game):
+    if game.get("indoor") is not False:
+        return {"weather_note": "Roof status unverified; outdoor wind adjustment withheld"}
+    try:
+        city = game.get("address", {}).get("city", "")
+        if not city:
+            return {"weather_note": "Venue city unavailable"}
+        response = requests.get("https://geocoding-api.open-meteo.com/v1/search", params={"name": city, "count": 10, "countryCode": "US"}, timeout=8)
+        response.raise_for_status()
+        states = {"AZ": "Arizona", "CA": "California", "CO": "Colorado", "FL": "Florida", "GA": "Georgia", "IL": "Illinois", "IN": "Indiana", "LA": "Louisiana", "MD": "Maryland", "MA": "Massachusetts", "MI": "Michigan", "MN": "Minnesota", "MO": "Missouri", "NV": "Nevada", "NJ": "New Jersey", "NY": "New York", "NC": "North Carolina", "OH": "Ohio", "PA": "Pennsylvania", "TN": "Tennessee", "TX": "Texas", "WA": "Washington", "WI": "Wisconsin", "DC": "District of Columbia", "VA": "Virginia"}
+        state = str(game.get("address", {}).get("state", ""))
+        state = states.get(state.upper(), state)
+        candidates = [r for r in response.json().get("results", []) if r.get("country_code") == "US" and str(r.get("admin1", "")).lower() == state.lower()]
+        if len(candidates) != 1:
+            return {"weather_note": "Venue-city coordinates not uniquely verified"}
+        point = candidates[0]
+        response = requests.get("https://api.open-meteo.com/v1/forecast", params={"latitude": point["latitude"], "longitude": point["longitude"], "hourly": "wind_speed_10m", "wind_speed_unit": "mph", "timezone": "UTC", "forecast_days": 14}, timeout=8)
+        response.raise_for_status()
+        hourly = response.json()["hourly"]
+        dates = pd.to_datetime(hourly["time"], utc=True)
+        target = pd.Timestamp(game["kickoff"])
+        index = abs(dates - target).argmin()
+        if abs((dates[index] - target).total_seconds()) > 3600:
+            return {"weather_note": "Kickoff outside forecast coverage"}
+        return {"wind_mph": nfl_number(hourly["wind_speed_10m"][index]), "weather_note": f"Open-Meteo city forecast: {city}, {dates[index].isoformat()} (not stadium gusts)"}
+    except Exception:
+        return {"weather_note": "Wind forecast unavailable"}
+
+
+def nfl_prepare(player, game, data, role=None):
+    stats = data["stats"]
+    matches = stats.loc[stats["player_display_name"].map(nfl_name) == nfl_name(player["name"]), "player_id"].unique()
+    if len(matches) != 1:
+        raise ValueError("No unique historical player ID; quarterback identity needs verification.")
+    context = dict(game)
+    context.update(role or {})
+    context.update(nfl_weather(game))
+    context["player_id"] = matches[0]
+    context["espn_id"] = player["espn_id"]
+    context["roster_status"] = player.get("status", "unknown")
+    context["data_warnings"] = data.get("warnings", [])
+    return context
+
+
+def nfl_qb_model(stats, context, market, line, side):
+    """One line-independent QB projection; all evaluation uses strictly earlier games."""
+    import math
+    import numpy as np
+    from statistics import NormalDist
+    market = nfl_market(market)
+    line = nfl_number(line)
+    if market is None or line is None or line < 0 or side not in ("Over", "Under"):
+        raise ValueError("Select a supported full-game QB market, nonnegative line, and direction.")
+    kickoff = pd.to_datetime(context.get("kickoff"), utc=True, errors="coerce")
+    if pd.isna(kickoff):
+        raise ValueError("A verified game kickoff is required.")
+    prior = stats.loc[(stats["kickoff"] < kickoff) & (stats["kickoff"] >= kickoff - pd.Timedelta(days=730))].copy()
+    logs = prior.loc[(prior["player_id"] == context["player_id"]) & prior["started"] & (prior["attempts"] >= 0)].sort_values("kickoff", ascending=False).head(16)
+    logs = logs.dropna(subset=list(NFL_MARKETS.values()) + ["sacks_suffered"])
+    if len(logs) < 3:
+        raise ValueError(f"Only {len(logs)} verified starts available; at least three are required.")
+    team, opponent = nfl_team(context["team"]), nfl_team(context["opponent"])
+    # Aggregate all passers and rushers, so team pace does not become QB-only volume.
+    teams = prior.groupby(["game_id", "team", "opponent_team", "kickoff"], as_index=False)[["attempts", "completions", "passing_yards", "carries", "sacks_suffered"]].sum(min_count=1)
+    teams = teams.loc[(teams["attempts"] > 0) & (teams["kickoff"] >= kickoff - pd.Timedelta(days=400))]
+    if teams.empty:
+        raise ValueError("League baseline unavailable.")
+    league_att = float(teams.attempts.mean())
+    league_cmp = float(teams.completions.sum() / teams.attempts.sum())
+    league_ypa = float(teams.passing_yards.sum() / teams.attempts.sum())
+    weights = np.exp(-np.arange(len(logs)) / 7.0)
+    weights *= np.where(logs.season.to_numpy() == context["season"], 1.0, 0.65)
+    effective_n = float(weights.sum() ** 2 / (weights ** 2).sum())
+    weight = weights / weights.sum()
+    avg = lambda col: float(np.dot(weight, logs[col].to_numpy(dtype=float)))
+    talent = effective_n / (effective_n + 4.0)
+    attempts = talent * avg("attempts") + (1 - talent) * league_att
+    volume = float(np.dot(weights, logs.attempts.to_numpy(dtype=float)))
+    cmp_rate = (float(np.dot(weights, logs.completions)) + 100 * league_cmp) / (volume + 100)
+    ypa = (float(np.dot(weights, logs.passing_yards)) + 100 * league_ypa) / (volume + 100)
+    base_att, base_cmp, base_ypa = attempts, cmp_rate, ypa
+    flags, trace = [], []
+    trace.append({"signal": "QB baseline", "value": f"{len(logs)} starts / {effective_n:.1f} effective", "effect": f"{attempts:.1f} ATT; {cmp_rate:.1%} CMP; {ypa:.2f} Y/A"})
+    own = teams.loc[teams.team == team].sort_values("kickoff", ascending=False).head(8)
+    defense = teams.loc[teams.opponent_team == opponent].sort_values("kickoff", ascending=False).head(8)
+    if len(own) >= 4:
+        own_plays = own.attempts + own.carries + own.sacks_suffered
+        league_plays = teams.attempts + teams.carries + teams.sacks_suffered
+        pace = float(own_plays.mean() / league_plays.mean())
+        rate = float(own.attempts.sum() / own_plays.sum())
+        baseline_rate = float(teams.attempts.sum() / league_plays.sum())
+        team_factor = 1 + float(np.clip(pace * rate / baseline_rate - 1, -0.12, 0.12)) * 0.35
+        attempts *= team_factor
+        trace.append({"signal": "Team plays + pass rate", "value": f"{own_plays.mean():.1f} plays; {rate:.1%} attempts/play", "effect": f"ATT x{team_factor:.3f}"})
+    else:
+        flags.append("Limited team-volume history")
+    if len(defense) >= 4:
+        shrink = len(defense) / (len(defense) + 12.0)
+        def_cmp = float(defense.completions.sum() / defense.attempts.sum())
+        def_ypa = float(defense.passing_yards.sum() / defense.attempts.sum())
+        att_factor = 1 + float(np.clip(defense.attempts.mean() / league_att - 1, -0.15, 0.15)) * shrink
+        cmp_factor = 1 + float(np.clip(def_cmp / league_cmp - 1, -0.12, 0.12)) * shrink
+        ypa_factor = 1 + float(np.clip(def_ypa / league_ypa - 1, -0.20, 0.20)) * shrink
+        attempts *= att_factor
+        cmp_rate *= cmp_factor
+        ypa *= ypa_factor
+        sack_rate = defense.sacks_suffered.sum() / (defense.attempts.sum() + defense.sacks_suffered.sum())
+        trace.append({"signal": "Opponent passing defense", "value": f"{len(defense)} games; {def_cmp:.1%} CMP; {def_ypa:.2f} Y/A; {sack_rate:.1%} sack/dropback proxy", "effect": f"ATT x{att_factor:.3f}; CMP x{cmp_factor:.3f}; Y/A x{ypa_factor:.3f}"})
+    else:
+        flags.append("Limited opponent history")
+    spread, total = nfl_number(context.get("spread")), nfl_number(context.get("total"))
+    script_factor = 1.0
+    if spread is not None:
+        script_factor += float(np.clip(spread * 0.007, -0.06, 0.06))
+    if total is not None:
+        script_factor += float(np.clip((total - 44) * 0.0025, -0.025, 0.025))
+    if spread is None or total is None:
+        flags.append("Spread/total incomplete")
+    attempts *= script_factor
+    trace.append({"signal": "Expected game conditions", "value": f"Spread {spread}; total {total}", "effect": f"ATT x{script_factor:.3f}"})
+    wind = nfl_number(context.get("wind_mph"))
+    if wind is not None and not context.get("roof_closed", False):
+        wind_effect = min(0.10, max(0, wind - 15) * 0.005)
+        ypa *= 1 - wind_effect
+        cmp_rate *= 1 - wind_effect * 0.35
+        trace.append({"signal": "Wind forecast", "value": f"{wind:.0f} mph", "effect": f"Y/A -{wind_effect:.1%}"})
+    elif not context.get("roof_closed", False):
+        flags.append("Wind/roof status unverified")
+    starter_id = context.get("starter_id")
+    starter_ok = bool(starter_id and str(starter_id) == str(context.get("espn_id")))
+    if not starter_ok:
+        flags.append("Starting quarterback unverified" if not starter_id else "Not listed QB1")
+    injuries = context.get("injuries", [])
+    key_ids = set(context.get("key_player_ids", [])) | {str(context.get("espn_id"))}
+    relevant = [i for i in injuries if i.get("position") in ("QB", "WR", "TE", "OT", "OG", "C", "G", "T") and str(i.get("id")) in key_ids]
+    qb_risk = [i for i in relevant if str(i.get("id")) == str(context.get("espn_id"))]
+    if relevant:
+        flags.append("Reported QB/receiver/line injury: " + "; ".join(f"{i['name']} ({i['status']})" for i in relevant))
+    if not context.get("availability_loaded"):
+        flags.append("Injury report unavailable")
+    if not context.get("key_player_ids"):
+        flags.append("Supporting starter depth chart unavailable")
+    trace.append({"signal": "Role + availability", "value": context.get("starter_name", "Unavailable"), "effect": "ESPN depth-chart QB1, not a confirmed game starter; risk gate only"})
+    current_starts = int((logs.season == context["season"]).sum())
+    age = int((kickoff - logs.iloc[0].kickoff).days)
+    if current_starts < 3:
+        flags.append(f"Early-season evidence ({current_starts} current-season starts)")
+    if len(logs) < 8:
+        flags.append(f"Small sample ({len(logs)} starts)")
+    if logs.iloc[0].team != team:
+        flags.append("Team change since latest start")
+    if age > 28:
+        flags.append(f"Last start {age} days ago")
+    trace.append({"signal": "Rest / freshness", "value": f"{age} calendar days since latest start", "effect": "No automatic long-rest bonus"})
+    # Bound contextual changes jointly because volume/defense/game script overlap.
+    attempts = float(np.clip(attempts, base_att * 0.82, base_att * 1.18))
+    cmp_rate = float(np.clip(cmp_rate, 0.40, 0.82))
+    ypa = float(np.clip(ypa, 3.5, 10.5))
+    projections = {"Pass Attempts": attempts, "Pass Completions": attempts * cmp_rate, "Passing Yards": attempts * ypa}
+    projection = projections[market]
+    values = logs[NFL_MARKETS[market]].to_numpy(dtype=float)
+    observed_sd = float(np.std(values, ddof=1))
+    league_sd = float(teams[NFL_MARKETS[market]].std())
+    floor = {"Pass Attempts": 6.0, "Pass Completions": 4.5, "Passing Yards": 55.0}[market]
+    sigma = max(floor, math.sqrt(talent * observed_sd ** 2 + (1 - talent) * league_sd ** 2))
+    # Missing context increases forecast dispersion; it is not an additive hit-rate bonus.
+    sigma *= 1 + min(0.30, 0.04 * len(flags))
+    dist = NormalDist(projection, sigma)
+    lower_bound = dist.cdf(-0.5)
+    cdf = lambda x: max(0.0, min(1.0, (dist.cdf(x) - lower_bound) / (1 - lower_bound)))
+    over = 1 - cdf(math.floor(line) + 0.5)
+    under = cdf(math.ceil(line) - 0.5)
+    push = max(0.0, 1 - over - under)
+    probability = over if side == "Over" else under
+    hits = values > line if side == "Over" else values < line
+    raw = float(np.dot(weight, hits))
+    evidence_parts = {"Sample": min(25, effective_n / 12 * 25), "Current role": 20 if starter_ok else 0, "Current season": min(15, current_starts * 3), "Opponent coverage": min(15, len(defense) / 8 * 15), "Freshness": 10 if age <= 14 else 6 if age <= 28 else 2, "Context": (5 if spread is not None and total is not None else 0) + (5 if context.get("availability_loaded") else 0) + (5 if wind is not None or context.get("roof_closed") else 0)}
+    confidence = max(0, min(100, round(sum(evidence_parts.values()) - min(12, 3 * len(relevant)))))
+    score = round(0.7 * probability * 100 + 0.3 * confidence)
+    action = "PLAY" if score >= 80 and confidence >= 75 and probability >= 0.70 else "WATCH" if score >= 65 and confidence >= 50 and probability >= 0.55 else "PASS"
+    hard_gate = not starter_ok or context.get("roster_status", "active") != "active" or bool(qb_risk) or logs.iloc[0].team != team
+    if hard_gate:
+        action = "PASS"
+    elif current_starts < 3 or relevant or context.get("data_warnings"):
+        action = "WATCH" if action == "PLAY" else action
+    trace.append({"signal": "Predictive distribution", "value": f"Mean {projection:.2f}; SD {sigma:.2f}; continuity-corrected normal", "effect": f"Over {over:.1%}; Under {under:.1%}; Push {push:.1%}"})
+    return {"version": NFL_MODEL_VERSION, "market": market, "line": line, "side": side, "projection": projection, "projections": projections, "probability": probability, "over": over, "under": under, "push": push, "raw": raw, "confidence": confidence, "confidence_parts": evidence_parts, "score": score, "action": action, "flags": flags + context.get("data_warnings", []), "trace": trace, "logs": logs, "sample": len(logs), "historical_avg": float(values.mean()), "stability": max(0.0, 1 - observed_sd / max(1, abs(float(values.mean())))), "context": context, "sigma": sigma}
+
+
+def nfl_debug(result, player):
+    ctx = result["context"]
+    lines = ["PROPIQ NFL QUARTERBACK DEBUGGER", f"Model: {NFL_MODEL_VERSION} (experimental; not yet prospectively calibrated)", f"Player: {player}", f"Game: {ctx['team']} vs {ctx['opponent']} | {ctx['kickoff']}", f"Market: {result['market']} | {result['side']} {result['line']}", f"Historical: {result['sample']} starts | avg {result['historical_avg']:.2f} | weighted hit rate {result['raw']:.1%}", "", "SHARED QB PROJECTIONS"]
+    lines += [f"{k}: {v:.2f}" for k, v in result["projections"].items()]
+    lines += ["", "SIGNALS (adjust projections, not percentage-point bonuses)", "Signal | Value | Effect"]
+    lines += [f"{row['signal']} | {row['value']} | {row['effect']}" for row in result["trace"]]
+    lines += ["", "EVIDENCE"] + [f"{k}: {v:.1f}" for k, v in result["confidence_parts"].items()]
+    lines += ["", f"Model chance: {result['probability']:.1%}; push: {result['push']:.1%}", f"Evidence quality: {result['confidence']}/100", f"Entry score: {result['score']}/100 | {result['action']}", "Weather source: " + ctx.get("weather_note", "Not supplied"), "Flags: " + (" | ".join(result["flags"]) or "None"), "Unavailable advanced inputs: charted pressures/coverage, route participation, coaching-change estimates; no fabricated adjustments."]
+    return "\n".join(lines)
+
+
+def nfl_capture(results, source):
+    import uuid
+    rows = []
+    now = pd.Timestamp.now(tz="UTC")
+    for result in results:
+        ctx = result["context"]
+        if pd.Timestamp(ctx["kickoff"]) <= now:
+            continue
+        rows.append({"sport": "NFL", "model_version": NFL_MODEL_VERSION, "player": result["player"], "player_id": ctx["player_id"], "player_team": ctx["team"], "opp": ctx["opponent"], "stat": result["market"], "line": result["line"], "side": result["side"], "adj": result["probability"] * 100, "confidence": result["confidence"], "cons": result["stability"] * 100, "entry_score": result["score"], "entry_action": result["action"], "tier": result["action"], "projection": result["projection"], "avg": result["historical_avg"], "samples": result["sample"], "game_id": ctx["game_id"], "game_date": pd.Timestamp(ctx["kickoff"]).tz_convert("America/New_York").date().isoformat(), "game_datetime": ctx["kickoff"], "start_time": ctx["kickoff"], "odds_type": "goblin" if "Reduced" in result.get("line_type", "") else "standard", "model_flags": result["flags"], "confidence_parts": result["confidence_parts"], "slate_source": result.get("slate_source", "manual"), "line_verification_required": result.get("slate_source", "manual") != "live"})
+        rows[-1]["push_probability"] = result["push"]
+    if rows:
+        save_model_prediction_batch(rows, str(uuid.uuid4()), st.session_state.session_id, source)
+
+
+def nfl_actual(row):
+    try:
+        kickoff = pd.to_datetime(row.get("game_datetime") or _tracker_metadata_value(row, "Game Datetime"), utc=True, errors="coerce")
+        market = nfl_market(row.get("market") or row.get("Matchup"))
+        if pd.isna(kickoff) or market is None or kickoff >= pd.Timestamp.now(tz="UTC"):
+            return None
+        season = kickoff.year if kickoff.month >= 3 else kickoff.year - 1
+        stats = nfl_history(season)["stats"]
+        player_id = str(row.get("player_id") or _tracker_metadata_value(row, "Player ID"))
+        matches = stats.loc[(stats.player_id == player_id) & (abs(stats.kickoff - kickoff) <= pd.Timedelta(minutes=15)) & (stats.opponent_team == nfl_team(row.get("opponent") or row.get("Opponent"))) & stats.started]
+        return nfl_number(matches.iloc[0][NFL_MARKETS[market]]) if len(matches) == 1 else None
+    except Exception:
+        return None
+
+
+def nfl_save_pick(player, result):
+    ctx = result["context"]
+    if pd.Timestamp(ctx["kickoff"]) <= pd.Timestamp.now(tz="UTC"):
+        st.session_state.parlay_notice = "This game has started. Refresh the NFL board before adding a pick."
+        return
+    leg = {"player": player, "sport": "NFL", "prop": f"{result['market']} {result['side']}", "line": result["line"], "side": result["side"], "verdict": result["action"], "confidence": result["confidence"], "adj": round(result["probability"] * 100, 1), "game_id": ctx["game_id"], "game_date": ctx["kickoff"][:10], "line_type": result.get("line_type", "Unverified"), "added": datetime.now().strftime("%I:%M %p")}
+    entry = {"Player": player, "Sport": "NFL", "Prop": result["market"], "Line": f"{result['line']} {result['side']}", "Opponent": ctx["opponent"], "Matchup": result["market"], "Avg PTS": result["historical_avg"], "Adjusted": f"{result['probability']:.0%}", "Verdict": result["action"], "Result": "Pending", "player_id": ctx["player_id"], "game_datetime": ctx["kickoff"], "market": result["market"], "opponent": ctx["opponent"]}
+    entry.update({"Player ID": ctx["player_id"], "Game Datetime": ctx["kickoff"], "Event ID": ctx["game_id"], "Game Date": ctx["kickoff"][:10], "Team": ctx["team"]})
+    add_to_pick_list_and_tracker(leg, entry)
+
+
+def nfl_render_result(player, result, key):
+    ctx = result["context"]
+    st.subheader(f"{player} · {ctx['team']} vs {ctx['opponent']}")
+    render_entry_decision(result["score"], result["action"], f"{result['market']} {result['side']} {result['line']:g}", result["probability"], result["confidence"], result["stability"], " · ".join(result["flags"][:2]) or "Starter and matchup context loaded.", "Entry score = 70% model chance + 30% evidence quality. Risk gates can limit the action. NFL beta: coefficients and probabilities await prospective validation.", history_label=f"Last {result['sample']} starts", history_value=f"{result['raw']:.0%} weighted hit rate", evidence_label="Evidence quality", line_type_label=result.get("line_type", "Manual line · payout unverified"))
+    cols = st.columns(3)
+    for col, (market, projection) in zip(cols, result["projections"].items()):
+        col.metric(market, f"{projection:.1f}")
+    st.caption(f"Kickoff {pd.Timestamp(ctx['kickoff']).tz_convert('America/New_York').strftime('%a %b %d, %I:%M %p ET')} · {ctx.get('stadium', '')}")
+    if result["push"] > 0.001:
+        st.caption(f"Estimated push probability: {result['push']:.1%}")
+    with st.expander("Game logs"):
+        st.dataframe(result["logs"][["kickoff", "team", "opponent_team", "attempts", "completions", "passing_yards"]], hide_index=True, use_container_width=True)
+    with st.expander("Model debugger"):
+        report = nfl_debug(result, player)
+        st.code(report, language=None)
+        st.download_button("Download debugger", report, "nfl-qb-debug.txt", key=f"{key}_debug")
+    st.button("Add & Track", key=f"{key}_pick", icon=":material/bookmark_add:", on_click=nfl_save_pick, args=(player, result), use_container_width=True)
+
+
+def render_nfl_analyzer():
+    st.markdown("<div id='nfl-analyzer-controls'></div>", unsafe_allow_html=True)
+    render_navigation_scroll_target("nfl-analyzer-controls")
+    st.subheader("NFL Quarterback Lab")
+    st.caption("BETA · Full-game attempts, completions, and passing yards")
+    try:
+        with st.spinner("Loading quarterbacks and schedule..."):
+            directory, board = nfl_directory(), nfl_board()
+    except Exception as err:
+        st.error(f"NFL roster/schedule unavailable: {err}")
+        return
+    if directory["warnings"]:
+        st.warning("; ".join(directory["warnings"]))
+    players = directory["players"]
+    if not players:
+        st.warning("No verified NFL quarterback roster is available.")
+        return
+    # Keep a non-widget copy so switching workspaces cannot erase these inputs.
+    for name, value in st.session_state.get("nfl_saved_inputs", {}).items():
+        if name not in st.session_state:
+            st.session_state[name] = value
+    jump = st.session_state.pop("nfl_jump", None)
+    if jump:
+        st.session_state.nfl_player = jump["player"]
+        st.session_state.nfl_market_input = nfl_market(jump["market"]) or "Pass Attempts"
+        st.session_state.nfl_line = float(jump["line"])
+        st.session_state.nfl_side = jump["side"]
+        st.session_state.nfl_line_type = jump["line_type"]
+        st.session_state.nfl_selected_game = jump.get("game_id", "")
+        st.session_state.nfl_verified_line = dict(jump)
+        st.session_state.pop("nfl_result", None)
+    selected = player_typeahead("Player search", [p["name"] for p in players], "nfl_player", sport="nfl", noun="quarterback")
+    exact = [p for p in players if nfl_name(p["name"]) == nfl_name(selected)]
+    if len(exact) == 1 and exact[0].get("image"):
+        st.image(exact[0]["image"], width=80)
+    market = st.selectbox("Market", list(NFL_MARKETS), key="nfl_market_input")
+    c2, c3 = st.columns(2)
+    if not jump and market != st.session_state.get("nfl_previous_market", market):
+        st.session_state.nfl_line = {"Pass Attempts": 30.5, "Pass Completions": 20.5, "Passing Yards": 225.5}[market]
+    st.session_state.nfl_previous_market = market
+    with c2:
+        if "nfl_line" not in st.session_state:
+            st.session_state.nfl_line = {"Pass Attempts": 30.5, "Pass Completions": 20.5, "Passing Yards": 225.5}[market]
+        line = st.number_input("Line", min_value=0.0, step=0.5, key="nfl_line")
+    with c3:
+        side = st.selectbox("Direction", ["Over", "Under"], key="nfl_side")
+    games = [g for g in board if len(exact) == 1 and g["team"] == exact[0]["team"] and pd.Timestamp(g["kickoff"]) > pd.Timestamp.now(tz="UTC")]
+    game_ids = [g["game_id"] for g in games]
+    if st.session_state.get("nfl_selected_game") not in game_ids:
+        st.session_state.nfl_selected_game = game_ids[0] if game_ids else None
+    chosen_game = st.selectbox("Game", game_ids, key="nfl_selected_game", format_func=lambda gid: next(f"{g['game_name']} · {pd.Timestamp(g['kickoff']).tz_convert('America/New_York').strftime('%a %b %d %I:%M %p ET')}" for g in games if g["game_id"] == gid)) if games else None
+    game = next((g for g in games if g["game_id"] == chosen_game), None)
+    if selected and not games:
+        st.info("No verified upcoming game found for this quarterback in the next ten days.")
+    request_key = (selected, market, line, side, game["game_id"] if game else None)
+    st.session_state.nfl_saved_inputs = {name: st.session_state[name] for name in ("nfl_player", "nfl_market_input", "nfl_line", "nfl_side", "nfl_selected_game") if name in st.session_state}
+    if st.button("Analyze quarterback", type="primary", use_container_width=True, disabled=not game or len(exact) != 1):
+        st.session_state.pop("nfl_result", None)
+        try:
+            with st.spinner("Loading game logs and quarterback context..."):
+                data = nfl_history(game["season"])
+                ctx = nfl_prepare(exact[0], game, data, nfl_team_context(game["team_id"]))
+                if pd.Timestamp(ctx["kickoff"]) <= pd.Timestamp.now(tz="UTC"):
+                    raise ValueError("This game has started. Select another upcoming game.")
+                result = nfl_qb_model(data["stats"], ctx, market, line, side)
+                verified = st.session_state.get("nfl_verified_line") or {}
+                same_line = (verified.get("player"), verified.get("market"), verified.get("line"), verified.get("side"), verified.get("game_id")) == request_key
+                result["line_type"] = verified.get("line_type") if same_line else "Manual line · payout unverified"
+                result["player"] = selected
+                st.session_state.nfl_result = (request_key, result)
+                nfl_capture([result], "individual_analyzer")
+        except Exception as err:
+            st.error(f"NFL analysis unavailable: {err}")
+    saved = st.session_state.get("nfl_result")
+    if saved and saved[0] == request_key:
+        nfl_render_result(selected, saved[1], "nfl_individual")
+    with st.expander("Historical line replay"):
+        render_nfl_backtest()
+
+
+def nfl_backtest(stats, lines):
+    required = {"player", "game_id", "market", "line", "side", "captured_at"}
+    if not required.issubset(lines.columns):
+        raise ValueError("CSV needs player, game_id (nflverse), market, line, side, captured_at (UTC).")
+    outputs = []
+    for _, row in lines.iterrows():
+        out = dict(row)
+        try:
+            game = stats.loc[(stats.game_id == str(row.game_id)) & (stats.player_display_name.map(nfl_name) == nfl_name(row.player)) & stats.started]
+            if len(game) != 1:
+                raise ValueError("No unique completed start for this player/game")
+            actual = game.iloc[0]
+            captured = pd.to_datetime(row.captured_at, utc=True, errors="coerce")
+            if pd.isna(captured) or captured >= actual.kickoff:
+                raise ValueError("Line capture must precede kickoff")
+            # No current roster, weather, injuries, or closing odds are used in historical replay.
+            ctx = {"player_id": actual.player_id, "team": actual.team, "opponent": actual.opponent_team, "season": int(actual.season), "kickoff": actual.kickoff.isoformat(), "game_id": actual.game_id, "spread": nfl_number(row.get("spread")), "total": nfl_number(row.get("total"))}
+            available = stats.loc[stats.kickoff < captured - pd.Timedelta(hours=24)]
+            result = nfl_qb_model(available, ctx, row.market, float(row.line), row.side)
+            observed = float(actual[NFL_MARKETS[result["market"]]])
+            outcome = "Push" if observed == float(row.line) else "Hit" if (observed > float(row.line)) == (row.side == "Over") else "Miss"
+            decisive_probability = result["probability"] / max(1e-9, 1 - result["push"])
+            out.update(status="Evaluated", actual=observed, outcome=outcome, probability=result["probability"], decisive_probability=decisive_probability, projection=result["projection"], brier=None if outcome == "Push" else (decisive_probability - (outcome == "Hit")) ** 2)
+        except Exception as err:
+            out.update(status="Excluded", reason=str(err))
+        outputs.append(out)
+    report = pd.DataFrame(outputs)
+    if len(report) and "status" in report:
+        valid = report.loc[report.status == "Evaluated"].copy()
+        if len(valid):
+            valid["_captured"] = pd.to_datetime(valid.captured_at, utc=True)
+            valid["_identity"] = valid.apply(lambda r: (nfl_name(r.player), str(r.game_id), nfl_market(r.market), float(r.line), r.side), axis=1)
+            duplicates = valid.sort_values("_captured", kind="stable").duplicated("_identity", keep="last")
+            excluded = duplicates.index[duplicates]
+            report.loc[excluded, "status"] = "Excluded"
+            report.loc[excluded, "reason"] = "Repeated prop: latest valid pregame snapshot retained"
+            report.loc[excluded, "brier"] = float("nan")
+    return report
+
+
+def render_nfl_backtest():
+    st.caption("Historical pregame lines only. Replay uses earlier statistics with a 24-hour publication buffer; current role/injury context is unavailable. This evaluates the statistical core, not the full live recommendation policy.")
+    template = "player,game_id,market,line,side,captured_at,spread,total\n"
+    st.download_button("CSV template", template, "nfl-lines-template.csv", key="nfl_bt_template")
+    upload = st.file_uploader("Historical lines CSV", type="csv", key="nfl_bt_file")
+    if upload and st.button("Run historical replay", key="nfl_bt_run"):
+        try:
+            rows = pd.read_csv(upload)
+            if len(rows) > 1000:
+                raise ValueError("Limit each replay to 1,000 pregame lines.")
+            years = sorted({int(str(g).split("_")[0]) for g in rows.game_id})
+            with st.spinner("Replaying historical lines..."):
+                stats = pd.concat([nfl_history(y)["stats"] for y in years]).drop_duplicates(["game_id", "player_id"])
+                report = nfl_backtest(stats, rows)
+            st.session_state.nfl_backtest_report = report
+        except Exception as err:
+            st.error(str(err))
+    report = st.session_state.get("nfl_backtest_report")
+    if report is not None:
+        st.dataframe(report, use_container_width=True, hide_index=True)
+        if "brier" in report:
+            evaluated = report.loc[report.brier.notna()]
+            if len(evaluated):
+                st.write(f"{len(evaluated)} settled lines · hit rate {(evaluated.outcome == 'Hit').mean():.1%} · Brier {evaluated.brier.mean():.3f}")
+        st.download_button("Download replay", report.to_csv(index=False), "nfl-line-replay.csv", key="nfl_bt_download")
+
+
+def render_nfl_scanner():
+    st.subheader("NFL Quarterback Edge")
+    st.caption("BETA · Shared quarterback model · Exact full-game lines")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        market = st.selectbox("Market", ["All QB markets"] + list(NFL_MARKETS), key="nfl_scan_market")
+    with c2:
+        direction = st.selectbox("Direction", ["Both sides", "Over", "Under"], key="nfl_scan_side")
+    with c3:
+        reduced = st.checkbox("Include reduced-payout lines", key="nfl_scan_reduced")
+    settings = (market, direction, reduced)
+    if st.button("Scan NFL quarterbacks", type="primary", use_container_width=True):
+        st.session_state.pop("nfl_scan", None)
+        audit, results, seen = [], [], set()
+        try:
+            with st.spinner("Loading PrizePicks NFL board and quarterback data..."):
+                props, directory, games = fetch_all_pp_props("NFL"), nfl_directory(), nfl_board()
+                seasons = {g["season"] for g in games}
+                if not seasons:
+                    raise ValueError("No verified upcoming regular-season/playoff games.")
+                data = nfl_history(max(seasons))
+            progress = st.progress(0)
+            for i, prop in enumerate(props):
+                label = f"{prop.get('player')} | {prop.get('stat')} | {prop.get('line')}"
+                try:
+                    stat = nfl_market(prop.get("stat"))
+                    if prop.get("sport") != "NFL" or not stat or (market != "All QB markets" and stat != market):
+                        raise ValueError("Outside selected NFL market")
+                    is_reduced = is_reduced_payout_line(prop)
+                    if is_reduced and (not reduced or direction == "Under"):
+                        raise ValueError("Reduced line excluded by filters / Over-only")
+                    players = [p for p in directory["players"] if nfl_name(p["name"]) == nfl_name(prop["player"]) and p["team"] == nfl_team(prop["team"])]
+                    if len(players) != 1:
+                        raise ValueError("Player/team identity not verified")
+                    player = players[0]
+                    start = pd.to_datetime(prop.get("start_time"), utc=True, errors="coerce")
+                    matches = [g for g in games if g["team"] == player["team"] and pd.notna(start) and abs((pd.Timestamp(g["kickoff"]) - start).total_seconds()) <= 900]
+                    if len(matches) != 1:
+                        raise ValueError("Exact future game/time not verified")
+                    if pd.Timestamp(matches[0]["kickoff"]) <= pd.Timestamp.now(tz="UTC"):
+                        raise ValueError("Game has already started")
+                    ctx = nfl_prepare(player, matches[0], data, nfl_team_context(player["team_id"]))
+                    sides = ["Over"] if is_reduced else ["Over", "Under"] if direction == "Both sides" else [direction]
+                    for side in sides:
+                        key = (player["espn_id"], ctx["game_id"], stat, float(prop["line"]), side, is_reduced)
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        result = nfl_qb_model(data["stats"], ctx, stat, float(prop["line"]), side)
+                        result.update(player=player["name"], line_type="Reduced payout · verify return" if is_reduced else "Standard payout", projection_id=prop.get("projection_id"), slate_source=prop.get("slate_source", "unknown"))
+                        if prop.get("line_verification_required") or result["slate_source"] == "unknown":
+                            result["flags"].append("Cached or unverified line: confirm current availability and payout")
+                            if result["action"] == "PLAY":
+                                result["action"] = "WATCH"
+                        # Payout class is displayed separately; it does not change the hit probability.
+                        results.append(result)
+                        audit.append(f"{label} | {side} | {result['action']} | chance {result['probability']:.1%} | evidence {result['confidence']} | score {result['score']} | " + "; ".join(result["flags"]))
+                except Exception as err:
+                    audit.append(f"{label} | EXCLUDED | {err}")
+                progress.progress((i + 1) / max(1, len(props)))
+            progress.empty()
+            nfl_capture(results, "edge_scanner")
+            st.session_state.nfl_scan = {"settings": settings, "results": results, "audit": audit, "captured": len(props), "generated": pd.Timestamp.now(tz="UTC").isoformat(), "warnings": directory["warnings"] + data["warnings"]}
+        except Exception as err:
+            st.error(f"NFL scanner unavailable: {err}")
+            st.code("\n".join(audit + [str(err)]), language=None)
+    scan = st.session_state.get("nfl_scan")
+    if not scan:
+        return
+    if scan["settings"] != settings:
+        st.info("Filters changed. Run a new scan to apply them.")
+    now = pd.Timestamp.now(tz="UTC")
+    current = [r for r in scan["results"] if pd.Timestamp(r["context"]["kickoff"]) > now]
+    ranked = sorted(current, key=lambda r: ({"PLAY": 0, "WATCH": 1, "PASS": 2}[r["action"]], -r["score"], -r["probability"]))
+    show_pass = st.checkbox("Show passes for audit", key="nfl_show_pass")
+    visible = [r for r in ranked if show_pass or r["action"] in ("PLAY", "WATCH")]
+    st.caption(f"{scan['captured']} source rows · {len(scan['results'])} direction evaluations · {len(visible)} displayed · {scan['generated']}")
+    if not visible:
+        st.info("No PLAY/WATCH rows passed the current data and role gates. Open the scanner debugger for every exclusion and PASS reason.")
+    for index, result in enumerate(visible):
+        with st.expander(f"{result['action']} · {result['score']} · {result['player']} · {result['market']} {result['side']} {result['line']:g} · {result['line_type']}"):
+            nfl_render_result(result["player"], result, f"nfl_scan_{index}")
+            st.button("Open analyzer", key=f"nfl_open_{index}", use_container_width=True, on_click=open_edge_analyzer, args=("nfl", result["player"], result["line"], result["side"], result["market"], result["line_type"], result["context"]["game_id"]))
+    with st.expander("Scanner coverage and debugger"):
+        report = "PROPIQ NFL SCANNER DEBUGGER\n" + scan["generated"] + "\n" + NFL_MODEL_VERSION + "\n" + "\n".join(scan["warnings"] + scan["audit"])
+        st.code(report, language=None)
+        st.download_button("Download scanner debugger", report, "nfl-scanner-debug.txt", key="nfl_scan_debug")
+
+
 # Session state
 # ─────────────────────────────────────────────
 
@@ -6320,7 +6974,12 @@ if "session_id" not in st.session_state:
     import uuid
     st.session_state.session_id = str(uuid.uuid4())
 
-_ANALYZER_SPORTS = {"nba", "mlb"}
+# Detach NFL control values from Streamlit's hidden-widget cleanup on every route.
+for _nfl_widget_key in ("nfl_player", "nfl_market_input", "nfl_line", "nfl_side", "nfl_selected_game", "nfl_scan_market", "nfl_scan_side", "nfl_scan_reduced", "edge_league_select"):
+    if _nfl_widget_key in st.session_state:
+        st.session_state[_nfl_widget_key] = st.session_state[_nfl_widget_key]
+
+_ANALYZER_SPORTS = {"nba", "mlb", "nfl"}
 _VALID_SPORTS = _ANALYZER_SPORTS | {"edge"}
 _VALID_VIEWS = {"analyze", "edge", "picks", "results"}
 try:
@@ -6457,6 +7116,7 @@ def add_to_pick_list(leg: dict) -> None:
             and str(existing.get("sport", "")) == sport
             and str(existing.get("prop", "")) == prop
             and str(existing.get("side", "")) == side
+            and (sport != "NFL" or str(existing.get("game_id", "")) == str(leg.get("game_id", "")))
             and same_line
         )
         if same_pick:
@@ -6486,6 +7146,7 @@ def add_to_pick_list_and_tracker(leg: dict, entry: dict) -> None:
                 if str(old.get("Player", "")) == player
                 and str(old.get("Line", "")) == line
                 and str(old.get("Matchup", "")) == matchup
+                and (entry.get("Sport") != "NFL" or _tracker_metadata_value(old, "Event ID") == _tracker_metadata_value(entry, "Event ID"))
             ),
             None,
         )
@@ -6655,7 +7316,7 @@ def navigate_to_sport(sport: str, target: str) -> None:
 
 def open_edge_analyzer(sport: str, player: str, line: float,
                        side: str, stat: str,
-                       line_type: str = "Line type unverified") -> None:
+                       line_type: str = "Line type unverified", event_id: str = "") -> None:
     """Open an Edge result in its analyzer without an extra rerun."""
     sport_key = str(sport or "").strip().lower()
     target = f"{sport_key}-analyzer-controls"
@@ -6669,6 +7330,8 @@ def open_edge_analyzer(sport: str, player: str, line: float,
         st.session_state.edge_jump_player = player
         st.session_state.edge_jump_line = line
         st.session_state.edge_jump_side = side
+    elif sport_key == "nfl":
+        st.session_state.nfl_jump = {"player": player, "market": stat, "line": float(line), "side": side, "line_type": line_type, "game_id": event_id}
     elif sport_key == "mlb":
         st.session_state.edge_jump_pitcher = player
         st.session_state.edge_jump_line = line
@@ -6693,6 +7356,10 @@ def open_pick_list_analyzer(leg: dict) -> None:
     if not stat:
         stat = "Strikeouts" if sport_key == "mlb" else "Points"
     st.session_state.edge_return_available = False
+    if sport_key == "nfl":
+        open_edge_analyzer("nfl", player, float(line), side, stat, leg.get("line_type", "Unverified"), leg.get("game_id", ""))
+        st.session_state.edge_return_available = False
+        return
     if sport_key == "nba":
         st.session_state.edge_jump_player = player
         st.session_state.edge_jump_line = line
@@ -6946,6 +7613,7 @@ def build_model_prediction_rows(results: list, scan_id: str,
         risk_flags = list(dict.fromkeys(risk_flags))[:12]
 
         signal_keys = (
+            "push_probability",
             "raw_adj", "calibrated_base", "reliability", "avg", "l3", "samples",
             "edge_raw", "projection_gap", "projection_prob", "pc", "pc_expected",
             "verdict_edge", "quality_gate_blocked",
@@ -7457,7 +8125,9 @@ def settle_model_predictions(predictions: list, max_events: int = 40) -> dict:
         if is_current_model:
             checked_current += 1
         sport = str(sample.get("sport", "")).upper()
-        if sport == "MLB":
+        if sport == "NFL":
+            actual = nfl_actual(sample)
+        elif sport == "MLB":
             actual = _learning_mlb_actual(
                 sample.get("player_id", ""), sample.get("player", ""),
                 sample.get("market", ""), sample.get("game_date", ""),
@@ -7478,6 +8148,9 @@ def settle_model_predictions(predictions: list, max_events: int = 40) -> dict:
         for row in rows:
             result = _learning_pick_result(actual, float(row.get("line", 0)), row.get("side", "Over"))
             probability = float(row.get("probability", 50) or 50) / 100.0
+            if sport == "NFL":
+                push_probability = float((row.get("signal_snapshot") or {}).get("push_probability", 0) or 0)
+                probability = min(1.0, probability / max(1e-9, 1 - push_probability))
             outcome = 1.0 if result == "Hit" else 0.0 if result == "Miss" else None
             closing_line, closing_source, closing_at = _learning_closing_line(row)
             updates = {
@@ -7617,6 +8290,10 @@ def _learning_evaluation_rows(predictions: list) -> list:
         risk_flags = item.get("risk_flags", []) or []
         if not isinstance(signal_snapshot, dict):
             signal_snapshot = {}
+        if str(item.get("sport", "")).upper() == "NFL":
+            # The binary learning report excludes pushes, so evaluate conditional win chance.
+            push_probability = _parse_numeric_value(signal_snapshot.get("push_probability"), 0) or 0
+            probability = min(1.0, probability / max(1e-9, 1 - push_probability))
         if not isinstance(risk_flags, list):
             risk_flags = [str(risk_flags)]
         decision_reasons = signal_snapshot.get("entry_decision_reasons", []) or []
@@ -10933,7 +11610,7 @@ def _tracker_metadata_value(entry: dict, field: str) -> str:
         return direct
     token = {
         "Sport": "sport", "Game Date": "date", "Event ID": "event",
-        "Player ID": "player_id", "Team": "team",
+        "Player ID": "player_id", "Team": "team", "Game Datetime": "kickoff",
     }.get(field)
     if not token:
         return ""
@@ -10948,7 +11625,7 @@ def _tracker_metadata_value(entry: dict, field: str) -> str:
 def _tracker_sport(entry: dict) -> str:
     """Recover a persisted tracker sport without guessing shared WNBA/NBA props."""
     sport = _tracker_metadata_value(entry, "Sport").upper()
-    if sport in ("MLB", "WNBA", "NBA"):
+    if sport in ("MLB", "WNBA", "NBA", "NFL"):
         return sport
     matchup = str(entry.get("Matchup", entry.get("matchup", "")) or "")
     return "MLB" if matchup in ("Strikeouts", "Hitter Fantasy Score") else "NBA"
@@ -10961,6 +11638,7 @@ def _tracker_durable_venue(entry: dict) -> str:
     for field, token in (
         ("Sport", "sport"), ("Game Date", "date"), ("Event ID", "event"),
         ("Player ID", "player_id"), ("Team", "team"),
+        ("Game Datetime", "kickoff"),
     ):
         value = str(entry.get(field, "") or "").strip()
         if value and not re.search(
@@ -10998,7 +11676,7 @@ def load_tracker_from_supabase(session_id: str) -> list:
                 "Result":      r.get("result", "Pending"),
             }
             persisted["Sport"] = _tracker_sport(persisted)
-            for field in ("Game Date", "Event ID", "Player ID", "Team"):
+            for field in ("Game Date", "Event ID", "Player ID", "Team", "Game Datetime"):
                 value = _tracker_metadata_value(persisted, field)
                 if value:
                     persisted[field] = value
@@ -12468,6 +13146,9 @@ def auto_detect_result(entry: dict) -> Optional[str]:
 
         sport = _tracker_sport(entry)
         prop = str(entry.get("Matchup", ""))
+        if sport == "NFL":
+            actual = nfl_actual(entry)
+            return _learning_pick_result(actual, line_val, side) if actual is not None else None
         is_mlb = sport == "MLB" or prop in ("Strikeouts", "Hitter Fantasy Score")
         expected_date_text = _tracker_metadata_value(entry, "Game Date")[:10]
         expected_date = pd.to_datetime(expected_date_text, errors="coerce")
@@ -14613,7 +15294,7 @@ if _active_view == "results":
 
 if _active_view == "analyze":
     with st.container(key="analyzer_sport_navigation"):
-        _sp1, _sp2 = st.columns(2)
+        _sp1, _sp2, _sp3 = st.columns(3)
         with _sp1:
             st.button(
                 "NBA", key="sport_nba", use_container_width=True,
@@ -14627,6 +15308,13 @@ if _active_view == "analyze":
                 icon=":material/sports_baseball:",
                 type="primary" if st.session_state.active_sport == "mlb" else "secondary",
                 on_click=navigate_to_sport, args=("mlb", "mlb-analyzer-controls"),
+            )
+        with _sp3:
+            st.button(
+                "NFL", key="sport_nfl", use_container_width=True,
+                icon=":material/sports_football:",
+                type="primary" if st.session_state.active_sport == "nfl" else "secondary",
+                on_click=navigate_to_sport, args=("nfl", "nfl-analyzer-controls"),
             )
 
     if st.session_state.get("edge_return_available"):
@@ -24181,6 +24869,13 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
         if not isinstance(cached, list) or not cached:
             return False
         try:
+            if sport_filter == "NFL":
+                return len(cached) <= 1500 and all(
+                    p.get("sport") == "NFL"
+                    and nfl_market(p.get("stat")) is not None
+                    and int(p.get("line_selection_version", 0) or 0) >= PP_CACHE_MIN_LINE_SELECTION_VERSION
+                    for p in cached
+                )
             if sport_filter == "MLB":
                 mlb_rows = [p for p in cached if p.get("sport") == "MLB"]
                 if mlb_rows and any(
@@ -24264,6 +24959,15 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
     if sport_filter == "NBA":  _all_leagues = [("7", "NBA")]
     elif sport_filter == "MLB": _all_leagues = [("2", "MLB")]
     elif sport_filter == "WNBA": _all_leagues = [("3", "WNBA")]
+    elif sport_filter == "NFL":
+        # Discover the exact full-game league instead of treating an ID guess as verification.
+        league_response = _req.get("https://partner-api.prizepicks.com/leagues", timeout=10)
+        league_response.raise_for_status()
+        nfl_leagues = [row for row in league_response.json().get("data", [])
+                       if str(row.get("attributes", {}).get("name", "")).upper() == "NFL"]
+        if len(nfl_leagues) != 1:
+            raise RuntimeError("Could not verify the PrizePicks full-game NFL league.")
+        _all_leagues = [(str(nfl_leagues[0]["id"]), "NFL")]
 
     def _parse(data: dict, sport: str, expected_league_id: str) -> Tuple[list, dict]:
         """Parse only verified, supported PrizePicks player markets."""
@@ -24331,6 +25035,8 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
             }
 
         def _canonical_market(stat_name: str) -> Optional[str]:
+            if expected_sport == "NFL":
+                return nfl_market(stat_name)
             if expected_sport == "MLB":
                 market = normalize_mlb_pitcher_prop_stat(stat_name)
                 return market if market in ("Strikeouts", "Hitter Fantasy Score") else None
@@ -24385,6 +25091,9 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
 
             name = pi.get("name", "")
             if not name:
+                continue
+            if expected_sport == "NFL" and str(pi.get("pos", "")).upper() != "QB":
+                skipped_unsupported += 1
                 continue
             if (
                 expected_sport == "MLB"
@@ -25006,6 +25715,26 @@ def enrich_edge_results_with_sportsbook_market(results: List[dict]) -> List[dict
     )
     return results
 
+
+if st.session_state.active_sport == "nfl":
+    st.markdown("""<style>
+    .st-key-nfl_workspace h3, .st-key-nfl_workspace [data-testid="stMetricValue"] { color: #eef4f8 !important; }
+    .st-key-nfl_workspace [data-testid="stCaptionContainer"], .st-key-nfl_workspace [data-testid="stMetricLabel"] { color: #a7b6c3 !important; }
+    </style>""", unsafe_allow_html=True)
+    with st.container(key="nfl_workspace"):
+        render_nfl_analyzer()
+    st.stop()
+
+if st.session_state.active_sport == "edge":
+    _edge_league = st.radio("Sport", ["MLB", "NFL"], horizontal=True, key="edge_league_select")
+    if _edge_league == "NFL":
+        st.markdown("""<style>
+        .st-key-nfl_workspace h3, .st-key-nfl_workspace [data-testid="stMetricValue"] { color: #eef4f8 !important; }
+        .st-key-nfl_workspace [data-testid="stCaptionContainer"], .st-key-nfl_workspace [data-testid="stMetricLabel"] { color: #a7b6c3 !important; }
+        </style>""", unsafe_allow_html=True)
+        with st.container(key="nfl_workspace"):
+            render_nfl_scanner()
+        st.stop()
 
 if st.session_state.active_sport == "edge":
 
