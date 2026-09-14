@@ -6242,6 +6242,74 @@ div[data-baseweb="menu"] [role="option"]:hover {
 @media (prefers-reduced-motion: reduce) {
     .analysis-progress::after { animation: none !important; width: 100% !important; }
 }
+/* Sports desk: unframed sections, compact score tiles, and source-first news. */
+.hub-heading { display:flex; justify-content:space-between; align-items:end; gap:16px; margin:20px 0; }
+.hub-heading h1 { color:#f2f6fa !important; font-size:30px !important; line-height:1.2; padding:6px 0 0; letter-spacing:0 !important; }
+.hub-heading > span, .hub-muted { color:#a7b6c3; font-size:14px; }
+.hub-kicker { color:#74d2d8; font-size:12px; font-weight:700; letter-spacing:0; }
+.hub-section { color:#eef4f8 !important; font-size:20px !important; letter-spacing:0 !important; margin:26px 0 10px; padding:0; }
+.hub-section > span { color:#74d2d8; margin-left:8px; font-size:16px; }
+.st-key-hub_workspace [data-testid="stCaptionContainer"] { color:#a7b6c3 !important; font-size:14px !important; }
+.st-key-hub_workspace [data-testid="stVerticalBlock"] { gap:0.65rem !important; }
+.st-key-hub_workspace div[data-testid="stButton"] button { background:#18242b !important; color:#eaf3f8 !important; border:1px solid #394750 !important; box-shadow:none !important; min-height:44px !important; }
+.st-key-hub_workspace .st-key-hub_sports div[data-testid="stButton"] button[kind="primary"] { color:#95edf0 !important; border-color:#74d2d8 !important; background:#163037 !important; }
+.st-key-hub_workspace div[data-testid="stButton"] button:hover { border-color:#74d2d8 !important; }
+.st-key-hub_workspace div[data-testid="stButton"] button:disabled { opacity:0.45 !important; }
+.st-key-hub_workspace [data-testid="stRadio"] label, .st-key-hub_workspace [data-testid="stRadio"] p { color:#dbe5eb !important; }
+.st-key-hub_sports div[data-testid="stHorizontalBlock"] { display:grid !important; grid-template-columns:repeat(3,minmax(0,1fr)) !important; gap:8px !important; }
+.st-key-hub_actions div[data-testid="stHorizontalBlock"] { display:grid !important; grid-template-columns:repeat(2,minmax(0,1fr)) !important; gap:8px !important; }
+.st-key-hub_sports div[data-testid="stColumn"], .st-key-hub_actions div[data-testid="stColumn"] { width:100% !important; min-width:0 !important; }
+.st-key-hub_sports button { min-height:42px !important; }
+.hub-scores { display:flex; gap:10px; overflow-x:auto; padding:3px 1px 12px; scroll-snap-type:x proximity; scrollbar-width:thin; scrollbar-color:#53616b transparent; }
+.hub-game { display:block; flex:0 0 206px; background:#131b20; border:1px solid #303c43; border-radius:8px; padding:14px; color:#edf3f7 !important; text-decoration:none !important; scroll-snap-align:start; }
+.hub-game:hover { border-color:#74d2d8; }
+.hub-game:focus-visible, .hub-story a:focus-visible { outline:2px solid #74d2d8; outline-offset:2px; }
+.hub-game-status { display:block; color:#d4bd78; font-size:12px; min-height:22px; }
+.hub-game-status.is-live { color:#59dfac; font-weight:700; }
+.hub-team { display:flex; align-items:center; gap:9px; min-height:34px; font-size:16px; }
+.hub-team img { width:28px; height:28px; object-fit:contain; }
+.hub-team b { margin-left:auto; font-size:18px; }
+.hub-game-note { display:block; font-size:12px; line-height:1.5; color:#a7b6c3; margin-top:9px; min-height:36px; }
+.hub-pick { padding:10px 0 14px; border-bottom:1px solid #29333c; }
+.hub-pick strong, .hub-pick span, .hub-pick small { display:block; line-height:1.6; }
+.hub-pick strong { color:#eef4f8; font-size:16px; }
+.hub-pick span { color:#d1dce4; font-size:14px; }
+.hub-pick small { color:#a7b6c3; font-size:12px; }
+.hub-mention { border-left:2px solid #d4bd78; padding:8px 14px; margin:8px 0; }
+.hub-mention span, .hub-mention small { display:block; color:#a7b6c3; font-size:12px; }
+.hub-mention a { display:block; color:#eaf1f5 !important; font-size:16px; margin:4px 0; }
+.hub-news { display:grid; grid-template-columns:1.1fr 1fr; column-gap:28px; }
+.hub-story { padding:14px 0; border-top:1px solid #303b44; min-width:0; }
+.hub-story a { display:flex; gap:14px; text-decoration:none !important; }
+.hub-story a:hover h3 { color:#8ee5e9 !important; }
+.hub-photo { flex:0 0 104px; position:relative; }
+.hub-photo:empty { display:none; }
+.hub-photo img { display:block; width:100%; aspect-ratio:16/9; object-fit:cover; border-radius:4px; }
+.hub-credit { display:none; }
+.hub-story-copy { min-width:0; }
+.hub-story-copy > span { color:#a7b6c3; font-size:12px; }
+.hub-story-copy h3 { color:#f0f4f8 !important; font-size:17px !important; line-height:1.4; margin:6px 0; padding:0; letter-spacing:0 !important; overflow-wrap:anywhere; }
+.hub-story-copy > small { color:#74d2d8; font-size:13px; }
+.hub-story:first-child { grid-row:span 4; }
+.hub-story:first-child a { display:block; }
+.hub-story:first-child .hub-credit { display:block; font-size:10px; color:#a7b6c3; margin-top:4px; }
+.hub-story:first-child h3 { font-size:24px !important; }
+.hub-story:first-child .hub-story-copy { padding-top:12px; }
+body:has(.hub-heading) .pl-ticker-wrap { display:none !important; }
+@media (max-width:1099px) {
+    .st-key-workspace_navigation div[data-testid="stHorizontalBlock"] { grid-template-columns:repeat(5,minmax(0,1fr)) !important; }
+}
+@media (max-width:768px) {
+    .hub-heading { display:block; margin:16px 0; }
+    .hub-heading h1 { font-size:27px !important; margin-bottom:8px; }
+    .hub-news { grid-template-columns:1fr; }
+    .hub-story:first-child { grid-row:auto; }
+    .hub-story:first-child h3 { font-size:22px !important; }
+    .hub-photo { flex-basis:88px; }
+    .hub-game { flex-basis:188px; }
+    .st-key-workspace_navigation button > div { flex-direction:column !important; gap:3px !important; }
+    .st-key-workspace_navigation button, .st-key-workspace_navigation button p { font-size:11px !important; }
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -6966,6 +7034,186 @@ def render_nfl_scanner():
         st.download_button("Download scanner debugger", report, "nfl-scanner-debug.txt", key="nfl_scan_debug")
 
 
+HUB_SPORTS = {"mlb": "baseball/mlb", "nfl": "football/nfl", "nba": "basketball/nba"}
+
+
+def hub_url(value, media=False):
+    from urllib.parse import urlsplit
+    try:
+        url = str(value or "")
+        parts = urlsplit(url)
+        domains = ("espncdn.com",) if media else ("espn.com",)
+        return url if parts.scheme == "https" and not parts.username and any(parts.hostname == d or (parts.hostname or "").endswith("." + d) for d in domains) else ""
+    except ValueError:
+        return ""
+
+
+def hub_parse_games(payload):
+    games = []
+    for event in payload.get("events", []):
+        comp = (event.get("competitions") or [{}])[0]
+        sides = {c.get("homeAway"): c for c in comp.get("competitors", [])}
+        if not all(s in sides for s in ("away", "home")):
+            continue
+        status = (comp.get("status") or event.get("status") or {}).get("type", {})
+        start = pd.to_datetime(event.get("date"), utc=True, errors="coerce")
+        if pd.isna(start):
+            continue
+        game = {"id": str(event.get("id", "")), "start": start.isoformat(), "state": status.get("state", "pre"), "status": status.get("shortDetail") or status.get("description", "Scheduled"), "venue": comp.get("venue", {}).get("fullName", ""), "url": next((hub_url(link.get("href")) for link in event.get("links", []) if hub_url(link.get("href"))), "")}
+        for side in ("away", "home"):
+            row, team = sides[side], sides[side].get("team", {})
+            game[side] = {"name": team.get("abbreviation", "TBD"), "full_name": team.get("displayName", "TBD"), "logo": hub_url(team.get("logo"), media=True), "score": str(row.get("score", "")), "starter": next((p.get("athlete", {}).get("displayName", "") for p in row.get("probables", []) if p.get("name") == "probableStartingPitcher"), "")}
+        weather = event.get("weather") or comp.get("weather") or {}
+        condition = str(weather.get("conditionId", ""))
+        game["weather"] = condition if condition and not condition.isdigit() else ""
+        games.append(game)
+    return sorted(games, key=lambda g: ({"in": 0, "pre": 1, "post": 2}.get(g["state"], 3), g["start"]))
+
+
+def hub_parse_news(payload):
+    articles, seen = [], set()
+    for item in payload.get("articles", []):
+        url = hub_url((item.get("links", {}).get("web") or {}).get("href"))
+        title = str(item.get("headline", "")).strip()
+        if not title or not url or url in seen:
+            continue
+        seen.add(url)
+        photo = next((p for p in item.get("images", []) if hub_url(p.get("url"), media=True)), {})
+        articles.append({"title": title, "url": url, "published": item.get("published", ""), "image": hub_url(photo.get("url"), media=True), "credit": str(photo.get("credit", "ESPN")), "athletes": [str(c.get("description", "")) for c in item.get("categories", []) if c.get("type") == "athlete"]})
+    return sorted(articles, key=lambda a: str(a["published"]), reverse=True)[:12]
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def hub_feed(sport, day):
+    import concurrent.futures
+    if sport not in HUB_SPORTS:
+        raise ValueError("Unsupported hub sport")
+    base = "https://site.api.espn.com/apis/site/v2/sports/" + HUB_SPORTS[sport]
+    def fetch(kind):
+        try:
+            params = {"dates": pd.Timestamp(day).strftime("%Y%m%d"), "limit": 100} if kind == "scoreboard" else {"limit": 12}
+            response = requests.get(f"{base}/{kind}", params=params, timeout=8)
+            response.raise_for_status()
+            payload = response.json()
+            return {"items": hub_parse_games(payload) if kind == "scoreboard" else hub_parse_news(payload), "error": ""}
+        except Exception:
+            return {"items": [], "error": "ESPN schedule unavailable" if kind == "scoreboard" else "ESPN headlines unavailable"}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        games, news = list(pool.map(fetch, ["scoreboard", "news"]))
+    return {"games": games["items"], "news": news["items"], "errors": [r["error"] for r in (games, news) if r["error"]], "fetched": pd.Timestamp.now(tz="UTC").isoformat()}
+
+
+def hub_pick_mentions(articles, picks):
+    import unicodedata
+    def name(text):
+        return re.sub(r"[^a-z0-9 ]", "", unicodedata.normalize("NFKD", str(text)).encode("ascii", "ignore").decode().lower()).strip()
+    matches = []
+    for article in articles:
+        title, tags = name(article["title"]), {name(n) for n in article["athletes"]}
+        players = [p["player"] for p in picks if name(p.get("player")) and (name(p["player"]) in tags or (" " + name(p["player"]) + " ") in (" " + title + " "))]
+        if players:
+            matches.append({**article, "players": list(dict.fromkeys(players))})
+    return matches[:3]
+
+
+def hub_set_sport(sport):
+    if sport in HUB_SPORTS:
+        st.session_state.hub_sport = sport
+        st.session_state.active_sport = sport
+        sync_navigation_query()
+
+
+def hub_open_workspace(sport, view):
+    if view == "edge" and sport in ("mlb", "nfl"):
+        st.session_state.edge_league_select = sport.upper()
+        st.session_state.last_analyzer_sport = sport
+        navigate_to_view("edge")
+    elif view == "analyze":
+        navigate_to_sport(sport, f"{sport}-analyzer-controls")
+
+
+def hub_timestamp(value):
+    timestamp = pd.to_datetime(value, utc=True, errors="coerce")
+    return timestamp.tz_convert("America/New_York").strftime("%b %d, %I:%M %p ET") if pd.notna(timestamp) else "Time unavailable"
+
+
+def render_sports_hub():
+    import html
+    esc = lambda value: html.escape(str(value), quote=True)
+    sport = st.session_state.get("hub_sport", st.session_state.get("active_sport", "mlb"))
+    if sport not in HUB_SPORTS:
+        sport = st.session_state.get("last_analyzer_sport", "mlb")
+    st.session_state.hub_sport = sport
+    today = pd.Timestamp.now(tz="America/New_York").normalize()
+    st.markdown(f"<div id='workspace-top' class='hub-heading'><div><span class='hub-kicker'>THE DAILY BRIEF</span><h1>Your sports desk</h1></div><span>{today.strftime('%A, %B %d')}</span></div>", unsafe_allow_html=True)
+    with st.container(key="hub_sports"):
+        for col, key in zip(st.columns(3), HUB_SPORTS):
+            col.button(key.upper(), key=f"hub_sport_{key}", type="primary" if sport == key else "secondary", use_container_width=True, on_click=hub_set_sport, args=(key,))
+    with st.container(key="hub_actions"):
+        left, right = st.columns(2)
+        left.button(f"Analyze {sport.upper()}", icon=":material/search:", use_container_width=True, key="hub_analyze", on_click=hub_open_workspace, args=(sport, "analyze"))
+        right.button(f"{sport.upper()} Edge", icon=":material/bolt:", use_container_width=True, key="hub_edge", disabled=sport == "nba", help="Edge is available for MLB and NFL" if sport == "nba" else "Open saved scanner results", on_click=hub_open_workspace, args=(sport, "edge"))
+    st.markdown("<h2 class='hub-section'>Around the league</h2>", unsafe_allow_html=True)
+    chosen = st.radio("Schedule date", ["Today", "Tomorrow"], horizontal=True, key="hub_schedule_day", label_visibility="collapsed")
+    day = (today + pd.Timedelta(days=int(chosen == "Tomorrow"))).date().isoformat()
+    with st.spinner("Updating the sports desk..."):
+        feed = hub_feed(sport, day)
+    for error in feed["errors"]:
+        st.warning(error + ". Use Refresh to try again; analysis tools remain available.")
+    cards = []
+    for game in feed["games"]:
+        status = hub_timestamp(game["start"]).split(", ")[-1] if game["state"] == "pre" and game["status"].lower() not in ("postponed", "canceled", "cancelled", "delayed") else game["status"]
+        rows = []
+        for side in ("away", "home"):
+            team = game[side]
+            logo = f"<img src='{esc(team['logo'])}' alt='' loading='lazy'>" if team["logo"] else ""
+            score = team["score"] if game["state"] in ("in", "post") else ""
+            rows.append(f"<div class='hub-team'>{logo}<span title='{esc(team['full_name'])}'>{esc(team['name'])}</span><b>{esc(score)}</b></div>")
+        matchup = " · ".join(game[s]["starter"] or "TBD" for s in ("away", "home")) if sport == "mlb" else game["venue"]
+        extra = ("Probable: " if sport == "mlb" else "") + matchup
+        if game.get("weather"):
+            extra += " · Reported weather: " + game["weather"]
+        body = f"<span class='hub-game-status {'is-live' if game['state'] == 'in' else ''}'>{esc(status)}</span>{''.join(rows)}<span class='hub-game-note'>{esc(extra)}</span>"
+        tag = f"a href='{esc(game['url'])}' target='_blank' rel='noopener noreferrer' aria-label='{esc(game['away']['full_name'] + ' at ' + game['home']['full_name'] + ' on ESPN')}'" if game["url"] else "div"
+        cards.append(f"<{tag} class='hub-game'>{body}</{'a' if game['url'] else 'div'}>")
+    if cards:
+        st.markdown("<div class='hub-scores'>" + "".join(cards) + "</div>", unsafe_allow_html=True)
+    elif not any("schedule" in e for e in feed["errors"]):
+        st.info(f"No {sport.upper()} games scheduled for {chosen.lower()} in the ESPN feed.")
+    refresh, stamp = st.columns([1, 3])
+    refresh.button("", icon=":material/refresh:", help="Refresh news and schedule", key="hub_refresh", on_click=hub_feed.clear, args=(sport, day))
+    stamp.caption("ESPN · Updated " + hub_timestamp(feed["fetched"]) + " · Times ET")
+
+    picks = [p for p in st.session_state.get("parlay_legs", []) if str(p.get("sport", "")).lower() == sport]
+    st.markdown(f"<h2 class='hub-section'>Your shortlist <span>{len(picks)}</span></h2>", unsafe_allow_html=True)
+    if not picks:
+        st.markdown("<p class='hub-muted'>No saved picks for this sport.</p>", unsafe_allow_html=True)
+    else:
+        for i, pick in enumerate(picks[:6]):
+            with st.container(key=f"hub_pick_{i}"):
+                main, action = st.columns([3, 1])
+                main.markdown(f"<div class='hub-pick'><strong>{esc(pick.get('player', ''))}</strong><span>{esc(pick.get('prop', ''))} · {esc(pick.get('line', ''))}</span><small>Saved verdict: {esc(pick.get('verdict', 'Unrated'))} · Not refreshed</small></div>", unsafe_allow_html=True)
+                action.button("Review", key=f"hub_review_{i}", icon=":material/arrow_forward:", use_container_width=True, on_click=open_pick_list_analyzer, args=(dict(pick),))
+        mentions = hub_pick_mentions(feed["news"], picks)
+        if mentions:
+            st.markdown("<h3 class='hub-section'>In the news: your players</h3>", unsafe_allow_html=True)
+            st.caption("Headline mentions, not a verified availability report. Saved scores are unchanged.")
+            for article in mentions:
+                st.markdown(f"<div class='hub-mention'><span>{esc(', '.join(article['players']))}</span><a href='{esc(article['url'])}' target='_blank' rel='noopener noreferrer'>{esc(article['title'])}</a><small>ESPN · {esc(hub_timestamp(article['published']))}</small></div>", unsafe_allow_html=True)
+        elif not any("headlines" in e for e in feed["errors"]):
+            st.caption("No saved-player mentions in the latest headlines. This does not confirm availability.")
+
+    st.markdown(f"<h2 class='hub-section'>Latest in {sport.upper()}</h2>", unsafe_allow_html=True)
+    if not feed["news"] and not any("headlines" in e for e in feed["errors"]):
+        st.info("No headlines available in this feed.")
+    articles = []
+    for article in feed["news"][:5]:
+        photo = f"<img src='{esc(article['image'])}' alt='' loading='lazy'><small class='hub-credit'>{esc(article['credit'])}</small>" if article["image"] else ""
+        articles.append(f"<article class='hub-story'><a href='{esc(article['url'])}' target='_blank' rel='noopener noreferrer'><div class='hub-photo'>{photo}</div><div class='hub-story-copy'><span>ESPN · {esc(hub_timestamp(article['published']))}</span><h3>{esc(article['title'])}</h3><small>Read story <span aria-hidden='true'>↗</span></small></div></a></article>")
+    st.markdown("<div class='hub-news'>" + "".join(articles) + "</div>", unsafe_allow_html=True)
+    st.caption("News and schedules are informational. No model probabilities or picks are changed by this feed.")
+
+
 # Session state
 # ─────────────────────────────────────────────
 
@@ -6980,8 +7228,10 @@ for _nfl_widget_key in ("nfl_player", "nfl_market_input", "nfl_line", "nfl_side"
         st.session_state[_nfl_widget_key] = st.session_state[_nfl_widget_key]
 
 _ANALYZER_SPORTS = {"nba", "mlb", "nfl"}
+if "hub_schedule_day" in st.session_state:
+    st.session_state.hub_schedule_day = st.session_state.hub_schedule_day
 _VALID_SPORTS = _ANALYZER_SPORTS | {"edge"}
-_VALID_VIEWS = {"analyze", "edge", "picks", "results"}
+_VALID_VIEWS = {"home", "analyze", "edge", "picks", "results"}
 try:
     _url_sport = st.query_params.get("sport", "")
     if isinstance(_url_sport, list):
@@ -6999,7 +7249,7 @@ except Exception:
     _url_view = ""
 _default_active_view = (
     _url_view if _url_view in _VALID_VIEWS else
-    "edge" if _default_active_sport == "edge" else "analyze"
+    "edge" if _default_active_sport == "edge" else "analyze" if _url_sport in _ANALYZER_SPORTS else "home"
 )
 _default_analyzer_sport = (
     _default_active_sport if _default_active_sport in _ANALYZER_SPORTS else "mlb"
@@ -7282,6 +7532,10 @@ def navigate_to_view(view: str, target: str = "workspace-top") -> None:
     if view not in _VALID_VIEWS:
         return
     current_sport = str(st.session_state.get("active_sport", "mlb")).lower()
+    if view == "home":
+        hub_sport = current_sport if current_sport in _ANALYZER_SPORTS else str(st.session_state.get("last_analyzer_sport", "mlb"))
+        st.session_state.hub_sport = hub_sport
+        st.session_state.active_sport = hub_sport
     if view == "analyze":
         analyzer_sport = str(st.session_state.get("last_analyzer_sport", "mlb")).lower()
         if analyzer_sport not in _ANALYZER_SPORTS:
@@ -15121,7 +15375,7 @@ def fetch_live_data() -> dict:
     return result
 
 # Fetch live data
-_live = fetch_live_data()
+_live = {"scores": [], "headlines": [], "mlb_scores": []} if st.session_state.get("active_view") == "home" else fetch_live_data()
 _all_scores = _live.get("scores", []) + _live.get("mlb_scores", [])
 _headlines  = _live.get("headlines", [])
 
@@ -15251,7 +15505,11 @@ elif _active_view == "analyze" and st.session_state.active_sport == "edge":
     persist_active_sport(_restore_sport if _restore_sport in _ANALYZER_SPORTS else "mlb")
 
 with st.container(key="workspace_navigation"):
-    _nav1, _nav2, _nav3, _nav4 = st.columns(4)
+    _nav0, _nav1, _nav2, _nav3, _nav4 = st.columns(5)
+    with _nav0:
+        st.button("Home", key="view_home", use_container_width=True,
+                  icon=":material/home:", type="primary" if _active_view == "home" else "secondary",
+                  on_click=navigate_to_view, args=("home",))
     with _nav1:
         st.button(
             "Analyze", key="view_analyze", use_container_width=True,
@@ -15269,7 +15527,7 @@ with st.container(key="workspace_navigation"):
     with _nav3:
         _pick_count = len(st.session_state.get("parlay_legs", []) or [])
         st.button(
-            f"Picks ({_pick_count})", key="view_picks", use_container_width=True,
+            "Picks", key="view_picks", use_container_width=True, help=f"{_pick_count} saved picks",
             icon=":material/bookmarks:",
             type="primary" if _active_view == "picks" else "secondary",
             on_click=navigate_to_view, args=("picks",),
@@ -15281,6 +15539,12 @@ with st.container(key="workspace_navigation"):
             type="primary" if _active_view == "results" else "secondary",
             on_click=navigate_to_view, args=("results",),
         )
+
+if _active_view == "home":
+    with st.container(key="hub_workspace"):
+        render_sports_hub()
+    render_navigation_scroll_target("workspace-top")
+    st.stop()
 
 if _active_view == "picks":
     render_pick_list_page()
