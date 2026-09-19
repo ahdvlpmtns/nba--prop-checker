@@ -6256,7 +6256,13 @@ div[data-baseweb="menu"] [role="option"]:hover {
 .st-key-hub_workspace div[data-testid="stButton"] button:hover { border-color:#74d2d8 !important; }
 .st-key-hub_workspace div[data-testid="stButton"] button:disabled { opacity:0.45 !important; }
 .st-key-hub_workspace [data-testid="stRadio"] label, .st-key-hub_workspace [data-testid="stRadio"] p { color:#dbe5eb !important; }
-.st-key-hub_sports div[data-testid="stHorizontalBlock"] { display:grid !important; grid-template-columns:repeat(3,minmax(0,1fr)) !important; gap:8px !important; }
+.st-key-hub_sports div[data-testid="stHorizontalBlock"] { display:grid !important; grid-template-columns:repeat(4,minmax(0,1fr)) !important; gap:8px !important; }
+.st-key-analyzer_sport_navigation div[data-testid="stHorizontalBlock"] { grid-template-columns:repeat(4,minmax(0,1fr)) !important; }
+.st-key-analyzer_sport_navigation button { padding:8px 6px !important; gap:4px !important; min-width:0 !important; }
+.st-key-analyzer_sport_navigation button p { font-size:13px !important; white-space:nowrap !important; letter-spacing:0 !important; }
+.st-key-analyzer_sport_navigation button [data-testid="stIconMaterial"] { font-size:18px !important; }
+.st-key-nfl_workspace h3, .st-key-nfl_workspace [data-testid="stMetricValue"] { color:#eef4f8 !important; }
+.st-key-nfl_workspace [data-testid="stCaptionContainer"], .st-key-nfl_workspace [data-testid="stMetricLabel"] { color:#a7b6c3 !important; }
 .st-key-hub_actions div[data-testid="stHorizontalBlock"] { display:grid !important; grid-template-columns:repeat(2,minmax(0,1fr)) !important; gap:8px !important; }
 .st-key-hub_sports div[data-testid="stColumn"], .st-key-hub_actions div[data-testid="stColumn"] { width:100% !important; min-width:0 !important; }
 .st-key-hub_sports button { min-height:42px !important; }
@@ -6549,6 +6555,7 @@ def nfl_weather(game):
         response = requests.get("https://geocoding-api.open-meteo.com/v1/search", params={"name": city, "count": 10, "countryCode": "US"}, timeout=8)
         response.raise_for_status()
         states = {"AZ": "Arizona", "CA": "California", "CO": "Colorado", "FL": "Florida", "GA": "Georgia", "IL": "Illinois", "IN": "Indiana", "LA": "Louisiana", "MD": "Maryland", "MA": "Massachusetts", "MI": "Michigan", "MN": "Minnesota", "MO": "Missouri", "NV": "Nevada", "NJ": "New Jersey", "NY": "New York", "NC": "North Carolina", "OH": "Ohio", "PA": "Pennsylvania", "TN": "Tennessee", "TX": "Texas", "WA": "Washington", "WI": "Wisconsin", "DC": "District of Columbia", "VA": "Virginia"}
+        states.update({"AL": "Alabama", "AK": "Alaska", "AR": "Arkansas", "CT": "Connecticut", "DE": "Delaware", "HI": "Hawaii", "ID": "Idaho", "IA": "Iowa", "KS": "Kansas", "KY": "Kentucky", "ME": "Maine", "MS": "Mississippi", "MT": "Montana", "NE": "Nebraska", "NH": "New Hampshire", "NM": "New Mexico", "ND": "North Dakota", "OK": "Oklahoma", "OR": "Oregon", "RI": "Rhode Island", "SC": "South Carolina", "SD": "South Dakota", "UT": "Utah", "VT": "Vermont", "WV": "West Virginia", "WY": "Wyoming"})
         state = str(game.get("address", {}).get("state", ""))
         state = states.get(state.upper(), state)
         candidates = [r for r in response.json().get("results", []) if r.get("country_code") == "US" and str(r.get("admin1", "")).lower() == state.lower()]
@@ -6736,6 +6743,11 @@ def nfl_debug(result, player):
     lines += [f"{row['signal']} | {row['value']} | {row['effect']}" for row in result["trace"]]
     lines += ["", "EVIDENCE"] + [f"{k}: {v:.1f}" for k, v in result["confidence_parts"].items()]
     lines += ["", f"Model chance: {result['probability']:.1%}; push: {result['push']:.1%}", f"Evidence quality: {result['confidence']}/100", f"Entry score: {result['score']}/100 | {result['action']}", "Weather source: " + ctx.get("weather_note", "Not supplied"), "Flags: " + (" | ".join(result["flags"]) or "None"), "Unavailable advanced inputs: charted pressures/coverage, route participation, coaching-change estimates; no fabricated adjustments."]
+    if ctx.get("sport") == "CFB":
+        lines[0] = "PROPIQ CFB QUARTERBACK DEBUGGER"
+        lines[1] = f"Model: {result['version']} (unvalidated beta; action ceiling WATCH)"
+        lines[5] = lines[5].replace("starts", "same-school appearances (not verified starts)")
+        lines += ["Snapshot UTC: " + result.get("snapshot_at", "Unavailable"), "College limitations: schedule strength, coaching changes, confirmed gameday role and comprehensive availability not verified."]
     return "\n".join(lines)
 
 
@@ -6749,6 +6761,8 @@ def nfl_capture(results, source):
             continue
         rows.append({"sport": "NFL", "model_version": NFL_MODEL_VERSION, "player": result["player"], "player_id": ctx["player_id"], "player_team": ctx["team"], "opp": ctx["opponent"], "stat": result["market"], "line": result["line"], "side": result["side"], "adj": result["probability"] * 100, "confidence": result["confidence"], "cons": result["stability"] * 100, "entry_score": result["score"], "entry_action": result["action"], "tier": result["action"], "projection": result["projection"], "avg": result["historical_avg"], "samples": result["sample"], "game_id": ctx["game_id"], "game_date": pd.Timestamp(ctx["kickoff"]).tz_convert("America/New_York").date().isoformat(), "game_datetime": ctx["kickoff"], "start_time": ctx["kickoff"], "odds_type": "goblin" if "Reduced" in result.get("line_type", "") else "standard", "model_flags": result["flags"], "confidence_parts": result["confidence_parts"], "slate_source": result.get("slate_source", "manual"), "line_verification_required": result.get("slate_source", "manual") != "live"})
         rows[-1]["push_probability"] = result["push"]
+        rows[-1]["sport"] = ctx.get("sport", "NFL")
+        rows[-1]["model_version"] = result.get("version", NFL_MODEL_VERSION)
     if rows:
         save_model_prediction_batch(rows, str(uuid.uuid4()), st.session_state.session_id, source)
 
@@ -6771,18 +6785,22 @@ def nfl_actual(row):
 def nfl_save_pick(player, result):
     ctx = result["context"]
     if pd.Timestamp(ctx["kickoff"]) <= pd.Timestamp.now(tz="UTC"):
-        st.session_state.parlay_notice = "This game has started. Refresh the NFL board before adding a pick."
+        st.session_state.parlay_notice = "This game has started. Refresh the football board before adding a pick."
         return
     leg = {"player": player, "sport": "NFL", "prop": f"{result['market']} {result['side']}", "line": result["line"], "side": result["side"], "verdict": result["action"], "confidence": result["confidence"], "adj": round(result["probability"] * 100, 1), "game_id": ctx["game_id"], "game_date": ctx["kickoff"][:10], "line_type": result.get("line_type", "Unverified"), "added": datetime.now().strftime("%I:%M %p")}
     entry = {"Player": player, "Sport": "NFL", "Prop": result["market"], "Line": f"{result['line']} {result['side']}", "Opponent": ctx["opponent"], "Matchup": result["market"], "Avg PTS": result["historical_avg"], "Adjusted": f"{result['probability']:.0%}", "Verdict": result["action"], "Result": "Pending", "player_id": ctx["player_id"], "game_datetime": ctx["kickoff"], "market": result["market"], "opponent": ctx["opponent"]}
     entry.update({"Player ID": ctx["player_id"], "Game Datetime": ctx["kickoff"], "Event ID": ctx["game_id"], "Game Date": ctx["kickoff"][:10], "Team": ctx["team"]})
+    leg["sport"] = entry["Sport"] = ctx.get("sport", "NFL")
+    leg["player_label"] = result.get("label", player)
     add_to_pick_list_and_tracker(leg, entry)
 
 
 def nfl_render_result(player, result, key):
     ctx = result["context"]
+    sport = ctx.get("sport", "NFL")
+    sample_label = "same-school appearances" if sport == "CFB" else "starts"
     st.subheader(f"{player} · {ctx['team']} vs {ctx['opponent']}")
-    render_entry_decision(result["score"], result["action"], f"{result['market']} {result['side']} {result['line']:g}", result["probability"], result["confidence"], result["stability"], " · ".join(result["flags"][:2]) or "Starter and matchup context loaded.", "Entry score = 70% model chance + 30% evidence quality. Risk gates can limit the action. NFL beta: coefficients and probabilities await prospective validation.", history_label=f"Last {result['sample']} starts", history_value=f"{result['raw']:.0%} weighted hit rate", evidence_label="Evidence quality", line_type_label=result.get("line_type", "Manual line · payout unverified"))
+    render_entry_decision(result["score"], result["action"], f"{result['market']} {result['side']} {result['line']:g}", result["probability"], result["confidence"], result["stability"], " · ".join(result["flags"][:2]) or "Starter and matchup context loaded.", f"Entry score = 70% model chance + 30% evidence quality. Risk gates can limit the action. {sport} beta: coefficients and probabilities await prospective validation.", history_label=f"Last {result['sample']} {sample_label}", history_value=f"{result['raw']:.0%} weighted hit rate", evidence_label="Evidence quality", line_type_label=result.get("line_type", "Manual line · payout unverified"))
     cols = st.columns(3)
     for col, (market, projection) in zip(cols, result["projections"].items()):
         col.metric(market, f"{projection:.1f}")
@@ -6794,7 +6812,7 @@ def nfl_render_result(player, result, key):
     with st.expander("Model debugger"):
         report = nfl_debug(result, player)
         st.code(report, language=None)
-        st.download_button("Download debugger", report, "nfl-qb-debug.txt", key=f"{key}_debug")
+        st.download_button("Download debugger", report, f"{sport.lower()}-qb-debug.txt", key=f"{key}_debug")
     st.button("Add & Track", key=f"{key}_pick", icon=":material/bookmark_add:", on_click=nfl_save_pick, args=(player, result), use_container_width=True)
 
 
@@ -7034,7 +7052,518 @@ def render_nfl_scanner():
         st.download_button("Download scanner debugger", report, "nfl-scanner-debug.txt", key="nfl_scan_debug")
 
 
-HUB_SPORTS = {"mlb": "baseball/mlb", "nfl": "football/nfl", "nba": "basketball/nba"}
+CFB_MODEL_VERSION = "cfb-qb-v1-beta"
+CFB_ESPN = "https://site.api.espn.com/apis/site/v2/sports/football/college-football"
+CFB_LEAGUE_NAMES = {"CFB", "NCAAF", "COLLEGE FOOTBALL", "NCAA FOOTBALL"}
+
+
+def cfb_parse_board(payload, now):
+    games = []
+    for event in payload.get("events", []):
+        comp = (event.get("competitions") or [{}])[0]
+        kickoff = pd.to_datetime(event.get("date"), utc=True, errors="coerce")
+        if pd.isna(kickoff) or kickoff <= now or comp.get("status", {}).get("type", {}).get("state") != "pre" or comp.get("timeValid") is False:
+            continue
+        teams = {r.get("homeAway"): r.get("team", {}) for r in comp.get("competitors", [])}
+        if not all(teams.get(v, {}).get("id") for v in ("home", "away")):
+            continue
+        odds = (comp.get("odds") or [{}])[0]
+        for venue, other in (("home", "away"), ("away", "home")):
+            own, opp = teams[venue], teams[other]
+            games.append({"sport": "CFB", "game_id": str(event["id"]), "kickoff": kickoff.isoformat(), "season": int(event.get("season", {}).get("year") or (kickoff.year if kickoff.month > 2 else kickoff.year - 1)), "team": own.get("abbreviation", ""), "team_name": own.get("displayName", ""), "team_id": str(own["id"]), "opponent": opp.get("abbreviation", ""), "opponent_id": str(opp["id"]), "venue": venue, "spread": nfl_number(odds.get("pointSpread", {}).get(venue, {}).get("close", {}).get("line")), "total": nfl_number(odds.get("overUnder")), "stadium": comp.get("venue", {}).get("fullName", ""), "indoor": comp.get("venue", {}).get("indoor"), "address": comp.get("venue", {}).get("address", {}), "game_name": event.get("shortName", ""), "team_aliases": [own.get(k, "") for k in ("abbreviation", "displayName", "shortDisplayName", "location", "name")]})
+    return games
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def cfb_scoreboard(day):
+    from urllib.parse import urlsplit
+    payload = nfl_json(f"{CFB_ESPN}/scoreboard?groups=80&limit=1000&dates={day}")
+    events = list(payload.get("events", []))
+    warnings = []
+    if len(events) >= 25:
+        # ESPN can ignore limit=1000. Expand capped FBS days by verified conference IDs.
+        year = int(day[:4]) - (int(day[4:6]) < 3)
+        catalog = nfl_json(f"https://sports.core.api.espn.com/v2/sports/football/leagues/college-football/seasons/{year}/types/2/groups/80/children?limit=100")
+        group_ids = [urlsplit(item.get("$ref", "")).path.rstrip("/").split("/")[-1] for item in catalog.get("items", [])]
+        if not group_ids or any(not gid.isdigit() for gid in group_ids) or len(group_ids) != catalog.get("count"):
+            raise ValueError("FBS conference catalog incomplete; scoreboard coverage unverified")
+        for gid in group_ids:
+            try:
+                batch = nfl_json(f"{CFB_ESPN}/scoreboard?groups={gid}&limit=1000&dates={day}")
+                if len(batch.get("events", [])) >= 25:
+                    warnings.append(f"Conference {gid} on {day} may still be truncated")
+                events.extend(batch.get("events", []))
+            except Exception as err:
+                warnings.append(f"Conference {gid} on {day}: {type(err).__name__}")
+    return {"events": list({str(e.get('id')): e for e in events if e.get('id')}.values()), "warnings": warnings}
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def cfb_board():
+    import concurrent.futures
+    now = pd.Timestamp.now(tz="UTC")
+    # College scoreboards require individual dates; a date range can silently return zero.
+    dates = [(now.tz_convert("America/New_York") + pd.Timedelta(days=i)).strftime("%Y%m%d") for i in range(11)]
+    def fetch(day):
+        try:
+            payload = cfb_scoreboard(day)
+            return cfb_parse_board(payload, now), "; ".join(payload["warnings"])
+        except Exception as err:
+            return [], f"Schedule {day}: {type(err).__name__}"
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+        batches = list(pool.map(fetch, dates))
+    unique = {(g["game_id"], g["team_id"]): g for batch, _ in batches for g in batch}
+    return {"games": sorted(unique.values(), key=lambda g: g["kickoff"]), "warnings": [e for _, e in batches if e]}
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def cfb_roster(team_id):
+    payload = nfl_json(f"{CFB_ESPN}/teams/{team_id}/roster")
+    return [{"name": a.get("displayName", ""), "espn_id": str(a["id"]), "team_id": str(team_id), "image": a.get("headshot", {}).get("href", ""), "status": a.get("status", {}).get("type", "unknown"), "injuries": a.get("injuries", [])} for group in payload.get("athletes", []) for a in group.get("items", []) if a.get("position", {}).get("abbreviation") == "QB"]
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def cfb_directory():
+    import concurrent.futures
+    board = cfb_board()
+    teams = {g["team_id"]: g for g in board["games"]}
+    def fetch(team):
+        try:
+            return [{**p, "team": team["team"], "label": f"{p['name']} ({team['team']})"} for p in cfb_roster(team["team_id"])], ""
+        except Exception as err:
+            return [], f"{team['team']} roster: {type(err).__name__}"
+    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+        batches = list(pool.map(fetch, teams.values()))
+    return {"players": [p for batch, _ in batches for p in batch], "games": board["games"], "warnings": board["warnings"] + [e for _, e in batches if e]}
+
+
+def cfb_parse_box(payload):
+    header = payload.get("header", {})
+    comp = (header.get("competitions") or [{}])[0]
+    if not comp.get("status", {}).get("type", {}).get("completed"):
+        return []
+    kickoff = pd.to_datetime(comp.get("date"), utc=True, errors="coerce")
+    if pd.isna(kickoff):
+        return []
+    opponents = {str(c.get("id") or c.get("team", {}).get("id")): c.get("team", {}).get("abbreviation", "") for c in comp.get("competitors", [])}
+    rows = []
+    for team in payload.get("boxscore", {}).get("players", []):
+        tid = str(team.get("team", {}).get("id", ""))
+        other = [i for i in opponents if i != tid]
+        if tid not in opponents or len(other) != 1:
+            continue
+        for category in team.get("statistics", []):
+            if category.get("name") != "passing":
+                continue
+            parsed = []
+            for athlete in category.get("athletes", []):
+                values = dict(zip(category.get("keys", []), athlete.get("stats", [])))
+                pair = str(values.get("completions/passingAttempts", "")).split("/")
+                if len(pair) != 2:
+                    continue
+                cmp, att, yards = nfl_number(pair[0]), nfl_number(pair[1]), nfl_number(values.get("passingYards"))
+                if None in (cmp, att, yards) or cmp < 0 or att < cmp or int(cmp) != cmp or int(att) != att:
+                    continue
+                a = athlete.get("athlete", {})
+                parsed.append({"game_id": str(header.get("id") or comp.get("id")), "kickoff": kickoff, "season": int(header.get("season", {}).get("year") or (kickoff.year if kickoff.month > 2 else kickoff.year - 1)), "team": opponents[tid], "team_id": tid, "opponent_team": opponents[other[0]], "opponent_id": other[0], "player_id": str(a.get("id", "")), "player_display_name": a.get("displayName", ""), "attempts": att, "completions": cmp, "passing_yards": yards, "started": athlete.get("starter") is True})
+            total = sum(r["attempts"] for r in parsed)
+            totals = dict(zip(category.get("keys", []), category.get("totals", [])))
+            total_pair = str(totals.get("completions/passingAttempts", "")).split("/")
+            declared_attempts = nfl_number(total_pair[1]) if len(total_pair) == 2 else None
+            complete = declared_attempts is not None and declared_attempts == total
+            for row in parsed:
+                row["attempt_share"] = (row["attempts"] / total if total else 0) if complete else None
+                rows.append(row)
+    return rows
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def cfb_team_history(team_id, season, kickoff):
+    import concurrent.futures
+    cutoff = min(pd.Timestamp(kickoff), pd.Timestamp.now(tz="UTC"))
+    events, warnings = {}, []
+    for year in (season, season - 1):
+        for season_type in (2, 3):
+            try:
+                schedule = nfl_json(f"{CFB_ESPN}/teams/{team_id}/schedule?season={year}&seasontype={season_type}")
+                for event in schedule.get("events", []):
+                    date = pd.to_datetime(event.get("date"), utc=True, errors="coerce")
+                    comp = (event.get("competitions") or [{}])[0]
+                    if pd.notna(date) and date < cutoff and comp.get("status", {}).get("type", {}).get("completed"):
+                        events[str(event["id"])] = date
+            except Exception as err:
+                warnings.append(f"Team {team_id}, {year} schedule: {type(err).__name__}")
+    ids = sorted(events, key=events.get, reverse=True)[:16]
+    def fetch(gid):
+        try:
+            rows = cfb_parse_box(nfl_json(f"{CFB_ESPN}/summary?event={gid}"))
+            return rows, "" if rows else f"No final passing box score for {gid}"
+        except Exception as err:
+            return [], f"Box score {gid}: {type(err).__name__}"
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+        batches = list(pool.map(fetch, ids))
+    rows = [row for batch, _ in batches for row in batch]
+    return {"stats": pd.DataFrame(rows), "warnings": warnings + [e for _, e in batches if e], "requested": len(ids)}
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def cfb_prepare(player, game):
+    own = cfb_team_history(game["team_id"], game["season"], game["kickoff"])
+    defense = cfb_team_history(game["opponent_id"], game["season"], game["kickoff"])
+    context = {**game, "player_id": player["espn_id"], "espn_id": player["espn_id"], "roster_status": player["status"], "injuries": player.get("injuries", []), "starter_id": None, "data_warnings": own["warnings"] + defense["warnings"]}
+    try:
+        depth = nfl_json(f"{CFB_ESPN}/teams/{game['team_id']}/depthcharts")
+        ids = {str(p["athletes"][0]["id"]) for chart in depth.get("depthchart", []) for p in chart.get("positions", {}).values() if p.get("position", {}).get("abbreviation") == "QB" and p.get("athletes")}
+        if len(ids) == 1:
+            context["starter_id"] = next(iter(ids))
+    except Exception:
+        pass
+    context.update(nfl_weather(game))
+    stats = pd.concat([own["stats"], defense["stats"]], ignore_index=True)
+    if stats.empty:
+        raise ValueError("No completed college passing box scores available.")
+    return {"stats": stats.drop_duplicates(["game_id", "player_id", "team_id"]), "context": context, "captured_at": pd.Timestamp.now(tz="UTC").isoformat()}
+
+
+def cfb_qb_model(stats, context, market, line, side):
+    """College-only beta: same inputs give identical scanner and analyzer forecasts."""
+    import math
+    import numpy as np
+    from statistics import NormalDist
+    market, line = nfl_market(market), nfl_number(line)
+    if market is None or line is None or line < 0 or side not in ("Over", "Under"):
+        raise ValueError("Select a full-game passing market, nonnegative line, and Over/Under.")
+    kickoff = pd.to_datetime(context.get("kickoff"), utc=True, errors="coerce")
+    if pd.isna(kickoff):
+        raise ValueError("Verified kickoff required.")
+    prior = stats.loc[(stats.kickoff < kickoff) & (stats.kickoff >= kickoff - pd.Timedelta(days=550))].copy()
+    # School IDs, not pro-team aliases. Transfer history cannot silently supply a new school's role.
+    logs = prior.loc[(prior.player_id == str(context["player_id"])) & (prior.team_id == str(context["team_id"]))].sort_values("kickoff", ascending=False).head(12).copy()
+    logs = logs.dropna(subset=list(NFL_MARKETS.values()) + ["attempt_share"])
+    if len(logs) < 3 or logs.attempts.sum() < 60:
+        raise ValueError(f"Insufficient same-school evidence: {len(logs)} appearances, {logs.attempts.sum():g} attempts; need 3 appearances and 60 attempts.")
+    weights = np.exp(-np.arange(len(logs)) / 5) * np.where(logs.season == context["season"], 1, .5)
+    weights /= weights.sum()
+    effective_n = float(1 / sum(weights ** 2))
+    avg = lambda col: float(np.dot(weights, logs[col]))
+    flags = ["CFB beta: not prospectively calibrated", "College injury/receiver/line availability is incomplete"]
+    trace = []
+    # These are declared weak priors, not measured league averages or fitted coefficients.
+    talent = effective_n / (effective_n + 3)
+    attempts = talent * avg("attempts") + (1 - talent) * 30
+    volume = max(1, avg("attempts") * effective_n)
+    cmp_rate = (avg("completions") * effective_n + .62 * 60) / (volume + 60)
+    ypa = (avg("passing_yards") * effective_n + 7.5 * 60) / (volume + 60)
+    trace.append({"signal": "Same-school passing baseline", "value": f"{len(logs)} appearances; {effective_n:.1f} effective; backups/short outings retained", "effect": f"{attempts:.1f} ATT, {cmp_rate:.1%} CMP, {ypa:.2f} Y/A; weak priors 30 ATT / 62% / 7.5 Y/A"})
+    teams = prior.groupby(["game_id", "team_id", "opponent_id", "kickoff"], as_index=False)[list(NFL_MARKETS.values())].sum(min_count=1)
+    defense = teams.loc[(teams.opponent_id == str(context["opponent_id"])) & (teams.attempts > 0)].sort_values("kickoff", ascending=False).head(8)
+    if len(defense) >= 4:
+        # Raw schedule quality is unknown; use only a small rate adjustment, never NFL baselines.
+        strength = len(defense) / (len(defense) + 20)
+        dc = float(defense.completions.sum() / defense.attempts.sum())
+        dy = float(defense.passing_yards.sum() / defense.attempts.sum())
+        cf = 1 + float(np.clip(dc / .62 - 1, -.12, .12)) * strength
+        yf = 1 + float(np.clip(dy / 7.5 - 1, -.15, .15)) * strength
+        cmp_rate *= cf
+        ypa *= yf
+        trace.append({"signal": "Opponent passing allowance", "value": f"{len(defense)} games; {dc:.1%} CMP; {dy:.2f} Y/A", "effect": f"CMP x{cf:.3f}, Y/A x{yf:.3f}; not schedule-strength adjusted"})
+    else:
+        flags.append("Fewer than four opponent passing profiles")
+    flags.append("Opponent strength/FBS-FCS schedule adjustment unavailable")
+    spread = nfl_number(context.get("spread"))
+    blowout = spread is not None and abs(spread) >= 21
+    factor = 1.0 if spread is None else 1 + float(np.clip(spread * .003, -.06, .04))
+    if blowout:
+        factor *= .92
+        flags.append("Large spread: shortened QB workload risk")
+    if spread is None:
+        flags.append("Spread unavailable; blowout risk not quantified")
+    attempts *= factor
+    trace.append({"signal": "Game script / blowout", "value": f"Spread {spread}", "effect": f"ATT x{factor:.3f}; heuristic, not fitted"})
+    recent_share = float(logs.head(3).attempt_share.mean())
+    latest_share = float(logs.iloc[0].attempt_share)
+    role_ok = recent_share >= .70 and latest_share >= .65
+    depth_id = context.get("starter_id")
+    if depth_id and str(depth_id) != str(context["player_id"]):
+        role_ok = False
+    if not role_ok:
+        flags.append("QB rotation/backup risk: recent passing share or depth chart disagrees")
+    if not depth_id:
+        flags.append("QB1 inferred from passing share, not a confirmed starter")
+    trace.append({"signal": "Quarterback role", "value": f"L3 attempt share {recent_share:.0%}; latest {latest_share:.0%}", "effect": "Role gate only; no low-volume games discarded"})
+    wind = nfl_number(context.get("wind_mph"))
+    if wind is not None and context.get("indoor") is False:
+        effect = min(.12, max(0, wind - 15) * .005)
+        ypa *= 1 - effect
+        cmp_rate *= 1 - effect * .35
+        trace.append({"signal": "Outdoor wind", "value": f"{wind:.0f} mph", "effect": f"Y/A -{effect:.1%}"})
+    elif context.get("indoor") is not True:
+        flags.append("Wind/roof status unverified")
+    current = int((logs.season == context["season"]).sum())
+    age = int((kickoff - logs.iloc[0].kickoff).days)
+    if current < 3:
+        flags.append(f"Early season: {current} same-school appearances")
+    if age > 21:
+        flags.append(f"Last appearance {age} days ago")
+    if context.get("injuries"):
+        flags.append("QB injury designation: " + str(context["injuries"]))
+    flags += context.get("data_warnings", [])
+    projections = {"Pass Attempts": attempts, "Pass Completions": attempts * float(np.clip(cmp_rate, .3, .88)), "Passing Yards": attempts * float(np.clip(ypa, 2, 13))}
+    values = logs[NFL_MARKETS[market]].to_numpy(dtype=float)
+    mean = projections[market]
+    floor = {"Pass Attempts": 8, "Pass Completions": 6, "Passing Yards": 70}[market]
+    sd = max(floor, float(np.std(values, ddof=1))) * (1 + min(.35, .10 + .025 * len(flags)))
+    distribution = NormalDist(mean, sd)
+    # Counts are nonnegative; passing yards may be negative on completed backward plays.
+    lower = distribution.cdf(-.5) if market != "Passing Yards" else 0
+    cdf = lambda x: max(0, min(1, (distribution.cdf(x) - lower) / max(1e-9, 1 - lower)))
+    over, under = 1 - cdf(math.floor(line) + .5), cdf(math.ceil(line) - .5)
+    push = max(0, 1 - over - under)
+    probability = over if side == "Over" else under
+    parts = {"Sample": min(25, effective_n / 10 * 25), "Current role": 20 if role_ok and depth_id else 12 if role_ok else 0, "Current season": min(15, current * 3), "Opponent coverage": min(15, len(defense) / 8 * 15), "Freshness": 10 if age <= 14 else 5 if age <= 21 else 0, "Context": (5 if spread is not None else 0) + (5 if wind is not None or context.get("indoor") is True else 0)}
+    confidence = max(0, min(85, round(sum(parts.values()) - (8 if context.get("data_warnings") else 0))))
+    score = round(.7 * probability * 100 + .3 * confidence)
+    # A new sport's unvalidated probabilities must not masquerade as proven PLAY recommendations.
+    action = "WATCH" if probability >= .55 and confidence >= 50 and score >= 65 else "PASS"
+    if not role_ok or age > 28 or context.get("roster_status") != "active" or context.get("injuries"):
+        action = "PASS"
+    trace.append({"signal": "Predictive distribution", "value": f"Mean {mean:.2f}, SD {sd:.2f}", "effect": f"Over {over:.1%}; Under {under:.1%}; Push {push:.1%}; beta action ceiling WATCH"})
+    return {"version": CFB_MODEL_VERSION, "market": market, "line": line, "side": side, "projection": mean, "projections": projections, "probability": probability, "over": over, "under": under, "push": push, "raw": float(np.dot(weights, values > line if side == "Over" else values < line)), "confidence": confidence, "confidence_parts": parts, "score": score, "action": action, "flags": flags, "trace": trace, "logs": logs, "sample": len(logs), "historical_avg": float(values.mean()), "stability": max(0, 1 - float(np.std(values, ddof=1)) / max(1, abs(float(values.mean())))), "context": context, "sigma": sd}
+
+
+def cfb_evaluate(snapshot, market, line, side, line_type="Manual line - payout unverified"):
+    result = cfb_qb_model(snapshot["stats"], snapshot["context"], market, line, side)
+    result.update(line_type=line_type, snapshot_at=snapshot["captured_at"])
+    return result
+
+
+def cfb_actual(row):
+    try:
+        event = str(row.get("event_id") or _tracker_metadata_value(row, "Event ID"))
+        player = str(row.get("player_id") or _tracker_metadata_value(row, "Player ID"))
+        market = nfl_market(row.get("market") or row.get("Matchup"))
+        records = cfb_parse_box(nfl_json(f"{CFB_ESPN}/summary?event={event}"))
+        matches = [r for r in records if r["player_id"] == player]
+        return matches[0][NFL_MARKETS[market]] if market and len(matches) == 1 else None
+    except Exception:
+        return None
+
+
+def cfb_match_prop(prop, directory):
+    if prop.get("sport") != "CFB" or not nfl_market(prop.get("stat")):
+        raise ValueError("Outside supported CFB full-game passing markets")
+    start = pd.to_datetime(prop.get("start_time"), utc=True, errors="coerce")
+    if pd.isna(start):
+        raise ValueError("Quote has no valid kickoff timestamp")
+    if start <= pd.Timestamp.now(tz="UTC"):
+        raise ValueError("Quote kickoff is past; game already started or quote is stale")
+    school_games = [g for g in directory["games"] if nfl_name(prop.get("team")) in {nfl_name(v) for v in g["team_aliases"] if v}]
+    if not school_games:
+        raise ValueError(f"School {prop.get('team')} has no verified upcoming FBS-board matchup")
+    timed_games = [g for g in school_games if abs((pd.Timestamp(g["kickoff"]) - start).total_seconds()) <= 900]
+    if not timed_games:
+        raise ValueError(f"Quote kickoff {start.isoformat()} does not match the school's upcoming games")
+    matches = []
+    for game in timed_games:
+        for player in directory["players"]:
+            if player["team_id"] == game["team_id"] and nfl_name(player["name"]) == nfl_name(prop.get("player")):
+                matches.append((player, game))
+    if len(matches) != 1:
+        raise ValueError("QB identity not uniquely verified on the scheduled school's roster")
+    if pd.Timestamp(matches[0][1]["kickoff"]) <= pd.Timestamp.now(tz="UTC"):
+        raise ValueError("Game already started")
+    return matches[0]
+
+
+def cfb_scan_props(props, directory, market, direction, reduced, prepare=cfb_prepare, progress=None):
+    import concurrent.futures
+    results, audit, seen, snapshots = [], [], set(), {}
+    requests_by_qb = {}
+    for prop in props:
+        try:
+            if market != "All QB markets" and nfl_market(prop.get("stat")) != market:
+                continue
+            if is_reduced_payout_line(prop) and (not reduced or direction == "Under"):
+                continue
+            player, game = cfb_match_prop(prop, directory)
+            requests_by_qb[(player["espn_id"], game["game_id"])] = (player, game)
+        except ValueError:
+            continue  # The ordered quote audit below records the concrete exclusion.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+        futures = {pool.submit(prepare, player, game): identity for identity, (player, game) in requests_by_qb.items()}
+        for index, future in enumerate(concurrent.futures.as_completed(futures)):
+            try:
+                snapshots[futures[future]] = future.result()
+            except Exception as err:
+                snapshots[futures[future]] = err
+            if progress:
+                progress(.8 * (index + 1) / max(1, len(futures)))
+    for index, prop in enumerate(props):
+        if progress:
+            progress(.8 + .2 * index / max(1, len(props)))
+        label = f"{prop.get('player')} | {prop.get('stat')} | {prop.get('line')} | {prop.get('projection_id', '')}"
+        try:
+            stat = nfl_market(prop.get("stat"))
+            if market != "All QB markets" and stat != market:
+                raise ValueError("Excluded by market filter")
+            is_reduced = is_reduced_payout_line(prop)
+            if is_reduced and (not reduced or direction == "Under"):
+                raise ValueError("Reduced-payout filter / Over-only line")
+            player, game = cfb_match_prop(prop, directory)
+            identity = (player["espn_id"], game["game_id"])
+            if identity not in snapshots:
+                snapshots[identity] = prepare(player, game)
+            snapshot = snapshots[identity]
+            if isinstance(snapshot, Exception):
+                raise snapshot
+            for side in (["Over"] if is_reduced else ["Over", "Under"] if direction == "Both sides" else [direction]):
+                key = (*identity, stat, float(prop["line"]), side, is_reduced)
+                if key in seen:
+                    audit.append(f"{label} | {side} | Duplicate exact quote excluded")
+                    continue
+                seen.add(key)
+                result = cfb_evaluate(snapshot, stat, prop["line"], side, "Reduced payout - verify return" if is_reduced else "Standard payout")
+                result.update(player=player["name"], label=player["label"], snapshot=snapshot, projection_id=prop.get("projection_id"), slate_source=prop.get("slate_source", "unknown"))
+                if prop.get("line_verification_required") or result["slate_source"] != "live":
+                    result["flags"].append("Cached/unverified quote: verify availability and payout")
+                results.append(result)
+                audit.append(f"{label} | {side} | {result['action']} {result['score']} | chance {result['probability']:.1%} | snapshot {result['snapshot_at']} | " + "; ".join(result["flags"]))
+        except Exception as err:
+            audit.append(f"{label} | EXCLUDED | {err}")
+    if progress:
+        progress(1.0)
+    return {"results": results, "audit": audit, "captured": len(props), "generated": pd.Timestamp.now(tz="UTC").isoformat(), "warnings": directory["warnings"]}
+
+
+def cfb_open_result(result):
+    st.session_state.cfb_jump = result
+    st.session_state.edge_return_available = True
+    navigate_to_sport("cfb", "cfb-analyzer-controls")
+
+
+def render_cfb_analyzer():
+    st.markdown("<div id='cfb-analyzer-controls'></div>", unsafe_allow_html=True)
+    render_navigation_scroll_target("cfb-analyzer-controls")
+    st.subheader("College Quarterback Lab")
+    st.caption("CFB BETA · FBS scheduled matchups · Unvalidated recommendations limited to WATCH")
+    try:
+        with st.spinner("Loading upcoming college games and quarterbacks..."):
+            directory = cfb_directory()
+    except Exception as err:
+        st.error(f"College schedule/rosters unavailable: {err}")
+        return
+    if directory["warnings"]:
+        with st.expander("Coverage warnings"):
+            st.code("\n".join(directory["warnings"]), language=None)
+    players = directory["players"]
+    if not players:
+        st.info("No verified QB rosters for upcoming games. Refresh when the college board is available.")
+        return
+    jump = st.session_state.pop("cfb_jump", None)
+    if jump:
+        st.session_state.cfb_player = jump.get("label", jump.get("player", ""))
+        st.session_state.cfb_market = jump["market"]
+        st.session_state.cfb_line = float(jump["line"])
+        st.session_state.cfb_side = jump["side"]
+        st.session_state.cfb_game = jump.get("context", {}).get("game_id", jump.get("game_id", ""))
+        st.session_state.cfb_handoff = jump
+        st.session_state.pop("cfb_result", None)
+    selected = player_typeahead("Player search", [p["label"] for p in players], "cfb_player", sport="cfb", noun="quarterback")
+    exact = [p for p in players if p["label"] == selected]
+    if len(exact) == 1 and exact[0].get("image"):
+        st.image(exact[0]["image"], width=72)
+    market = st.selectbox("Market", list(NFL_MARKETS), key="cfb_market")
+    if "cfb_line" not in st.session_state or (not jump and st.session_state.get("cfb_previous_market", market) != market):
+        st.session_state.cfb_line = {"Pass Attempts": 29.5, "Pass Completions": 19.5, "Passing Yards": 224.5}[market]
+    st.session_state.cfb_previous_market = market
+    left, right = st.columns(2)
+    with left:
+        line = st.number_input("Line", min_value=0.0, step=.5, key="cfb_line")
+    with right:
+        side = st.selectbox("Direction", ["Over", "Under"], key="cfb_side")
+    now = pd.Timestamp.now(tz="UTC")
+    games = [g for g in directory["games"] if len(exact) == 1 and g["team_id"] == exact[0]["team_id"] and pd.Timestamp(g["kickoff"]) > now]
+    ids = [g["game_id"] for g in games]
+    if st.session_state.get("cfb_game") not in ids:
+        st.session_state.cfb_game = ids[0] if ids else None
+    gid = st.selectbox("Game", ids, key="cfb_game", format_func=lambda value: next(f"{g['game_name']} · {hub_timestamp(g['kickoff'])}" for g in games if g["game_id"] == value)) if ids else None
+    game = next((g for g in games if g["game_id"] == gid), None)
+    request_key = (selected, gid, market, line, side)
+    handoff = st.session_state.get("cfb_handoff", {})
+    same = (handoff.get("label"), handoff.get("context", {}).get("game_id"), handoff.get("market"), handoff.get("line"), handoff.get("side")) == request_key
+    if jump and same and handoff.get("snapshot"):
+        st.session_state.cfb_result = (request_key, handoff)
+    if st.button("Analyze quarterback", type="primary", use_container_width=True, disabled=game is None):
+        st.session_state.pop("cfb_result", None)
+        try:
+            with st.spinner("Loading college passing logs and matchup context..."):
+                snapshot = cfb_prepare(exact[0], game)
+                if pd.Timestamp(game["kickoff"]) <= pd.Timestamp.now(tz="UTC"):
+                    raise ValueError("Game has started; choose another matchup.")
+                result = cfb_evaluate(snapshot, market, line, side, handoff.get("line_type") if same else "Manual line - payout unverified")
+                result.update(player=exact[0]["name"], label=selected, snapshot=snapshot)
+                st.session_state.cfb_result = (request_key, result)
+                nfl_capture([result], "individual_analyzer")
+        except Exception as err:
+            st.error(f"College analysis unavailable: {err}")
+    saved = st.session_state.get("cfb_result")
+    if saved and saved[0] == request_key:
+        if same:
+            st.caption("Exact scanner snapshot retained. Analyze again to check the current cached data.")
+        nfl_render_result(saved[1]["player"], saved[1], "cfb_individual")
+
+
+def render_cfb_scanner():
+    st.subheader("College Quarterback Edge")
+    st.caption("CFB BETA · FBS scheduled matchups · Same analyzer model · WATCH/PASS pending validation")
+    market = st.selectbox("Market", ["All QB markets"] + list(NFL_MARKETS), key="cfb_scan_market")
+    left, right = st.columns(2)
+    with left:
+        side = st.selectbox("Direction", ["Both sides", "Over", "Under"], key="cfb_scan_side")
+    with right:
+        reduced = st.checkbox("Include reduced-payout lines", key="cfb_scan_reduced")
+    settings = (market, side, reduced)
+    if st.button("Scan college quarterbacks", type="primary", use_container_width=True):
+        st.session_state.pop("cfb_scan", None)
+        try:
+            with st.spinner("Loading college quotes, rosters and passing matchups..."):
+                props = fetch_all_pp_props("CFB")
+                progress = st.progress(0.0)
+                scan = cfb_scan_props(props, cfb_directory(), market, side, reduced, progress=progress.progress)
+                progress.empty()
+                scan["settings"] = settings
+                st.session_state.cfb_scan = scan
+                nfl_capture(scan["results"], "edge_scanner")
+        except Exception as err:
+            st.error(f"College scanner unavailable: {err}")
+            st.code(f"PROPIQ CFB SCANNER DEBUGGER\n{CFB_MODEL_VERSION}\nFETCH/SCAN ERROR: {err}", language=None)
+    scan = st.session_state.get("cfb_scan")
+    if not scan:
+        return
+    if settings != scan["settings"]:
+        st.info("Filters changed. Run another scan to apply them.")
+    show_pass = st.checkbox("Show passes for audit", key="cfb_show_pass")
+    results = sorted([r for r in scan["results"] if pd.Timestamp(r["context"]["kickoff"]) > pd.Timestamp.now(tz="UTC")], key=lambda r: ({"WATCH": 0, "PASS": 1}[r["action"]], -r["score"], -r["probability"]))
+    visible = [r for r in results if show_pass or r["action"] == "WATCH"]
+    st.caption(f"{scan['captured']} quotes · {len(scan['results'])} direction evaluations · {len(visible)} displayed")
+    if not visible:
+        st.info("No WATCH candidates passed the current filters and evidence gates. The debugger lists every exclusion.")
+    for index, result in enumerate(visible):
+        with st.expander(f"{result['action']} · {result['score']} · {result['label']} · {result['market']} {result['side']} {result['line']:g} · {result['line_type']}"):
+            nfl_render_result(result["player"], result, f"cfb_scan_{index}")
+            st.button("Open analyzer", key=f"cfb_open_{index}", on_click=cfb_open_result, args=(result,), use_container_width=True)
+    with st.expander("Scanner coverage and debugger"):
+        report = "\n".join(["PROPIQ CFB SCANNER DEBUGGER", CFB_MODEL_VERSION, scan["generated"],
+                            f"Run filters: {scan['settings']}",
+                            f"Source quotes: {scan['captured']} | Direction evaluations: {len(scan['results'])} | Displayed now: {len(visible)}",
+                            "Beta policy: WATCH/PASS only until prospective validation. Missing rows are not proof that no market opportunity exists.",
+                            "", "COVERAGE / EXCLUSIONS", *scan["warnings"], *scan["audit"],
+                            "", "CANDIDATE MODEL DETAILS", *[nfl_debug(r, r["player"]) + "\nLine type: " + r["line_type"] for r in scan["results"]]])
+        st.code(report, language=None)
+        st.download_button("Download debugger", report, "cfb-scanner-debug.txt", key="cfb_debug_download")
+
+
+HUB_SPORTS = {"mlb": "baseball/mlb", "nfl": "football/nfl", "cfb": "football/college-football", "nba": "basketball/nba"}
 
 
 def hub_url(value, media=False):
@@ -7091,6 +7620,9 @@ def hub_feed(sport, day):
     base = "https://site.api.espn.com/apis/site/v2/sports/" + HUB_SPORTS[sport]
     def fetch(kind):
         try:
+            if sport == "cfb" and kind == "scoreboard":
+                payload = cfb_scoreboard(pd.Timestamp(day).strftime("%Y%m%d"))
+                return {"items": hub_parse_games(payload), "error": "; ".join(payload["warnings"])}
             params = {"dates": pd.Timestamp(day).strftime("%Y%m%d"), "limit": 100} if kind == "scoreboard" else {"limit": 12}
             response = requests.get(f"{base}/{kind}", params=params, timeout=8)
             response.raise_for_status()
@@ -7124,7 +7656,7 @@ def hub_set_sport(sport):
 
 
 def hub_open_workspace(sport, view):
-    if view == "edge" and sport in ("mlb", "nfl"):
+    if view == "edge" and sport in ("mlb", "nfl", "cfb"):
         st.session_state.edge_league_select = sport.upper()
         st.session_state.last_analyzer_sport = sport
         navigate_to_view("edge")
@@ -7147,7 +7679,7 @@ def render_sports_hub():
     today = pd.Timestamp.now(tz="America/New_York").normalize()
     st.markdown(f"<div id='workspace-top' class='hub-heading'><div><span class='hub-kicker'>THE DAILY BRIEF</span><h1>Your sports desk</h1></div><span>{today.strftime('%A, %B %d')}</span></div>", unsafe_allow_html=True)
     with st.container(key="hub_sports"):
-        for col, key in zip(st.columns(3), HUB_SPORTS):
+        for col, key in zip(st.columns(len(HUB_SPORTS)), HUB_SPORTS):
             col.button(key.upper(), key=f"hub_sport_{key}", type="primary" if sport == key else "secondary", use_container_width=True, on_click=hub_set_sport, args=(key,))
     with st.container(key="hub_actions"):
         left, right = st.columns(2)
@@ -7227,7 +7759,10 @@ for _nfl_widget_key in ("nfl_player", "nfl_market_input", "nfl_line", "nfl_side"
     if _nfl_widget_key in st.session_state:
         st.session_state[_nfl_widget_key] = st.session_state[_nfl_widget_key]
 
-_ANALYZER_SPORTS = {"nba", "mlb", "nfl"}
+for _cfb_widget_key in ("cfb_player", "cfb_market", "cfb_line", "cfb_side", "cfb_game", "cfb_scan_market", "cfb_scan_side", "cfb_scan_reduced"):
+    if _cfb_widget_key in st.session_state:
+        st.session_state[_cfb_widget_key] = st.session_state[_cfb_widget_key]
+_ANALYZER_SPORTS = {"nba", "mlb", "nfl", "cfb"}
 if "hub_schedule_day" in st.session_state:
     st.session_state.hub_schedule_day = st.session_state.hub_schedule_day
 _VALID_SPORTS = _ANALYZER_SPORTS | {"edge"}
@@ -7366,7 +7901,7 @@ def add_to_pick_list(leg: dict) -> None:
             and str(existing.get("sport", "")) == sport
             and str(existing.get("prop", "")) == prop
             and str(existing.get("side", "")) == side
-            and (sport != "NFL" or str(existing.get("game_id", "")) == str(leg.get("game_id", "")))
+            and (sport not in ("NFL", "CFB") or str(existing.get("game_id", "")) == str(leg.get("game_id", "")))
             and same_line
         )
         if same_pick:
@@ -7396,7 +7931,7 @@ def add_to_pick_list_and_tracker(leg: dict, entry: dict) -> None:
                 if str(old.get("Player", "")) == player
                 and str(old.get("Line", "")) == line
                 and str(old.get("Matchup", "")) == matchup
-                and (entry.get("Sport") != "NFL" or _tracker_metadata_value(old, "Event ID") == _tracker_metadata_value(entry, "Event ID"))
+                and (entry.get("Sport") not in ("NFL", "CFB") or _tracker_metadata_value(old, "Event ID") == _tracker_metadata_value(entry, "Event ID"))
             ),
             None,
         )
@@ -7546,6 +8081,8 @@ def navigate_to_view(view: str, target: str = "workspace-top") -> None:
     elif view == "edge":
         if current_sport in _ANALYZER_SPORTS:
             st.session_state.last_analyzer_sport = current_sport
+        if current_sport in ("mlb", "nfl", "cfb"):
+            st.session_state.edge_league_select = current_sport.upper()
         st.session_state.active_sport = "edge"
         if target == "workspace-top":
             target = "edge-scanner-controls"
@@ -7586,6 +8123,8 @@ def open_edge_analyzer(sport: str, player: str, line: float,
         st.session_state.edge_jump_side = side
     elif sport_key == "nfl":
         st.session_state.nfl_jump = {"player": player, "market": stat, "line": float(line), "side": side, "line_type": line_type, "game_id": event_id}
+    elif sport_key == "cfb":
+        st.session_state.cfb_jump = {"player": player, "label": player, "market": stat, "line": float(line), "side": side, "line_type": line_type, "game_id": event_id}
     elif sport_key == "mlb":
         st.session_state.edge_jump_pitcher = player
         st.session_state.edge_jump_line = line
@@ -7610,8 +8149,8 @@ def open_pick_list_analyzer(leg: dict) -> None:
     if not stat:
         stat = "Strikeouts" if sport_key == "mlb" else "Points"
     st.session_state.edge_return_available = False
-    if sport_key == "nfl":
-        open_edge_analyzer("nfl", player, float(line), side, stat, leg.get("line_type", "Unverified"), leg.get("game_id", ""))
+    if sport_key in ("nfl", "cfb"):
+        open_edge_analyzer(sport_key, leg.get("player_label", player) if sport_key == "cfb" else player, float(line), side, stat, leg.get("line_type", "Unverified"), leg.get("game_id", ""))
         st.session_state.edge_return_available = False
         return
     if sport_key == "nba":
@@ -8379,8 +8918,8 @@ def settle_model_predictions(predictions: list, max_events: int = 40) -> dict:
         if is_current_model:
             checked_current += 1
         sport = str(sample.get("sport", "")).upper()
-        if sport == "NFL":
-            actual = nfl_actual(sample)
+        if sport in ("NFL", "CFB"):
+            actual = cfb_actual(sample) if sport == "CFB" else nfl_actual(sample)
         elif sport == "MLB":
             actual = _learning_mlb_actual(
                 sample.get("player_id", ""), sample.get("player", ""),
@@ -8402,7 +8941,7 @@ def settle_model_predictions(predictions: list, max_events: int = 40) -> dict:
         for row in rows:
             result = _learning_pick_result(actual, float(row.get("line", 0)), row.get("side", "Over"))
             probability = float(row.get("probability", 50) or 50) / 100.0
-            if sport == "NFL":
+            if sport in ("NFL", "CFB"):
                 push_probability = float((row.get("signal_snapshot") or {}).get("push_probability", 0) or 0)
                 probability = min(1.0, probability / max(1e-9, 1 - push_probability))
             outcome = 1.0 if result == "Hit" else 0.0 if result == "Miss" else None
@@ -8544,7 +9083,7 @@ def _learning_evaluation_rows(predictions: list) -> list:
         risk_flags = item.get("risk_flags", []) or []
         if not isinstance(signal_snapshot, dict):
             signal_snapshot = {}
-        if str(item.get("sport", "")).upper() == "NFL":
+        if str(item.get("sport", "")).upper() in ("NFL", "CFB"):
             # The binary learning report excludes pushes, so evaluate conditional win chance.
             push_probability = _parse_numeric_value(signal_snapshot.get("push_probability"), 0) or 0
             probability = min(1.0, probability / max(1e-9, 1 - push_probability))
@@ -11879,7 +12418,7 @@ def _tracker_metadata_value(entry: dict, field: str) -> str:
 def _tracker_sport(entry: dict) -> str:
     """Recover a persisted tracker sport without guessing shared WNBA/NBA props."""
     sport = _tracker_metadata_value(entry, "Sport").upper()
-    if sport in ("MLB", "WNBA", "NBA", "NFL"):
+    if sport in ("MLB", "WNBA", "NBA", "NFL", "CFB"):
         return sport
     matchup = str(entry.get("Matchup", entry.get("matchup", "")) or "")
     return "MLB" if matchup in ("Strikeouts", "Hitter Fantasy Score") else "NBA"
@@ -13400,8 +13939,8 @@ def auto_detect_result(entry: dict) -> Optional[str]:
 
         sport = _tracker_sport(entry)
         prop = str(entry.get("Matchup", ""))
-        if sport == "NFL":
-            actual = nfl_actual(entry)
+        if sport in ("NFL", "CFB"):
+            actual = cfb_actual(entry) if sport == "CFB" else nfl_actual(entry)
             return _learning_pick_result(actual, line_val, side) if actual is not None else None
         is_mlb = sport == "MLB" or prop in ("Strikeouts", "Hitter Fantasy Score")
         expected_date_text = _tracker_metadata_value(entry, "Game Date")[:10]
@@ -15558,7 +16097,7 @@ if _active_view == "results":
 
 if _active_view == "analyze":
     with st.container(key="analyzer_sport_navigation"):
-        _sp1, _sp2, _sp3 = st.columns(3)
+        _sp1, _sp2, _sp3, _sp4 = st.columns(4)
         with _sp1:
             st.button(
                 "NBA", key="sport_nba", use_container_width=True,
@@ -15580,6 +16119,11 @@ if _active_view == "analyze":
                 type="primary" if st.session_state.active_sport == "nfl" else "secondary",
                 on_click=navigate_to_sport, args=("nfl", "nfl-analyzer-controls"),
             )
+        with _sp4:
+            st.button("CFB", key="sport_cfb", use_container_width=True,
+                      icon=":material/school:",
+                      type="primary" if st.session_state.active_sport == "cfb" else "secondary",
+                      on_click=navigate_to_sport, args=("cfb", "cfb-analyzer-controls"))
 
     if st.session_state.get("edge_return_available"):
         with st.container(key="return_to_edge_navigation"):
@@ -25133,9 +25677,9 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
         if not isinstance(cached, list) or not cached:
             return False
         try:
-            if sport_filter == "NFL":
+            if sport_filter in ("NFL", "CFB"):
                 return len(cached) <= 1500 and all(
-                    p.get("sport") == "NFL"
+                    p.get("sport") == sport_filter
                     and nfl_market(p.get("stat")) is not None
                     and int(p.get("line_selection_version", 0) or 0) >= PP_CACHE_MIN_LINE_SELECTION_VERSION
                     for p in cached
@@ -25223,15 +25767,15 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
     if sport_filter == "NBA":  _all_leagues = [("7", "NBA")]
     elif sport_filter == "MLB": _all_leagues = [("2", "MLB")]
     elif sport_filter == "WNBA": _all_leagues = [("3", "WNBA")]
-    elif sport_filter == "NFL":
+    elif sport_filter in ("NFL", "CFB"):
         # Discover the exact full-game league instead of treating an ID guess as verification.
         league_response = _req.get("https://partner-api.prizepicks.com/leagues", timeout=10)
         league_response.raise_for_status()
         nfl_leagues = [row for row in league_response.json().get("data", [])
-                       if str(row.get("attributes", {}).get("name", "")).upper() == "NFL"]
+                       if str(row.get("attributes", {}).get("name", "")).upper() in (CFB_LEAGUE_NAMES if sport_filter == "CFB" else {"NFL"})]
         if len(nfl_leagues) != 1:
-            raise RuntimeError("Could not verify the PrizePicks full-game NFL league.")
-        _all_leagues = [(str(nfl_leagues[0]["id"]), "NFL")]
+            raise RuntimeError(f"Could not verify the PrizePicks full-game {sport_filter} league.")
+        _all_leagues = [(str(nfl_leagues[0]["id"]), sport_filter)]
 
     def _parse(data: dict, sport: str, expected_league_id: str) -> Tuple[list, dict]:
         """Parse only verified, supported PrizePicks player markets."""
@@ -25250,7 +25794,7 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
                 payload_league_ids.add(str(item.get("id", "") or ""))
                 league_name = attrs.get("name") or attrs.get("display_name")
                 if league_name:
-                    payload_league_names.add(str(league_name).upper())
+                    payload_league_names.add("CFB" if str(league_name).upper() in CFB_LEAGUE_NAMES else str(league_name).upper())
             rel = item.get("relationships", {}) or {}
             rel_league_id = str(
                 ((rel.get("league", {}) or {}).get("data", {}) or {}).get("id", "")
@@ -25259,7 +25803,7 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
             if rel_league_id:
                 payload_league_ids.add(rel_league_id)
             if attrs.get("league"):
-                payload_league_names.add(str(attrs.get("league")).upper())
+                payload_league_names.add("CFB" if str(attrs.get("league")).upper() in CFB_LEAGUE_NAMES else str(attrs.get("league")).upper())
         for proj in projections:
             attrs = proj.get("attributes", {}) or {}
             rel = proj.get("relationships", {}) or {}
@@ -25295,11 +25839,11 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
                 "team": a.get("team_abbreviation") or a.get("team", ""),
                 "pos": a.get("position", ""),
                 "league_id": player_league_id,
-                "league_name": str(a.get("league", "") or "").upper(),
+                "league_name": "CFB" if str(a.get("league", "") or "").upper() in CFB_LEAGUE_NAMES else str(a.get("league", "") or "").upper(),
             }
 
         def _canonical_market(stat_name: str) -> Optional[str]:
-            if expected_sport == "NFL":
+            if expected_sport in ("NFL", "CFB"):
                 return nfl_market(stat_name)
             if expected_sport == "MLB":
                 market = normalize_mlb_pitcher_prop_stat(stat_name)
@@ -25356,7 +25900,7 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
             name = pi.get("name", "")
             if not name:
                 continue
-            if expected_sport == "NFL" and str(pi.get("pos", "")).upper() != "QB":
+            if expected_sport in ("NFL", "CFB") and str(pi.get("pos", "")).upper() != "QB":
                 skipped_unsupported += 1
                 continue
             if (
@@ -25980,6 +26524,11 @@ def enrich_edge_results_with_sportsbook_market(results: List[dict]) -> List[dict
     return results
 
 
+if st.session_state.active_sport == "cfb":
+    with st.container(key="nfl_workspace"):
+        render_cfb_analyzer()
+    st.stop()
+
 if st.session_state.active_sport == "nfl":
     st.markdown("""<style>
     .st-key-nfl_workspace h3, .st-key-nfl_workspace [data-testid="stMetricValue"] { color: #eef4f8 !important; }
@@ -25990,7 +26539,11 @@ if st.session_state.active_sport == "nfl":
     st.stop()
 
 if st.session_state.active_sport == "edge":
-    _edge_league = st.radio("Sport", ["MLB", "NFL"], horizontal=True, key="edge_league_select")
+    _edge_league = st.radio("Sport", ["MLB", "NFL", "CFB"], horizontal=True, key="edge_league_select")
+    if _edge_league == "CFB":
+        with st.container(key="nfl_workspace"):
+            render_cfb_scanner()
+        st.stop()
     if _edge_league == "NFL":
         st.markdown("""<style>
         .st-key-nfl_workspace h3, .st-key-nfl_workspace [data-testid="stMetricValue"] { color: #eef4f8 !important; }
