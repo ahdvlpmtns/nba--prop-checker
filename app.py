@@ -6747,7 +6747,20 @@ def nfl_debug(result, player):
         lines[0] = "PROPIQ CFB QUARTERBACK DEBUGGER"
         lines[1] = f"Model: {result['version']} (unvalidated beta; action ceiling WATCH)"
         lines[5] = lines[5].replace("starts", "same-school appearances (not verified starts)")
-        lines += ["Snapshot UTC: " + result.get("snapshot_at", "Unavailable"), "College limitations: schedule strength, coaching changes, confirmed gameday role and comprehensive availability not verified."]
+        lines += ["Line type: " + result.get("line_type", "Manual line - payout unverified"),
+                  f"Entry arithmetic: 0.70 x {result['probability'] * 100:.2f} + 0.30 x {result['confidence']} = {result['score']}/100 (rounded); action gates apply separately",
+                  "Historical hit rate is descriptive; model chance comes from the projected distribution, not a fitted calibration of that hit rate.",
+                  "Snapshot UTC: " + result.get("snapshot_at", "Unavailable"),
+                  "College limitations: opponent-relative offense comparisons are a partial proxy, not a full schedule-strength rating; coaching changes, confirmed gameday role and comprehensive availability not verified."]
+        matchup = result.get("matchup", {})
+        lines += ["", "OPPONENT COMPARISON AUDIT", "Game | Offense ID | Season | Other games / attempts | Allowed CMP / baseline | Allowed Y/A / baseline | Weight"]
+        lines += [f"{c['game_id']} | {c['offense_id']} | {c['season']} | {c['baseline_games']} / {c['baseline_attempts']:g} | {c['allowed_cmp']:.1%} / {c['expected_cmp']:.1%} | {c['allowed_ypa']:.2f} / {c['expected_ypa']:.2f} | {c['weight']:.3f}" for c in matchup.get("comparisons", [])]
+        if not matchup.get("eligible"):
+            lines.append("Insufficient independent comparisons: no directional matchup adjustment applied.")
+        lines += ["", "QB WORKLOAD AUDIT", "Game | Date | Season | ATT | CMP | YDS | Team passing share"]
+        for row in result["logs"].itertuples():
+            share = f"{row.attempt_share:.1%}" if pd.notna(row.attempt_share) else "Unavailable"
+            lines.append(f"{row.game_id} | {row.kickoff.isoformat()} | {row.season} | {row.attempts:g} | {row.completions:g} | {row.passing_yards:g} | {share}")
     return "\n".join(lines)
 
 
@@ -7052,7 +7065,7 @@ def render_nfl_scanner():
         st.download_button("Download scanner debugger", report, "nfl-scanner-debug.txt", key="nfl_scan_debug")
 
 
-CFB_MODEL_VERSION = "cfb-qb-v1-beta"
+CFB_MODEL_VERSION = "cfb-qb-v2-workload-matchup-beta"
 CFB_ESPN = "https://site.api.espn.com/apis/site/v2/sports/football/college-football"
 CFB_LEAGUE_NAMES = {"CFB", "NCAAF", "COLLEGE FOOTBALL", "NCAA FOOTBALL"}
 
@@ -7178,7 +7191,12 @@ def cfb_parse_box(payload):
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
-def cfb_team_history(team_id, season, kickoff):
+def cfb_final_box(game_id):
+    return cfb_parse_box(nfl_json(f"{CFB_ESPN}/summary?event={game_id}"))
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def cfb_team_history(team_id, season, kickoff, max_games=16):
     import concurrent.futures
     cutoff = min(pd.Timestamp(kickoff), pd.Timestamp.now(tz="UTC"))
     events, warnings = {}, []
@@ -7193,10 +7211,10 @@ def cfb_team_history(team_id, season, kickoff):
                         events[str(event["id"])] = date
             except Exception as err:
                 warnings.append(f"Team {team_id}, {year} schedule: {type(err).__name__}")
-    ids = sorted(events, key=events.get, reverse=True)[:16]
+    ids = sorted(events, key=events.get, reverse=True)[:max_games]
     def fetch(gid):
         try:
-            rows = cfb_parse_box(nfl_json(f"{CFB_ESPN}/summary?event={gid}"))
+            rows = cfb_final_box(gid)
             return rows, "" if rows else f"No final passing box score for {gid}"
         except Exception as err:
             return [], f"Box score {gid}: {type(err).__name__}"
@@ -7204,6 +7222,116 @@ def cfb_team_history(team_id, season, kickoff):
         batches = list(pool.map(fetch, ids))
     rows = [row for batch, _ in batches for row in batch]
     return {"stats": pd.DataFrame(rows), "warnings": warnings + [e for _, e in batches if e], "requested": len(ids)}
+
+
+def cfb_team_passing(stats, kickoff):
+    """Only complete pregame team passing totals can support matchup comparisons."""
+    columns = ["game_id", "team_id", "opponent_id", "kickoff", "season", *NFL_MARKETS.values()]
+    if stats is None or stats.empty:
+        return pd.DataFrame(columns=columns)
+    work = stats.loc[(stats.kickoff < kickoff) & (stats.kickoff >= kickoff - pd.Timedelta(days=550))].drop_duplicates(["game_id", "team_id", "player_id"])
+    groups = work.groupby(["game_id", "team_id", "opponent_id", "kickoff", "season"])
+    complete = groups.filter(lambda g: g[list(NFL_MARKETS.values()) + ["attempt_share"]].notna().all().all()
+                             and abs(float(g.attempt_share.sum()) - 1) < .001)
+    return complete.groupby(columns[:5], as_index=False)[list(NFL_MARKETS.values())].sum(min_count=1)
+
+
+def cfb_opponent_matchup(stats, reference_stats, context):
+    import numpy as np
+    kickoff = pd.Timestamp(context["kickoff"])
+    teams = cfb_team_passing(stats, kickoff)
+    defense = teams.loc[(teams.opponent_id == str(context["opponent_id"])) & (teams.attempts > 0)].sort_values("kickoff", ascending=False).head(8)
+    references = cfb_team_passing(reference_stats, kickoff)
+    comparisons = []
+    for row in defense.itertuples():
+        # Same-season offense elsewhere, excluding every meeting with this defense.
+        baseline = references.loc[(references.team_id == row.team_id) & (references.season == row.season)
+                                  & (references.opponent_id != str(context["opponent_id"]))
+                                  & (references.game_id != row.game_id)].sort_values("kickoff", ascending=False).head(6)
+        if len(baseline) < 2 or baseline.attempts.sum() < 40:
+            continue
+        expected_cmp = float(baseline.completions.sum() / baseline.attempts.sum())
+        expected_ypa = float(baseline.passing_yards.sum() / baseline.attempts.sum())
+        if expected_cmp <= 0 or expected_ypa <= 0:
+            continue
+        age = max(0, (kickoff - row.kickoff).days)
+        weight = np.exp(-age / 240) * (1 if row.season == context["season"] else .35)
+        comparisons.append({"game_id": row.game_id, "offense_id": row.team_id, "season": row.season,
+                            "baseline_games": len(baseline), "baseline_attempts": float(baseline.attempts.sum()),
+                            "allowed_cmp": row.completions / row.attempts, "expected_cmp": expected_cmp,
+                            "allowed_ypa": row.passing_yards / row.attempts, "expected_ypa": expected_ypa,
+                            "weight": float(weight)})
+    cf = yf = 1.0
+    cmp_residual = ypa_residual = strength = 0.0
+    # Two different offenses are required; repeat meetings are not independent support.
+    eligible = len({c["offense_id"] for c in comparisons}) >= 2
+    if eligible:
+        weights = np.array([c["weight"] for c in comparisons])
+        strength = float(weights.sum() / (weights.sum() + 6))
+        cmp_residual = float(np.average([np.clip(c["allowed_cmp"] / c["expected_cmp"] - 1, -.25, .25) for c in comparisons], weights=weights))
+        ypa_residual = float(np.average([np.clip(c["allowed_ypa"] / c["expected_ypa"] - 1, -.4, .4) for c in comparisons], weights=weights))
+        cf = 1 + float(np.clip(cmp_residual * strength, -.04, .04))
+        yf = 1 + float(np.clip(ypa_residual * strength, -.06, .06))
+    current = int((defense.season == context["season"]).sum())
+    weighted_coverage = current + .35 * (len(defense) - current)
+    coverage = 15 * min(1, weighted_coverage / 8) * (.5 + .5 * len(comparisons) / max(1, len(defense)))
+    return {"games": len(defense), "current_games": current, "comparisons": comparisons, "eligible": eligible,
+            "cmp_factor": cf, "ypa_factor": yf, "cmp_residual": cmp_residual, "ypa_residual": ypa_residual,
+            "strength": strength, "coverage_points": coverage,
+            "raw_cmp": float(defense.completions.sum() / defense.attempts.sum()) if len(defense) else None,
+            "raw_ypa": float(defense.passing_yards.sum() / defense.attempts.sum()) if len(defense) else None}
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def cfb_opponent_references(defense_stats, game):
+    import concurrent.futures
+    teams = cfb_team_passing(defense_stats, pd.Timestamp(game["kickoff"]))
+    allowed = teams.loc[teams.opponent_id == str(game["opponent_id"])].sort_values("kickoff", ascending=False).head(8)
+    # Bound cold-load work; final boxes are cached across all QBs and markets.
+    school_ids = list(dict.fromkeys(allowed.team_id))[:4]
+    def fetch(tid):
+        try:
+            data = cfb_team_history(tid, game["season"], game["kickoff"], max_games=8)
+            return data["stats"], data["warnings"]
+        except Exception as err:
+            return pd.DataFrame(), [f"Offense {tid} comparison unavailable: {type(err).__name__}"]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+        batches = list(pool.map(fetch, school_ids))
+    return {"stats": pd.concat([s for s, _ in batches], ignore_index=True) if batches else pd.DataFrame(),
+            "warnings": [w for _, warnings in batches for w in warnings], "schools_requested": school_ids}
+
+
+def cfb_workload(logs, context):
+    import numpy as np
+    current = logs.loc[logs.season == context["season"]]
+    previous = logs.loc[logs.season != context["season"]]
+    def weighted_attempts(frame):
+        weights = np.exp(-np.arange(len(frame)) / 3)
+        weights /= weights.sum()
+        return float(np.dot(weights, frame.attempts)), float(1 / sum(weights ** 2))
+    prior_anchor = 30.0
+    if len(previous):
+        previous_avg, previous_n = weighted_attempts(previous)
+        prior_anchor = (previous_n * previous_avg + 3 * 30) / (previous_n + 3)
+    current_avg, current_n = weighted_attempts(current) if len(current) else (None, 0)
+    share = current_n / (current_n + 3)
+    attempts = share * current_avg + (1 - share) * prior_anchor if current_avg is not None else prior_anchor
+    role = current.head(3)
+    known = role.attempt_share.dropna()
+    recent_share = float(known.mean()) if len(known) else None
+    latest_share = nfl_number(role.iloc[0].attempt_share) if len(role) else None
+    depth_id = context.get("starter_id")
+    role_ok = len(role) >= 2 and len(known) == len(role) and recent_share >= .70 and latest_share >= .65
+    if depth_id and str(depth_id) != str(context["player_id"]):
+        role_ok = False
+    change = abs(current_avg - prior_anchor) / max(10, prior_anchor) if current_avg is not None else 0
+    variability = float(known.std(ddof=0)) if len(known) else 0
+    uncertainty = min(.25, .5 * change + variability + (.10 if len(known) != len(role) or not len(role) else 0))
+    points = (20 if depth_id else 12) * min(1, len(role) / 3) * max(.5, 1 - variability) if role_ok else 0
+    return {"attempts": attempts, "current_games": len(current), "prior_games": len(previous), "current_avg": current_avg,
+            "prior_anchor": prior_anchor, "current_weight": share, "current_effective_n": current_n,
+            "role_games": len(role), "known_role_games": len(known), "recent_share": recent_share, "latest_share": latest_share,
+            "role_ok": bool(role_ok), "role_points": points, "uncertainty": uncertainty}
 
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -7219,13 +7347,15 @@ def cfb_prepare(player, game):
     except Exception:
         pass
     context.update(nfl_weather(game))
+    references = cfb_opponent_references(defense["stats"], game)
+    context["matchup_warnings"] = references["warnings"]
     stats = pd.concat([own["stats"], defense["stats"]], ignore_index=True)
     if stats.empty:
         raise ValueError("No completed college passing box scores available.")
-    return {"stats": stats.drop_duplicates(["game_id", "player_id", "team_id"]), "context": context, "captured_at": pd.Timestamp.now(tz="UTC").isoformat()}
+    return {"stats": stats.drop_duplicates(["game_id", "player_id", "team_id"]), "opponent_reference_stats": references["stats"], "context": context, "captured_at": pd.Timestamp.now(tz="UTC").isoformat()}
 
 
-def cfb_qb_model(stats, context, market, line, side):
+def cfb_qb_model(stats, context, market, line, side, reference_stats=None):
     """College-only beta: same inputs give identical scanner and analyzer forecasts."""
     import math
     import numpy as np
@@ -7236,40 +7366,36 @@ def cfb_qb_model(stats, context, market, line, side):
     kickoff = pd.to_datetime(context.get("kickoff"), utc=True, errors="coerce")
     if pd.isna(kickoff):
         raise ValueError("Verified kickoff required.")
-    prior = stats.loc[(stats.kickoff < kickoff) & (stats.kickoff >= kickoff - pd.Timedelta(days=550))].copy()
+    prior = stats.loc[(stats.kickoff < kickoff) & (stats.kickoff >= kickoff - pd.Timedelta(days=550))].drop_duplicates(["game_id", "team_id", "player_id"]).copy()
     # School IDs, not pro-team aliases. Transfer history cannot silently supply a new school's role.
     logs = prior.loc[(prior.player_id == str(context["player_id"])) & (prior.team_id == str(context["team_id"]))].sort_values("kickoff", ascending=False).head(12).copy()
-    logs = logs.dropna(subset=list(NFL_MARKETS.values()) + ["attempt_share"])
+    logs = logs.dropna(subset=list(NFL_MARKETS.values()))
     if len(logs) < 3 or logs.attempts.sum() < 60:
         raise ValueError(f"Insufficient same-school evidence: {len(logs)} appearances, {logs.attempts.sum():g} attempts; need 3 appearances and 60 attempts.")
-    weights = np.exp(-np.arange(len(logs)) / 5) * np.where(logs.season == context["season"], 1, .5)
+    weights = np.exp(-np.arange(len(logs)) / 5) * np.where(logs.season == context["season"], 1, .35)
     weights /= weights.sum()
     effective_n = float(1 / sum(weights ** 2))
     avg = lambda col: float(np.dot(weights, logs[col]))
     flags = ["CFB beta: not prospectively calibrated", "College injury/receiver/line availability is incomplete"]
     trace = []
     # These are declared weak priors, not measured league averages or fitted coefficients.
-    talent = effective_n / (effective_n + 3)
-    attempts = talent * avg("attempts") + (1 - talent) * 30
+    workload = cfb_workload(logs, context)
+    attempts = workload["attempts"]
     volume = max(1, avg("attempts") * effective_n)
     cmp_rate = (avg("completions") * effective_n + .62 * 60) / (volume + 60)
     ypa = (avg("passing_yards") * effective_n + 7.5 * 60) / (volume + 60)
     trace.append({"signal": "Same-school passing baseline", "value": f"{len(logs)} appearances; {effective_n:.1f} effective; backups/short outings retained", "effect": f"{attempts:.1f} ATT, {cmp_rate:.1%} CMP, {ypa:.2f} Y/A; weak priors 30 ATT / 62% / 7.5 Y/A"})
-    teams = prior.groupby(["game_id", "team_id", "opponent_id", "kickoff"], as_index=False)[list(NFL_MARKETS.values())].sum(min_count=1)
-    defense = teams.loc[(teams.opponent_id == str(context["opponent_id"])) & (teams.attempts > 0)].sort_values("kickoff", ascending=False).head(8)
-    if len(defense) >= 4:
-        # Raw schedule quality is unknown; use only a small rate adjustment, never NFL baselines.
-        strength = len(defense) / (len(defense) + 20)
-        dc = float(defense.completions.sum() / defense.attempts.sum())
-        dy = float(defense.passing_yards.sum() / defense.attempts.sum())
-        cf = 1 + float(np.clip(dc / .62 - 1, -.12, .12)) * strength
-        yf = 1 + float(np.clip(dy / 7.5 - 1, -.15, .15)) * strength
-        cmp_rate *= cf
-        ypa *= yf
-        trace.append({"signal": "Opponent passing allowance", "value": f"{len(defense)} games; {dc:.1%} CMP; {dy:.2f} Y/A", "effect": f"CMP x{cf:.3f}, Y/A x{yf:.3f}; not schedule-strength adjusted"})
-    else:
-        flags.append("Fewer than four opponent passing profiles")
-    flags.append("Opponent strength/FBS-FCS schedule adjustment unavailable")
+    current_avg_text = f"{workload['current_avg']:.1f}" if workload["current_avg"] is not None else "unavailable"
+    trace.append({"signal": "Current-season workload", "value": f"{workload['current_games']} current / {workload['prior_games']} prior appearances; current {current_avg_text} ATT; prior anchor {workload['prior_anchor']:.1f}", "effect": f"Current weight {workload['current_weight']:.0%} -> {attempts:.1f} ATT; 3-game prior strength, heuristic; no low-volume games removed"})
+    matchup = cfb_opponent_matchup(prior, reference_stats, context)
+    cmp_rate *= matchup["cmp_factor"]
+    ypa *= matchup["ypa_factor"]
+    if not matchup["eligible"]:
+        flags.append("Opponent-relative matchup unverified: need comparisons against two distinct offenses")
+    flags.append("Opponent-relative proxy is not a full FBS/FCS strength-of-schedule rating")
+    raw_allowance = f"{matchup['raw_cmp']:.1%} CMP; {matchup['raw_ypa']:.2f} Y/A" if matchup["games"] else "unavailable"
+    trace.append({"signal": "Opponent passing allowance", "value": f"{matchup['games']} complete games ({matchup['current_games']} current season); {raw_allowance}", "effect": "Descriptive only; not a second matchup bonus"})
+    trace.append({"signal": "Opponent-relative matchup", "value": f"{len(matchup['comparisons'])}/{matchup['games']} comparisons; same-season offense elsewhere, target defense excluded", "effect": f"CMP x{matchup['cmp_factor']:.3f}, Y/A x{matchup['ypa_factor']:.3f}; shrinkage {matchup['strength']:.0%}; prior season weight 35%; bounded heuristic, not fitted"})
     spread = nfl_number(context.get("spread"))
     blowout = spread is not None and abs(spread) >= 21
     factor = 1.0 if spread is None else 1 + float(np.clip(spread * .003, -.06, .04))
@@ -7280,17 +7406,14 @@ def cfb_qb_model(stats, context, market, line, side):
         flags.append("Spread unavailable; blowout risk not quantified")
     attempts *= factor
     trace.append({"signal": "Game script / blowout", "value": f"Spread {spread}", "effect": f"ATT x{factor:.3f}; heuristic, not fitted"})
-    recent_share = float(logs.head(3).attempt_share.mean())
-    latest_share = float(logs.iloc[0].attempt_share)
-    role_ok = recent_share >= .70 and latest_share >= .65
+    role_ok = workload["role_ok"]
     depth_id = context.get("starter_id")
-    if depth_id and str(depth_id) != str(context["player_id"]):
-        role_ok = False
     if not role_ok:
-        flags.append("QB rotation/backup risk: recent passing share or depth chart disagrees")
+        flags.append("QB role unverified/rotation risk: current-season share missing, thin or conflicting")
     if not depth_id:
         flags.append("QB1 inferred from passing share, not a confirmed starter")
-    trace.append({"signal": "Quarterback role", "value": f"L3 attempt share {recent_share:.0%}; latest {latest_share:.0%}", "effect": "Role gate only; no low-volume games discarded"})
+    shares = [f"{workload[k]:.0%}" if workload[k] is not None else "unavailable" for k in ("recent_share", "latest_share")]
+    trace.append({"signal": "Quarterback role", "value": f"Current-season L{workload['role_games']} attempt share {shares[0]}; latest {shares[1]}; {workload['known_role_games']} verified shares", "effect": f"{'Role supported' if role_ok else 'PASS gate'}; historical role never verifies this season; workload uncertainty +{workload['uncertainty']:.1%} to SD, not hit chance"})
     wind = nfl_number(context.get("wind_mph"))
     if wind is not None and context.get("indoor") is False:
         effect = min(.12, max(0, wind - 15) * .005)
@@ -7307,12 +7430,12 @@ def cfb_qb_model(stats, context, market, line, side):
         flags.append(f"Last appearance {age} days ago")
     if context.get("injuries"):
         flags.append("QB injury designation: " + str(context["injuries"]))
-    flags += context.get("data_warnings", [])
+    flags += context.get("data_warnings", []) + context.get("matchup_warnings", [])
     projections = {"Pass Attempts": attempts, "Pass Completions": attempts * float(np.clip(cmp_rate, .3, .88)), "Passing Yards": attempts * float(np.clip(ypa, 2, 13))}
     values = logs[NFL_MARKETS[market]].to_numpy(dtype=float)
     mean = projections[market]
     floor = {"Pass Attempts": 8, "Pass Completions": 6, "Passing Yards": 70}[market]
-    sd = max(floor, float(np.std(values, ddof=1))) * (1 + min(.35, .10 + .025 * len(flags)))
+    sd = max(floor, float(np.std(values, ddof=1))) * (1 + min(.35, .10 + .025 * len(flags)) + workload["uncertainty"])
     distribution = NormalDist(mean, sd)
     # Counts are nonnegative; passing yards may be negative on completed backward plays.
     lower = distribution.cdf(-.5) if market != "Passing Yards" else 0
@@ -7320,7 +7443,7 @@ def cfb_qb_model(stats, context, market, line, side):
     over, under = 1 - cdf(math.floor(line) + .5), cdf(math.ceil(line) - .5)
     push = max(0, 1 - over - under)
     probability = over if side == "Over" else under
-    parts = {"Sample": min(25, effective_n / 10 * 25), "Current role": 20 if role_ok and depth_id else 12 if role_ok else 0, "Current season": min(15, current * 3), "Opponent coverage": min(15, len(defense) / 8 * 15), "Freshness": 10 if age <= 14 else 5 if age <= 21 else 0, "Context": (5 if spread is not None else 0) + (5 if wind is not None or context.get("indoor") is True else 0)}
+    parts = {"Sample": min(25, effective_n / 10 * 25), "Current role": workload["role_points"], "Current season": min(15, current * 3), "Opponent coverage": matchup["coverage_points"], "Freshness": 10 if age <= 14 else 5 if age <= 21 else 0, "Context": (5 if spread is not None else 0) + (5 if wind is not None and context.get("indoor") is False or context.get("indoor") is True else 0)}
     confidence = max(0, min(85, round(sum(parts.values()) - (8 if context.get("data_warnings") else 0))))
     score = round(.7 * probability * 100 + .3 * confidence)
     # A new sport's unvalidated probabilities must not masquerade as proven PLAY recommendations.
@@ -7328,11 +7451,11 @@ def cfb_qb_model(stats, context, market, line, side):
     if not role_ok or age > 28 or context.get("roster_status") != "active" or context.get("injuries"):
         action = "PASS"
     trace.append({"signal": "Predictive distribution", "value": f"Mean {mean:.2f}, SD {sd:.2f}", "effect": f"Over {over:.1%}; Under {under:.1%}; Push {push:.1%}; beta action ceiling WATCH"})
-    return {"version": CFB_MODEL_VERSION, "market": market, "line": line, "side": side, "projection": mean, "projections": projections, "probability": probability, "over": over, "under": under, "push": push, "raw": float(np.dot(weights, values > line if side == "Over" else values < line)), "confidence": confidence, "confidence_parts": parts, "score": score, "action": action, "flags": flags, "trace": trace, "logs": logs, "sample": len(logs), "historical_avg": float(values.mean()), "stability": max(0, 1 - float(np.std(values, ddof=1)) / max(1, abs(float(values.mean())))), "context": context, "sigma": sd}
+    return {"version": CFB_MODEL_VERSION, "market": market, "line": line, "side": side, "projection": mean, "projections": projections, "probability": probability, "over": over, "under": under, "push": push, "raw": float(np.dot(weights, values > line if side == "Over" else values < line)), "confidence": confidence, "confidence_parts": parts, "score": score, "action": action, "flags": flags, "trace": trace, "logs": logs, "sample": len(logs), "historical_avg": float(values.mean()), "stability": max(0, 1 - float(np.std(values, ddof=1)) / max(1, abs(float(values.mean())))), "context": context, "sigma": sd, "workload": workload, "matchup": matchup}
 
 
 def cfb_evaluate(snapshot, market, line, side, line_type="Manual line - payout unverified"):
-    result = cfb_qb_model(snapshot["stats"], snapshot["context"], market, line, side)
+    result = cfb_qb_model(snapshot["stats"], snapshot["context"], market, line, side, snapshot.get("opponent_reference_stats"))
     result.update(line_type=line_type, snapshot_at=snapshot["captured_at"])
     return result
 
@@ -7491,7 +7614,7 @@ def render_cfb_analyzer():
     request_key = (selected, gid, market, line, side)
     handoff = st.session_state.get("cfb_handoff", {})
     same = (handoff.get("label"), handoff.get("context", {}).get("game_id"), handoff.get("market"), handoff.get("line"), handoff.get("side")) == request_key
-    if jump and same and handoff.get("snapshot"):
+    if jump and same and handoff.get("snapshot") and handoff.get("version") == CFB_MODEL_VERSION:
         st.session_state.cfb_result = (request_key, handoff)
     if st.button("Analyze quarterback", type="primary", use_container_width=True, disabled=game is None):
         st.session_state.pop("cfb_result", None)
@@ -7762,6 +7885,10 @@ for _nfl_widget_key in ("nfl_player", "nfl_market_input", "nfl_line", "nfl_side"
 for _cfb_widget_key in ("cfb_player", "cfb_market", "cfb_line", "cfb_side", "cfb_game", "cfb_scan_market", "cfb_scan_side", "cfb_scan_reduced"):
     if _cfb_widget_key in st.session_state:
         st.session_state[_cfb_widget_key] = st.session_state[_cfb_widget_key]
+if st.session_state.get("cfb_active_model") != CFB_MODEL_VERSION:
+    for _cfb_result_key in ("cfb_scan", "cfb_result", "cfb_handoff"):
+        st.session_state.pop(_cfb_result_key, None)
+    st.session_state.cfb_active_model = CFB_MODEL_VERSION
 _ANALYZER_SPORTS = {"nba", "mlb", "nfl", "cfb"}
 if "hub_schedule_day" in st.session_state:
     st.session_state.hub_schedule_day = st.session_state.hub_schedule_day
