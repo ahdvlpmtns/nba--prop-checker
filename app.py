@@ -6341,7 +6341,7 @@ def render_entry_decision(
 
     score = max(0, min(100, int(round(score))))
     action = str(action or "PASS").upper()
-    action_class = "play" if action == "PLAY" else "watch" if action == "WATCH" else "pass"
+    action_class = "play" if action == "PLAY" else "watch" if action in ("WATCH", "PAYOUT CHECK") else "pass"
     probability_pct = float(probability) * 100 if float(probability) <= 1 else float(probability)
     consistency_pct = float(consistency) * 100 if float(consistency) <= 1 else float(consistency)
     safe_direction = _html.escape(str(direction or "Model decision"))
@@ -7686,6 +7686,837 @@ def render_cfb_scanner():
         st.download_button("Download debugger", report, "cfb-scanner-debug.txt", key="cfb_debug_download")
 
 
+NBA_POINTS_MODEL_VERSION = "nba-points-v1-season-role"
+NBAP_ESPN = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba"
+NBAP_LOG_COLUMNS = ["event_id", "date", "season", "phase", "team_id", "opponent_id", "venue", "MIN", "PTS", "FGM", "FGA", "FG3M", "FG3A", "FTM", "FTA", "REB", "AST"]
+
+
+def nbap_season(value):
+    date = pd.Timestamp(value)
+    year = date.year + (date.month >= 9)
+    return year, f"{year - 1}-{str(year)[-2:]}"
+
+
+def nbap_market(value):
+    return "Points" if re.sub(r"\s+", " ", str(value).strip().lower()) in ("points", "pts") else None
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def nbap_json(url):
+    response = requests.get(url, headers={"User-Agent": "PropIQ/1.0", "Accept": "application/json"}, timeout=8)
+    response.raise_for_status()
+    data = response.json()
+    if not isinstance(data, dict) or int(data.get("code", 200) or 200) >= 400:
+        raise ValueError("ESPN returned an invalid response")
+    return data
+
+
+def nbap_parse_games(payload, now):
+    games = []
+    for event in payload.get("events", []):
+        comp = (event.get("competitions") or [{}])[0]
+        phase = int((event.get("seasonType") or {}).get("type") or (event.get("season") or {}).get("type") or 0)
+        start = pd.to_datetime(event.get("date"), utc=True, errors="coerce")
+        status = comp.get("status", event.get("status", {})).get("type", {})
+        if phase != 2 or pd.isna(start) or start <= now or status.get("state") != "pre" or comp.get("timeValid") is False or event.get("timeValid") is False:
+            continue
+        if any(w in str(status.get("name", "")).lower() for w in ("postpon", "cancel", "delay", "suspend")):
+            continue
+        teams = {c.get("homeAway"): c.get("team", {}) for c in comp.get("competitors", [])}
+        if not all(teams.get(v, {}).get("id") for v in ("home", "away")):
+            continue
+        for venue, other in (("home", "away"), ("away", "home")):
+            own, opp = teams[venue], teams[other]
+            odds = (comp.get("odds") or [{}])[0]
+            games.append({"sport": "NBA", "game_id": str(event["id"]), "kickoff": start.isoformat(), "phase": 2,
+                          "season": int((event.get("season") or {}).get("year") or nbap_season(start)[0]),
+                          "team_id": str(own["id"]), "team": own.get("abbreviation", ""), "opponent_id": str(opp["id"]), "opponent": opp.get("abbreviation", ""),
+                          "venue": venue, "game_name": event.get("shortName", ""), "stadium": comp.get("venue", {}).get("fullName", ""),
+                          "spread": nfl_number(odds.get("pointSpread", {}).get(venue, {}).get("close", {}).get("line")),
+                          "team_aliases": [own.get(k, "") for k in ("abbreviation", "displayName", "shortDisplayName", "location", "name")]})
+    return games
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def nbap_board(date_key):
+    import concurrent.futures
+    now = pd.Timestamp.now(tz="UTC")
+    dates = [(pd.Timestamp(date_key) + pd.Timedelta(days=i)).strftime("%Y%m%d") for i in range(15)]
+    def fetch(day):
+        try:
+            return nbap_parse_games(nbap_json(f"{NBAP_ESPN}/scoreboard?dates={day}&limit=1000"), now), ""
+        except Exception as err:
+            return [], f"Schedule {day}: {type(err).__name__}"
+    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+        batches = list(pool.map(fetch, dates))
+    unique = {(g["game_id"], g["team_id"]): g for batch, _ in batches for g in batch}
+    return {"games": sorted(unique.values(), key=lambda g: g["kickoff"]), "warnings": [w for _, w in batches if w]}
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def nbap_roster(team_id, date_key):
+    data = nbap_json(f"{NBAP_ESPN}/teams/{team_id}/roster")
+    team = data.get("team", {})
+    if str(team.get("id")) != str(team_id):
+        raise ValueError("Roster team identity unavailable")
+    found = []
+    for group in data.get("athletes", []):
+        for athlete in group.get("items", [group]):
+            if athlete.get("id") and athlete.get("displayName"):
+                found.append({"name": athlete["displayName"], "espn_id": str(athlete["id"]), "team_id": str(team_id), "team": team.get("abbreviation", ""),
+                              "label": f"{athlete['displayName']} ({team.get('abbreviation', '')})", "image": athlete.get("headshot", {}).get("href", ""),
+                              "roster_status": str(athlete.get("status", {}).get("type", "unknown")).lower(), "injuries": athlete.get("injuries", [])})
+    if not found:
+        raise ValueError("Roster returned no athletes")
+    return found
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def nbap_directory(date_key):
+    import concurrent.futures
+    board = nbap_board(date_key)
+    def fetch(tid):
+        try:
+            return nbap_roster(str(tid), date_key), ""
+        except Exception as err:
+            return [], f"Roster {tid}: {type(err).__name__}"
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        batches = list(pool.map(fetch, range(1, 31)))
+    players = [p for batch, _ in batches for p in batch]
+    counts = {}
+    for p in players:
+        counts[p["espn_id"]] = counts.get(p["espn_id"], 0) + 1
+    if not players:
+        raise ValueError("NBA rosters unavailable; identity cannot be verified")
+    return {"players": [p for p in players if counts[p["espn_id"]] == 1], "games": board["games"],
+            "warnings": board["warnings"] + [w for _, w in batches if w] + (["Duplicate roster identities excluded"] if any(n > 1 for n in counts.values()) else [])}
+
+
+def nbap_pair(value):
+    match = re.fullmatch(r"\s*(\d+)\s*[-/]\s*(\d+)\s*", str(value))
+    if not match:
+        return None, None
+    made, attempted = map(int, match.groups())
+    return (made, attempted) if made <= attempted else (None, None)
+
+
+def nbap_minutes(value):
+    match = re.fullmatch(r"(\d+):(\d{2})", str(value))
+    if match:
+        return int(match[1]) + int(match[2]) / 60 if int(match[2]) < 60 else None
+    return nfl_number(value)
+
+
+def nbap_parse_logs(payload, season, phases=(2,)):
+    rows = []
+    names = payload.get("names", [])
+    for block in payload.get("seasonTypes", []):
+        label = str(block.get("displayName", ""))
+        phase = 1 if "Preseason" in label else 2 if "Regular Season" in label else 3 if "Postseason" in label else 0
+        if phase not in phases or not label.startswith(f"{season - 1}-{str(season)[-2:]}"):
+            continue
+        for category in block.get("categories", []):
+            if category.get("type") != "event":
+                continue
+            for item in category.get("events", []):
+                eid = str(item.get("eventId", ""))
+                event = payload.get("events", {}).get(eid, {})
+                date = pd.to_datetime(event.get("gameDate"), utc=True, errors="coerce")
+                if pd.isna(date) or event.get("gameResult") not in ("W", "L"):
+                    continue
+                stats = dict(zip(names, item.get("stats", [])))
+                mins = nbap_minutes(stats.get("minutes"))
+                pts = nfl_number(stats.get("points"))
+                if mins is None or pts is None or mins <= 0 or mins > 75 or pts < 0:
+                    continue
+                opponent = str(event.get("opponent", {}).get("id", ""))
+                home, away = str(event.get("homeTeamId", "")), str(event.get("awayTeamId", ""))
+                team = away if opponent == home else home if opponent == away else ""
+                # ESPN can put All-Star exhibitions inside the regular-season block.
+                if team not in {str(i) for i in range(1, 31)} or opponent not in {str(i) for i in range(1, 31)}:
+                    continue
+                fgm, fga = nbap_pair(stats.get("fieldGoalsMade-fieldGoalsAttempted"))
+                fg3m, fg3a = nbap_pair(stats.get("threePointFieldGoalsMade-threePointFieldGoalsAttempted"))
+                ftm, fta = nbap_pair(stats.get("freeThrowsMade-freeThrowsAttempted"))
+                rows.append({"event_id": eid, "date": date, "season": season, "phase": phase, "team_id": team, "opponent_id": opponent,
+                             "venue": "home" if team == home else "away", "MIN": mins, "PTS": pts, "FGM": fgm, "FGA": fga,
+                             "FG3M": fg3m, "FG3A": fg3a, "FTM": ftm, "FTA": fta,
+                             "REB": nfl_number(stats.get("totalRebounds")), "AST": nfl_number(stats.get("assists"))})
+    return pd.DataFrame(rows, columns=NBAP_LOG_COLUMNS).drop_duplicates("event_id").sort_values("date", ascending=False).reset_index(drop=True)
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def nbap_player_logs(player_id, season, date_key):
+    payload = nbap_json(f"https://site.web.api.espn.com/apis/common/v3/sports/basketball/nba/athletes/{player_id}/gamelog?season={season}")
+    if "seasonTypes" not in payload:
+        raise ValueError("Player game-log response incomplete")
+    return nbap_parse_logs(payload, season)
+
+
+def nbap_parse_box(payload):
+    header = payload.get("header", {})
+    comp = (header.get("competitions") or [{}])[0]
+    if not comp.get("status", {}).get("type", {}).get("completed"):
+        return {"players": [], "teams": []}
+    date = pd.to_datetime(comp.get("date"), utc=True, errors="coerce")
+    season = header.get("season", {})
+    if pd.isna(date) or not season.get("year") or int(season.get("type", 0)) not in (1, 2, 3):
+        return {"players": [], "teams": []}
+    eid = str(header.get("id", ""))
+    players, teams = [], []
+    for group in payload.get("boxscore", {}).get("players", []):
+        tid = str(group.get("team", {}).get("id", ""))
+        for category in group.get("statistics", []):
+            for a in category.get("athletes", []):
+                if a.get("didNotPlay"):
+                    continue
+                values = dict(zip(category.get("labels", []), a.get("stats", [])))
+                mins, pts = nbap_minutes(values.get("MIN")), nfl_number(values.get("PTS"))
+                if mins is not None and pts is not None:
+                    players.append({"event_id": eid, "date": date, "season": int(season["year"]), "phase": int(season["type"]), "team_id": tid,
+                                    "player_id": str(a.get("athlete", {}).get("id", "")), "name": a.get("athlete", {}).get("displayName", ""),
+                                    "MIN": mins, "PTS": pts, "started": a.get("starter") if isinstance(a.get("starter"), bool) else None})
+    competitors = {str(c.get("team", {}).get("id", c.get("id", ""))): c for c in comp.get("competitors", [])}
+    period = int(comp.get("status", {}).get("period", 4) or 4)
+    stats_by_team = {}
+    for team in payload.get("boxscore", {}).get("teams", []):
+        tid = str(team.get("team", {}).get("id", ""))
+        vals = {s.get("name"): s.get("displayValue") for s in team.get("statistics", [])}
+        _, fga = nbap_pair(vals.get("fieldGoalsMade-fieldGoalsAttempted"))
+        _, fta = nbap_pair(vals.get("freeThrowsMade-freeThrowsAttempted"))
+        orb, tov = nfl_number(vals.get("offensiveRebounds")), nfl_number(vals.get("totalTurnovers", vals.get("turnovers")))
+        score = nfl_number(competitors.get(tid, {}).get("score"))
+        if None not in (fga, fta, orb, tov, score):
+            stats_by_team[tid] = (fga + .44 * fta - orb + tov, score)
+    if len(stats_by_team) == 2:
+        possessions = sum(p[0] for p in stats_by_team.values()) / 2
+        for tid, (_, score) in stats_by_team.items():
+            opp = next(k for k in stats_by_team if k != tid)
+            if possessions > 40:
+                teams.append({"event_id": eid, "date": date, "season": int(season["year"]), "phase": int(season["type"]), "team_id": tid,
+                              "opponent_id": opp, "pace": possessions * 48 / (48 + 5 * max(0, period - 4)),
+                              "def_rating": 100 * stats_by_team[opp][1] / possessions, "points_allowed": stats_by_team[opp][1], "points": score})
+    return {"players": players, "teams": teams}
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def nbap_box(event_id):
+    return nbap_parse_box(nbap_json(f"{NBAP_ESPN}/summary?event={event_id}"))
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def nbap_team_history(team_id, season, date_key):
+    import concurrent.futures
+    now = pd.Timestamp.now(tz="UTC")
+    events, warnings = {}, []
+    for year, phase in ((season, 2), (season - 1, 2), (season, 1)):
+        try:
+            data = nbap_json(f"{NBAP_ESPN}/teams/{team_id}/schedule?season={year}&seasontype={phase}")
+            batch = []
+            for event in data.get("events", []):
+                comp = (event.get("competitions") or [{}])[0]
+                date = pd.to_datetime(event.get("date"), utc=True, errors="coerce")
+                actual_phase = int(event.get("seasonType", {}).get("type", 0))
+                if actual_phase == phase and pd.notna(date) and date < now and comp.get("status", {}).get("type", {}).get("completed"):
+                    batch.append((str(event["id"]), date))
+            for eid, date in sorted(batch, key=lambda v: v[1], reverse=True)[:4 if phase == 1 else 8]:
+                events[eid] = date
+        except Exception as err:
+            warnings.append(f"Team {team_id}, season {year}, phase {phase}: {type(err).__name__}")
+    def fetch(eid):
+        try:
+            return nbap_box(eid), ""
+        except Exception as err:
+            return {"players": [], "teams": []}, f"Box {eid}: {type(err).__name__}"
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+        batches = list(pool.map(fetch, events))
+    return {"players": [p for b, _ in batches for p in b["players"]], "teams": [t for b, _ in batches for t in b["teams"]],
+            "warnings": warnings + [w for _, w in batches if w]}
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def nbap_availability(player, date_key):
+    status, note, verified = "Unknown", "Current injury feed unavailable", False
+    try:
+        payload = nbap_json(f"{NBAP_ESPN}/injuries")
+        if not isinstance(payload.get("injuries"), list):
+            raise ValueError("Incomplete injury feed")
+        status, note, verified = "Active/Unlisted", "No active ESPN injury designation; unlisted is not a medical clearance", True
+        for group in payload["injuries"]:
+            for item in group.get("injuries", []):
+                if str(item.get("athlete", {}).get("id", "")) == player["espn_id"]:
+                    status = item.get("status", "Unknown")
+                    note = item.get("shortComment") or item.get("longComment") or "ESPN injury designation"
+    except Exception:
+        pass
+    for injury in player.get("injuries", []):
+        value = str(injury.get("status", "Unknown"))
+        if value.lower() not in ("active", "probable", ""):
+            status, note, verified = value, str(injury.get("shortComment") or "Roster injury designation"), True
+    if player.get("roster_status") != "active":
+        status, note = "Unknown", "Current active-roster status unverified"
+    return {"status": status, "note": note, "verified": verified, "fetched_at": pd.Timestamp.now(tz="UTC").isoformat()}
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def nbap_league_context(season, date_key):
+    try:
+        response = requests.get("https://stats.nba.com/stats/leaguedashteamstats",
+                                params={"Season": f"{season - 1}-{str(season)[-2:]}", "SeasonType": "Regular Season", "MeasureType": "Advanced", "PerMode": "PerGame", "LeagueID": "00"},
+                                headers={"User-Agent": "Mozilla/5.0", "Referer": "https://www.nba.com/", "Accept": "application/json", "x-nba-stats-origin": "stats", "x-nba-stats-token": "true"}, timeout=8)
+        response.raise_for_status()
+        result = response.json().get("resultSets", [{}])[0]
+        rows = [dict(zip(result.get("headers", []), r)) for r in result.get("rowSet", [])]
+        rows = [r for r in rows if nfl_number(r.get("GP"), 0) > 0 and nfl_number(r.get("PACE")) and nfl_number(r.get("DEF_RATING"))]
+        if len(rows) >= 20:
+            games = sum(float(r["GP"]) for r in rows)
+            return {"pace": sum(float(r["PACE"]) * float(r["GP"]) for r in rows) / games,
+                    "def_rating": sum(float(r["DEF_RATING"]) * float(r["GP"]) for r in rows) / games,
+                    "verified": True, "teams": len(rows), "source": "NBA Stats current-season Advanced team aggregates; GP-weighted league reference"}
+    except Exception:
+        pass
+    return {"pace": 100.0, "def_rating": 114.0, "verified": False, "teams": 0,
+            "source": "League aggregates unavailable: weak heuristic references 100 pace / 114 defensive rating"}
+
+
+def nbap_matchup(own_history, opponent_history, season, cutoff, league=None):
+    import numpy as np
+    def summarize(history, tid):
+        rows = [t for t in history.get("teams", []) if t["phase"] == 2 and t["team_id"] == tid and t["date"] < cutoff]
+        rows = sorted(rows, key=lambda r: r["date"], reverse=True)[:8]
+        if not rows:
+            return None, None, 0, 0
+        weights = np.array([1.0 if r["season"] == season else .25 for r in rows])
+        return float(np.average([r["pace"] for r in rows], weights=weights)), float(np.average([r["def_rating"] for r in rows], weights=weights)), sum(r["season"] == season for r in rows), len(rows)
+    own = summarize(own_history, own_history["team_id"])
+    opp = summarize(opponent_history, opponent_history["team_id"])
+    league = league or {"pace": 100.0, "def_rating": 114.0, "verified": False, "source": "Weak heuristic league references"}
+    pace_factor = float(np.clip(((own[0] or league["pace"]) + (opp[0] or league["pace"])) / 2 / league["pace"], .96, 1.04))
+    reliability = (opp[2] + .25 * (opp[3] - opp[2])) / (opp[3] + 8) if opp[3] else 0
+    defense_factor = 1 + float(np.clip((opp[1] or league["def_rating"]) / league["def_rating"] - 1, -.12, .12)) * reliability
+    pace_reliability = min(1, (own[2] + opp[2] + .25 * (own[3] + opp[3] - own[2] - opp[2])) / 12)
+    pace_factor = 1 + (pace_factor - 1) * pace_reliability
+    factor = float(np.clip(pace_factor * defense_factor, .94, 1.06))
+    return {"factor": factor, "pace_factor": pace_factor, "defense_factor": defense_factor, "own_pace": own[0], "opponent_pace": opp[0],
+            "opponent_def_rating": opp[1], "current_games": opp[2], "games": opp[3], "effective_games": opp[2] + .25 * (opp[3] - opp[2]),
+            "league_verified": league["verified"], "league_pace": league["pace"], "league_def_rating": league["def_rating"],
+            "source": "ESPN final box scores; estimated possessions. " + league["source"]}
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def nbap_prepare(player, game, date_key):
+    import concurrent.futures
+    if player["team_id"] != game["team_id"]:
+        raise ValueError("Player roster and scheduled team disagree")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+        jobs = {"current": pool.submit(nbap_player_logs, player["espn_id"], game["season"], date_key),
+                "prior": pool.submit(nbap_player_logs, player["espn_id"], game["season"] - 1, date_key),
+                "own": pool.submit(nbap_team_history, game["team_id"], game["season"], date_key),
+                "opp": pool.submit(nbap_team_history, game["opponent_id"], game["season"], date_key),
+                "availability": pool.submit(nbap_availability, player, date_key),
+                "league": pool.submit(nbap_league_context, game["season"], date_key)}
+        loaded, warnings = {}, []
+        for key, future in jobs.items():
+            try:
+                loaded[key] = future.result()
+            except Exception as err:
+                warnings.append(f"{key}: {type(err).__name__}")
+    frames = [loaded[k] for k in ("current", "prior") if k in loaded and not loaded[k].empty]
+    logs = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=NBAP_LOG_COLUMNS)
+    cutoff = pd.Timestamp(game["kickoff"])
+    own = {**loaded.get("own", {}), "team_id": game["team_id"]}
+    opp = {**loaded.get("opp", {}), "team_id": game["opponent_id"]}
+    role_rows = [r for r in own.get("players", []) if r["player_id"] == player["espn_id"] and r["team_id"] == player["team_id"] and r["season"] == game["season"] and r["date"] < cutoff]
+    warnings += own.get("warnings", []) + opp.get("warnings", [])
+    return {"version": NBA_POINTS_MODEL_VERSION, "captured_at": pd.Timestamp.now(tz="UTC").isoformat(), "player": player, "game": game,
+            "logs": logs, "role_rows": role_rows, "availability": loaded.get("availability", {"status": "Unknown", "verified": False, "note": "Feed unavailable"}),
+            "matchup": nbap_matchup(own, opp, game["season"], cutoff, loaded.get("league")), "warnings": warnings}
+
+
+def nbap_model(snapshot, market, line, side, line_type="Manual line - verify market and payout", line_verified=False):
+    """One points distribution and one evidence assessment for both NBA workflows."""
+    import math
+    import numpy as np
+    from statistics import NormalDist
+    if nbap_market(market) is None or nfl_number(line) is None or not 0 <= float(line) <= 100 or side not in ("Over", "Under"):
+        raise ValueError("Choose full-game Points, a valid line, and Over/Under")
+    line = float(line)
+    player, game = snapshot["player"], snapshot["game"]
+    kickoff = pd.to_datetime(game.get("kickoff"), utc=True, errors="coerce")
+    captured = pd.to_datetime(snapshot.get("captured_at"), utc=True, errors="coerce")
+    if pd.isna(kickoff) or pd.isna(captured) or captured >= kickoff or game.get("phase") != 2 or player["team_id"] != game["team_id"]:
+        raise ValueError("A verified pregame regular-season event and matching current roster are required")
+    logs = snapshot["logs"].copy()
+    logs = logs.loc[(logs.date < captured) & (logs.date < kickoff) & (logs.phase == 2) & logs.season.isin([game["season"], game["season"] - 1])]
+    logs = logs.drop_duplicates("event_id").dropna(subset=["MIN", "PTS"]).sort_values("date", ascending=False)
+    logs = logs.loc[(logs.MIN > 0) & (logs.PTS >= 0)].head(40)
+    if len(logs) < 5:
+        raise ValueError(f"Insufficient regular-season evidence ({len(logs)} appearances; need 5). Missing statistics and DNPs are not zero-point performances.")
+    current = logs.loc[(logs.season == game["season"]) & (logs.team_id == game["team_id"])]
+    old_team = logs.loc[(logs.season == game["season"]) & (logs.team_id != game["team_id"])]
+    previous = logs.loc[logs.season != game["season"]]
+    same_prior = previous.loc[previous.team_id == game["team_id"]]
+    transferred = len(same_prior) < 3 and len(previous) >= 3 or len(old_team) > 0
+    logs["weight"] = np.exp(-np.arange(len(logs)) / 15) * np.where(logs.season == game["season"], 1.0, .25)
+    logs.loc[logs.team_id != game["team_id"], "weight"] *= .5
+    weights = logs.weight.to_numpy(dtype=float)
+    weights /= weights.sum()
+    effective_n = float(1 / sum(weights ** 2))
+    average = lambda col: float(np.dot(weights, logs[col].to_numpy(dtype=float)))
+    flags, gates, trace = [], [], []
+    if player.get("roster_status") != "active":
+        gates.append("Active roster unverified")
+    baseline_minutes = float(same_prior.head(20).MIN.median()) if len(same_prior) else float(logs.head(20).MIN.median())
+    role = [r for r in snapshot.get("role_rows", []) if r["season"] == game["season"] and r["team_id"] == game["team_id"] and r["date"] < captured and r["date"] < kickoff]
+    role = sorted({r["event_id"]: r for r in role}.values(), key=lambda r: r["date"], reverse=True)[:5]
+    preseason = [r for r in role if r["phase"] == 1]
+    if len(current):
+        role_minutes = float(current.head(5).MIN.mean())
+        role_weight = min(.85, len(current) / (len(current) + 2))
+        role_source = f"Current-team regular season L{min(5, len(current))}"
+        projected_minutes = role_weight * role_minutes + (1 - role_weight) * baseline_minutes
+        role_variance = float(current.head(5).MIN.std(ddof=0))
+        role_points = 20 * min(1, len(current) / 5) * max(.4, 1 - role_variance / 15)
+        role_freshness = (captured - current.iloc[0].date).days
+    elif len(preseason):
+        role_minutes = float(np.mean([r["MIN"] for r in preseason]))
+        # Exhibition minutes are a partial role proxy, never a regular-season outcome sample.
+        role_weight = .65 if transferred else .25
+        projected_minutes = role_weight * role_minutes + (1 - role_weight) * baseline_minutes
+        role_source = f"Preseason proxy L{len(preseason)}; starter status inferred"
+        role_variance = float(np.std([r["MIN"] for r in preseason]))
+        role_points = 10 * min(1, len(preseason) / 3) * max(.5, 1 - role_variance / 20)
+        role_freshness = (captured - preseason[0]["date"]).days
+        flags.append("Preseason role proxy; regular-season workload not established")
+    else:
+        projected_minutes = baseline_minutes
+        role_source, role_points, role_freshness = "Historical minutes assumption; current role unavailable", 0, 999
+        role_variance = float(logs.head(10).MIN.std(ddof=0))
+        flags.append("Current role unavailable")
+    projected_minutes = float(np.clip(projected_minutes, 0, 42))
+    if transferred:
+        flags.append("New-team role: previous-team production discounted")
+        if not len(current) and not len(preseason):
+            gates.append("New-team workload unverified")
+    if len(current) < 5:
+        flags.append(f"Early-season evidence: {len(current)} current-team regular appearances")
+    if role_freshness > 14:
+        gates.append("No recent current-role evidence")
+    if projected_minutes < 8:
+        gates.append("Very limited projected workload")
+    ppm = average("PTS") / max(1, average("MIN"))
+    trace.append({"signal": "Minutes / role", "value": role_source, "effect": f"{baseline_minutes:.1f} historical minutes -> {projected_minutes:.1f} projected minutes; no blowout/short appearances removed"})
+    last_dates = [pd.Timestamp(r["date"]) for r in role if r["phase"] == 2]
+    if len(current):
+        last_dates += list(current.date)
+    rest_gap = None
+    if last_dates:
+        rest_gap = (kickoff.tz_convert("America/New_York").date() - max(last_dates).tz_convert("America/New_York").date()).days
+        if rest_gap == 1:
+            projected_minutes *= .97
+            trace.append({"signal": "Back-to-back", "value": "0 full rest days", "effect": "Minutes x0.97, applied once to the shared projection"})
+    complete = logs.dropna(subset=["FGM", "FGA", "FG3M", "FG3A", "FTM", "FTA"])
+    complete = complete.loc[(complete.FGM >= complete.FG3M) & (complete.FGA >= complete.FG3A) & (complete.FGA >= complete.FGM) & (complete.FG3A >= complete.FG3M) & (complete.FTA >= complete.FTM)]
+    if len(complete) >= 5:
+        cw = complete.weight.to_numpy(dtype=float)
+        cw /= cw.sum()
+        value = lambda col: float(np.dot(cw, complete[col].to_numpy(dtype=float)))
+        mins = max(1, value("MIN"))
+        two_a, two_m = value("FGA") - value("FG3A"), value("FGM") - value("FG3M")
+        three_a, three_m, ft_a, ft_m = value("FG3A"), value("FG3M"), value("FTA"), value("FTM")
+        # Weak, explicitly reported shooting priors stabilize efficiency; opportunity stays player-specific.
+        efficiency_n = min(15, effective_n)
+        two_pct = (two_m * efficiency_n + .52 * 40) / (two_a * efficiency_n + 40)
+        three_pct = (three_m * efficiency_n + .35 * 35) / (three_a * efficiency_n + 35)
+        ft_pct = (ft_m * efficiency_n + .78 * 20) / (ft_a * efficiency_n + 20)
+        shot_path = projected_minutes / mins * (2 * two_a * two_pct + 3 * three_a * three_pct + ft_a * ft_pct)
+        base_projection = .7 * shot_path + .3 * projected_minutes * ppm
+        trace.append({"signal": "Scoring opportunity + efficiency", "value": f"{two_a / mins * projected_minutes:.1f} 2PA / {three_a / mins * projected_minutes:.1f} 3PA / {ft_a / mins * projected_minutes:.1f} FTA", "effect": f"Regressed rates {two_pct:.1%} / {three_pct:.1%} / {ft_pct:.1%}; shot path {shot_path:.1f}; PPM path {projected_minutes * ppm:.1f}; blended once 70/30"})
+    else:
+        shot_path = None
+        base_projection = projected_minutes * ppm
+        flags.append("Shooting-component coverage incomplete: PPM-only projection")
+        trace.append({"signal": "Scoring opportunity", "value": f"{len(complete)} complete shooting games", "effect": f"PPM-only projection {base_projection:.1f}; no missing shooting field treated as zero"})
+    matchup = snapshot.get("matchup", {})
+    factor = float(np.clip(matchup.get("factor", 1), .94, 1.06))
+    projection = max(0, base_projection * factor)
+    if not matchup.get("league_verified"):
+        flags.append("Current league reference unavailable; weak matchup priors used")
+    if matchup.get("current_games", 0) < 3:
+        flags.append("Opponent current-season defense sample is thin")
+    trace.append({"signal": "Defense + pace", "value": f"{matchup.get('games', 0)} games / {matchup.get('current_games', 0)} current; {matchup.get('source', 'Unavailable')}", "effect": f"Shared scoring multiplier x{factor:.3f}; projection {projection:.1f}; prior-season team games receive 25% weight"})
+    availability = snapshot.get("availability", {})
+    status = str(availability.get("status", "Unknown"))
+    status_lower = status.lower()
+    unavailable = any(v in status_lower for v in ("out", "doubtful", "suspended", "inactive"))
+    uncertain = not availability.get("verified") or any(v in status_lower for v in ("unknown", "question", "day-to-day", "day to day"))
+    if unavailable:
+        gates.append(f"Availability: {status}")
+    elif uncertain:
+        flags.append(f"Availability unresolved: {status}")
+    trace.append({"signal": "Availability", "value": status, "effect": availability.get("note", "No verified report") + "; entry gate / evidence only"})
+    flags += snapshot.get("warnings", [])
+    values = logs.PTS.to_numpy(dtype=float)
+    observed_sigma = float(np.sqrt(np.dot(weights, (values - average("PTS")) ** 2)))
+    sigma = max(4, observed_sigma, .20 * projection)
+    uncertainty = min(.45, .08 + (.12 if len(current) < 5 else 0) + (.10 if transferred else 0) + (.10 if uncertain else 0) + min(.12, role_variance / 80))
+    sigma *= 1 + uncertainty
+    distribution = NormalDist(projection, sigma)
+    lower = distribution.cdf(-.5)
+    cdf = lambda x: float(np.clip((distribution.cdf(x) - lower) / max(1e-9, 1 - lower), 0, 1))
+    over, under = 1 - cdf(math.floor(line) + .5), cdf(math.ceil(line) - .5)
+    push = max(0, 1 - over - under)
+    probability = over if side == "Over" else under
+    evidence_parts = {"Sample": 20 * min(1, (len(current) + .25 * len(previous) + .10 * len(old_team)) / 12),
+                      "Current role": role_points, "Freshness": 10 if role_freshness <= 7 and len(current) else 6 if role_freshness <= 7 else 3 if role_freshness <= 14 else 0,
+                      "Matchup coverage": 20 * min(1, matchup.get("effective_games", 0) / 8) * (1 if matchup.get("league_verified") else .65),
+                      "Availability": 0 if unavailable else 5 if uncertain else 12,
+                      "Data completeness": 10 + 5 * min(1, len(complete) / len(logs))}
+    confidence = int(round(max(0, min(100, sum(evidence_parts.values()) - min(8, len(snapshot.get("warnings", [])) * 2)))))
+    score = int(round(.7 * probability * 100 + .3 * confidence))
+    model_action = "PLAY" if probability >= .70 and confidence >= 75 and score >= 80 else "WATCH" if probability >= .55 and confidence >= 50 and score >= 65 else "PASS"
+    if uncertain or len(current) < 5 or role_points < 12:
+        if model_action == "PLAY":
+            model_action = "WATCH"
+            gates.append("Strong label needs established current role and availability")
+    if unavailable or any(v in gates for v in ("Active roster unverified", "New-team workload unverified", "No recent current-role evidence", "Very limited projected workload")):
+        model_action = "PASS"
+    action = model_action
+    reduced = "reduced" in line_type.lower()
+    if reduced and model_action in ("PLAY", "WATCH"):
+        action = "PAYOUT CHECK"
+        gates.append("Reduced line: exact entry return required")
+    elif not line_verified and model_action == "PLAY":
+        action = "WATCH"
+        gates.append("Verify the exact full-game line and payout")
+    if action == "PASS":
+        score = min(score, 64)
+    elif action == "WATCH":
+        score = min(score, 79)
+    raw = float(np.dot(weights, values > line if side == "Over" else values < line))
+    hits = int(sum(values > line if side == "Over" else values < line))
+    trace.append({"signal": "Predictive distribution", "value": f"Mean {projection:.2f}; SD {sigma:.2f}; uncertainty +{uncertainty:.0%}", "effect": f"Over {over:.1%}; Under {under:.1%}; Push {push:.1%}; side selected without automatic switching"})
+    return {"version": NBA_POINTS_MODEL_VERSION, "player": player["name"], "label": player["label"], "market": "Points", "line": line, "side": side,
+            "projection": projection, "projected_minutes": projected_minutes, "shot_path": shot_path, "probability": probability, "over": over, "under": under, "push": push,
+            "confidence": confidence, "confidence_parts": evidence_parts, "score": score, "base_score": int(round(.7 * probability * 100 + .3 * confidence)), "action": action,
+            "model_action": model_action, "flags": flags, "gates": gates, "trace": trace, "logs": logs.drop(columns="weight"), "sample": len(logs), "hits": hits,
+            "raw": raw, "historical_avg": float(values.mean()), "stability": max(0, 1 - observed_sigma / max(1, average("PTS"))),
+            "current_games": len(current), "prior_games": len(previous), "effective_sample": effective_n, "role_source": role_source,
+            "line_type": line_type, "line_verified": bool(line_verified), "snapshot": snapshot, "snapshot_at": snapshot["captured_at"], "sigma": sigma}
+
+
+def nbap_debug(result):
+    snapshot, game = result["snapshot"], result["snapshot"]["game"]
+    lines = ["PROPIQ NBA POINTS DEBUGGER", f"Model: {result['version']} (heuristic model; prospective calibration pending)",
+             f"Player: {result['player']} | ESPN {snapshot['player']['espn_id']} | roster {snapshot['player']['team_id']} / game {game['team_id']}",
+             f"Event: {game['game_id']} | {game['team']} vs {game['opponent']} | {game['kickoff']} | regular season {game['season'] - 1}-{str(game['season'])[-2:]}",
+             f"Market: Points {result['side']} {result['line']:g} | {result['line_type']} | exact quote verified: {result['line_verified']}",
+             f"History: {result['hits']}/{result['sample']} hit (unweighted); weighted {result['raw']:.1%}; {result['current_games']} current-team / {result['prior_games']} prior season; effective {result['effective_sample']:.1f}",
+             "", "EXECUTED SIGNALS", "Signal | Value | Effect"]
+    lines += [f"{r['signal']} | {r['value']} | {r['effect']}" for r in result["trace"]]
+    lines += ["", "EVIDENCE QUALITY (coverage, independent of the line)"] + [f"{k}: {v:.1f}" for k, v in result["confidence_parts"].items()]
+    lines += ["", "FINAL", f"Projection: {result['projection']:.2f} points at {result['projected_minutes']:.1f} minutes | edge {result['projection'] - result['line']:+.2f}",
+              f"Model chance: {result['probability']:.1%} | evidence {result['confidence']}/100 | output stability {result['stability']:.1%}",
+              f"Entry arithmetic: 70% x {result['probability'] * 100:.2f} + 30% x {result['confidence']} = {result['base_score']}; final {result['score']} {result['action']}",
+              f"Model-only action: {result['model_action']}; payout/verification action: {result['action']}", "Gates: " + (" | ".join(result["gates"]) or "None"),
+              "Flags: " + (" | ".join(result["flags"]) or "None"), f"Snapshot UTC: {result['snapshot_at']}",
+              "Unavailable advanced inputs: confirmed gameday rotations, player-specific defensive assignments, potential assists/rebound chances, coaching and teammate usage redistribution. No fabricated bonuses.",
+              "", "REGULAR-SEASON GAME LOGS", "Event | Date | Season | Team ID | Opponent ID | MIN | PTS | FGA | FTA"]
+    lines += [f"{r.event_id} | {r.date.isoformat()} | {r.season} | {r.team_id} | {r.opponent_id} | {r.MIN:g} | {r.PTS:g} | {r.FGA} | {r.FTA}" for r in result["logs"].itertuples()]
+    return "\n".join(lines)
+
+
+def nbap_prediction_result(result):
+    """Map a shared result to the existing prediction ledger schema."""
+    game = result["snapshot"]["game"]
+    return {"sport": "NBA", "model_version": result["version"], "player": result["player"],
+            "player_id": result["snapshot"]["player"]["espn_id"], "player_team": game["team"], "opp": game["opponent"],
+            "stat": "Points", "line": result["line"], "side": result["side"], "adj": result["probability"] * 100,
+            "confidence": result["confidence"], "cons": result["stability"] * 100, "samples": result["sample"],
+            "avg": result["historical_avg"], "projection": result["projection"], "projection_gap": (result["projection"] - result["line"]) * (1 if result["side"] == "Over" else -1),
+            "entry_score": result["score"], "entry_action": result["action"], "tier": result["model_action"],
+            "model_entry_score": result["base_score"], "model_entry_action": result["model_action"], "model_entry_reasons": result["gates"],
+            "entry_decision_reasons": result["gates"], "model_flags": result["flags"], "confidence_parts": result["confidence_parts"],
+            "push_probability": result["push"], "current_games": result["current_games"], "prior_games": result["prior_games"],
+            "projected_minutes": result["projected_minutes"], "role_source": result["role_source"],
+            "game_id": game["game_id"], "game_date": pd.Timestamp(game["kickoff"]).tz_convert("America/New_York").date().isoformat(),
+            "game_datetime": game["kickoff"], "slate_source": "live" if result["line_verified"] else "manual_or_cached",
+            "line_verification_required": not result["line_verified"], "odds_type": "goblin" if "reduced" in result["line_type"].lower() else "standard"}
+
+
+def nbap_capture(results, source):
+    import uuid
+    now = pd.Timestamp.now(tz="UTC")
+    rows = [nbap_prediction_result(r) for r in results if pd.Timestamp(r["snapshot"]["game"]["kickoff"]) > now]
+    return save_model_prediction_batch(rows, str(uuid.uuid4()), st.session_state.session_id, source) if rows else 0
+
+
+def nbap_settlement(row):
+    event = str(row.get("event_id") or _tracker_metadata_value(row, "Event ID") or "")
+    player = str(row.get("player_id") or _tracker_metadata_value(row, "Player ID") or "")
+    if not event or not player or nbap_market(row.get("market") or row.get("Matchup")) is None:
+        return {"actual": None, "void": False}
+    try:
+        payload = nbap_json(f"{NBAP_ESPN}/summary?event={event}")
+        header = payload.get("header", {})
+        comp = (header.get("competitions") or [{}])[0]
+        if str(header.get("id")) != event or header.get("season", {}).get("type") != 2 or not comp.get("status", {}).get("type", {}).get("completed"):
+            return {"actual": None, "void": False}
+        matches = [a for t in payload.get("boxscore", {}).get("players", []) for s in t.get("statistics", []) for a in s.get("athletes", []) if str(a.get("athlete", {}).get("id", "")) == player]
+        if len(matches) != 1:
+            return {"actual": None, "void": False}
+        a = matches[0]
+        if a.get("didNotPlay") is True:
+            return {"actual": None, "void": True}
+        records = nbap_parse_box(payload)["players"]
+        found = [r for r in records if r["player_id"] == player]
+        return {"actual": found[0]["PTS"] if len(found) == 1 else None, "void": False}
+    except Exception:
+        return {"actual": None, "void": False}
+
+
+def nbap_save_pick(result):
+    game, player = result["snapshot"]["game"], result["snapshot"]["player"]
+    if pd.Timestamp(game["kickoff"]) <= pd.Timestamp.now(tz="UTC"):
+        st.session_state.parlay_notice = "This game has started. Refresh the NBA board."
+        return
+    leg = {"sport": "NBA", "player": result["player"], "player_label": result["label"], "player_id": player["espn_id"],
+           "prop": f"Points {result['side']}", "line": result["line"], "side": result["side"], "verdict": result["action"],
+           "adj": round(result["probability"] * 100, 1), "confidence": result["confidence"], "line_type": result["line_type"],
+           "game_id": game["game_id"], "game_date": game["kickoff"][:10], "added": datetime.now().strftime("%I:%M %p")}
+    entry = {"Player": result["player"], "Sport": "NBA", "Prop": "Points", "Matchup": "Points", "Line": f"{result['line']:g} {result['side']}",
+             "Opponent": game["opponent"], "Team": game["team"], "Venue": game["venue"], "Avg PTS": round(result["historical_avg"], 1),
+             "Hit Rate": f"{result['raw']:.0%}", "Adjusted": f"{result['probability']:.0%}", "Consistency": f"{result['stability']:.0%}",
+             "Verdict": result["action"], "Result": "Pending", "Player ID": player["espn_id"], "Event ID": game["game_id"],
+             "Game Date": pd.Timestamp(game["kickoff"]).tz_convert("America/New_York").date().isoformat(), "Game Datetime": game["kickoff"],
+             "player_id": player["espn_id"], "event_id": game["game_id"], "market": "Points", "game_datetime": game["kickoff"], "Line Type": result["line_type"]}
+    add_to_pick_list_and_tracker(leg, entry)
+
+
+def nbap_open_result(result):
+    st.session_state.nbap_jump = result
+    st.session_state.edge_return_available = True
+    navigate_to_sport("nba", "nba-analyzer-controls")
+
+
+def nbap_render_result(result, key):
+    game = result["snapshot"]["game"]
+    note = " | ".join(result["gates"]) or " | ".join(result["flags"][:2]) or "Current role and matchup evidence loaded."
+    render_entry_decision(result["score"], result["action"], f"{result['player']} · Points {result['side']} {result['line']:g}",
+                          result["probability"], result["confidence"], result["stability"], note,
+                          f"70% model chance + 30% evidence = {result['base_score']}. Model action: {result['model_action']}. Entry gates: {'; '.join(result['gates']) or 'None'}.",
+                          history_label=f"Last {result['sample']} regular appearances", history_value=f"{result['hits']}/{result['sample']} hit; weighted {result['raw']:.0%}",
+                          evidence_label="Evidence quality", line_type_label=result["line_type"])
+    a, b, c = st.columns(3)
+    a.metric("Projected points", f"{result['projection']:.1f}")
+    b.metric("Projected minutes", f"{result['projected_minutes']:.1f}")
+    c.metric("Projected edge", f"{result['projection'] - result['line']:+.1f}")
+    st.caption(f"{game['game_name']} · {hub_timestamp(game['kickoff'])} · {game['season'] - 1}-{str(game['season'])[-2:]} regular season")
+    with st.expander("Matchup and role"):
+        st.write(result["role_source"])
+        st.write(f"Availability: {result['snapshot']['availability'].get('status', 'Unknown')} · {result['snapshot']['availability'].get('note', '')}")
+        st.write(f"Defense: {result['snapshot']['matchup'].get('games', 0)} game profiles, {result['snapshot']['matchup'].get('current_games', 0)} this season. " + result["snapshot"]["matchup"].get("source", "Unavailable"))
+        for flag in result["flags"]:
+            st.caption(flag)
+    with st.expander("Game logs"):
+        st.dataframe(result["logs"][["date", "season", "team_id", "opponent_id", "MIN", "PTS", "FGA", "FG3A", "FTA"]], use_container_width=True, hide_index=True)
+    with st.expander("Model debugger - copy report"):
+        report = nbap_debug(result)
+        st.code(report, language=None)
+        st.download_button("Download debugger", report, "nba-points-debug.txt", key=f"{key}_debug")
+    left, right = st.columns(2)
+    left.button("Add & Track", icon=":material/bookmark_add:", key=f"{key}_save", on_click=nbap_save_pick, args=(result,), use_container_width=True,
+                disabled=any("Availability:" in g or "workload unverified" in g for g in result["gates"]))
+    with right.expander("Share pick"):
+        st.code(f"{result['player']} · Points {result['side']} {result['line']:g}\n{result['action']} · Entry {result['score']} · Model {result['probability']:.0%} · Evidence {result['confidence']}/100\n{game['game_name']} · {hub_timestamp(game['kickoff'])}\n{result['line_type']}", language=None)
+
+
+def render_nbap_analyzer():
+    st.markdown("<div id='nba-analyzer-controls'></div>", unsafe_allow_html=True)
+    render_navigation_scroll_target("nba-analyzer-controls")
+    st.subheader("NBA Player Analyzer")
+    try:
+        with st.spinner("Loading NBA games and current rosters..."):
+            directory = nbap_directory(_cache_date())
+    except Exception as err:
+        st.error(f"NBA roster/schedule coverage unavailable: {err}")
+        st.code(f"PROPIQ NBA POINTS DEBUGGER\n{NBA_POINTS_MODEL_VERSION}\nPREFLIGHT ERROR: {err}", language=None)
+        st.button("Retry roster lookup", key="nbap_retry_rosters", on_click=nbap_directory.clear)
+        return
+    if directory["warnings"]:
+        with st.expander("Data coverage"):
+            st.code("\n".join(directory["warnings"]), language=None)
+    jump = st.session_state.pop("nbap_jump", None)
+    if jump:
+        label = jump.get("label", jump.get("player", ""))
+        if label not in {p["label"] for p in directory["players"]}:
+            matches = [p for p in directory["players"] if nfl_name(p["name"]) == nfl_name(jump.get("player", label))]
+            if len(matches) == 1:
+                label = matches[0]["label"]
+        st.session_state.nbap_player = label
+        st.session_state.nbap_line = float(jump["line"])
+        st.session_state.nbap_side = jump["side"]
+        st.session_state.nbap_game = jump.get("snapshot", {}).get("game", {}).get("game_id", jump.get("game_id", ""))
+        st.session_state.nbap_handoff = jump
+        st.session_state.pop("nbap_result", None)
+    selected = player_typeahead("Player search", [p["label"] for p in directory["players"]], "nbap_player", sport="nba")
+    exact = [p for p in directory["players"] if p["label"] == selected]
+    if not exact:
+        return
+    player = exact[0]
+    if player.get("image"):
+        st.image(player["image"], width=64)
+    st.selectbox("Market", ["Points"], disabled=True, key="nbap_market")
+    a, b = st.columns(2)
+    if "nbap_line" not in st.session_state:
+        st.session_state.nbap_line = 24.5
+    line = a.number_input("Points line", value=None, min_value=0.0, max_value=100.0, step=.5, key="nbap_line")
+    side = b.selectbox("Direction", ["Over", "Under"], key="nbap_side")
+    games = [g for g in directory["games"] if g["team_id"] == player["team_id"] and pd.Timestamp(g["kickoff"]) > pd.Timestamp.now(tz="UTC")]
+    ids = [g["game_id"] for g in games]
+    if st.session_state.get("nbap_game") not in ids:
+        st.session_state.nbap_game = ids[0] if ids else None
+    gid = st.selectbox("Game", ids, key="nbap_game", format_func=lambda value: next(f"{g['game_name']} · {hub_timestamp(g['kickoff'])}" for g in games if g["game_id"] == value)) if ids else None
+    game = next((g for g in games if g["game_id"] == gid), None)
+    if not game:
+        st.info("No verified upcoming regular-season game for this roster. Preseason lines are excluded from this model.")
+    request = (selected, gid, line, side)
+    handoff = st.session_state.get("nbap_handoff", {})
+    same = (handoff.get("label"), handoff.get("snapshot", {}).get("game", {}).get("game_id"), handoff.get("line"), handoff.get("side")) == request
+    if jump and same and handoff.get("version") == NBA_POINTS_MODEL_VERSION:
+        st.session_state.nbap_result = (request, handoff)
+    if st.button("Analyze points", type="primary", key="nbap_analyze", use_container_width=True, disabled=game is None):
+        st.session_state.pop("nbap_result", None)
+        try:
+            with st.spinner("Loading scoring opportunity, role and matchup..."):
+                snapshot = nbap_prepare(player, game, _cache_date())
+                if pd.Timestamp(game["kickoff"]) <= pd.Timestamp.now(tz="UTC"):
+                    raise ValueError("Game already started")
+                result = nbap_model(snapshot, "Points", line, side, handoff.get("line_type", "Manual line - verify market and payout") if same else "Manual line - verify market and payout", handoff.get("line_verified", False) if same else False)
+                st.session_state.nbap_result = (request, result)
+                nbap_capture([result], "individual_analyzer")
+        except Exception as err:
+            st.error(f"NBA analysis unavailable: {err}")
+    saved = st.session_state.get("nbap_result")
+    if saved and saved[0] == request:
+        nbap_render_result(saved[1], "nbap_individual")
+
+
+def nbap_match_quote(prop, directory):
+    if prop.get("sport") != "NBA" or nbap_market(prop.get("stat")) is None:
+        raise ValueError("Unsupported sport/market; only NBA full-game Points are supported")
+    start = pd.to_datetime(prop.get("start_time"), utc=True, errors="coerce")
+    if pd.isna(start) or start <= pd.Timestamp.now(tz="UTC"):
+        raise ValueError("Quote tipoff unavailable or already started")
+    matches = []
+    for g in directory["games"]:
+        if nfl_name(prop.get("team")) not in {nfl_name(v) for v in g["team_aliases"] if v} or abs((pd.Timestamp(g["kickoff"]) - start).total_seconds()) > 900:
+            continue
+        for p in directory["players"]:
+            if p["team_id"] == g["team_id"] and nfl_name(p["name"]) == nfl_name(prop.get("player")):
+                matches.append((p, g))
+    if len(matches) != 1:
+        raise ValueError("Player, current team and exact regular-season event could not be uniquely matched")
+    return matches[0]
+
+
+def nbap_scan(props, directory, direction, reduced, prepare=None, progress=None):
+    import concurrent.futures
+    prepare = prepare or nbap_prepare
+    matched, audit, snapshots, unique = [], [], {}, set()
+    for p in props:
+        label = f"{p.get('player')} | {p.get('stat')} | {p.get('line')} | {p.get('projection_id', '')}"
+        try:
+            if is_reduced_payout_line(p) and (not reduced or direction == "Under"):
+                raise ValueError("Reduced-payout/Over-only filter")
+            player, game = nbap_match_quote(p, directory)
+            matched.append((p, player, game, label))
+        except Exception as err:
+            audit.append(label + " | EXCLUDED | " + str(err))
+    jobs = {(p["espn_id"], g["game_id"]): (p, g) for _, p, g, _ in matched}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+        futures = {pool.submit(prepare, p, g, _cache_date()): identity for identity, (p, g) in jobs.items()}
+        for index, future in enumerate(concurrent.futures.as_completed(futures)):
+            try:
+                snapshots[futures[future]] = future.result()
+            except Exception as err:
+                snapshots[futures[future]] = err
+            if progress:
+                progress(.8 * (index + 1) / max(1, len(futures)))
+    results = []
+    for index, (prop, player, game, label) in enumerate(matched):
+        snapshot = snapshots[(player["espn_id"], game["game_id"])]
+        if isinstance(snapshot, Exception):
+            audit.append(label + " | EXCLUDED | " + str(snapshot))
+            continue
+        is_reduced = is_reduced_payout_line(prop)
+        for side in (["Over"] if is_reduced else ["Over", "Under"] if direction == "Both sides" else [direction]):
+            try:
+                key = (player["espn_id"], game["game_id"], float(prop["line"]), side, is_reduced)
+                if key in unique:
+                    audit.append(label + f" | {side} | Duplicate exact quote")
+                    continue
+                unique.add(key)
+                verified = prop.get("slate_source") == "live" and not prop.get("line_verification_required")
+                result = nbap_model(snapshot, "Points", prop["line"], side, "Reduced payout - verify exact entry return" if is_reduced else "Standard payout", verified)
+                result["projection_id"] = prop.get("projection_id")
+                results.append(result)
+                audit.append(label + f" | {side} | {result['action']} {result['score']} | chance {result['probability']:.1%} | evidence {result['confidence']} | " + "; ".join(result["gates"] + result["flags"]))
+            except Exception as err:
+                audit.append(label + f" | {side} | EXCLUDED | {err}")
+        if progress:
+            progress(.8 + .2 * (index + 1) / max(1, len(matched)))
+    if progress:
+        progress(1.0)
+    return {"version": NBA_POINTS_MODEL_VERSION, "results": results, "audit": audit, "warnings": directory["warnings"],
+            "captured": len(props), "matched": len(matched), "generated": pd.Timestamp.now(tz="UTC").isoformat()}
+
+
+def render_nbap_scanner():
+    st.subheader("NBA Points Edge")
+    a, b = st.columns(2)
+    direction = a.selectbox("Direction", ["Both sides", "Over", "Under"], key="nbap_scan_side")
+    reduced = b.checkbox("Include reduced-payout lines", key="nbap_scan_reduced")
+    filters = (direction, reduced)
+    if st.button("Scan NBA points", key="nbap_scan_button", type="primary", use_container_width=True):
+        st.session_state.pop("nbap_scan", None)
+        try:
+            with st.spinner("Loading NBA quotes and verified regular-season games..."):
+                props = fetch_all_pp_props("NBA")
+                directory = nbap_directory(_cache_date())
+                progress = st.progress(0.0)
+                scan = nbap_scan(props, directory, direction, reduced, progress=progress.progress)
+                progress.empty()
+                scan["filters"] = filters
+                st.session_state.nbap_scan = scan
+                nbap_capture(scan["results"], "edge_scanner")
+        except Exception as err:
+            st.error(f"NBA scan unavailable: {err}")
+            st.code(f"PROPIQ NBA SCANNER DEBUGGER\n{NBA_POINTS_MODEL_VERSION}\nFETCH/SCAN ERROR: {err}", language=None)
+    scan = st.session_state.get("nbap_scan")
+    if not scan:
+        return
+    if scan["filters"] != filters:
+        st.info("Filters changed. Run a fresh scan to apply them.")
+    show_pass = st.checkbox("Show passes for audit", key="nbap_show_pass")
+    ranked = sorted(scan["results"], key=lambda r: ({"PLAY": 0, "WATCH": 1, "PAYOUT CHECK": 2, "PASS": 3}[r["action"]], -r["score"], -r["probability"]))
+    visible = [r for r in ranked if pd.Timestamp(r["snapshot"]["game"]["kickoff"]) > pd.Timestamp.now(tz="UTC") and (show_pass or r["action"] != "PASS")]
+    st.caption(f"{scan['captured']} quotes · {scan['matched']} verified quote matches · {len(scan['results'])} side evaluations · {len(visible)} displayed")
+    if not visible:
+        st.info("No current candidates passed the evidence and event checks. Open the debugger for every exclusion, including preseason and unsupported markets.")
+    for index, result in enumerate(visible):
+        with st.expander(f"{result['action']} · {result['score']} · {result['label']} · Points {result['side']} {result['line']:g} · {result['line_type']}"):
+            nbap_render_result(result, f"nbap_scan_{index}")
+            st.button("Open analyzer", key=f"nbap_open_{index}", on_click=nbap_open_result, args=(result,), use_container_width=True)
+    with st.expander("Scanner coverage and debugger - copy report"):
+        report = "\n".join(["PROPIQ NBA SCANNER DEBUGGER", scan["version"], scan["generated"], f"Filters: {scan['filters']}",
+                            f"Quotes: {scan['captured']} | Matches: {scan['matched']} | Side evaluations: {len(scan['results'])} | Displayed: {len(visible)}",
+                            "Sides and alternate lines from the same player/game are correlated evaluations, not independent outcomes.",
+                            "", "COVERAGE / EXCLUSIONS", *scan["warnings"], *scan["audit"], "", "CANDIDATE MODEL DETAILS", *[nbap_debug(r) for r in scan["results"]]])
+        st.code(report, language=None)
+        st.download_button("Download scanner debugger", report, "nba-scanner-debug.txt", key="nbap_scan_debug_download")
+
+
 HUB_SPORTS = {"mlb": "baseball/mlb", "nfl": "football/nfl", "cfb": "football/college-football", "nba": "basketball/nba"}
 
 
@@ -7779,7 +8610,7 @@ def hub_set_sport(sport):
 
 
 def hub_open_workspace(sport, view):
-    if view == "edge" and sport in ("mlb", "nfl", "cfb"):
+    if view == "edge" and sport in ("mlb", "nfl", "cfb", "nba"):
         st.session_state.edge_league_select = sport.upper()
         st.session_state.last_analyzer_sport = sport
         navigate_to_view("edge")
@@ -7889,6 +8720,13 @@ if st.session_state.get("cfb_active_model") != CFB_MODEL_VERSION:
     for _cfb_result_key in ("cfb_scan", "cfb_result", "cfb_handoff"):
         st.session_state.pop(_cfb_result_key, None)
     st.session_state.cfb_active_model = CFB_MODEL_VERSION
+for _nbap_key in ("nbap_player", "nbap_line", "nbap_side", "nbap_game", "nbap_market", "nbap_scan_side", "nbap_scan_reduced", "nbap_show_pass"):
+    if _nbap_key in st.session_state:
+        st.session_state[_nbap_key] = st.session_state[_nbap_key]
+if st.session_state.get("nbap_active_model") != NBA_POINTS_MODEL_VERSION:
+    for _nbap_key in ("nbap_result", "nbap_scan", "nbap_handoff"):
+        st.session_state.pop(_nbap_key, None)
+    st.session_state.nbap_active_model = NBA_POINTS_MODEL_VERSION
 _ANALYZER_SPORTS = {"nba", "mlb", "nfl", "cfb"}
 if "hub_schedule_day" in st.session_state:
     st.session_state.hub_schedule_day = st.session_state.hub_schedule_day
@@ -8028,7 +8866,7 @@ def add_to_pick_list(leg: dict) -> None:
             and str(existing.get("sport", "")) == sport
             and str(existing.get("prop", "")) == prop
             and str(existing.get("side", "")) == side
-            and (sport not in ("NFL", "CFB") or str(existing.get("game_id", "")) == str(leg.get("game_id", "")))
+            and (sport not in ("NFL", "CFB", "NBA") or str(existing.get("game_id", "")) == str(leg.get("game_id", "")))
             and same_line
         )
         if same_pick:
@@ -8058,7 +8896,7 @@ def add_to_pick_list_and_tracker(leg: dict, entry: dict) -> None:
                 if str(old.get("Player", "")) == player
                 and str(old.get("Line", "")) == line
                 and str(old.get("Matchup", "")) == matchup
-                and (entry.get("Sport") not in ("NFL", "CFB") or _tracker_metadata_value(old, "Event ID") == _tracker_metadata_value(entry, "Event ID"))
+                and (entry.get("Sport") not in ("NFL", "CFB", "NBA") or _tracker_metadata_value(old, "Event ID") == _tracker_metadata_value(entry, "Event ID"))
             ),
             None,
         )
@@ -8208,7 +9046,7 @@ def navigate_to_view(view: str, target: str = "workspace-top") -> None:
     elif view == "edge":
         if current_sport in _ANALYZER_SPORTS:
             st.session_state.last_analyzer_sport = current_sport
-        if current_sport in ("mlb", "nfl", "cfb"):
+        if current_sport in ("mlb", "nfl", "cfb", "nba"):
             st.session_state.edge_league_select = current_sport.upper()
         st.session_state.active_sport = "edge"
         if target == "workspace-top":
@@ -8245,9 +9083,7 @@ def open_edge_analyzer(sport: str, player: str, line: float,
         viewed.append(viewed_key)
         st.session_state.edge_viewed = viewed[-200:]
     if sport_key == "nba":
-        st.session_state.edge_jump_player = player
-        st.session_state.edge_jump_line = line
-        st.session_state.edge_jump_side = side
+        st.session_state.nbap_jump = {"player": player, "label": player, "market": stat, "line": float(line), "side": side, "line_type": line_type, "game_id": event_id}
     elif sport_key == "nfl":
         st.session_state.nfl_jump = {"player": player, "market": stat, "line": float(line), "side": side, "line_type": line_type, "game_id": event_id}
     elif sport_key == "cfb":
@@ -8276,8 +9112,8 @@ def open_pick_list_analyzer(leg: dict) -> None:
     if not stat:
         stat = "Strikeouts" if sport_key == "mlb" else "Points"
     st.session_state.edge_return_available = False
-    if sport_key in ("nfl", "cfb"):
-        open_edge_analyzer(sport_key, leg.get("player_label", player) if sport_key == "cfb" else player, float(line), side, stat, leg.get("line_type", "Unverified"), leg.get("game_id", ""))
+    if sport_key in ("nfl", "cfb", "nba"):
+        open_edge_analyzer(sport_key, leg.get("player_label", player) if sport_key in ("cfb", "nba") else player, float(line), side, stat, leg.get("line_type", "Unverified"), leg.get("game_id", ""))
         st.session_state.edge_return_available = False
         return
     if sport_key == "nba":
@@ -8552,6 +9388,8 @@ def build_model_prediction_rows(results: list, scan_id: str,
             "lineup_k", "lineup_profile_coverage", "lineup_confirmed",
             "lineup_projected", "lineup_source", "lineup_source_date",
             "lineup_deep_checked",
+            "model_entry_score", "model_entry_action", "model_entry_reasons",
+            "projected_minutes", "role_source", "current_games", "prior_games",
         )
         signal_snapshot = {
             key: _learning_json_safe(result.get(key))
@@ -9059,6 +9897,14 @@ def settle_model_predictions(predictions: list, max_events: int = 40) -> dict:
                 sample.get("game_date", ""), sample.get("event_id", ""),
                 sample.get("opponent", ""),
             )
+        elif sport == "NBA":
+            settled = nbap_settlement(sample)
+            if settled["void"]:
+                for row in rows:
+                    update_model_prediction_row(row, {"status": "Settled", "result": "Void", "settled_at": datetime.utcnow().isoformat() + "Z"})
+                    updated += 1
+                continue
+            actual = settled["actual"]
         else:
             actual = None
         if actual is None:
@@ -9068,7 +9914,7 @@ def settle_model_predictions(predictions: list, max_events: int = 40) -> dict:
         for row in rows:
             result = _learning_pick_result(actual, float(row.get("line", 0)), row.get("side", "Over"))
             probability = float(row.get("probability", 50) or 50) / 100.0
-            if sport in ("NFL", "CFB"):
+            if sport in ("NFL", "CFB", "NBA"):
                 push_probability = float((row.get("signal_snapshot") or {}).get("push_probability", 0) or 0)
                 probability = min(1.0, probability / max(1e-9, 1 - push_probability))
             outcome = 1.0 if result == "Hit" else 0.0 if result == "Miss" else None
@@ -9210,7 +10056,7 @@ def _learning_evaluation_rows(predictions: list) -> list:
         risk_flags = item.get("risk_flags", []) or []
         if not isinstance(signal_snapshot, dict):
             signal_snapshot = {}
-        if str(item.get("sport", "")).upper() in ("NFL", "CFB"):
+        if str(item.get("sport", "")).upper() in ("NFL", "CFB", "NBA"):
             # The binary learning report excludes pushes, so evaluate conditional win chance.
             push_probability = _parse_numeric_value(signal_snapshot.get("push_probability"), 0) or 0
             probability = min(1.0, probability / max(1e-9, 1 - push_probability))
@@ -10793,7 +11639,7 @@ def normalize_nba_game_log_cols(df: pd.DataFrame, n: Optional[int] = None) -> pd
             df[c] = None
     for c in ["MIN", "PTS", "REB", "AST", "STL", "BLK", "TO", "FGA", "FTA", "FG3A", "FG3M", "PLUS_MINUS"]:
         if c not in df.columns:
-            df[c] = 0
+            df[c] = float("nan")
     df = df.sort_values("GAME_DATE", ascending=False)
     if n:
         df = df.head(n)
@@ -14069,6 +14915,11 @@ def auto_detect_result(entry: dict) -> Optional[str]:
         if sport in ("NFL", "CFB"):
             actual = cfb_actual(entry) if sport == "CFB" else nfl_actual(entry)
             return _learning_pick_result(actual, line_val, side) if actual is not None else None
+        if sport == "NBA":
+            settled = nbap_settlement(entry)
+            if settled["void"]:
+                return "Void"
+            return _learning_pick_result(settled["actual"], line_val, side) if settled["actual"] is not None else None
         is_mlb = sport == "MLB" or prop in ("Strikeouts", "Hitter Fantasy Score")
         expected_date_text = _tracker_metadata_value(entry, "Game Date")[:10]
         expected_date = pd.to_datetime(expected_date_text, errors="coerce")
@@ -25972,6 +26823,8 @@ def fetch_all_pp_props(sport_filter: str = "Both") -> list:
         def _canonical_market(stat_name: str) -> Optional[str]:
             if expected_sport in ("NFL", "CFB"):
                 return nfl_market(stat_name)
+            if expected_sport == "NBA":
+                return nbap_market(stat_name)
             if expected_sport == "MLB":
                 market = normalize_mlb_pitcher_prop_stat(stat_name)
                 return market if market in ("Strikeouts", "Hitter Fantasy Score") else None
@@ -26666,7 +27519,11 @@ if st.session_state.active_sport == "nfl":
     st.stop()
 
 if st.session_state.active_sport == "edge":
-    _edge_league = st.radio("Sport", ["MLB", "NFL", "CFB"], horizontal=True, key="edge_league_select")
+    _edge_league = st.radio("Sport", ["MLB", "NBA", "NFL", "CFB"], horizontal=True, key="edge_league_select")
+    if _edge_league == "NBA":
+        with st.container(key="nfl_workspace"):
+            render_nbap_scanner()
+        st.stop()
     if _edge_league == "CFB":
         with st.container(key="nfl_workspace"):
             render_cfb_scanner()
@@ -32757,6 +33614,10 @@ if st.session_state.active_sport == "edge":
 # ── NBA Mode guard — stop here if MLB or Soccer selected ─────
 if st.session_state.active_sport not in ("nba",):
     st.stop()
+
+with st.container(key="nfl_workspace"):
+    render_nbap_analyzer()
+st.stop()
 
 # ── NBA Player Prop mode ─────────────────────────────────────
 # The old NBA Slate Scanner has been replaced by the cross-sport Edge Scanner.
