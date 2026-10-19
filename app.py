@@ -4391,11 +4391,17 @@ def research_quote_identity(row, sport):
 def research_board_item(row, sport, score=None, action=None):
     """Project model output into a display row, without recomputing predictions."""
     game = row.get("snapshot", {}).get("game", {}) or row.get("context", {})
+    dimensions = scanner_decision_dimensions(row)
+    display_action = row.get("action") if action is None else action
+    if dimensions["entry_eligibility"] == "AWAITING PAYOUT":
+        display_action = "PAYOUT CHECK"
     return {"id": research_quote_identity(row, sport), "player": str(row.get("player", "")),
             "market": row.get("stat") or row.get("market") or "Points",
             "line": row["line"], "side": row.get("side", "Over"),
             "score": row.get("score") if score is None else score,
-            "action": row.get("action") if action is None else action,
+            "action": display_action,
+            **dimensions,
+            "score_label": "Model score" if dimensions["entry_eligibility"] == "AWAITING PAYOUT" else "Entry score",
             "context": game.get("game_name") or f"vs {row.get('opp') or 'TBD'} · {row.get('game_date') or 'Date TBD'}",
             "payout": row.get("line_type") or ("Reduced payout - check return" if is_reduced_payout_line(row) else "Standard payout"),
             "image": research_player_photo(row, sport)}
@@ -4454,7 +4460,7 @@ def render_research_board(items, key):
             if st.session_state.get(state_key) not in ids:
                 st.session_state[state_key] = visible[0][1]["id"]
             selected = st.session_state[state_key]
-            st.markdown("<div class='research-board-labels'><span>Player / matchup</span><span>Exact line</span><span>Entry</span></div>", unsafe_allow_html=True)
+            st.markdown("<div class='research-board-labels'><span>Player / matchup</span><span>Exact line</span><span>Score</span></div>", unsafe_allow_html=True)
             for index, item in visible:
                 tone = "play" if item["action"] == "PLAY" else "watch" if item["action"] in ("WATCH", "PAYOUT CHECK") else "pass"
                 with st.container(key=f"research_board_row_{key}_{item['id']}_{index}"):
@@ -4471,10 +4477,11 @@ def render_research_board(items, key):
                                           type="primary" if item["id"] == selected else "secondary",
                                           use_container_width=True, on_click=select_research_candidate, args=(key, item["id"]))
                                 st.caption(item["context"])
+                                st.caption(f"Model: {item['model_assessment']} · Entry: {item['entry_eligibility'].lower()}")
                     with line:
                         st.markdown(f"<div class='research-row-line'><strong>{html.escape(str(item['side']))} {float(item['line']):g}</strong><span>{html.escape(str(item['market']))}</span><span>{html.escape(str(item['payout']))}</span></div>", unsafe_allow_html=True)
                     with score:
-                        st.markdown(f"<div class='research-row-score {tone}'><strong>{int(round(item['score']))}</strong><span>{html.escape(str(item['action']))}</span></div>", unsafe_allow_html=True)
+                        st.markdown(f"<div class='research-row-score {tone}' title='{html.escape(item['eligibility_note'], quote=True)}'><strong>{int(round(item['score']))}</strong><span>{html.escape(str(item['action']))}</span><span>{html.escape(item['score_label'])}</span></div>", unsafe_allow_html=True)
             st.caption(f"{len(visible)} of {len(items)} candidates")
         with inspector:
             detail = st.container(key=f"research_inspector_{key}")
@@ -4501,12 +4508,25 @@ def render_entry_decision(
     evidence_label: str = "Evidence quality",
     consistency_label: str = "Output stability",
     line_type_label: Optional[str] = None,
+    decision_context: Optional[dict] = None,
 ) -> None:
     """Render one presentation-only decision index without changing model output."""
     import html as _html
 
     score = max(0, min(100, int(round(score))))
     action = str(action or "PASS").upper()
+    score_label = "Entry Score"
+    decision_meta = ""
+    if decision_context:
+        eligibility = decision_context.get("entry_eligibility", "UNVERIFIED LEGACY")
+        if eligibility == "AWAITING PAYOUT":
+            action, score_label = "PAYOUT CHECK", "Pre-payout model score"
+        elif eligibility == "BLOCKED" and action in ("PLAY", "WATCH"):
+            action = "BLOCKED"
+        decision_meta = (
+            f"<div class='unified-decision-note'>Model assessment: {_html.escape(str(decision_context.get('model_assessment', 'UNAVAILABLE')))}"
+            f" · Entry eligibility: {_html.escape(str(eligibility).lower())}</div>"
+        )
     action_class = "play" if action == "PLAY" else "watch" if action in ("WATCH", "PAYOUT CHECK") else "pass"
     probability_pct = float(probability) * 100 if float(probability) <= 1 else float(probability)
     consistency_pct = float(consistency) * 100 if float(consistency) <= 1 else float(consistency)
@@ -4530,12 +4550,13 @@ def render_entry_decision(
     st.markdown(
         f"<div class='unified-decision-card {action_class}'>"
         f"<div class='unified-decision-score'>"
-        f"<div class='unified-decision-label'>Entry Score</div>"
+        f"<div class='unified-decision-label'>{score_label}</div>"
         f"<div class='unified-decision-number'>{score}<small> / 100</small></div>"
         f"</div>"
         f"<div class='unified-decision-call'>"
         f"<div class='unified-decision-action'>{_html.escape(action)}</div>"
         f"<div class='unified-decision-direction'>{safe_direction}</div>"
+        f"{decision_meta}"
         f"<div class='unified-decision-note'>{safe_note}</div>"
         f"{line_type_meta}"
         f"</div>"
@@ -7585,6 +7606,61 @@ def _learning_prediction_key(scan_id: str, result: dict) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def _learning_decision_dimensions(item: dict) -> dict:
+    """Read saved decision dimensions; never reconstruct a model read from outcomes."""
+    snapshot = item.get("signal_snapshot") or {}
+    if not isinstance(snapshot, dict):
+        snapshot = {}
+    recorded = str(item.get("action") or "UNAVAILABLE").upper()
+    model_read = str(snapshot.get("model_assessment") or snapshot.get("model_entry_action") or "UNAVAILABLE").upper()
+    if model_read not in ("PLAY", "WATCH", "PASS"):
+        model_read = "UNAVAILABLE"
+    valid = {"ELIGIBLE", "AWAITING PAYOUT", "BLOCKED", "UNVERIFIED LEGACY"}
+    saved = str(snapshot.get("entry_eligibility") or "").upper()
+    if snapshot.get("decision_report_version") == "decision-separation-v1" and saved in valid:
+        return {"model_assessment": model_read, "entry_eligibility": saved,
+                "eligibility_note": str(snapshot.get("eligibility_note") or "Frozen at capture"),
+                "recorded_action": recorded}
+
+    reduced = bool(item.get("is_reduced")) or str(item.get("odds_type") or "standard").lower() != "standard"
+    reasons = snapshot.get("entry_decision_reasons") or []
+    if not isinstance(reasons, list):
+        reasons = [str(reasons)]
+    payout_reason = any("reduced payout" in str(reason).lower() for reason in reasons)
+    line_failed = item.get("line_verified") is False or snapshot.get("line_verification_required") is True
+    if model_read == "PASS":
+        eligibility, note = "BLOCKED", "Saved model assessment is PASS"
+    elif line_failed:
+        eligibility, note = "BLOCKED", "Exact line requires verification"
+    elif reduced and (model_read in ("PLAY", "WATCH") or recorded in ("PLAY", "WATCH", "PAYOUT CHECK") or payout_reason):
+        eligibility, note = "AWAITING PAYOUT", "Exact entry return has not been evaluated; model strength is not entry approval"
+    elif recorded in ("PLAY", "WATCH") and item.get("line_verified") is True:
+        eligibility, note = "ELIGIBLE", "Recorded entry action cleared the saved gates; profitability is not established"
+    elif recorded == "PASS" and not reduced:
+        eligibility, note = "BLOCKED", "Recorded entry action is PASS"
+    else:
+        eligibility, note = "UNVERIFIED LEGACY", "Saved information cannot establish entry eligibility"
+    return {"model_assessment": model_read, "entry_eligibility": eligibility,
+            "eligibility_note": note, "recorded_action": recorded}
+
+
+def scanner_decision_dimensions(result: dict) -> dict:
+    """Use the same labels for the live scanner and its frozen learning record."""
+    verified = result.get("line_verified")
+    if verified is None and ("line_verification_required" in result or "slate_source" in result):
+        verified = not result.get("line_verification_required") and result.get("slate_source", "live") == "live"
+    return _learning_decision_dimensions({
+        "action": result.get("entry_action") or result.get("action"),
+        "is_reduced": is_reduced_payout_line(result) or "reduced" in str(result.get("line_type", "")).lower(),
+        "line_verified": verified,
+        "signal_snapshot": {
+            "model_entry_action": result.get("model_entry_action") or result.get("model_action"),
+            "entry_decision_reasons": result.get("entry_decision_reasons"),
+            "line_verification_required": result.get("line_verification_required"),
+        },
+    })
+
+
 def build_model_prediction_rows(results: list, scan_id: str,
                                 session_id: str = "",
                                 source: str = "edge_scanner") -> list:
@@ -7652,6 +7728,13 @@ def build_model_prediction_rows(results: list, scan_id: str,
             key: _learning_json_safe(result.get(key))
             for key in signal_keys if result.get(key) is not None
         }
+        dimensions = scanner_decision_dimensions(result)
+        signal_snapshot.update({
+            "decision_report_version": "decision-separation-v1",
+            "model_assessment": dimensions["model_assessment"],
+            "entry_eligibility": dimensions["entry_eligibility"],
+            "eligibility_note": dimensions["eligibility_note"],
+        })
         event_id = str(
             result.get("game_pk") or result.get("event_id")
             or result.get("game_id") or ""
@@ -8337,6 +8420,7 @@ def _learning_evaluation_rows(predictions: list) -> list:
             "market": str(item.get("market", "Unknown") or "Unknown"),
             "side": side,
             "action": str(item.get("action", "PASS") or "PASS").upper(),
+            **_learning_decision_dimensions(item),
             "model_version": str(item.get("model_version", "Unknown") or "Unknown"),
             "source": source,
             "sportsbook_grade": str(item.get("sportsbook_grade", "Unavailable") or "Unavailable"),
@@ -8363,6 +8447,7 @@ def _learning_evaluation_rows(predictions: list) -> list:
             "clv": clv,
             "game_date": str(item.get("game_date", "") or ""),
             "created_at": str(item.get("created_at", "") or ""),
+            "settled_at": str(item.get("settled_at", "") or ""),
         })
     return rows
 
@@ -8405,6 +8490,50 @@ def _learning_group_summary(rows: list, label: str) -> Optional[dict]:
 
 
 LEARNING_SHADOW_CALIBRATOR_VERSION = "rolling-beta-v1"
+
+
+def _learning_line_type_benchmarks(rows: list) -> list:
+    """Same-sample diagnostics, not deployable or out-of-sample forecasts."""
+    grouped = {}
+    for row in rows or []:
+        key = (row.get("sport", "Unknown"), row.get("market", "Unknown"), row.get("line_type", "Unknown"))
+        grouped.setdefault(key, []).append(row)
+    summaries = []
+    for key, group in sorted(grouped.items()):
+        n = len(group)
+        rate = sum(row["actual"] for row in group) / n
+        baseline = rate * (1 - rate)
+        brier = sum(row["brier"] for row in group) / n
+        summaries.append({"Segment": " / ".join(key), "N": n, "Model Brier": brier,
+                          "Retrospective baseline": baseline,
+                          "Skill vs own baseline": 1 - brier / baseline if baseline > 0 else None})
+    return summaries
+
+
+def _learning_forward_line_baseline(rows: list, min_history: int = 20) -> list:
+    """Score a fixed-prior baseline using only outcomes available at forecast time."""
+    prepared = []
+    for row in rows or []:
+        day = pd.to_datetime(row.get("game_date"), utc=True, errors="coerce")
+        created = pd.to_datetime(row.get("created_at"), utc=True, errors="coerce")
+        settled = pd.to_datetime(row.get("settled_at"), utc=True, errors="coerce")
+        if pd.isna(day) or pd.isna(created):
+            continue
+        key = (row.get("sport"), row.get("market"), row.get("line_type"))
+        prepared.append((row, key, day.normalize(), created, settled))
+    evaluated = []
+    for row, key, day, created, _ in prepared:
+        history = [prior for prior, prior_key, prior_day, prior_created, settled in prepared
+                   if prior_key == key and prior_day < day and prior_created < created
+                   and pd.notna(settled) and prior_created <= settled <= created]
+        if len(history) < min_history:
+            continue
+        # Beta(1,1) is fixed in advance; no fit to the target or same-day outcomes.
+        probability = (1 + sum(prior["actual"] for prior in history)) / (2 + len(history))
+        evaluated.append({**row, "baseline_prob": probability,
+                          "baseline_brier": (probability - row["actual"]) ** 2,
+                          "baseline_history_n": len(history)})
+    return evaluated
 
 
 def _learning_row_day(row: dict) -> str:
@@ -8691,6 +8820,11 @@ def render_model_learning_dashboard(predictions: list) -> None:
         )
         for action in ("PLAY", "WATCH", "PASS")
     }
+    dimensions = [_learning_decision_dimensions(row) for row in unique_filtered]
+    model_counts = {label: sum(row["model_assessment"] == label for row in dimensions)
+                    for label in ("PLAY", "WATCH", "PASS", "UNAVAILABLE")}
+    eligibility_counts = {label: sum(row["entry_eligibility"] == label for row in dimensions)
+                          for label in ("ELIGIBLE", "AWAITING PAYOUT", "BLOCKED", "UNVERIFIED LEGACY")}
 
     if graded:
         predicted = sum(row["prob"] for row in graded) / len(graded)
@@ -8722,16 +8856,23 @@ def render_model_learning_dashboard(predictions: list) -> None:
         f"<div class='workspace-summary-item'><span>Model average</span><strong>{f'{predicted:.1%}' if predicted is not None else '—'}</strong></div>"
         f"<div class='workspace-summary-item'><span>Calibration gap</span><strong>{f'{gap:+.1%}' if gap is not None else '—'}</strong></div>"
         f"<div class='workspace-summary-item'><span>Brier score</span><strong>{f'{brier:.3f}' if brier is not None else '—'}</strong></div>"
-        f"<div class='workspace-summary-item'><span>Brier skill</span><strong>{f'{brier_skill:+.1%}' if brier_skill is not None else '—'}</strong></div>"
+        f"<div class='workspace-summary-item'><span>Pooled Brier skill</span><strong>{f'{brier_skill:+.1%}' if brier_skill is not None else '—'}</strong></div>"
         f"</div>",
         unsafe_allow_html=True,
     )
     st.caption(
-        f"Unique-decision coverage: {action_counts['PLAY']} PLAY · {action_counts['WATCH']} WATCH · "
-        f"{action_counts['PASS']} PASS · {pending} pending · {pushes} push. "
+        f"Recorded entry actions: {action_counts['PLAY']} PLAY · {action_counts['WATCH']} WATCH · "
+        f"{action_counts['PASS']} PASS (includes payout-blocked rows) · {pending} pending · {pushes} push. "
         f"{repeated_snapshots} repeated scan snapshots are retained for history but excluded from headline calibration; "
         f"{len(snapshot_graded)} settled snapshots collapse to {len(graded)} unique settled decisions. "
         "The latest valid pregame snapshot represents each unique prop."
+    )
+    st.caption(
+        f"Saved model assessments: {model_counts['PLAY']} PLAY · {model_counts['WATCH']} WATCH · "
+        f"{model_counts['PASS']} PASS · {model_counts['UNAVAILABLE']} unavailable. "
+        f"Entry eligibility: {eligibility_counts['ELIGIBLE']} eligible · "
+        f"{eligibility_counts['AWAITING PAYOUT']} awaiting payout · {eligibility_counts['BLOCKED']} blocked · "
+        f"{eligibility_counts['UNVERIFIED LEGACY']} unverified legacy. Model strength is not entry approval."
     )
 
     if not graded:
@@ -8755,11 +8896,43 @@ def render_model_learning_dashboard(predictions: list) -> None:
     if baseline_brier is not None:
         st.caption(
             f"Brier benchmark: {baseline_brier:.3f} from always predicting this sample's "
-            f"{actual:.1%} base hit rate · model skill {brier_skill:+.1%}. Higher skill is better; "
-            "a negative value means the probability model did not beat the constant-rate baseline."
+            f"{actual:.1%} base hit rate · "
+            + (f"model skill {brier_skill:+.1%}. " if brier_skill is not None else "skill undefined for a zero-variance outcome sample. ")
+            + "This baseline is retrospective, not an out-of-sample forecast."
         )
 
-    st.markdown("**Out-of-Sample Rolling Calibrator**")
+    line_benchmarks = _learning_line_type_benchmarks(graded)
+    within_line_baseline = sum(row["Retrospective baseline"] * row["N"] for row in line_benchmarks) / len(graded)
+    within_line_skill = 1 - brier / within_line_baseline if within_line_baseline > 0 else None
+    line_benchmark_rows = [
+        {**row, "Model Brier": f"{row['Model Brier']:.3f}",
+         "Retrospective baseline": f"{row['Retrospective baseline']:.3f}",
+         "Skill vs own baseline": f"{row['Skill vs own baseline']:+.1%}" if row["Skill vs own baseline"] is not None else "N/A"}
+        for row in line_benchmarks
+    ]
+    forward_baseline = _learning_forward_line_baseline(graded)
+    forward_active_brier = sum(row["brier"] for row in forward_baseline) / len(forward_baseline) if forward_baseline else None
+    forward_base_brier = sum(row["baseline_brier"] for row in forward_baseline) / len(forward_baseline) if forward_baseline else None
+    forward_skill = 1 - forward_active_brier / forward_base_brier if forward_base_brier is not None and forward_base_brier > 0 else None
+    st.markdown("**Like-for-Like Probability Benchmarks**")
+    st.dataframe(pd.DataFrame(line_benchmark_rows), use_container_width=True, hide_index=True)
+    st.caption(
+        f"Sport / market / line-type-only retrospective baseline: {within_line_baseline:.3f} · "
+        + (f"model skill {within_line_skill:+.1%}. " if within_line_skill is not None else "skill unavailable. ")
+        + "Each group's observed hit rate is fit on these same outcomes. This diagnostic separates line-type mix from within-group performance; it is not a live forecast."
+    )
+    if forward_baseline:
+        st.caption(
+            f"Chronology-safe line-type baseline: {len(forward_baseline)} shared outcomes · "
+            f"model Brier {forward_active_brier:.3f} · baseline Brier {forward_base_brier:.3f} · "
+            + (f"skill {forward_skill:+.1%}. " if forward_skill is not None else "skill unavailable. ")
+            + "Fixed Beta(1,1) prior, at least 20 earlier outcomes in the same sport/market/line type, settled before the forecast; same-day outcomes excluded. Report-only."
+        )
+    else:
+        st.caption("Chronology-safe line-type benchmark pending: each forecast needs 20 earlier same-group outcomes with recorded settlement times before that forecast. Missing timestamps are not guessed.")
+    st.caption("Unique props can still share a player or game. Hit-rate intervals are descriptive, not adjusted for those correlations. No forecast, action gate or live model is changed by this report.")
+
+    st.markdown("**Experimental Rolling Shadow**")
     st.markdown(
         f"<div class='workspace-summary-grid'>"
         f"<div class='workspace-summary-item'><span>Shadow coverage</span><strong>{len(rolling_shadow)}</strong></div>"
@@ -8773,7 +8946,8 @@ def render_model_learning_dashboard(predictions: list) -> None:
         st.caption(
             f"{LEARNING_SHADOW_CALIBRATOR_VERSION} grades each decision using only outcomes from earlier game days. "
             f"Positive improvement means the shadow probability beat the live probability on the same {len(rolling_shadow)} outcomes. "
-            "It remains report-only until it has at least 100 out-of-sample decisions and a lower Brier score."
+            "This is an earlier-day simulation; legacy settlement availability is not verified by this shadow comparison. "
+            "It remains report-only and never promotes itself or changes live probabilities."
         )
     else:
         st.caption(
@@ -8800,7 +8974,8 @@ def render_model_learning_dashboard(predictions: list) -> None:
     segment_specs = []
     for field, prefix in (
         ("sport", "Sport"), ("market", "Market"), ("side", "Side"),
-        ("action", "Action"), ("line_type", "Line type"),
+        ("model_assessment", "Model assessment"), ("entry_eligibility", "Entry eligibility"),
+        ("action", "Recorded action"), ("line_type", "Line type"),
         ("sportsbook_grade", "Market check"),
     ):
         for value in sorted({row[field] for row in graded}):
@@ -8819,36 +8994,37 @@ def render_model_learning_dashboard(predictions: list) -> None:
         for action in ("PLAY", "WATCH", "PASS")
     }
     play_rows = action_groups["PLAY"]
-    watch_rows = action_groups["WATCH"]
     pass_rows = action_groups["PASS"]
-    recommended_rows = play_rows + watch_rows
     recommendation_rows = [
-        summary for summary in (
-            _learning_group_summary(recommended_rows, "Recommended: PLAY + WATCH"),
-            _learning_group_summary(pass_rows, "Not recommended: PASS"),
-        ) if summary
+        summary for label in ("ELIGIBLE", "AWAITING PAYOUT", "BLOCKED", "UNVERIFIED LEGACY")
+        if (summary := _learning_group_summary([row for row in graded if row["entry_eligibility"] == label], f"Entry eligibility: {label}"))
     ]
-    st.markdown("**Recommendation Separation**")
+    st.markdown("**Entry Eligibility Outcomes**")
     st.dataframe(
         pd.DataFrame(recommendation_rows), use_container_width=True, hide_index=True
     )
 
     line_action_rows = _learning_pair_rows(
-        graded, "line_type", "Line type", "action", "Action"
+        graded, "line_type", "Line type", "action", "Recorded action"
     )
+    line_model_rows = _learning_pair_rows(graded, "line_type", "Line type", "model_assessment", "Model assessment")
+    line_eligibility_rows = _learning_pair_rows(graded, "line_type", "Line type", "entry_eligibility", "Entry eligibility")
     line_sport_rows = _learning_pair_rows(
         graded, "line_type", "Line type", "sport", "Sport"
     )
     line_gate_rows = _learning_line_type_gate_rows(graded)
     st.markdown("**Economic Separation Audit**")
     st.caption(
-        "Standard and adjusted-payout lines are evaluated separately. Hit rate alone does not "
-        "measure value when the payout changes, so only standard lines can receive a scanner "
-        "PLAY or WATCH without an exact payout check."
+        "Model assessment and entry eligibility are separate. A reduced-payout model PLAY/WATCH "
+        "is a research candidate, not an eligible entry until its exact return is evaluated. "
+        "Recorded actions are retained unchanged for compatibility; missing legacy model assessments remain unavailable."
     )
     st.dataframe(
-        pd.DataFrame(line_action_rows), use_container_width=True, hide_index=True
+        pd.DataFrame(line_model_rows), use_container_width=True, hide_index=True
     )
+    st.dataframe(pd.DataFrame(line_eligibility_rows), use_container_width=True, hide_index=True)
+    with st.expander("Original recorded actions (unchanged)"):
+        st.dataframe(pd.DataFrame(line_action_rows), use_container_width=True, hide_index=True)
     with st.expander("Line type by sport and PASS gate", expanded=False):
         st.markdown("**Line Type × Sport**")
         st.dataframe(
@@ -8869,7 +9045,7 @@ def render_model_learning_dashboard(predictions: list) -> None:
             st.caption("No settled PASS decisions are available by line type.")
 
     pass_reason_rows = _learning_pass_reason_rows(graded)
-    st.markdown("**PASS Gate Audit**")
+    st.markdown("**Recorded PASS Gate Audit**")
     if pass_reason_rows:
         pass_columns = [
             "Segment", "N", "PASS share", "Sample", "Predicted", "Actual",
@@ -8881,7 +9057,7 @@ def render_model_learning_dashboard(predictions: list) -> None:
             hide_index=True,
         )
         st.caption(
-            "A PASS can carry more than one gate reason, so rows overlap. New scans store exact gate reasons; "
+            "These are original entry-action PASS records, including payout-only blocks, not all model PASS assessments. Gate reasons overlap. New scans store exact gate reasons; "
             "older decisions are reconstructed from their saved evidence, rank penalties, and risk flags."
         )
         with st.expander("Inspect settled PASS decisions", expanded=False):
@@ -8919,25 +9095,32 @@ def render_model_learning_dashboard(predictions: list) -> None:
         st.caption("No settled PASS decisions are available for gate analysis.")
     if play_rows and len(play_rows) < 20:
         st.info(
-            f"PLAY is promising, but only {len(play_rows)} unique settled decisions are available. "
-            "Keep the current gate until this reaches at least 20; do not loosen it from an early winning streak."
+            f"Only {len(play_rows)} recorded PLAY decisions have settled. This is a thin monitoring sample, not validation of PLAY performance."
         )
-    if len(watch_rows) >= 15 and len(pass_rows) >= 15:
-        watch_actual = sum(row["actual"] for row in watch_rows) / len(watch_rows)
-        pass_actual = sum(row["actual"] for row in pass_rows) / len(pass_rows)
-        watch_predicted = sum(row["prob"] for row in watch_rows) / len(watch_rows)
-        if watch_actual + 0.05 < pass_actual or watch_predicted - watch_actual >= 0.08:
-            st.warning(
-                f"Action-order audit: WATCH hit {watch_actual:.1%} versus PASS {pass_actual:.1%}, "
-                f"and WATCH was predicted at {watch_predicted:.1%}. The ranking gate needs more "
-                "unique outcomes before it should drive entry construction."
-            )
+    if not play_rows:
+        st.caption("No recorded PLAY decisions have settled in this filtered cohort; PLAY performance cannot be evaluated here.")
+    comparable_groups = {}
+    for row in graded:
+        comparable_groups.setdefault((row["sport"], row["market"], row["line_type"]), []).append(row)
+    for cohort, cohort_rows in comparable_groups.items():
+        comparable_watch = [row for row in cohort_rows if row["model_assessment"] == "WATCH"]
+        comparable_pass = [row for row in cohort_rows if row["model_assessment"] == "PASS"]
+        if len(comparable_watch) >= 15 and len(comparable_pass) >= 15:
+            watch_actual = sum(row["actual"] for row in comparable_watch) / len(comparable_watch)
+            pass_actual = sum(row["actual"] for row in comparable_pass) / len(comparable_pass)
+            watch_predicted = sum(row["prob"] for row in comparable_watch) / len(comparable_watch)
+            if watch_actual + 0.05 < pass_actual or watch_predicted - watch_actual >= 0.08:
+                st.warning(
+                    f"Comparable model-read audit ({' / '.join(cohort)}): WATCH hit {watch_actual:.1%} "
+                    f"versus model PASS {pass_actual:.1%}; WATCH prediction {watch_predicted:.1%}. "
+                    "This is a monitoring flag, not evidence to automatically change gates."
+                )
 
-    def report_table(title: str, rows: list) -> list:
+    def report_table(title: str, rows: list, columns=None) -> list:
         lines = [title]
         if not rows:
             return lines + ["No settled rows available."]
-        columns = [
+        columns = columns or [
             "Segment", "N", "Sample", "Predicted", "Actual",
             "Actual 95% range", "Gap", "Brier",
         ]
@@ -8948,6 +9131,7 @@ def render_model_learning_dashboard(predictions: list) -> None:
 
     report_lines = [
         "PROPIQ MODEL LEARNING REPORT",
+        "Report schema: decision-separation-v1 (forecast model unchanged)",
         "",
         "FILTERS",
         f"Sport: {sport_filter}",
@@ -8963,6 +9147,9 @@ def render_model_learning_dashboard(predictions: list) -> None:
         f"Repeated snapshots excluded: {repeated_snapshots}",
         f"Pending unique decisions: {pending}",
         f"Pushes: {pushes}",
+        "Model assessments: " + " | ".join(f"{label}: {count}" for label, count in model_counts.items()),
+        "Entry eligibility: " + " | ".join(f"{label}: {count}" for label, count in eligibility_counts.items()),
+        "Recorded entry actions (unchanged): " + " | ".join(f"{label}: {count}" for label, count in action_counts.items()),
         "",
         "HEADLINE",
         f"Actual hit rate: {actual:.1%}" if actual is not None else "Actual hit rate: N/A",
@@ -8971,7 +9158,16 @@ def render_model_learning_dashboard(predictions: list) -> None:
         f"Brier score: {brier:.3f}" if brier is not None else "Brier score: N/A",
         f"Constant-rate Brier baseline: {baseline_brier:.3f}" if baseline_brier is not None else "Constant-rate Brier baseline: N/A",
         f"Brier skill vs baseline: {brier_skill:+.1%}" if brier_skill is not None else "Brier skill vs baseline: N/A",
+        "Baseline scope: retrospective constants fit on the same outcomes; not proof of prospective skill",
+        f"Within-sport/market/line-type retrospective Brier baseline: {within_line_baseline:.3f}",
+        f"Skill vs within-group retrospective baseline: {within_line_skill:+.1%}" if within_line_skill is not None else "Skill vs within-group retrospective baseline: N/A",
+        f"Chronology-safe line-type baseline shared outcomes: {len(forward_baseline)}",
+        f"Chronology-safe active Brier: {forward_active_brier:.3f}" if forward_active_brier is not None else "Chronology-safe active Brier: N/A",
+        f"Chronology-safe baseline Brier: {forward_base_brier:.3f}" if forward_base_brier is not None else "Chronology-safe baseline Brier: N/A",
+        f"Chronology-safe skill: {forward_skill:+.1%}" if forward_skill is not None else "Chronology-safe skill: N/A",
+        "Chronology-safe policy: Beta(1,1), >=20 earlier same-group outcomes, settled before forecast; no same-day outcomes; missing timestamps excluded",
         f"Rolling shadow version: {LEARNING_SHADOW_CALIBRATOR_VERSION}",
+        "Rolling shadow timing: earlier-game-day simulation; legacy settlement availability not verified; never auto-promoted",
         f"Rolling shadow shared outcomes: {len(rolling_shadow)}",
         f"Rolling shadow active Brier: {shadow_active_brier:.3f}" if shadow_active_brier is not None else "Rolling shadow active Brier: N/A",
         f"Rolling shadow Brier: {shadow_brier:.3f}" if shadow_brier is not None else "Rolling shadow Brier: N/A",
@@ -8980,11 +9176,22 @@ def render_model_learning_dashboard(predictions: list) -> None:
     ]
     report_lines.extend(report_table("CALIBRATION BY HIT CHANCE", calibration_rows))
     report_lines.append("")
+    report_lines.extend(report_table("LIKE-FOR-LIKE RETROSPECTIVE BENCHMARKS", line_benchmark_rows,
+                                     ["Segment", "N", "Model Brier", "Retrospective baseline", "Skill vs own baseline"]))
+    report_lines.append("")
     report_lines.extend(report_table("PERFORMANCE BY SEGMENT", segment_rows))
     report_lines.append("")
-    report_lines.extend(report_table("RECOMMENDATION SEPARATION", recommendation_rows))
+    report_lines.extend(report_table("ENTRY ELIGIBILITY OUTCOMES", recommendation_rows))
+    report_lines.append("Eligibility is not a probability band. AWAITING PAYOUT does not mean model PASS or verified entry value.")
+    report_lines.append("Legacy model assessments are read from saved pre-payout fields only; missing assessments remain UNAVAILABLE.")
+    report_lines.append("Model probabilities, recorded actions and historical outcomes have not been rewritten. Report-only; no automatic model promotion.")
+    report_lines.append("Props sharing a player/game are correlated; displayed hit-rate intervals do not adjust for that dependence.")
     report_lines.append("")
-    report_lines.extend(report_table("LINE TYPE BY ACTION", line_action_rows))
+    report_lines.extend(report_table("LINE TYPE BY MODEL ASSESSMENT", line_model_rows))
+    report_lines.append("")
+    report_lines.extend(report_table("LINE TYPE BY ENTRY ELIGIBILITY", line_eligibility_rows))
+    report_lines.append("")
+    report_lines.extend(report_table("LINE TYPE BY RECORDED ACTION (UNCHANGED)", line_action_rows))
     report_lines.append("")
     report_lines.extend(report_table("LINE TYPE BY SPORT", line_sport_rows))
     report_lines.append("")
@@ -9002,7 +9209,7 @@ def render_model_learning_dashboard(predictions: list) -> None:
     else:
         report_lines.append("No settled PASS decisions available by line type.")
     report_lines.append("")
-    report_lines.append("PASS GATE AUDIT")
+    report_lines.append("RECORDED PASS GATE AUDIT (OVERLAPPING REASONS)")
     if pass_reason_rows:
         pass_columns = [
             "Segment", "N", "PASS share", "Sample", "Predicted", "Actual",
@@ -9402,7 +9609,9 @@ def render_pick_list_page() -> None:
     avg_conf = round(sum(confidences) / len(confidences)) if confidences else 0
     avg_prob = round(sum(probabilities) / len(probabilities)) if probabilities else 0
     avg_entry = round(0.7 * avg_prob + 0.3 * avg_conf) if legs else 0
+    eligibility_holds = any(leg.get("entry_eligibility") and leg["entry_eligibility"] != "ELIGIBLE" for leg in legs)
     readiness = (
+        "Needs entry checks" if eligibility_holds else
         "Ready to review" if legs and avg_entry >= 80 and watch_count == 0 else
         "Needs review" if legs else "Empty"
     )
@@ -9439,6 +9648,10 @@ def render_pick_list_page() -> None:
             "#36d399" if "Strong" in verdict else
             "#f4c95d" if "Lean" in verdict or "Watch" in verdict else "#aeb9c7"
         )
+        if leg.get("entry_eligibility"):
+            verdict = f"Model {leg.get('model_entry_action', 'UNAVAILABLE')} · {str(leg['entry_eligibility']).lower()}"
+            if leg["entry_eligibility"] != "ELIGIBLE":
+                verdict_color = "var(--yellow)"
         player = _html.escape(str(leg.get("player", "Unknown player")))
         prop = _html.escape(str(leg.get("prop", "Prop")))
         sport = _html.escape(str(leg.get("sport", "")))
@@ -26285,6 +26498,7 @@ if st.session_state.active_sport == "edge":
                 )
                 display_action = "PAYOUT CHECK" if payout_check else action
                 display_score = model_entry_score if payout_check else entry_score
+                dimensions = scanner_decision_dimensions({**result, "model_entry_action": model_action, "entry_action": action})
                 reasons = (
                     result.get("entry_decision_reasons", [])
                     or result.get("validation_reasons", [])
@@ -26301,6 +26515,10 @@ if st.session_state.active_sport == "edge":
                         f"   model_grade={model_action} · final_value_action=PAYOUT CHECK · "
                         "exact slip payout required"
                     )
+                lines.append(
+                    f"   model_assessment={dimensions['model_assessment']} · entry_eligibility={dimensions['entry_eligibility']} · "
+                    f"recorded_entry_action={action} · recorded_entry_score={entry_score}"
+                )
                 lines.append(
                     f"   tier={result.get('tier', 'N/A')} · model_chance={float(result.get('adj', 0) or 0):.1f}% · "
                     f"evidence={int(result.get('confidence', 0) or 0)}/100 · "
@@ -31461,9 +31679,11 @@ if st.session_state.active_sport == "edge":
                         f"line {_sb_line:g} · {_sb_prob:.0f}% no-vig · {_sb_books} books</span>"
                     )
 
+                _decision_dimensions = scanner_decision_dimensions(_r)
+                _display_action = "PAYOUT CHECK" if _decision_dimensions["entry_eligibility"] == "AWAITING PAYOUT" else _edge_entry_action
                 with _candidate_inspector, st.container(key=f"scan_candidate_mlb_{_row_index}"):
                     st.markdown(scanner_candidate_heading(
-                        _r["player"], _r["stat"], _result_side, _r["line"], _edge_entry_score, _edge_entry_action,
+                        _r["player"], _r["stat"], _result_side, _r["line"], _edge_entry_score, _display_action,
                         f"vs {_r.get('opp', 'TBD')} · {_r.get('game_date') or 'Date TBD'}",
                         "Reduced payout - check return" if is_reduced_payout_line(_r) else "Standard payout",
                         image=research_player_photo(_r, "MLB"),
@@ -31476,6 +31696,7 @@ if st.session_state.active_sport == "edge":
                             " | ".join(str(reason) for reason in (_r.get("validation_reasons") or [])),
                             history_label=f"Last {_r['samples']} appearances", history_value=f"Average {_r['avg']}",
                             evidence_label="Evidence quality", line_type_label=("Reduced payout - check exact entry return" if _payout_check else "Standard payout"),
+                            decision_context=_decision_dimensions,
                         )
                         # Action buttons row
                         _btn_key_safe = _re_edge.sub(r'[^a-zA-Z0-9]', '_', f"{_r['player']}_{_r['stat']}_{_r['line']}_{_r['sport']}")
@@ -31494,8 +31715,11 @@ if st.session_state.active_sport == "edge":
                                 "confidence": _conf_val,
                                 "adj":        _r["adj"],
                                 "sport":      _r["sport"],
-                                "entry_score": _edge_entry_score,
-                                "entry_action": _edge_entry_action,
+                                "entry_score": _r.get("entry_score", _edge_entry_score),
+                                "entry_action": _r.get("entry_action", _edge_entry_action),
+                                "model_entry_score": _r.get("model_entry_score", _edge_entry_score),
+                                "model_entry_action": _decision_dimensions["model_assessment"],
+                                "entry_eligibility": _decision_dimensions["entry_eligibility"],
                                 "odds_type": _r.get("odds_type", "standard"),
                                 "reduced_payout": _payout_check,
                                 "line_type": (
@@ -31508,6 +31732,7 @@ if st.session_state.active_sport == "edge":
                                 (_r.get("validation_reasons", []) or [])
                                 + (_r.get("trap_reasons", []) or [])
                                 + (["Reduced payout line · verify exact slip return"] if _payout_check else [])
+                                + [f"Model assessment: {_decision_dimensions['model_assessment']}; entry eligibility: {_decision_dimensions['entry_eligibility']}"]
                             )
                             _edge_tracker_entry = {
                                 "Player":      _r["player"],
@@ -31537,7 +31762,7 @@ if st.session_state.active_sport == "edge":
                                 (
                                     "Verify PP line first" if _line_needs_verify else
                                     "Pass — analyze only" if _is_pass else
-                                    "➕ Add & Track"
+                                    "Save candidate & track" if _decision_dimensions["entry_eligibility"] == "AWAITING PAYOUT" else "➕ Add & Track"
                                 ),
                                 key=f"ep_{_btn_key_safe}",
                                 use_container_width=True,
