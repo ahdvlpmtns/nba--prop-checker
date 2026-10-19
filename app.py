@@ -34,7 +34,7 @@ st.markdown(
 
 st.markdown("""
 <style>
-@import url("https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800;900&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&family=JetBrains+Mono:wght@400;500;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap");
 /* Sport-specific component foundations. */
 #MainMenu { visibility: hidden; }
 header { visibility: hidden; }
@@ -3981,16 +3981,16 @@ div[data-testid="stHorizontalBlock"]:has(.stat-card) > div[data-testid="stColumn
 
 /* PropIQ Workspace: shared theme and responsive app shell. */
 :root {
-  --bg:#101214; --bg2:#181b1e; --bg3:#212529; --bg4:#2a3034;
-  --surface:#181b1e; --surface2:#212529; --surface-0:#101214;
-  --surface-1:#181b1e; --surface-2:#212529; --surface-3:#2a3034;
-  --text:#f3f5f6; --text2:#bdc5ca; --text3:#9ca8af;
-  --accent:#65d4ce; --accent2:#38b7b1; --accent3:#97e7df;
-  --green:#75d9aa; --yellow:#efc969; --red:#f18f98; --orange:#e7ad7b;
-  --border:#30363a; --border2:#485159; --line-soft:#30363a; --line-strong:#485159;
+  --bg:#111214; --bg2:#1a1c1f; --bg3:#24272b; --bg4:#2b3036;
+  --surface:#1a1c1f; --surface2:#24272b; --surface-0:#111214;
+  --surface-1:#1a1c1f; --surface-2:#24272b; --surface-3:#2b3036;
+  --text:#f4f6f8; --text2:#b0b6be; --text3:#8e98a3;
+  --accent:#79b8ff; --accent2:#579de9; --accent3:#a0ceff;
+  --green:#79b8ff; --yellow:#f2a19a; --red:#f2a19a; --orange:#f2a19a;
+  --border:#33373d; --border2:#4b535f; --line-soft:#33373d; --line-strong:#4b535f;
   --accent-glow:transparent; --r-xs:4px; --r-sm:6px; --r-md:8px; --r-lg:8px; --r-xl:8px;
-  --font-display:'Plus Jakarta Sans',sans-serif; --font-body:'DM Sans',sans-serif;
-  --font-mono:'JetBrains Mono',monospace; --shadow-sm:none; --shadow-md:0 8px 24px #0003;
+  --font-display:'Barlow Condensed',sans-serif; --font-body:'IBM Plex Sans',sans-serif;
+  --font-mono:'IBM Plex Mono',monospace; --shadow-sm:none; --shadow-md:0 8px 24px #0003;
   --shadow-lg:0 12px 36px #0004; --shadow-teal:none; --shadow-green:none; --shadow-red:none;
   --nav-height:68px; --v8-nav-height:68px;
   --safe-bottom:calc(var(--nav-height) + 20px + env(safe-area-inset-bottom));
@@ -4001,7 +4001,7 @@ html,body,.stApp,[data-testid="stAppViewContainer"] {background:var(--bg) !impor
 * {letter-spacing:0 !important;box-sizing:border-box;}
 #MainMenu,header,footer,[data-testid="stDecoration"],.stDeployButton {display:none !important;}
 [data-testid="stSidebar"],[data-testid="stSidebarCollapsedControl"] {display:none !important;}
-[data-testid="stAppViewBlockContainer"],.block-container {max-width:1160px !important;width:100% !important;margin:0 auto !important;padding:20px 28px 100px !important;}
+[data-testid="stAppViewBlockContainer"],.block-container {max-width:1360px !important;width:100% !important;margin:0 auto !important;padding:20px 28px 100px !important;}
 [data-testid="stVerticalBlock"] {gap:16px;}
 .stMarkdown p,.stMarkdown li,[data-testid="stCaptionContainer"], [data-testid="stWidgetLabel"] p {color:var(--text2) !important;font-family:var(--font-body) !important;font-size:14px !important;line-height:1.55 !important;}
 [data-testid="stWidgetLabel"] p {color:var(--text) !important;}
@@ -4009,10 +4009,10 @@ h1,h2,h3,h4 {color:var(--text) !important;font-family:var(--font-display) !impor
 h1 {font-size:28px !important;} h2,h3 {font-size:22px !important;}
 button,button p {font-family:var(--font-body) !important;font-size:14px !important;text-transform:none !important;}
 .stButton button,[data-testid="stDownloadButton"] button,[data-testid="stPopover"]>button {min-height:44px !important;border-radius:6px !important;background:var(--bg2) !important;border:1px solid var(--border2) !important;color:var(--text) !important;box-shadow:none !important;transform:none !important;}
-.stButton button[kind="primary"] {background:var(--accent) !important;border-color:var(--accent) !important;color:#092522 !important;font-weight:700 !important;}
-.stButton button[kind="primary"] p {color:#092522 !important;}
+.stButton button[kind="primary"] {background:var(--accent) !important;border-color:var(--accent) !important;color:#0b1b2e !important;font-weight:700 !important;}
+.stButton button[kind="primary"] p {color:#0b1b2e !important;}
 .stButton button:hover {border-color:var(--accent) !important;}
-.stButton button:disabled,.stButton button:disabled p {opacity:1 !important;background:#252a2d !important;border-color:var(--border) !important;color:#9ca8af !important;}
+.stButton button:disabled,.stButton button:disabled p {opacity:1 !important;background:#252a2d !important;border-color:var(--border) !important;color:#8e98a3 !important;}
 button:focus-visible,input:focus-visible,summary:focus-visible {outline:2px solid var(--accent) !important;outline-offset:3px;}
 input:focus-visible {outline:none !important;}
 [data-baseweb="select"]>div,[data-testid="stNumberInputContainer"],[data-testid="stTextInput"]>div>div,textarea {background:var(--bg2) !important;border:1px solid var(--border2) !important;border-radius:6px !important;box-shadow:none !important;}
@@ -4035,20 +4035,25 @@ input::placeholder,textarea::placeholder,[data-baseweb="select"] [aria-hidden="t
 [data-baseweb="radio"]:has(input:checked)>div:first-child {background:var(--accent) !important;border-color:var(--accent) !important;}
 [role="listbox"],[data-baseweb="popover"]>div {background:var(--bg2) !important;color:var(--text) !important;border-color:var(--border2) !important;}
 [role="option"] {color:var(--text) !important;background:var(--bg2) !important;min-height:44px !important;font-size:16px !important;}
-[role="option"]:hover,[role="option"][aria-selected="true"] {background:#29403d !important;}
+[role="option"]:hover,[role="option"][aria-selected="true"] {background:#25374e !important;}
 [data-testid="stExpander"] {border:1px solid var(--border) !important;border-radius:6px !important;background:transparent !important;box-shadow:none !important;}
+[data-testid="stExpander"] details {border:0 !important;background:transparent !important;box-shadow:none !important;}
 [data-testid="stExpander"] summary {min-height:48px !important;font-size:14px !important;color:var(--text) !important;}
 [data-testid="stMetric"] {background:transparent !important;border:0 !important;box-shadow:none !important;padding:8px 0 !important;}
 [data-testid="stMetricLabel"] p {font-size:13px !important;color:var(--text2) !important;}
 [data-testid="stMetricValue"] {font-size:28px !important;color:var(--text) !important;}
 [data-testid="stAlert"] {border-radius:6px !important;}
+[data-testid="stAlertContainer"]:has([data-testid="stAlertContentWarning"]) {background:#f2a19a12 !important;border:1px solid #f2a19a40 !important;color:var(--yellow) !important;}
+[data-testid="stAlertContentWarning"] p {color:var(--yellow) !important;}
+[data-testid="stAlertContainer"]:has([data-testid="stAlertContentSuccess"]) {background:#79b8ff12 !important;border:1px solid #79b8ff40 !important;color:var(--accent) !important;}
+[data-testid="stAlertContentSuccess"] p {color:var(--accent) !important;}
 [data-testid="stCode"] {border:1px solid var(--border);border-radius:6px;}
 .pl-header {display:flex;align-items:center;justify-content:space-between;position:relative !important;min-height:64px !important;margin:0 0 12px !important;padding:8px 0 !important;background:none !important;border:0 !important;border-bottom:1px solid var(--border) !important;border-radius:0 !important;box-shadow:none !important;backdrop-filter:none !important;}
 .pl-header::before,.pl-header::after {display:none !important;}
 .pl-logo-wrap {display:flex;align-items:center;gap:10px;}
-.pl-icon {width:36px !important;height:34px !important;}
+.pl-icon {display:none !important;}
 .pl-icon svg {width:36px !important;height:34px !important;}
-.pl-logo {font-family:var(--font-display) !important;font-size:24px !important;font-weight:800 !important;line-height:1.1 !important;}
+.pl-logo {font-family:var(--font-display) !important;font-size:36px !important;font-weight:700 !important;line-height:1.1 !important;}
 .pl-logo span {color:var(--accent) !important;background:none !important;-webkit-text-fill-color:var(--accent) !important;}
 .pl-logo small {font-size:10px !important;color:var(--text3) !important;margin-left:7px;vertical-align:top;}
 .pl-sub {font-size:11px !important;color:var(--text3) !important;margin-top:3px;}
@@ -4061,21 +4066,21 @@ input::placeholder,textarea::placeholder,[data-baseweb="select"] [aria-hidden="t
 [data-testid="stPopoverBody"] {background:var(--bg2) !important;color:var(--text) !important;border:1px solid var(--border2) !important;border-radius:8px !important;}
 .st-key-workspace_tools button {width:40px !important;min-height:40px !important;padding:8px !important;background:transparent !important;border-color:transparent !important;}
 .st-key-workspace_navigation {position:sticky !important;top:0 !important;z-index:999 !important;padding:4px 0 !important;margin:0 !important;background:var(--bg) !important;border:0 !important;border-bottom:1px solid var(--border) !important;border-radius:0 !important;box-shadow:none !important;}
-.st-key-workspace_navigation [data-testid="stHorizontalBlock"] {display:grid !important;grid-template-columns:repeat(5,minmax(0,1fr)) !important;gap:4px !important;}
+.st-key-workspace_navigation [data-testid="stHorizontalBlock"] {display:grid !important;grid-template-columns:repeat(4,minmax(0,1fr)) !important;gap:4px !important;}
 .st-key-workspace_navigation [data-testid="stColumn"] {width:100% !important;min-width:0 !important;}
 .st-key-workspace_navigation button {width:100% !important;min-height:46px !important;border:0 !important;color:var(--text2) !important;background:transparent !important;padding:8px !important;}
-.st-key-workspace_navigation button[kind="primary"] {color:var(--accent) !important;background:#203432 !important;box-shadow:none !important;}
+.st-key-workspace_navigation button[kind="primary"] {color:var(--accent) !important;background:#202d3d !important;box-shadow:none !important;}
 .st-key-workspace_navigation button[kind="primary"] p {color:var(--accent) !important;}
 .st-key-analyzer_sport_navigation {width:100% !important;margin:0 0 4px !important;padding:0 !important;border:0 !important;background:none !important;box-shadow:none !important;}
 .st-key-analyzer_sport_navigation [data-testid="stHorizontalBlock"] {display:grid !important;grid-template-columns:repeat(4,minmax(0,1fr)) !important;gap:8px !important;}
 .st-key-analyzer_sport_navigation [data-testid="stColumn"] {width:100% !important;min-width:0 !important;}
 .st-key-analyzer_sport_navigation button {min-height:42px !important;background:transparent !important;border:1px solid transparent !important;color:var(--text2) !important;padding:7px !important;}
-.st-key-analyzer_sport_navigation button[kind="primary"] {background:#203432 !important;border-color:#4d8d83 !important;color:var(--accent) !important;}
+.st-key-analyzer_sport_navigation button[kind="primary"] {background:#202d3d !important;border-color:#79b8ff !important;color:var(--accent) !important;}
 .st-key-analyzer_sport_navigation button[kind="primary"] p {color:var(--accent) !important;}
 .st-key-edge_league_select [data-baseweb="button-group"] {display:grid !important;grid-template-columns:repeat(4,minmax(0,1fr)) !important;gap:8px !important;border:0 !important;background:none !important;padding:0 !important;}
 .st-key-edge_league_select button {background:transparent !important;border:1px solid transparent !important;border-radius:6px !important;min-height:42px !important;color:var(--text2) !important;font-size:14px !important;}
 .st-key-edge_league_select button p {color:var(--text2) !important;}
-.st-key-edge_league_select button[kind="segmented_controlActive"] {background:#203432 !important;border-color:#4d8d83 !important;}
+.st-key-edge_league_select button[kind="segmented_controlActive"] {background:#202d3d !important;border-color:#79b8ff !important;}
 .st-key-edge_league_select button[kind="segmented_controlActive"] p {color:var(--accent) !important;}
 .workspace-heading,.v55-hero {margin:8px 0 4px !important;padding:0 0 16px !important;border:0 !important;border-bottom:1px solid var(--border) !important;background:transparent !important;box-shadow:none !important;border-radius:0 !important;}
 .workspace-heading>span,.v55-kicker {display:block;color:var(--accent) !important;font-size:12px !important;font-weight:700;margin-bottom:6px;}
@@ -4091,20 +4096,21 @@ input::placeholder,textarea::placeholder,[data-baseweb="select"] [aria-hidden="t
 .st-key-mlb_player_search_row:not(:has(.stButton)) [data-testid="stColumn"]:last-child {display:none !important;}
 .st-key-mlb_player_search_row [data-testid="stTooltipIcon"] {display:none;}
 .v55-command-note {padding:0 !important;border:0 !important;background:none !important;color:var(--text3) !important;font:13px/1.6 var(--font-body) !important;}
-.unified-decision-card {display:grid !important;grid-template-columns:144px 1fr !important;background:var(--bg2) !important;border:1px solid var(--border) !important;border-left:3px solid var(--green) !important;border-radius:8px !important;box-shadow:none !important;overflow:hidden;margin:12px 0 !important;}
+.unified-decision-card {display:grid !important;grid-template-columns:144px 1fr !important;background:transparent !important;border:0 !important;border-top:1px solid var(--border) !important;border-bottom:1px solid var(--border) !important;border-radius:0 !important;box-shadow:none !important;overflow:hidden;margin:12px 0 !important;}
 .unified-decision-card.watch {border-left-color:var(--yellow) !important;}.unified-decision-card.pass {border-left-color:var(--text3) !important;}
 .unified-decision-score {padding:24px 20px !important;border:0 !important;background:none !important;align-self:start !important;}
 .unified-decision-label {font:12px var(--font-body) !important;color:var(--text2) !important;}
-.unified-decision-number {font:700 48px/1.2 var(--font-display) !important;font-style:normal !important;color:var(--green) !important;white-space:nowrap !important;}
+.unified-decision-number {font:600 88px/1 var(--font-display) !important;font-style:normal !important;color:var(--green) !important;white-space:nowrap !important;}
 .watch .unified-decision-number,.watch .unified-decision-action {color:var(--yellow) !important;}.pass .unified-decision-number,.pass .unified-decision-action {color:var(--text2) !important;}
 .unified-decision-number small {font-size:12px !important;color:var(--text3) !important;}
 .unified-decision-call {padding:24px 20px !important;border:0 !important;}
-.unified-decision-action {font-size:18px !important;font-weight:700 !important;color:var(--green) !important;}
+.unified-decision-action {font:600 32px/1.1 var(--font-display) !important;color:var(--green) !important;}
 .unified-decision-direction {font-size:18px !important;font-weight:700 !important;color:var(--text) !important;line-height:1.5 !important;margin:4px 0 !important;}
 .unified-decision-note {font:14px/1.6 var(--font-body) !important;color:var(--text2) !important;}
 .unified-decision-meta {display:inline-block;margin-top:12px !important;font:12px var(--font-body) !important;padding:5px 8px !important;border:1px solid var(--border2) !important;background:none !important;color:var(--text2) !important;border-radius:4px;}
 .unified-score-details {grid-column:1/-1 !important;border-top:1px solid var(--border) !important;}
 .unified-score-details summary {padding:14px 20px !important;color:var(--text2) !important;font-size:14px !important;cursor:pointer;}
+.unified-score-details summary::after {color:var(--accent) !important;}
 .unified-decision-evidence {padding:0 20px 12px !important;display:grid !important;grid-template-columns:repeat(4,minmax(0,1fr)) !important;gap:16px !important;}
 .unified-decision-metric {padding:8px 0 !important;background:none !important;border:0 !important;box-shadow:none !important;}
 .unified-decision-metric span {font:12px/1.5 var(--font-body) !important;color:var(--text3) !important;display:block;}
@@ -4134,7 +4140,7 @@ input::placeholder,textarea::placeholder,[data-baseweb="select"] [aria-hidden="t
 .research-identity>div:last-child {min-width:0;}
 .research-identity strong {display:block;font:700 22px/1.3 var(--font-display);color:var(--text);overflow-wrap:anywhere;}
 .research-identity>div>span {display:block;font:14px/1.6 var(--font-body);color:var(--text2);margin-top:3px;}
-.research-avatar {position:relative;flex:0 0 56px;width:56px;height:56px;overflow:hidden;border-radius:8px;background:#283c3b;border:1px solid #3c5752;}
+.research-avatar {position:relative;flex:0 0 56px;width:56px;height:56px;overflow:hidden;border-radius:8px;background:#242d39;border:1px solid #3c4d63;}
 .research-avatar span {display:grid;place-items:center;height:100%;font:700 19px var(--font-display);color:var(--accent);}
 .research-avatar img {position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:top;background:var(--bg2);font-size:0;}
 div[class*="st-key-scan_candidate_"] {gap:0 !important;border:1px solid var(--border2);border-radius:8px;background:var(--bg2);overflow:hidden;margin:0 0 4px;}
@@ -4167,7 +4173,7 @@ div[class*="st-key-scan_candidate_"] .unified-decision-card {border:0 !important
 [data-testid="stStatusWidget"], [data-testid="stStatus"] {font-size:14px;}
 .st-key-nbap_analyze_action {position:sticky !important;bottom:12px;z-index:30;background:var(--bg);padding:8px 0 !important;border-top:1px solid var(--border);}
 .st-key-mlb_analyze {position:sticky !important;bottom:12px;z-index:30;background:var(--bg);padding:8px 0 !important;}
-@media(hover:hover) {div[class*="st-key-scan_candidate_"]:hover {border-color:#5c746f;}}
+@media(hover:hover) {div[class*="st-key-scan_candidate_"]:hover {border-color:#79b8ff;}}
 .edge-player-v55 {font-size:18px !important;color:var(--text) !important;}
 .edge-market-v72,.edge-row-payout {font:13px/1.6 var(--font-body) !important;color:var(--text2) !important;}
 .edge-row-payout {display:inline-block;font-size:12px !important;color:var(--accent) !important;margin-top:4px;}
@@ -4176,7 +4182,7 @@ div[class*="st-key-scan_candidate_"] .unified-decision-card {border:0 !important
 .edge-score-item-v55 {background:none !important;border:0 !important;}
 .analyzer-scroll-anchor,[id$="-analyzer-controls"],#workspace-top {scroll-margin-top:18px !important;}
 @media(min-width:1100px) {
-  [data-testid="stAppViewBlockContainer"],.block-container {width:calc(100% - 120px) !important;margin-left:max(120px,calc((100% - 1120px)/2 + 45px)) !important;max-width:1120px !important;padding:20px 28px 80px !important;}
+  [data-testid="stAppViewBlockContainer"],.block-container {width:calc(100% - 120px) !important;margin-left:max(120px,calc((100% - 1360px)/2 + 45px)) !important;max-width:1360px !important;padding:20px 28px 80px !important;}
   .st-key-workspace_navigation {position:fixed !important;top:100px !important;left:16px !important;width:100px !important;border:0 !important;padding:0 !important;}
   .st-key-workspace_navigation [data-testid="stHorizontalBlock"] {grid-template-columns:1fr !important;gap:8px !important;}
   .st-key-workspace_navigation button {justify-content:flex-start !important;min-height:48px !important;}
@@ -4185,9 +4191,9 @@ div[class*="st-key-scan_candidate_"] .unified-decision-card {border:0 !important
   [data-testid="stAppViewBlockContainer"],.block-container {padding:8px 16px var(--safe-bottom) !important;width:100% !important;max-width:100% !important;margin:0 !important;}
   [data-testid="stVerticalBlock"] {gap:12px;}
   .pl-header {min-height:56px !important;margin-bottom:4px !important;padding:8px 0 !important;}
-  .pl-icon,.pl-sub,.pl-live-status {display:none !important;}.pl-logo {font-size:23px !important;}
+  .pl-icon,.pl-sub,.pl-live-status {display:none !important;}.pl-logo {font-size:32px !important;}
   .pl-header-actions {margin-right:44px;}.st-key-workspace_tools {top:8px;right:0;}
-  .st-key-workspace_navigation {position:fixed !important;top:auto !important;bottom:0 !important;left:0 !important;right:0 !important;width:100% !important;padding:6px 8px calc(6px + env(safe-area-inset-bottom)) !important;border-top:1px solid var(--border) !important;border-bottom:0 !important;background:#181b1ef5 !important;border-radius:0 !important;}
+  .st-key-workspace_navigation {position:fixed !important;top:auto !important;bottom:0 !important;left:0 !important;right:0 !important;width:100% !important;padding:6px 8px calc(6px + env(safe-area-inset-bottom)) !important;border-top:1px solid var(--border) !important;border-bottom:0 !important;background:#1a1c1ff5 !important;border-radius:0 !important;}
   .st-key-workspace_navigation button {min-height:52px !important;padding:5px 2px !important;flex-direction:column !important;gap:3px !important;}
   .st-key-workspace_navigation button>div {flex-direction:column !important;gap:3px !important;}
   .st-key-workspace_navigation button p {font-size:11px !important;white-space:nowrap;}
@@ -4200,7 +4206,7 @@ div[class*="st-key-scan_candidate_"] .unified-decision-card {border:0 !important
   .st-key-mlb_market_controls [data-testid="stHorizontalBlock"] {display:grid !important;grid-template-columns:1fr 1fr !important;gap:12px !important;}
   .st-key-mlb_market_controls [data-testid="stColumn"] {width:100% !important;min-width:0 !important;}
   .st-key-mlb_market_controls [data-testid="stColumn"]:first-child {grid-column:1/-1 !important;}
-  .unified-decision-card {grid-template-columns:90px 1fr !important;}.unified-decision-score {padding:20px 12px !important;}.unified-decision-number {font-size:40px !important;}
+  .unified-decision-card {grid-template-columns:98px 1fr !important;}.unified-decision-score {padding:20px 12px !important;}.unified-decision-number {font-size:68px !important;}
   .unified-decision-number small {display:block !important;margin-top:2px;white-space:nowrap !important;}
   .unified-decision-call {padding:18px 12px !important;}.unified-decision-direction {font-size:16px !important;}
   .unified-decision-evidence {grid-template-columns:1fr 1fr !important;gap:8px 16px !important;}
@@ -4221,6 +4227,79 @@ div[class*="st-key-scan_candidate_"] .unified-decision-card {border:0 !important
   .st-key-nbap_analyze_action,.st-key-mlb_analyze {bottom:calc(var(--nav-height) + env(safe-area-inset-bottom) + 4px) !important;}
   body:has(input[type="number"]:focus,input[role="combobox"][aria-expanded="true"]) .st-key-nbap_analyze_action,body:has(input[type="number"]:focus,input[role="combobox"][aria-expanded="true"]) .st-key-mlb_analyze {position:static !important;}
 }
+
+/* Research Desk: rows and inspection are native widgets backed by saved model output. */
+.workspace-heading h1,.workspace-page-head h1 {font:600 36px/1.15 var(--font-display) !important;}
+.pl-sub {font:11px var(--font-mono) !important;text-transform:uppercase;}
+.pl-logo small {font:11px var(--font-mono) !important;vertical-align:middle;}
+.research-identity strong {font-size:32px;line-height:1.1;}
+.research-avatar {border-radius:4px;}
+.unified-decision-label {font:11px var(--font-mono) !important;text-transform:uppercase;}
+.unified-decision-score {padding:24px 16px 24px 0 !important;}
+.unified-decision-call {padding:24px 0 24px 12px !important;}
+.unified-decision-direction {font-size:20px !important;}
+.unified-decision-meta {border:0 !important;padding:0 !important;font:12px var(--font-mono) !important;}
+.unified-score-details summary {padding-left:0 !important;padding-right:0 !important;}
+.unified-decision-evidence,.unified-score-detail-copy {padding-left:0 !important;padding-right:0 !important;}
+.research-board-labels {display:grid;grid-template-columns:minmax(0,1fr) 96px 62px;gap:12px;padding:12px 8px;border-bottom:1px solid var(--border);color:var(--text3);font:11px var(--font-mono);text-transform:uppercase;}
+.research-board-labels span:last-child {text-align:right;}
+div[class*="st-key-research_board_row_"] {border-bottom:1px solid var(--border);padding:12px 8px !important;background:transparent;border-radius:0;gap:4px !important;}
+div[class*="st-key-research_board_row_"]:has(button[kind="primary"]) {background:#79b8ff0b;border-left:2px solid var(--accent);padding-left:6px !important;}
+div[class*="st-key-research_board_row_"] [data-testid="stHorizontalBlock"] {display:grid !important;grid-template-columns:minmax(0,1fr) 96px 62px !important;gap:12px !important;align-items:center;}
+div[class*="st-key-research_board_row_"] [data-testid="stColumn"] {width:100% !important;min-width:0 !important;}
+div[class*="st-key-research_board_row_"] button,div[class*="st-key-research_board_row_"] button[kind="primary"] {padding:0 !important;min-height:44px !important;border:0 !important;background:transparent !important;justify-content:flex-start !important;color:var(--text) !important;text-align:left !important;}
+div[class*="st-key-research_board_row_"] button p {font-weight:600 !important;color:var(--text) !important;font-size:15px !important;line-height:1.3 !important;text-align:left;}
+div[class*="st-key-research_board_row_"] button[kind="primary"] p {color:var(--text) !important;}
+div[class*="st-key-research_board_row_"] [data-testid="stCaptionContainer"] p {font-size:12px !important;line-height:1.4 !important;}
+.research-row-line strong {display:block;font:600 24px/1.1 var(--font-display);color:var(--text);}
+div[class*="st-key-research_player_"] [data-testid="stHorizontalBlock"] {display:grid !important;grid-template-columns:40px minmax(0,1fr) !important;gap:10px !important;align-items:center;}
+.research-row-avatar {position:relative;width:40px;height:48px;background:var(--bg3);border-radius:4px;overflow:hidden;}
+.research-row-avatar span {display:grid;place-items:center;height:100%;font:600 18px var(--font-display);color:var(--accent);}
+.research-row-avatar img {position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:top;font-size:0;}
+.research-row-line span {display:block;font:12px/1.4 var(--font-body);color:var(--text2);margin-top:4px;overflow-wrap:anywhere;}
+.research-row-score {text-align:right;}
+.research-row-score strong {display:block;font:600 34px/1 var(--font-display);color:var(--accent);}
+.research-row-score span {display:block;font:10px/1.5 var(--font-mono);color:var(--accent);margin-top:4px;}
+.research-row-score.watch strong,.research-row-score.watch span {color:var(--yellow);}
+.research-row-score.pass strong,.research-row-score.pass span {color:var(--text3);}
+div[class*="st-key-research_inspector_"] {border-left:1px solid var(--border);padding-left:24px !important;min-width:0 !important;}
+div[class*="st-key-research_inspector_"] div[class*="st-key-scan_candidate_"] {background:transparent;border:0;border-radius:0;margin:0;}
+div[class*="st-key-research_inspector_"] .candidate-heading {grid-template-columns:1fr;padding:0 0 20px;gap:10px;border:0;border-bottom:1px solid var(--border);}
+div[class*="st-key-research_inspector_"] .candidate-score {display:none;}
+div[class*="st-key-research_inspector_"] .candidate-player>strong {font:600 32px/1.1 var(--font-display);}
+div[class*="st-key-research_inspector_"] .candidate-call {text-align:left;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;}
+div[class*="st-key-research_inspector_"] .candidate-call>b {margin-left:auto;}
+div[class*="st-key-research_inspector_"] .candidate-call {display:none !important;}
+div[class*="st-key-research_inspector_"] .candidate-call>strong {font:600 28px var(--font-display);}
+div[class*="st-key-research_inspector_"] .unified-decision-card {grid-template-columns:100px 1fr !important;}
+div[class*="st-key-research_inspector_"] .unified-decision-number {font-size:64px !important;}
+div[class*="st-key-research_inspector_"] .unified-decision-number small {display:block;}
+div[class*="st-key-research_inspector_"] .unified-decision-evidence {grid-template-columns:1fr 1fr !important;}
+div[class*="st-key-research_inspector_"] [data-testid="stExpander"] {border-left:0 !important;border-right:0 !important;border-radius:0 !important;}
+.research-inspector-top {display:flex;justify-content:space-between;align-items:center;font:11px var(--font-mono);color:var(--text3);padding:0 0 16px;border-bottom:1px solid var(--border);text-transform:uppercase;}
+.candidate-player:has(img) {position:relative;min-height:64px;padding-left:68px;}
+.candidate-player>img {position:absolute;left:0;top:0;width:56px;height:64px;object-fit:cover;object-position:top;border-radius:4px;background:var(--bg3);font-size:0;}
+.research-inspector-top span:last-child {color:var(--accent);}
+@media(min-width:1000px) {
+  div[class*="st-key-research_board_"]:not([class*="st-key-research_board_row_"])>[data-testid="stLayoutWrapper"]>[data-testid="stHorizontalBlock"] {gap:28px !important;align-items:flex-start !important;}
+  div[class*="st-key-research_back_"] {display:none !important;}
+}
+@media(max-width:999px) {
+  div[class*="st-key-research_board_"]:not([class*="st-key-research_board_row_"])>[data-testid="stLayoutWrapper"]>[data-testid="stHorizontalBlock"] {display:flex !important;flex-direction:column !important;}
+  div[class*="st-key-research_board_"]:not([class*="st-key-research_board_row_"])>[data-testid="stLayoutWrapper"]>[data-testid="stHorizontalBlock"]>[data-testid="stColumn"] {width:100% !important;flex:1 1 auto !important;}
+  div[class*="st-key-research_inspector_"] {border-left:0;border-top:1px solid var(--border);padding:20px 0 0 !important;}
+  .workspace-heading h1,.workspace-page-head h1 {font-size:30px !important;}
+  .research-identity strong {font-size:28px;}
+}
+@media(max-width:768px) {
+  div[class*="st-key-research_board_row_"] [data-testid="stHorizontalBlock"],.research-board-labels {grid-template-columns:minmax(0,1fr) 80px 48px !important;gap:8px !important;}
+  div[class*="st-key-research_player_"] [data-testid="stHorizontalBlock"] {grid-template-columns:36px minmax(0,1fr) !important;}
+  .research-row-avatar {width:36px;height:44px;}
+  .research-row-score strong {font-size:30px;}
+  .research-row-line strong {font-size:22px;white-space:nowrap;}
+  div[class*="st-key-research_inspector_"] .candidate-player>strong {font-size:28px;}
+}
+
 @media(prefers-reduced-motion:reduce) {* {animation:none !important;scroll-behavior:auto !important;transition:none !important;}}
 
 </style>
@@ -4242,7 +4321,7 @@ def render_player_identity(name, context, image=""):
     try:
         parts = urlsplit(str(image or ""))
         host = (parts.hostname or "").lower()
-        allowed = parts.scheme == "https" and not parts.username and (host == "espncdn.com" or host.endswith(".espncdn.com"))
+        allowed = parts.scheme == "https" and not parts.username and (host == "espncdn.com" or host.endswith(".espncdn.com") or host == "img.mlbstatic.com")
     except ValueError:
         allowed = False
     media = f"<img src='{escape(image)}' alt='' loading='lazy' referrerpolicy='no-referrer'>" if allowed else ""
@@ -4253,16 +4332,24 @@ def render_player_identity(name, context, image=""):
     )
 
 
-def scanner_candidate_heading(player, market, side, line, score, action, context="", line_type=""):
+def scanner_candidate_heading(player, market, side, line, score, action, context="", line_type="", image=""):
     """A common display row; ranking, gates and quote identity stay with each model."""
     import html
+    from urllib.parse import urlsplit
     escape = lambda value: html.escape(str(value or ""), quote=True)
+    try:
+        parts = urlsplit(str(image or ""))
+        host = (parts.hostname or "").lower()
+        trusted = parts.scheme == "https" and not parts.username and (host == "img.mlbstatic.com" or host == "espncdn.com" or host.endswith(".espncdn.com"))
+    except ValueError:
+        trusted = False
+    photo = f"<img src='{escape(image)}' alt='' loading='lazy'>" if trusted else ""
     action = str(action or "PASS").upper()
     tone = "play" if action == "PLAY" else "watch" if action in ("WATCH", "PAYOUT CHECK") else "pass"
     return (
         f"<div class='candidate-heading {tone}'>"
         f"<div class='candidate-score'><strong>{int(round(score))}</strong><span>Entry score</span></div>"
-        f"<div class='candidate-player'><strong>{escape(player)}</strong><span>{escape(context)}</span>"
+        f"<div class='candidate-player'>{photo}<strong>{escape(player)}</strong><span>{escape(context)}</span>"
         f"<small>{escape(line_type)}</small></div>"
         f"<div class='candidate-call'><strong>{escape(side)} {float(line):g}</strong>"
         f"<span>{escape(market)}</span><b>{escape(action)}</b></div></div>"
@@ -4278,12 +4365,125 @@ def render_recent_performance(values, line, side, dates=None, key=None):
     if frame.empty:
         return
     hits = frame.value.gt(line) if side == "Over" else frame.value.lt(line)
-    colors = ["#75d9aa" if hit else "#78848c" for hit in hits]
+    colors = ["#79b8ff" if hit else "#556170" for hit in hits]
     st.markdown(f"<div class='recent-chart-header'><strong>Recent performance</strong><span>{int(hits.sum())}/{len(frame)} {side.lower()} {line:g}</span></div>", unsafe_allow_html=True)
     chart = go.Figure(go.Bar(x=list(range(len(frame))), y=frame.value, marker_color=colors, customdata=frame.label, hovertemplate="%{customdata}: %{y}<extra></extra>"))
-    chart.add_hline(y=line, line_dash="dash", line_color="#efc969", annotation_text=f"Line {line:g}", annotation_position="top left")
-    chart.update_layout(height=205, margin=dict(l=0,r=0,t=24,b=0), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(color="#bdc5ca",size=12), showlegend=False, bargap=.32, xaxis=dict(tickmode="array",tickvals=list(range(len(frame)))[::2],ticktext=frame.label.iloc[::2],showgrid=False,fixedrange=True), yaxis=dict(gridcolor="#30363a",zeroline=False,rangemode="tozero",fixedrange=True))
+    chart.add_hline(y=line, line_dash="dash", line_color="#d8e0e9", annotation_text=f"Line {line:g}", annotation_position="top left")
+    chart.update_layout(height=220, margin=dict(l=0,r=0,t=24,b=0), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(family="IBM Plex Sans, sans-serif",color="#b0b6be",size=12), showlegend=False, bargap=.32, xaxis=dict(tickmode="array",tickvals=list(range(len(frame)))[::2],ticktext=frame.label.iloc[::2],showgrid=False,fixedrange=True), yaxis=dict(gridcolor="#33373d",zeroline=False,rangemode="tozero",fixedrange=True))
     st.plotly_chart(chart, config={"displayModeBar":False}, use_container_width=True, key=key)
+
+
+def research_quote_identity(row, sport):
+    """Keep selection on the exact event, market, side and payout variant."""
+    import hashlib
+    import json
+
+    game = row.get("snapshot", {}).get("game", {}) or row.get("context", {})
+    identity = [sport, row.get("player"), row.get("stat") or row.get("market") or "Points",
+                row.get("line"), row.get("side", "Over"), row.get("projection_id"),
+                row.get("game_pk") or game.get("game_id"),
+                row.get("game_datetime") or row.get("game_date") or game.get("kickoff"),
+                row.get("line_type"), row.get("odds_type"), row.get("is_goblin"),
+                row.get("is_promo"), row.get("payout_check_required")]
+    return hashlib.sha256(json.dumps(identity, default=str).encode()).hexdigest()[:24]
+
+
+def research_board_item(row, sport, score=None, action=None):
+    """Project model output into a display row, without recomputing predictions."""
+    game = row.get("snapshot", {}).get("game", {}) or row.get("context", {})
+    return {"id": research_quote_identity(row, sport), "player": str(row.get("player", "")),
+            "market": row.get("stat") or row.get("market") or "Points",
+            "line": row["line"], "side": row.get("side", "Over"),
+            "score": row.get("score") if score is None else score,
+            "action": row.get("action") if action is None else action,
+            "context": game.get("game_name") or f"vs {row.get('opp') or 'TBD'} · {row.get('game_date') or 'Date TBD'}",
+            "payout": row.get("line_type") or ("Reduced payout - check return" if is_reduced_payout_line(row) else "Standard payout"),
+            "image": research_player_photo(row, sport)}
+
+
+def research_player_photo(row, sport):
+    """Only official media tied to an existing provider player identifier."""
+    from urllib.parse import urlsplit
+
+    if str(sport).upper() == "MLB":
+        player_id = str(row.get("pitcher_id") or row.get("player_id") or "")
+        return f"https://img.mlbstatic.com/mlb-photos/image/upload/w_128,q_auto:good/v1/people/{player_id}/headshot/67/current" if player_id.isdigit() else ""
+    image = row.get("snapshot", {}).get("player", {}).get("image", "")
+    try:
+        parts = urlsplit(str(image or ""))
+        host = (parts.hostname or "").lower()
+        return image if parts.scheme == "https" and not parts.username and (host == "espncdn.com" or host.endswith(".espncdn.com")) else ""
+    except ValueError:
+        return ""
+
+
+def select_research_candidate(key, identity):
+    st.session_state[f"research_selected_{key}"] = identity
+    set_navigation_scroll_target(f"research-detail-{key}")
+
+
+def mlb_scanner_display_decision(row):
+    """Preserve the scanner's existing reduced-payout presentation policy."""
+    if row.get("payout_check_required"):
+        score = int(row.get("model_entry_score", 0) or 0)
+        action = str(row.get("model_entry_action", "WATCH"))
+        if not score or action not in ("PLAY", "WATCH"):
+            score, action, _ = scanner_entry_decision(row, apply_payout_gate=False)
+        return score, action, action == "PLAY"
+    return scanner_entry_decision(row)
+
+
+def render_research_board(items, key):
+    """Native list/detail workspace. Selection never starts another data fetch."""
+    import html
+
+    if not items:
+        return None, st.container()
+    state_key = f"research_selected_{key}"
+    with st.container(key=f"research_board_{key}"):
+        board, inspector = st.columns([1.15, 1], gap="large")
+        with board:
+            st.markdown(f"<div id='research-board-{key}'></div>", unsafe_allow_html=True)
+            names = list(dict.fromkeys(item["player"] for item in items))
+            search_key = f"research_search_{key}"
+            if st.session_state.get(search_key) not in names:
+                st.session_state[search_key] = None
+            name = st.selectbox("Find player in this scan", names, index=None, key=search_key, placeholder="All scanned players")
+            visible = [(i, item) for i, item in enumerate(items) if not name or item["player"] == name]
+            ids = {item["id"] for _, item in visible}
+            if st.session_state.get(state_key) not in ids:
+                st.session_state[state_key] = visible[0][1]["id"]
+            selected = st.session_state[state_key]
+            st.markdown("<div class='research-board-labels'><span>Player / matchup</span><span>Exact line</span><span>Entry</span></div>", unsafe_allow_html=True)
+            for index, item in visible:
+                tone = "play" if item["action"] == "PLAY" else "watch" if item["action"] in ("WATCH", "PAYOUT CHECK") else "pass"
+                with st.container(key=f"research_board_row_{key}_{item['id']}_{index}"):
+                    player, line, score = st.columns([3, 1.2, .8])
+                    with player:
+                        with st.container(key=f"research_player_{key}_{index}"):
+                            photo, name_col = st.columns([.6, 2])
+                            with photo:
+                                initials = "".join(word[0] for word in item["player"].split()[:2]).upper()
+                                image = f"<img src='{html.escape(item['image'], quote=True)}' alt='' loading='lazy'>" if item["image"] else ""
+                                st.markdown(f"<div class='research-row-avatar'><span>{html.escape(initials)}</span>{image}</div>", unsafe_allow_html=True)
+                            with name_col:
+                                st.button(item["player"], key=f"research_select_{key}_{item['id']}_{index}",
+                                          type="primary" if item["id"] == selected else "secondary",
+                                          use_container_width=True, on_click=select_research_candidate, args=(key, item["id"]))
+                                st.caption(item["context"])
+                    with line:
+                        st.markdown(f"<div class='research-row-line'><strong>{html.escape(str(item['side']))} {float(item['line']):g}</strong><span>{html.escape(str(item['market']))}</span><span>{html.escape(str(item['payout']))}</span></div>", unsafe_allow_html=True)
+                    with score:
+                        st.markdown(f"<div class='research-row-score {tone}'><strong>{int(round(item['score']))}</strong><span>{html.escape(str(item['action']))}</span></div>", unsafe_allow_html=True)
+            st.caption(f"{len(visible)} of {len(items)} candidates")
+        with inspector:
+            detail = st.container(key=f"research_inspector_{key}")
+            with detail:
+                st.markdown(f"<div id='research-detail-{key}'></div><div class='research-inspector-top'><span>Selected pick</span><span>Exact quote</span></div>", unsafe_allow_html=True)
+                st.button("Back to board", icon=":material/arrow_back:", key=f"research_back_{key}", on_click=set_navigation_scroll_target, args=(f"research-board-{key}",))
+    render_navigation_scroll_target(f"research-detail-{key}")
+    render_navigation_scroll_target(f"research-board-{key}")
+    return next(i for i, item in enumerate(items) if item["id"] == selected), detail
 
 
 def render_entry_decision(
@@ -5021,11 +5221,14 @@ def render_nfl_scanner():
     st.caption(f"{scan['captured']} source rows · {len(scan['results'])} direction evaluations · {len(visible)} displayed · {scan['generated']}")
     if not visible:
         st.info("No PLAY/WATCH rows passed the current data and role gates. Open the scanner debugger for every exclusion and PASS reason.")
+    _selected, _inspector = render_research_board([research_board_item(r, "NFL") for r in visible], "nfl")
     for index, result in enumerate(visible):
-        with st.container(key=f"scan_candidate_nfl_{index}"):
+        if index != _selected:
+            continue
+        with _inspector, st.container(key=f"scan_candidate_nfl_{index}"):
             st.markdown(scanner_candidate_heading(result["player"], result["market"], result["side"], result["line"], result["score"], result["action"],
                                                  result["context"]["game_name"], result["line_type"]), unsafe_allow_html=True)
-            with st.expander(f"Analysis and actions · {result['player']}"):
+            with st.expander(f"Analysis and actions · {result['player']}", expanded=True):
                 nfl_render_result(result["player"], result, f"nfl_scan_{index}")
                 st.button("Open analyzer", icon=":material/arrow_forward:", key=f"nfl_open_{index}", use_container_width=True, on_click=open_edge_analyzer, args=("nfl", result["player"], result["line"], result["side"], result["market"], result["line_type"], result["context"]["game_id"]))
     with st.expander("Scanner coverage and debugger"):
@@ -5639,11 +5842,14 @@ def render_cfb_scanner():
     st.caption(f"{scan['captured']} quotes · {len(scan['results'])} direction evaluations · {len(visible)} displayed")
     if not visible:
         st.info("No WATCH candidates passed the current filters and evidence gates. The debugger lists every exclusion.")
+    _selected, _inspector = render_research_board([research_board_item(r, "CFB") for r in visible], "cfb")
     for index, result in enumerate(visible):
-        with st.container(key=f"scan_candidate_cfb_{index}"):
+        if index != _selected:
+            continue
+        with _inspector, st.container(key=f"scan_candidate_cfb_{index}"):
             st.markdown(scanner_candidate_heading(result["player"], result["market"], result["side"], result["line"], result["score"], result["action"],
                                                  result["context"]["game_name"], result["line_type"]), unsafe_allow_html=True)
-            with st.expander(f"Analysis and actions · {result['player']}"):
+            with st.expander(f"Analysis and actions · {result['player']}", expanded=True):
                 nfl_render_result(result["player"], result, f"cfb_scan_{index}")
                 st.button("Open analyzer", icon=":material/arrow_forward:", key=f"cfb_open_{index}", on_click=cfb_open_result, args=(result,), use_container_width=True)
     with st.expander("Scanner coverage and debugger"):
@@ -6481,12 +6687,15 @@ def render_nbap_scanner():
     st.caption(f"{scan['captured']} quotes · {scan['matched']} verified quote matches · {len(scan['results'])} side evaluations · {len(visible)} displayed")
     if not visible:
         st.info("No current candidates passed the evidence and event checks. Open the debugger for every exclusion, including preseason and unsupported markets.")
+    _selected, _inspector = render_research_board([research_board_item(r, "NBA") for r in visible], "nba")
     for index, result in enumerate(visible):
-        with st.container(key=f"scan_candidate_nba_{index}"):
+        if index != _selected:
+            continue
+        with _inspector, st.container(key=f"scan_candidate_nba_{index}"):
             game = result["snapshot"]["game"]
             st.markdown(scanner_candidate_heading(result["player"], "Points", result["side"], result["line"], result["score"], result["action"],
-                                                 f"{game['game_name']} · {hub_timestamp(game['kickoff'])}", result["line_type"]), unsafe_allow_html=True)
-            with st.expander(f"Analysis and actions · {result['player']}"):
+                                                 f"{game['game_name']} · {hub_timestamp(game['kickoff'])}", result["line_type"], image=research_player_photo(result, "NBA")), unsafe_allow_html=True)
+            with st.expander(f"Analysis and actions · {result['player']}", expanded=True):
                 st.button("Open analyzer", icon=":material/arrow_forward:", key=f"nbap_open_{index}", on_click=nbap_open_result, args=(result,), use_container_width=True)
                 nbap_render_result(result, f"nbap_scan_{index}")
     with st.expander("Scanner coverage and debugger - copy report"):
@@ -6694,7 +6903,7 @@ def preserve_workspace_inputs():
     keys = {"edge_stat_filter", "edge_side_filter", "edge_min_filter", "edge_sort_filter",
             "edge_goblins", "edge_league_select", "mlb_prop_type", "mlb_line", "mlb_side",
             "hub_sport", "hub_schedule_day"}
-    keys.update(k for k in st.session_state if str(k).startswith("mlb_player_sel_"))
+    keys.update(k for k in st.session_state if str(k).startswith(("mlb_player_sel_", "research_search_")))
     for key in keys:
         if key in st.session_state:
             st.session_state[key] = st.session_state[key]
@@ -14888,67 +15097,22 @@ with st.container(key="workspace_header"):
     st.markdown(f"""
     <div class="pl-header">
         <div class="pl-logo-wrap">
-            <div class="pl-icon" style="position:relative;overflow:hidden;width:56px;height:44px;">
-                <svg width="56" height="44" viewBox="0 0 56 44" fill="none" style="display:block;">
-                    <defs>
-                        <linearGradient id="barGrad1" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stop-color="#40d9e0"/>
-                            <stop offset="100%" stop-color="#00868c"/>
-                        </linearGradient>
-                        <linearGradient id="barGrad2" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stop-color="#00c4cc"/>
-                            <stop offset="100%" stop-color="#007880"/>
-                        </linearGradient>
-                        <linearGradient id="barGrad3" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stop-color="#20ced6"/>
-                            <stop offset="100%" stop-color="#006e76"/>
-                        </linearGradient>
-                        <linearGradient id="scanGrad" x1="0" y1="0" x2="1" y2="0">
-                            <stop offset="0%" stop-color="#40d9e0" stop-opacity="0"/>
-                            <stop offset="50%" stop-color="#40d9e0" stop-opacity="0.7"/>
-                            <stop offset="100%" stop-color="#40d9e0" stop-opacity="0"/>
-                        </linearGradient>
-                    </defs>
-                    <!-- Bars — V shape rising left to right then back down, teal gradient -->
-                    <rect class="pl-bar pl-bar-1" x="0"  y="34" width="6" height="8"  fill="url(#barGrad1)" rx="1"/>
-                    <rect class="pl-bar pl-bar-2" x="8"  y="26" width="6" height="16" fill="url(#barGrad1)" rx="1"/>
-                    <rect class="pl-bar pl-bar-3" x="16" y="16" width="6" height="26" fill="url(#barGrad2)" rx="1"/>
-                    <rect class="pl-bar pl-bar-4" x="24" y="8"  width="6" height="34" fill="url(#barGrad3)" rx="1"/>
-                    <rect class="pl-bar pl-bar-5" x="32" y="16" width="6" height="26" fill="url(#barGrad2)" rx="1"/>
-                    <rect class="pl-bar pl-bar-6" x="40" y="26" width="6" height="16" fill="url(#barGrad1)" rx="1"/>
-                    <rect class="pl-bar pl-bar-7" x="48" y="34" width="6" height="8"  fill="url(#barGrad1)" rx="1"/>
-                    <!-- Basketball sitting on center peak -->
-                    <g class="pl-bball">
-                        <circle cx="27" cy="5" r="5.5" fill="#f97316"/>
-                        <path d="M21.5 5 Q27 2 32.5 5" fill="none" stroke="#92400e" stroke-width="0.85" stroke-linecap="round"/>
-                        <path d="M21.5 5 Q27 8 32.5 5" fill="none" stroke="#92400e" stroke-width="0.85" stroke-linecap="round"/>
-                        <line x1="27" y1="0" x2="27" y2="10.5" stroke="#92400e" stroke-width="0.85"/>
-                        <!-- Teal highlight glint on ball -->
-                        <circle cx="24.5" cy="3" r="1.2" fill="#40d9e0" opacity="0.55"/>
-                    </g>
-                    <!-- Scan line sweep — teal -->
-                    <rect class="pl-scan" x="0" y="0" width="4" height="44" fill="url(#scanGrad)" rx="2"/>
-                </svg>
-            </div>
             <div>
                 <div class="pl-logo">Prop<span>IQ</span><small>V8</small></div>
-                <div class="pl-sub">Sports intelligence</div>
+                <div class="pl-sub">Research desk</div>
             </div>
         </div>
         <div class="pl-header-actions">
             <span class="pl-header-sport">{_header_context}</span>
-            <span class="pl-live-status">Research workspace</span>
+            <span class="pl-live-status">Sports intelligence</span>
         </div>
     </div>
-
     """, unsafe_allow_html=True)
 
-    # ─────────────────────────────────────────────
-    # Live Data — Ticker + Score Cards
-    # ─────────────────────────────────────────────
     with st.container(key="workspace_tools"):
         with st.popover("", icon=":material/settings:", help="Settings and help"):
             st.subheader("Settings")
+            st.button("Sports desk", key="workspace_sports_desk", icon=":material/newspaper:", on_click=navigate_to_view, args=("home",), use_container_width=True)
             st.button("Refresh cached data", key="workspace_refresh_cache", icon=":material/refresh:", on_click=st.cache_data.clear, use_container_width=True)
             with st.expander("Score guide"):
                 render_v8_help_content()
@@ -15175,11 +15339,7 @@ elif _active_view == "analyze" and st.session_state.active_sport == "edge":
     persist_active_sport(_restore_sport if _restore_sport in _ANALYZER_SPORTS else "mlb")
 
 with st.container(key="workspace_navigation"):
-    _nav0, _nav1, _nav2, _nav3, _nav4 = st.columns(5)
-    with _nav0:
-        st.button("Home", key="view_home", use_container_width=True,
-                  icon=":material/home:", type="primary" if _active_view == "home" else "secondary",
-                  on_click=navigate_to_view, args=("home",))
+    _nav1, _nav2, _nav3, _nav4 = st.columns(4)
     with _nav1:
         st.button(
             "Analyze", key="view_analyze", use_container_width=True,
@@ -19276,6 +19436,8 @@ if st.session_state.active_sport == "mlb":
         _tonight = mlb_get_tonight_game(mlb_pitcher) if mlb_pitcher else {}
     mlb_opp  = _tonight.get("opp","")
     mlb_home = _tonight.get("home_team","")
+    _mlb_photo_id = _mlb_basic.get("id") if mlb_prop == "Hitter Fantasy Score" else (_tonight.get("probable_id") if _tonight.get("pitcher_matched") else None)
+    _mlb_photo = research_player_photo({"player_id": _mlb_photo_id}, "MLB")
 
     if _mlb_compact_form:
         _mlb_summary_context = "Next game context unavailable"
@@ -19288,7 +19450,7 @@ if st.session_state.active_sport == "mlb":
         with st.container(key="mlb_analysis_summary"):
             _mlb_summary_col, _mlb_edit_col = st.columns([5, 1])
             with _mlb_summary_col:
-                render_player_identity(mlb_pitcher, _mlb_summary_context)
+                render_player_identity(mlb_pitcher, _mlb_summary_context, _mlb_photo)
                 st.markdown(
                     f"<div class='mlb-analysis-summary'>"
                     f"<div class='mlb-analysis-summary-tags'>"
@@ -19313,7 +19475,7 @@ if st.session_state.active_sport == "mlb":
                 _od += f" · Opp SP: {_tonight.get('opp_pitcher')}"
         else:
             _od = f"vs {mlb_opp} · {_tonight.get('venue','')} · {'Home' if _tonight.get('pitcher_side')=='home' else 'Away'}"
-        render_player_identity(mlb_pitcher, f"{_tonight.get('game_date', '')} · {_od}")
+        render_player_identity(mlb_pitcher, f"{_tonight.get('game_date', '')} · {_od}", _mlb_photo)
     elif mlb_pitcher:
         # Try to figure out next start from recent logs
         _last_date = None
@@ -31105,22 +31267,18 @@ if st.session_state.active_sport == "edge":
                 f"sorted by {_edge_sort.lower()} within each group"
             )
 
-            # Render each result as a compact row. Supporting signals expand on demand.
+            _board_items = []
+            for _board_result in _display_edge_results:
+                _board_score, _board_action, _ = mlb_scanner_display_decision(_board_result)
+                _board_items.append(research_board_item(_board_result, "MLB", _board_score, _board_action))
+            _selected_candidate, _candidate_inspector = render_research_board(_board_items, "mlb")
+
             for _row_index, _r in enumerate(_display_edge_results):
+                if _row_index != _selected_candidate:
+                    continue
                 _grade_lbl, _grade_col, _reason_list = scanner_grade_and_reasons(_r)
                 _payout_check = bool(_r.get("payout_check_required"))
-                if _payout_check:
-                    _edge_entry_score = int(_r.get("model_entry_score", 0) or 0)
-                    _edge_entry_action = str(_r.get("model_entry_action", "WATCH"))
-                    if not _edge_entry_score or _edge_entry_action not in ("PLAY", "WATCH"):
-                        _edge_entry_score, _edge_entry_action, _ = scanner_entry_decision(
-                            _r, apply_payout_gate=False
-                        )
-                    _is_strong = _edge_entry_action == "PLAY"
-                else:
-                    _edge_entry_score, _edge_entry_action, _is_strong = (
-                        scanner_entry_decision(_r)
-                    )
+                _edge_entry_score, _edge_entry_action, _is_strong = mlb_scanner_display_decision(_r)
                 _reason_html = "".join(
                     f"<span class='edge-pill-v55'>{_why}</span>"
                     for _why in _reason_list
@@ -31303,13 +31461,114 @@ if st.session_state.active_sport == "edge":
                         f"line {_sb_line:g} · {_sb_prob:.0f}% no-vig · {_sb_books} books</span>"
                     )
 
-                with st.container(key=f"scan_candidate_mlb_{_row_index}"):
+                with _candidate_inspector, st.container(key=f"scan_candidate_mlb_{_row_index}"):
                     st.markdown(scanner_candidate_heading(
                         _r["player"], _r["stat"], _result_side, _r["line"], _edge_entry_score, _edge_entry_action,
                         f"vs {_r.get('opp', 'TBD')} · {_r.get('game_date') or 'Date TBD'}",
                         "Reduced payout - check return" if is_reduced_payout_line(_r) else "Standard payout",
+                        image=research_player_photo(_r, "MLB"),
                     ), unsafe_allow_html=True)
-                    with st.expander(f"Analysis and actions · {_r['player']} · {_result_side} {_r['line']:g}"):
+                    with st.expander(f"Analysis and actions · {_r['player']} · {_result_side} {_r['line']:g}", expanded=True):
+                        render_entry_decision(
+                            _edge_entry_score, _edge_entry_action, f"{_r['stat']} · {_result_side} {_r['line']:g}",
+                            _r["adj"], _conf_val, _r["cons"],
+                            " | ".join(str(reason) for reason in _reason_list[:2]),
+                            " | ".join(str(reason) for reason in (_r.get("validation_reasons") or [])),
+                            history_label=f"Last {_r['samples']} appearances", history_value=f"Average {_r['avg']}",
+                            evidence_label="Evidence quality", line_type_label=("Reduced payout - check exact entry return" if _payout_check else "Standard payout"),
+                        )
+                        # Action buttons row
+                        _btn_key_safe = _re_edge.sub(r'[^a-zA-Z0-9]', '_', f"{_r['player']}_{_r['stat']}_{_r['line']}_{_r['sport']}")
+                        _act_c2, _act_c3 = st.columns(2)
+
+                        with _act_c2:
+                            # ── Add to Parlay ─────────────────────────────────────
+                            import datetime as _dt_edge
+                            _new_leg = {
+                                "player":     _r["player"],
+                                "prop":       f"{_r['stat']} {_result_side}",
+                                "stat":       _r.get("stat", ""),
+                                "line":       _r["line"],
+                                "side":       _result_side,
+                                "verdict":    _tier_lbl,
+                                "confidence": _conf_val,
+                                "adj":        _r["adj"],
+                                "sport":      _r["sport"],
+                                "entry_score": _edge_entry_score,
+                                "entry_action": _edge_entry_action,
+                                "odds_type": _r.get("odds_type", "standard"),
+                                "reduced_payout": _payout_check,
+                                "line_type": (
+                                    "Reduced-payout line" if _payout_check
+                                    else "Standard full-payout line"
+                                ),
+                                "added":      _dt_edge.datetime.now().strftime("%I:%M %p"),
+                            }
+                            _tracker_risk_flags = (
+                                (_r.get("validation_reasons", []) or [])
+                                + (_r.get("trap_reasons", []) or [])
+                                + (["Reduced payout line · verify exact slip return"] if _payout_check else [])
+                            )
+                            _edge_tracker_entry = {
+                                "Player":      _r["player"],
+                                "Line":        f"{_r['line']} {_result_side}",
+                                "Opponent":    _r.get("opp", "—"),
+                                "Matchup":     _r["stat"],
+                                "Venue":       f"Edge Scanner · { _r.get('park', 'Neutral') } · date:{_r.get('game_date', '')}",
+                                "Game Date":   _r.get("game_date", ""),
+                                "Event ID":    _r.get("event_id") or _r.get("game_pk") or _r.get("game_id", ""),
+                                "Player ID":   _r.get("player_id") or _r.get("pitcher_id", ""),
+                                "Team":        _r.get("pp_team") or _r.get("player_team") or _r.get("pitcher_team", ""),
+                                "Avg PTS":     float(_r.get("avg", 0) or 0),
+                                "Hit Rate":    f"{float(_r.get('raw_adj', _r['adj']) or 0):.1f}%",
+                                "Adjusted":    f"{float(_r.get('adj', 0) or 0):.1f}%",
+                                "Consistency": f"{float(_r.get('cons', 0) or 0):.1f}%",
+                                "Confidence":  int(_r.get("confidence", 0) or 0),
+                                "Edge":        float(_r.get("edge_raw", 0) or 0),
+                                "Sample":      int(_r.get("samples", 0) or 0),
+                                "Risk Flags":  " | ".join(dict.fromkeys(_tracker_risk_flags)),
+                                "Trap":        _r.get("trap_label", ""),
+                                "Validation":  _r.get("validation_label", ""),
+                                "Verdict":     _tier_lbl,
+                                "Result":      "Pending",
+                                "Sport":       _r["sport"],
+                            }
+                            st.button(
+                                (
+                                    "Verify PP line first" if _line_needs_verify else
+                                    "Pass — analyze only" if _is_pass else
+                                    "➕ Add & Track"
+                                ),
+                                key=f"ep_{_btn_key_safe}",
+                                use_container_width=True,
+                                on_click=add_to_pick_list_and_tracker,
+                                args=(_new_leg, _edge_tracker_entry),
+                                disabled=_line_needs_verify or _is_pass,
+                                help=(
+                                    "This result came from an older fallback slate. Confirm the current PrizePicks line or refresh the slate first."
+                                    if _line_needs_verify else
+                                    "This prop did not clear the scanner's entry gate. Use Analyze to inspect it, but it cannot be added as a recommended leg."
+                                    if _is_pass else None
+                                ),
+                            )
+
+                        with _act_c3:
+                            # ── Deep Dive — jump to full individual analyzer ──────
+                            st.button(
+                                "🔍 Analyze",
+                                key=f"ea_{_btn_key_safe}",
+                                use_container_width=True,
+                                on_click=open_edge_analyzer,
+                                args=(
+                                    _r["sport"], _r["player"], _r["line"],
+                                    _result_side, _r["stat"],
+                                    (
+                                        "Reduced-payout line" if _payout_check
+                                        else "Standard full-payout line"
+                                    ),
+                                ),
+                            )
+
                         st.markdown(
                             f"<div class='edge-row-body'>"
                             f"<div class='edge-meta-v55'>{_ctx_pills}</div>"
@@ -31523,97 +31782,6 @@ if st.session_state.active_sport == "edge":
                                         use_container_width=True,
                                     )
 
-                        # Action buttons row
-                        _btn_key_safe = _re_edge.sub(r'[^a-zA-Z0-9]', '_', f"{_r['player']}_{_r['stat']}_{_r['line']}_{_r['sport']}")
-                        _act_c2, _act_c3 = st.columns(2)
-
-                        with _act_c2:
-                            # ── Add to Parlay ─────────────────────────────────────
-                            import datetime as _dt_edge
-                            _new_leg = {
-                                "player":     _r["player"],
-                                "prop":       f"{_r['stat']} {_result_side}",
-                                "stat":       _r.get("stat", ""),
-                                "line":       _r["line"],
-                                "side":       _result_side,
-                                "verdict":    _tier_lbl,
-                                "confidence": _conf_val,
-                                "adj":        _r["adj"],
-                                "sport":      _r["sport"],
-                                "entry_score": _edge_entry_score,
-                                "entry_action": _edge_entry_action,
-                                "odds_type": _r.get("odds_type", "standard"),
-                                "reduced_payout": _payout_check,
-                                "line_type": (
-                                    "Reduced-payout line" if _payout_check
-                                    else "Standard full-payout line"
-                                ),
-                                "added":      _dt_edge.datetime.now().strftime("%I:%M %p"),
-                            }
-                            _tracker_risk_flags = (
-                                (_r.get("validation_reasons", []) or [])
-                                + (_r.get("trap_reasons", []) or [])
-                                + (["Reduced payout line · verify exact slip return"] if _payout_check else [])
-                            )
-                            _edge_tracker_entry = {
-                                "Player":      _r["player"],
-                                "Line":        f"{_r['line']} {_result_side}",
-                                "Opponent":    _r.get("opp", "—"),
-                                "Matchup":     _r["stat"],
-                                "Venue":       f"Edge Scanner · { _r.get('park', 'Neutral') } · date:{_r.get('game_date', '')}",
-                                "Game Date":   _r.get("game_date", ""),
-                                "Event ID":    _r.get("event_id") or _r.get("game_pk") or _r.get("game_id", ""),
-                                "Player ID":   _r.get("player_id") or _r.get("pitcher_id", ""),
-                                "Team":        _r.get("pp_team") or _r.get("player_team") or _r.get("pitcher_team", ""),
-                                "Avg PTS":     float(_r.get("avg", 0) or 0),
-                                "Hit Rate":    f"{float(_r.get('raw_adj', _r['adj']) or 0):.1f}%",
-                                "Adjusted":    f"{float(_r.get('adj', 0) or 0):.1f}%",
-                                "Consistency": f"{float(_r.get('cons', 0) or 0):.1f}%",
-                                "Confidence":  int(_r.get("confidence", 0) or 0),
-                                "Edge":        float(_r.get("edge_raw", 0) or 0),
-                                "Sample":      int(_r.get("samples", 0) or 0),
-                                "Risk Flags":  " | ".join(dict.fromkeys(_tracker_risk_flags)),
-                                "Trap":        _r.get("trap_label", ""),
-                                "Validation":  _r.get("validation_label", ""),
-                                "Verdict":     _tier_lbl,
-                                "Result":      "Pending",
-                                "Sport":       _r["sport"],
-                            }
-                            st.button(
-                                (
-                                    "Verify PP line first" if _line_needs_verify else
-                                    "Pass — analyze only" if _is_pass else
-                                    "➕ Add & Track"
-                                ),
-                                key=f"ep_{_btn_key_safe}",
-                                use_container_width=True,
-                                on_click=add_to_pick_list_and_tracker,
-                                args=(_new_leg, _edge_tracker_entry),
-                                disabled=_line_needs_verify or _is_pass,
-                                help=(
-                                    "This result came from an older fallback slate. Confirm the current PrizePicks line or refresh the slate first."
-                                    if _line_needs_verify else
-                                    "This prop did not clear the scanner's entry gate. Use Analyze to inspect it, but it cannot be added as a recommended leg."
-                                    if _is_pass else None
-                                ),
-                            )
-
-                        with _act_c3:
-                            # ── Deep Dive — jump to full individual analyzer ──────
-                            st.button(
-                                "🔍 Analyze",
-                                key=f"ea_{_btn_key_safe}",
-                                use_container_width=True,
-                                on_click=open_edge_analyzer,
-                                args=(
-                                    _r["sport"], _r["player"], _r["line"],
-                                    _result_side, _r["stat"],
-                                    (
-                                        "Reduced-payout line" if _payout_check
-                                        else "Standard full-payout line"
-                                    ),
-                                ),
-                            )
 
     elif st.session_state.get("edge_has_scanned"):
         _scan_summary = st.session_state.get("edge_scan_summary", "No model candidates returned.")
