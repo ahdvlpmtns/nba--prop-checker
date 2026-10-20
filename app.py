@@ -5884,7 +5884,7 @@ def render_cfb_scanner():
         st.download_button("Download debugger", report, "cfb-scanner-debug.txt", key="cfb_debug_download")
 
 
-NBA_POINTS_MODEL_VERSION = "nba-points-v1-season-role"
+NBA_POINTS_MODEL_VERSION = "nba-points-v2-role-count-beta"
 NBAP_ESPN = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba"
 NBAP_LOG_COLUMNS = ["event_id", "date", "season", "phase", "team_id", "opponent_id", "venue", "MIN", "PTS", "FGM", "FGA", "FG3M", "FG3A", "FTM", "FTA", "REB", "AST"]
 
@@ -6231,11 +6231,37 @@ def nbap_prepare(player, game, date_key):
             "matchup": nbap_matchup(own, opp, game["season"], cutoff, loaded.get("league")), "warnings": warnings}
 
 
+def nbap_points_distribution(mean, sigma, line):
+    """Nonnegative integer scoring law; the reported projection is its exact mean."""
+    import math
+    mean, sigma, line = float(mean), float(sigma), float(line)
+    if not all(math.isfinite(v) for v in (mean, sigma, line)) or mean < 0 or sigma < 0 or not 0 <= line <= 100:
+        raise ValueError("Invalid NBA scoring distribution inputs")
+    if mean == 0:
+        return {"over": 0.0, "under": float(line > 0), "push": float(line == 0),
+                "mean": 0.0, "sigma": 0.0, "family": "Zero-point mass"}
+    variance = max(mean, sigma ** 2)
+    # Negative-binomial mean/variance parameterization; Poisson is its equidispersed limit.
+    excess = variance - mean
+    shape = mean ** 2 / excess if excess > 1e-8 * max(1, mean) else None
+    mass = math.exp(-shape * math.log1p(mean / shape)) if shape else math.exp(-mean)
+    masses = [mass]
+    for k in range(math.floor(line)):
+        mass *= ((k + shape) / (k + 1) * mean / (shape + mean)) if shape else mean / (k + 1)
+        masses.append(mass)
+    under = math.fsum(masses[:math.ceil(line)])
+    push = masses[-1] if line.is_integer() else 0.0
+    under = max(0.0, min(1.0, under))
+    push = max(0.0, min(1.0 - under, push))
+    return {"over": max(0.0, 1.0 - under - push), "under": under, "push": push,
+            "mean": mean, "sigma": math.sqrt(variance),
+            "family": "Negative binomial" if shape else "Poisson"}
+
+
 def nbap_model(snapshot, market, line, side, line_type="Manual line - verify market and payout", line_verified=False):
     """One points distribution and one evidence assessment for both NBA workflows."""
     import math
     import numpy as np
-    from statistics import NormalDist
     if nbap_market(market) is None or nfl_number(line) is None or not 0 <= float(line) <= 100 or side not in ("Over", "Under"):
         raise ValueError("Choose full-game Points, a valid line, and Over/Under")
     line = float(line)
@@ -6264,8 +6290,13 @@ def nbap_model(snapshot, market, line, side, line_type="Manual line - verify mar
     flags, gates, trace = [], [], []
     if player.get("roster_status") != "active":
         gates.append("Active roster unverified")
-    baseline_minutes = float(same_prior.head(20).MIN.median()) if len(same_prior) else float(logs.head(20).MIN.median())
+    historical_role = same_prior if len(same_prior) else previous if len(previous) else logs
+    broad_minutes = float(historical_role.MIN.median())
+    recent_minutes = float(historical_role.head(20).MIN.median())
+    baseline_minutes = .75 * broad_minutes + .25 * recent_minutes
+    role_anchor_sd = 0.0
     role = [r for r in snapshot.get("role_rows", []) if r["season"] == game["season"] and r["team_id"] == game["team_id"] and r["date"] < captured and r["date"] < kickoff]
+    role = [r for r in role if nfl_number(r.get("MIN")) is not None and 0 < float(r["MIN"]) <= 75]
     role = sorted({r["event_id"]: r for r in role}.values(), key=lambda r: r["date"], reverse=True)[:5]
     preseason = [r for r in role if r["phase"] == 1]
     if len(current):
@@ -6273,15 +6304,20 @@ def nbap_model(snapshot, market, line, side, line_type="Manual line - verify mar
         role_weight = min(.85, len(current) / (len(current) + 2))
         role_source = f"Current-team regular season L{min(5, len(current))}"
         projected_minutes = role_weight * role_minutes + (1 - role_weight) * baseline_minutes
+        if len(current) < 5:
+            role_anchor_sd = abs(role_minutes - baseline_minutes) * (role_weight * (1 - role_weight)) ** .5
         role_variance = float(current.head(5).MIN.std(ddof=0))
         role_points = 20 * min(1, len(current) / 5) * max(.4, 1 - role_variance / 15)
         role_freshness = (captured - current.iloc[0].date).days
     elif len(preseason):
         role_minutes = float(np.mean([r["MIN"] for r in preseason]))
         # Exhibition minutes are a partial role proxy, never a regular-season outcome sample.
-        role_weight = .65 if transferred else .25
+        role_weight = min(.60, len(preseason) / (len(preseason) + 4))
         projected_minutes = role_weight * role_minutes + (1 - role_weight) * baseline_minutes
-        role_source = f"Preseason proxy L{len(preseason)}; starter status inferred"
+        role_anchor_sd = abs(role_minutes - baseline_minutes) * (role_weight * (1 - role_weight)) ** .5
+        known_starts = [r["started"] for r in preseason if isinstance(r.get("started"), bool)]
+        start_note = f"{sum(known_starts)}/{len(known_starts)} recorded preseason starts" if known_starts else "preseason starts unavailable"
+        role_source = f"Preseason proxy L{len(preseason)}; {start_note}; gameday role unconfirmed"
         role_variance = float(np.std([r["MIN"] for r in preseason]))
         role_points = 10 * min(1, len(preseason) / 3) * max(.5, 1 - role_variance / 20)
         role_freshness = (captured - preseason[0]["date"]).days
@@ -6303,7 +6339,9 @@ def nbap_model(snapshot, market, line, side, line_type="Manual line - verify mar
     if projected_minutes < 8:
         gates.append("Very limited projected workload")
     ppm = average("PTS") / max(1, average("MIN"))
-    trace.append({"signal": "Minutes / role", "value": role_source, "effect": f"{baseline_minutes:.1f} historical minutes -> {projected_minutes:.1f} projected minutes; no blowout/short appearances removed"})
+    trace.append({"signal": "Minutes / role", "value": role_source,
+                  "effect": f"Historical L{len(historical_role)} median {broad_minutes:.1f}, recent L{min(20, len(historical_role))} median {recent_minutes:.1f} -> {baseline_minutes:.1f} anchor (75/25); {role_weight:.0%} current-role weight -> {projected_minutes:.1f} projected minutes; no blowout/short appearances removed"
+                  if len(current) or len(preseason) else f"Historical L{len(historical_role)} median {broad_minutes:.1f}, recent median {recent_minutes:.1f} -> {projected_minutes:.1f} assumed minutes; current role unavailable"})
     last_dates = [pd.Timestamp(r["date"]) for r in role if r["phase"] == 2]
     if len(current):
         last_dates += list(current.date)
@@ -6358,12 +6396,11 @@ def nbap_model(snapshot, market, line, side, line_type="Manual line - verify mar
     observed_sigma = float(np.sqrt(np.dot(weights, (values - average("PTS")) ** 2)))
     sigma = max(4, observed_sigma, .20 * projection)
     uncertainty = min(.45, .08 + (.12 if len(current) < 5 else 0) + (.10 if transferred else 0) + (.10 if uncertain else 0) + min(.12, role_variance / 80))
-    sigma *= 1 + uncertainty
-    distribution = NormalDist(projection, sigma)
-    lower = distribution.cdf(-.5)
-    cdf = lambda x: float(np.clip((distribution.cdf(x) - lower) / max(1e-9, 1 - lower), 0, 1))
-    over, under = 1 - cdf(math.floor(line) + .5), cdf(math.ceil(line) - .5)
-    push = max(0, 1 - over - under)
+    # Additional uncertainty is between the role anchors, not a second full minutes-variance estimate.
+    role_points_sd = base_projection / max(1, projected_minutes) * factor * role_anchor_sd
+    sigma = math.hypot(sigma * (1 + uncertainty), role_points_sd)
+    distribution = nbap_points_distribution(projection, sigma, line)
+    over, under, push, sigma = (distribution[k] for k in ("over", "under", "push", "sigma"))
     probability = over if side == "Over" else under
     evidence_parts = {"Sample": 20 * min(1, (len(current) + .25 * len(previous) + .10 * len(old_team)) / 12),
                       "Current role": role_points, "Freshness": 10 if role_freshness <= 7 and len(current) else 6 if role_freshness <= 7 else 3 if role_freshness <= 14 else 0,
@@ -6374,9 +6411,9 @@ def nbap_model(snapshot, market, line, side, line_type="Manual line - verify mar
     score = int(round(.7 * probability * 100 + .3 * confidence))
     model_action = "PLAY" if probability >= .70 and confidence >= 75 and score >= 80 else "WATCH" if probability >= .55 and confidence >= 50 and score >= 65 else "PASS"
     if uncertain or len(current) < 5 or role_points < 12:
+        gates.append("Action ceiling WATCH: current regular-season role or availability not established")
         if model_action == "PLAY":
             model_action = "WATCH"
-            gates.append("Strong label needs established current role and availability")
     if unavailable or any(v in gates for v in ("Active roster unverified", "New-team workload unverified", "No recent current-role evidence", "Very limited projected workload")):
         model_action = "PASS"
     action = model_action
@@ -6393,14 +6430,18 @@ def nbap_model(snapshot, market, line, side, line_type="Manual line - verify mar
         score = min(score, 79)
     raw = float(np.dot(weights, values > line if side == "Over" else values < line))
     hits = int(sum(values > line if side == "Over" else values < line))
-    trace.append({"signal": "Predictive distribution", "value": f"Mean {projection:.2f}; SD {sigma:.2f}; uncertainty +{uncertainty:.0%}", "effect": f"Over {over:.1%}; Under {under:.1%}; Push {push:.1%}; side selected without automatic switching"})
+    trace.append({"signal": "Role-anchor disagreement", "value": f"{role_anchor_sd:.2f} minutes SD / {role_points_sd:.2f} points SD",
+                  "effect": "Sparse current-role vs historical-anchor disagreement added in quadrature to predictive uncertainty; no probability bonus"})
+    trace.append({"signal": "Predictive distribution", "value": f"{distribution['family']}; mean {projection:.2f}; SD {sigma:.2f}; base uncertainty +{uncertainty:.0%}", "effect": f"Over {over:.1%}; Under {under:.1%}; Push {push:.1%}; nonnegative integer outcomes with mean equal to projection; side selected without automatic switching"})
     return {"version": NBA_POINTS_MODEL_VERSION, "player": player["name"], "label": player["label"], "market": "Points", "line": line, "side": side,
             "projection": projection, "projected_minutes": projected_minutes, "shot_path": shot_path, "probability": probability, "over": over, "under": under, "push": push,
             "confidence": confidence, "confidence_parts": evidence_parts, "score": score, "base_score": int(round(.7 * probability * 100 + .3 * confidence)), "action": action,
             "model_action": model_action, "flags": flags, "gates": gates, "trace": trace, "logs": logs.drop(columns="weight"), "sample": len(logs), "hits": hits,
             "raw": raw, "historical_avg": float(values.mean()), "stability": max(0, 1 - observed_sigma / max(1, average("PTS"))),
             "current_games": len(current), "prior_games": len(previous), "effective_sample": effective_n, "role_source": role_source,
-            "line_type": line_type, "line_verified": bool(line_verified), "snapshot": snapshot, "snapshot_at": snapshot["captured_at"], "sigma": sigma}
+            "line_type": line_type, "line_verified": bool(line_verified), "snapshot": snapshot, "snapshot_at": snapshot["captured_at"], "sigma": sigma,
+            "distribution_family": distribution["family"], "role_anchor_sd": role_anchor_sd,
+            "historical_minutes_anchor": baseline_minutes, "role_weight": role_weight if len(current) or len(preseason) else 0.0}
 
 
 def nbap_debug(result):
@@ -6410,6 +6451,7 @@ def nbap_debug(result):
              f"Event: {game['game_id']} | {game['team']} vs {game['opponent']} | {game['kickoff']} | regular season {game['season'] - 1}-{str(game['season'])[-2:]}",
              f"Market: Points {result['side']} {result['line']:g} | {result['line_type']} | exact quote verified: {result['line_verified']}",
              f"History: {result['hits']}/{result['sample']} hit (unweighted); weighted {result['raw']:.1%}; {result['current_games']} current-team / {result['prior_games']} prior season; effective {result['effective_sample']:.1f}",
+             f"Scoring law: {result.get('distribution_family', 'Legacy distribution')} | expected value equals displayed projection; prospective calibration pending",
              "", "EXECUTED SIGNALS", "Signal | Value | Effect"]
     lines += [f"{r['signal']} | {r['value']} | {r['effect']}" for r in result["trace"]]
     lines += ["", "EVIDENCE QUALITY (coverage, independent of the line)"] + [f"{k}: {v:.1f}" for k, v in result["confidence_parts"].items()]
@@ -6437,6 +6479,9 @@ def nbap_prediction_result(result):
             "entry_decision_reasons": result["gates"], "model_flags": result["flags"], "confidence_parts": result["confidence_parts"],
             "push_probability": result["push"], "current_games": result["current_games"], "prior_games": result["prior_games"],
             "projected_minutes": result["projected_minutes"], "role_source": result["role_source"],
+            "distribution_family": result.get("distribution_family"), "predictive_sd": result["sigma"],
+            "historical_minutes_anchor": result.get("historical_minutes_anchor"), "role_weight": result.get("role_weight"),
+            "role_anchor_sd": result.get("role_anchor_sd"),
             "game_id": game["game_id"], "game_date": pd.Timestamp(game["kickoff"]).tz_convert("America/New_York").date().isoformat(),
             "game_datetime": game["kickoff"], "slate_source": "live" if result["line_verified"] else "manual_or_cached",
             "line_verification_required": not result["line_verified"], "odds_type": "goblin" if "reduced" in result["line_type"].lower() else "standard"}
@@ -7723,6 +7768,7 @@ def build_model_prediction_rows(results: list, scan_id: str,
             "lineup_deep_checked",
             "model_entry_score", "model_entry_action", "model_entry_reasons",
             "projected_minutes", "role_source", "current_games", "prior_games",
+            "distribution_family", "predictive_sd", "historical_minutes_anchor", "role_weight", "role_anchor_sd",
         )
         signal_snapshot = {
             key: _learning_json_safe(result.get(key))
