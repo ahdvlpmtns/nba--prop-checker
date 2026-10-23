@@ -4663,28 +4663,122 @@ def nfl_history(season):
     return {"stats": stats, "warnings": [note for _, note in fetched if note], "loaded_at": pd.Timestamp.now(tz="UTC").isoformat()}
 
 
-@st.cache_data(ttl=600, show_spinner=False)
-def nfl_board():
-    now = pd.Timestamp.now(tz="UTC")
-    start, end = now.strftime("%Y%m%d"), (now + pd.Timedelta(days=10)).strftime("%Y%m%d")
-    payload = nfl_json(f"{NFL_ESPN}/scoreboard?dates={start}-{end}&limit=100")
+def nfl_parse_board(payload, now):
+    """Keep only identifiable, future, scheduled regular-season/playoff events."""
     games = []
     for event in payload.get("events", []):
-        if event.get("season", {}).get("type") not in (2, 3):
+        if not isinstance(event, dict):
+            continue
+        season = event.get("season") or {}
+        phase = nfl_number(season.get("type") or (event.get("seasonType") or {}).get("type"))
+        year = nfl_number(season.get("year"))
+        if not event.get("id") or phase not in (2, 3) or year is None:
             continue
         comp = (event.get("competitions") or [{}])[0]
         kickoff = pd.to_datetime(event.get("date"), utc=True, errors="coerce")
-        if pd.isna(kickoff) or kickoff <= now or comp.get("status", {}).get("type", {}).get("state") != "pre":
+        status = (comp.get("status") or event.get("status") or {}).get("type", {})
+        if pd.isna(kickoff) or kickoff <= now or status.get("state") != "pre":
+            continue
+        if event.get("timeValid") is False or comp.get("timeValid") is False or any(v in str(status.get("name", "")).lower() for v in ("postpon", "cancel", "delay", "suspend")):
             continue
         teams = {r.get("homeAway"): r.get("team", {}) for r in comp.get("competitors", [])}
-        if not all(k in teams for k in ("home", "away")):
+        if not all(teams.get(k, {}).get("id") and teams[k].get("abbreviation") for k in ("home", "away")):
             continue
-        odds = (comp.get("odds") or [{}])[0]
+        if str(teams["home"]["id"]) == str(teams["away"]["id"]):
+            continue
+        odds = next((row for row in (comp.get("odds") or []) if isinstance(row, dict)), {})
+        venue_data = comp.get("venue") or {}
         for venue, other in [("home", "away"), ("away", "home")]:
             own = teams[venue]
-            spread = nfl_number(odds.get("pointSpread", {}).get(venue, {}).get("close", {}).get("line"))
-            games.append({"game_id": str(event["id"]), "kickoff": kickoff.isoformat(), "season": event["season"]["year"], "team": nfl_team(own.get("abbreviation")), "team_id": str(own["id"]), "opponent": nfl_team(teams[other].get("abbreviation")), "venue": venue, "spread": spread, "total": nfl_number(odds.get("overUnder")), "stadium": comp.get("venue", {}).get("fullName", "Unknown"), "indoor": comp.get("venue", {}).get("indoor"), "address": comp.get("venue", {}).get("address", {}), "weather": comp.get("weather", {}), "game_name": event.get("shortName", "")})
+            spread = nfl_number((((odds.get("pointSpread") or {}).get(venue) or {}).get("close") or {}).get("line"))
+            games.append({"game_id": str(event["id"]), "kickoff": kickoff.isoformat(), "season": int(year), "team": nfl_team(own.get("abbreviation")), "team_id": str(own["id"]), "opponent": nfl_team(teams[other].get("abbreviation")), "venue": venue, "spread": spread, "total": nfl_number(odds.get("overUnder")), "stadium": venue_data.get("fullName", "Unknown"), "indoor": venue_data.get("indoor"), "address": venue_data.get("address") or {}, "weather": comp.get("weather") or {}, "game_name": event.get("shortName", "")})
     return sorted(games, key=lambda g: g["kickoff"])
+
+
+def nfl_schedule_error(err):
+    response = getattr(err, "response", None)
+    return f"HTTP {response.status_code}" if response is not None else f"{type(err).__name__}: {str(err)[:180]}"
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def nfl_schedule(date_key):
+    """Date-range fast path with bounded daily fallback and explicit coverage."""
+    import concurrent.futures
+    now = pd.Timestamp.now(tz="UTC")
+    dates = [(pd.Timestamp(date_key) + pd.Timedelta(days=i)).strftime("%Y%m%d") for i in range(11)]
+    audit, warnings = [], []
+
+    def fetch(query):
+        payload = nfl_json(f"{NFL_ESPN}/scoreboard?dates={query}&limit=100")
+        if not isinstance(payload, dict) or not isinstance(payload.get("events"), list) or nfl_number(payload.get("code"), 200) >= 400:
+            raise ValueError("ESPN scoreboard response is incomplete or contains an API error")
+        return [g for g in nfl_parse_board(payload, now) if dates[0] <= pd.Timestamp(g["kickoff"]).tz_convert("America/New_York").strftime("%Y%m%d") <= dates[-1]]
+
+    base = {"games": [], "warnings": warnings, "audit": audit, "start": dates[0], "end": dates[-1],
+            "fetched_at": now.isoformat(), "mode": "date range", "days_loaded": 0, "days_requested": len(dates)}
+    try:
+        games = fetch(f"{dates[0]}-{dates[-1]}")
+        audit.append(f"Range {dates[0]}-{dates[-1]}: {len(games) // 2} verified upcoming events")
+        if games:
+            unique = {(g["game_id"], g["team_id"]): g for g in games}
+            return {**base, "games": sorted(unique.values(), key=lambda g: (g["kickoff"], g["game_id"], g["team_id"])), "status": "ok", "days_loaded": len(dates)}
+        audit.append("Range had no usable upcoming games; checking individual dates")
+    except Exception as err:
+        audit.append("Range request failed: " + nfl_schedule_error(err))
+        response = getattr(err, "response", None)
+        if response is not None and response.status_code in (403, 429):
+            warnings.append("ESPN blocked or rate-limited the schedule request; daily fan-out withheld. Retry later.")
+            return {**base, "status": "error"}
+
+    def daily(day):
+        try:
+            return day, fetch(day), ""
+        except Exception as err:
+            return day, [], nfl_schedule_error(err)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+        batches = list(pool.map(daily, dates))
+    unique = {}
+    for day, games, error in batches:
+        audit.append(f"Date {day}: " + (error if error else f"{len(games) // 2} verified upcoming events"))
+        if error:
+            warnings.append(f"NFL schedule {day}: {error}")
+        else:
+            unique.update({(g["game_id"], g["team_id"]): g for g in games})
+    loaded = sum(not error for _, _, error in batches)
+    status = "error" if not loaded else "partial" if warnings else "ok" if unique else "empty"
+    return {**base, "games": sorted(unique.values(), key=lambda g: (g["kickoff"], g["game_id"], g["team_id"])),
+            "status": status, "mode": "individual-date fallback", "days_loaded": loaded}
+
+
+def nfl_board():
+    """Compatibility interface for callers needing only verified schedule rows."""
+    schedule = nfl_schedule(pd.Timestamp.now(tz="America/New_York").date().isoformat())
+    if schedule["status"] == "error":
+        raise RuntimeError("NFL schedule could not be loaded from ESPN; retry schedule loading")
+    return schedule["games"]
+
+
+def nfl_schedule_debug(schedule):
+    return "\n".join(["PROPIQ NFL SCHEDULE DEBUGGER", f"Generated UTC: {schedule['fetched_at']}",
+                      f"Window (America/New_York): {schedule['start']} - {schedule['end']}",
+                      f"Status: {schedule['status']} | mode: {schedule['mode']}",
+                      f"Calendar days covered: {schedule['days_loaded']}/{schedule['days_requested']}",
+                      f"Verified upcoming events: {len({g['game_id'] for g in schedule['games']})}",
+                      "", "REQUEST AUDIT", *schedule["audit"], "", "WARNINGS", *(schedule["warnings"] or ["None"])])
+
+
+def nfl_render_schedule_status(schedule, key):
+    if schedule["status"] == "error":
+        st.error("NFL schedule could not be loaded from ESPN. No games or matchups were guessed.")
+    elif schedule["status"] == "partial":
+        st.warning("NFL schedule coverage is incomplete. Verified games remain available, but some dates could not be checked.")
+    with st.expander("NFL schedule coverage and debugger"):
+        report = nfl_schedule_debug(schedule)
+        st.code(report, language=None)
+        st.download_button("Download schedule debugger", report, "nfl-schedule-debug.txt", key=f"{key}_debug")
+        st.button("Retry NFL schedule", key=f"{key}_retry", on_click=nfl_schedule.clear)
+    return schedule["status"] != "error"
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -5023,10 +5117,14 @@ def render_nfl_analyzer():
     render_workspace_heading("NFL", "Quarterback research", "Attempts, completions and passing yards · Beta")
     try:
         with st.spinner("Loading quarterbacks and schedule..."):
-            directory, board = nfl_directory(), nfl_board()
+            schedule = nfl_schedule(pd.Timestamp.now(tz="America/New_York").date().isoformat())
+            directory = nfl_directory() if schedule["status"] != "error" else None
     except Exception as err:
         st.error(f"NFL roster/schedule unavailable: {err}")
         return
+    if not nfl_render_schedule_status(schedule, "nfl_analyzer_schedule"):
+        return
+    board = schedule["games"]
     if directory["warnings"]:
         st.warning("; ".join(directory["warnings"]))
     players = directory["players"]
@@ -5177,13 +5275,19 @@ def render_nfl_scanner():
     if st.button("Scan NFL quarterbacks", type="primary", use_container_width=True):
         st.session_state.pop("nfl_scan", None)
         audit, results, seen = [], [], set()
+        schedule = None
         try:
             with st.spinner("Loading PrizePicks NFL board and quarterback data..."):
-                props, directory, games = fetch_all_pp_props("NFL"), nfl_directory(), nfl_board()
+                schedule = nfl_schedule(pd.Timestamp.now(tz="America/New_York").date().isoformat())
+                audit.append(nfl_schedule_debug(schedule))
+                if schedule["status"] == "error":
+                    raise ValueError("NFL schedule could not be loaded from ESPN; retry schedule loading")
+                props, directory, games = fetch_all_pp_props("NFL"), nfl_directory(), schedule["games"]
                 seasons = {g["season"] for g in games}
                 if not seasons:
                     raise ValueError("No verified upcoming regular-season/playoff games.")
                 data = nfl_history(max(seasons))
+            nfl_render_schedule_status(schedule, "nfl_scanner_schedule")
             progress = st.progress(0)
             for i, prop in enumerate(props):
                 label = f"{prop.get('player')} | {prop.get('stat')} | {prop.get('line')}"
@@ -5225,10 +5329,12 @@ def render_nfl_scanner():
                 progress.progress((i + 1) / max(1, len(props)))
             progress.empty()
             nfl_capture(results, "edge_scanner")
-            st.session_state.nfl_scan = {"settings": settings, "results": results, "audit": audit, "captured": len(props), "generated": pd.Timestamp.now(tz="UTC").isoformat(), "warnings": directory["warnings"] + data["warnings"]}
+            st.session_state.nfl_scan = {"settings": settings, "results": results, "audit": audit, "captured": len(props), "generated": pd.Timestamp.now(tz="UTC").isoformat(), "warnings": directory["warnings"] + data["warnings"] + schedule["warnings"]}
         except Exception as err:
             st.error(f"NFL scanner unavailable: {err}")
             st.code("\n".join(audit + [str(err)]), language=None)
+            if schedule and schedule["status"] in ("error", "partial"):
+                nfl_render_schedule_status(schedule, "nfl_scanner_schedule_failure")
     scan = st.session_state.get("nfl_scan")
     if not scan:
         return
