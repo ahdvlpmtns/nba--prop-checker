@@ -5884,7 +5884,7 @@ def render_cfb_scanner():
         st.download_button("Download debugger", report, "cfb-scanner-debug.txt", key="cfb_debug_download")
 
 
-NBA_POINTS_MODEL_VERSION = "nba-points-v2-role-count-beta"
+NBA_POINTS_MODEL_VERSION = "nba-points-v2.1-evidence-audit-beta"
 NBAP_ESPN = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba"
 NBAP_LOG_COLUMNS = ["event_id", "date", "season", "phase", "team_id", "opponent_id", "venue", "MIN", "PTS", "FGM", "FGA", "FG3M", "FG3A", "FTM", "FTA", "REB", "AST"]
 
@@ -6258,7 +6258,34 @@ def nbap_points_distribution(mean, sigma, line):
             "family": "Negative binomial" if shape else "Poisson"}
 
 
-def nbap_model(snapshot, market, line, side, line_type="Manual line - verify market and payout", line_verified=False):
+def nbap_latest_game_sensitivity(result):
+    """One frozen-input leave-one-out rerun, never a replacement forecast or capture."""
+    logs = result["logs"]
+    latest = str(logs.iloc[0].event_id)
+    check = {"status": "unavailable", "excluded_event_id": latest,
+             "excluded_date": logs.iloc[0].date.isoformat(), "latest_weight": result["latest_game_weight"],
+             "method": "Latest selected appearance removed from scoring and role history; same event, line, direction, matchup and availability; no older-game refill",
+             "full_projection": result["projection"], "full_probability": result["probability"],
+             "full_minutes": result["projected_minutes"]}
+    # Use the selected window only: dropping a game must not silently introduce game 41.
+    reduced_logs = logs.loc[logs.event_id.astype(str) != latest].copy()
+    if len(reduced_logs) < 5:
+        return {**check, "reason": "Fewer than five eligible appearances remain after removing the latest game"}
+    snapshot = {**result["snapshot"], "logs": reduced_logs,
+                "role_rows": [r for r in result["snapshot"].get("role_rows", []) if str(r["event_id"]) != latest]}
+    try:
+        alternate = nbap_model(snapshot, "Points", result["line"], result["side"], result["line_type"], result["line_verified"], include_sensitivity=False)
+    except ValueError as err:
+        return {**check, "reason": str(err)}
+    return {**check, "status": "available", "remaining_games": alternate["sample"],
+            "without_latest_projection": alternate["projection"], "without_latest_probability": alternate["probability"],
+            "without_latest_minutes": alternate["projected_minutes"],
+            "without_latest_role_source": alternate["role_source"],
+            "projection_change": alternate["projection"] - result["projection"],
+            "probability_change": alternate["probability"] - result["probability"]}
+
+
+def nbap_model(snapshot, market, line, side, line_type="Manual line - verify market and payout", line_verified=False, include_sensitivity=True):
     """One points distribution and one evidence assessment for both NBA workflows."""
     import math
     import numpy as np
@@ -6281,8 +6308,9 @@ def nbap_model(snapshot, market, line, side, line_type="Manual line - verify mar
     previous = logs.loc[logs.season != game["season"]]
     same_prior = previous.loc[previous.team_id == game["team_id"]]
     transferred = len(same_prior) < 3 and len(previous) >= 3 or len(old_team) > 0
-    logs["weight"] = np.exp(-np.arange(len(logs)) / 15) * np.where(logs.season == game["season"], 1.0, .25)
-    logs.loc[logs.team_id != game["team_id"], "weight"] *= .5
+    history_credit = np.where(logs.season == game["season"], 1.0, .25) * np.where(logs.team_id == game["team_id"], 1.0, .5)
+    sample_credit = float(history_credit.sum())
+    logs["weight"] = np.exp(-np.arange(len(logs)) / 15) * history_credit
     weights = logs.weight.to_numpy(dtype=float)
     weights /= weights.sum()
     effective_n = float(1 / sum(weights ** 2))
@@ -6402,7 +6430,7 @@ def nbap_model(snapshot, market, line, side, line_type="Manual line - verify mar
     distribution = nbap_points_distribution(projection, sigma, line)
     over, under, push, sigma = (distribution[k] for k in ("over", "under", "push", "sigma"))
     probability = over if side == "Over" else under
-    evidence_parts = {"Sample": 20 * min(1, (len(current) + .25 * len(previous) + .10 * len(old_team)) / 12),
+    evidence_parts = {"Sample": 20 * min(1, sample_credit / 12),
                       "Current role": role_points, "Freshness": 10 if role_freshness <= 7 and len(current) else 6 if role_freshness <= 7 else 3 if role_freshness <= 14 else 0,
                       "Matchup coverage": 20 * min(1, matchup.get("effective_games", 0) / 8) * (1 if matchup.get("league_verified") else .65),
                       "Availability": 0 if unavailable else 5 if uncertain else 12,
@@ -6417,13 +6445,14 @@ def nbap_model(snapshot, market, line, side, line_type="Manual line - verify mar
     if unavailable or any(v in gates for v in ("Active roster unverified", "New-team workload unverified", "No recent current-role evidence", "Very limited projected workload")):
         model_action = "PASS"
     action = model_action
+    if not line_verified:
+        gates.append("Verify the exact full-game line and payout")
     reduced = "reduced" in line_type.lower()
     if reduced and model_action in ("PLAY", "WATCH"):
         action = "PAYOUT CHECK"
         gates.append("Reduced line: exact entry return required")
     elif not line_verified and model_action == "PLAY":
         action = "WATCH"
-        gates.append("Verify the exact full-game line and payout")
     if action == "PASS":
         score = min(score, 64)
     elif action == "WATCH":
@@ -6433,7 +6462,7 @@ def nbap_model(snapshot, market, line, side, line_type="Manual line - verify mar
     trace.append({"signal": "Role-anchor disagreement", "value": f"{role_anchor_sd:.2f} minutes SD / {role_points_sd:.2f} points SD",
                   "effect": "Sparse current-role vs historical-anchor disagreement added in quadrature to predictive uncertainty; no probability bonus"})
     trace.append({"signal": "Predictive distribution", "value": f"{distribution['family']}; mean {projection:.2f}; SD {sigma:.2f}; base uncertainty +{uncertainty:.0%}", "effect": f"Over {over:.1%}; Under {under:.1%}; Push {push:.1%}; nonnegative integer outcomes with mean equal to projection; side selected without automatic switching"})
-    return {"version": NBA_POINTS_MODEL_VERSION, "player": player["name"], "label": player["label"], "market": "Points", "line": line, "side": side,
+    result = {"version": NBA_POINTS_MODEL_VERSION, "player": player["name"], "label": player["label"], "market": "Points", "line": line, "side": side,
             "projection": projection, "projected_minutes": projected_minutes, "shot_path": shot_path, "probability": probability, "over": over, "under": under, "push": push,
             "confidence": confidence, "confidence_parts": evidence_parts, "score": score, "base_score": int(round(.7 * probability * 100 + .3 * confidence)), "action": action,
             "model_action": model_action, "flags": flags, "gates": gates, "trace": trace, "logs": logs.drop(columns="weight"), "sample": len(logs), "hits": hits,
@@ -6441,7 +6470,11 @@ def nbap_model(snapshot, market, line, side, line_type="Manual line - verify mar
             "current_games": len(current), "prior_games": len(previous), "effective_sample": effective_n, "role_source": role_source,
             "line_type": line_type, "line_verified": bool(line_verified), "snapshot": snapshot, "snapshot_at": snapshot["captured_at"], "sigma": sigma,
             "distribution_family": distribution["family"], "role_anchor_sd": role_anchor_sd,
-            "historical_minutes_anchor": baseline_minutes, "role_weight": role_weight if len(current) or len(preseason) else 0.0}
+            "historical_minutes_anchor": baseline_minutes, "role_weight": role_weight if len(current) or len(preseason) else 0.0,
+            "sample_credit": sample_credit, "latest_game_weight": float(weights[0])}
+    if include_sensitivity:
+        result["latest_game_sensitivity"] = nbap_latest_game_sensitivity(result)
+    return result
 
 
 def nbap_debug(result):
@@ -6455,13 +6488,28 @@ def nbap_debug(result):
              "", "EXECUTED SIGNALS", "Signal | Value | Effect"]
     lines += [f"{r['signal']} | {r['value']} | {r['effect']}" for r in result["trace"]]
     lines += ["", "EVIDENCE QUALITY (coverage, independent of the line)"] + [f"{k}: {v:.1f}" for k, v in result["confidence_parts"].items()]
+    if result.get("sample_credit") is not None:
+        lines += [f"Sample credit: {result['sample_credit']:.3f} / 12 weighted appearances; season x1 / x0.25, other team x0.5; recency effective sample reported separately"]
     lines += ["", "FINAL", f"Projection: {result['projection']:.2f} points at {result['projected_minutes']:.1f} minutes | edge {result['projection'] - result['line']:+.2f}",
               f"Model chance: {result['probability']:.1%} | evidence {result['confidence']}/100 | output stability {result['stability']:.1%}",
               f"Entry arithmetic: 70% x {result['probability'] * 100:.2f} + 30% x {result['confidence']} = {result['base_score']}; final {result['score']} {result['action']}",
               f"Model-only action: {result['model_action']}; payout/verification action: {result['action']}", "Gates: " + (" | ".join(result["gates"]) or "None"),
               "Flags: " + (" | ".join(result["flags"]) or "None"), f"Snapshot UTC: {result['snapshot_at']}",
-              "Unavailable advanced inputs: confirmed gameday rotations, player-specific defensive assignments, potential assists/rebound chances, coaching and teammate usage redistribution. No fabricated bonuses.",
-              "", "REGULAR-SEASON GAME LOGS", "Event | Date | Season | Team ID | Opponent ID | MIN | PTS | FGA | FTA"]
+              "Unavailable advanced inputs: confirmed gameday rotations, player-specific defensive assignments, potential assists/rebound chances, coaching and teammate usage redistribution. No fabricated bonuses."]
+    sensitivity = result.get("latest_game_sensitivity") or {}
+    if sensitivity:
+        lines += ["", "LATEST-GAME SENSITIVITY (diagnostic only; no score or action adjustment)",
+                  f"Excluded event: {sensitivity['excluded_event_id']} | {sensitivity['excluded_date']} | full-model scoring weight {sensitivity['latest_weight']:.1%}",
+                  sensitivity["method"]]
+        if sensitivity["status"] == "available":
+            lines += [f"Projected points: {sensitivity['full_projection']:.2f} full -> {sensitivity['without_latest_projection']:.2f} without latest ({sensitivity['projection_change']:+.2f})",
+                      f"Selected-side model chance: {sensitivity['full_probability']:.1%} full -> {sensitivity['without_latest_probability']:.1%} without latest ({sensitivity['probability_change'] * 100:+.1f}pp)",
+                      f"Projected minutes: {sensitivity['full_minutes']:.1f} full -> {sensitivity['without_latest_minutes']:.1f} without latest; {sensitivity['remaining_games']} appearances remain",
+                      "Without-latest role source: " + sensitivity["without_latest_role_source"],
+                      "Full rerun includes changes to role, recency weights and uncertainty; this is not a second recommendation or a calibrated accuracy measure."]
+        else:
+            lines += ["Unavailable: " + sensitivity.get("reason", "Insufficient evidence")]
+    lines += ["", "REGULAR-SEASON GAME LOGS", "Event | Date | Season | Team ID | Opponent ID | MIN | PTS | FGA | FTA"]
     lines += [f"{r.event_id} | {r.date.isoformat()} | {r.season} | {r.team_id} | {r.opponent_id} | {r.MIN:g} | {r.PTS:g} | {r.FGA} | {r.FTA}" for r in result["logs"].itertuples()]
     return "\n".join(lines)
 
@@ -6482,6 +6530,8 @@ def nbap_prediction_result(result):
             "distribution_family": result.get("distribution_family"), "predictive_sd": result["sigma"],
             "historical_minutes_anchor": result.get("historical_minutes_anchor"), "role_weight": result.get("role_weight"),
             "role_anchor_sd": result.get("role_anchor_sd"),
+            "sample_credit": result.get("sample_credit"), "latest_game_weight": result.get("latest_game_weight"),
+            "latest_game_sensitivity": result.get("latest_game_sensitivity"),
             "game_id": game["game_id"], "game_date": pd.Timestamp(game["kickoff"]).tz_convert("America/New_York").date().isoformat(),
             "game_datetime": game["kickoff"], "slate_source": "live" if result["line_verified"] else "manual_or_cached",
             "line_verification_required": not result["line_verified"], "odds_type": "goblin" if "reduced" in result["line_type"].lower() else "standard"}
@@ -7769,6 +7819,7 @@ def build_model_prediction_rows(results: list, scan_id: str,
             "model_entry_score", "model_entry_action", "model_entry_reasons",
             "projected_minutes", "role_source", "current_games", "prior_games",
             "distribution_family", "predictive_sd", "historical_minutes_anchor", "role_weight", "role_anchor_sd",
+            "sample_credit", "latest_game_weight", "latest_game_sensitivity",
         )
         signal_snapshot = {
             key: _learning_json_safe(result.get(key))
