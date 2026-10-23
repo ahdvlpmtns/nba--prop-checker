@@ -4130,9 +4130,13 @@ input::placeholder,textarea::placeholder,[data-baseweb="select"] [aria-hidden="t
 .st-key-edge_scan_actions [data-testid="stColumn"]:last-child {flex:0 0 44px !important;min-width:44px !important;}
 .st-key-edge_scan_actions [data-testid="stColumn"]:first-child {flex:1 1 0 !important;min-width:0 !important;}
 .st-key-edge_scan_actions [data-testid="stColumn"]:last-child button {padding:8px !important;background:transparent !important;}
-.recent-chart-header {display:flex;justify-content:space-between;align-items:center;color:var(--text2);font-size:14px;margin-top:12px;}
+.recent-chart-header {display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;color:var(--text2);font-size:14px;margin-top:20px;}
 .recent-chart-header strong {color:var(--text);font-weight:600;}
-.recent-chart-header span {font-size:12px;color:var(--text3);}
+.recent-chart-header span {font-size:14px;color:var(--text2);}
+.recent-chart-legend {display:flex;gap:16px;flex-wrap:wrap;font-size:13px;color:var(--text2);margin-top:8px;}
+.recent-chart-legend span {display:inline-flex;align-items:center;gap:6px;}
+.recent-chart-legend i {display:inline-block;width:7px;height:7px;border-radius:50%;background:#79b8ff;}
+.recent-chart-legend .miss {background:#738194;}.recent-chart-legend .push {background:#d8e0e9;border-radius:0;transform:rotate(45deg);}
 .scan-empty-state {padding:32px 0;border-top:1px solid var(--border);color:var(--text2);font-size:14px;line-height:1.7;}
 .scan-empty-state strong {display:block;color:var(--text);font-size:18px;font-weight:600;}
 .edge-card-v55 {background:var(--bg2) !important;border:1px solid var(--border) !important;box-shadow:none !important;border-radius:8px !important;}
@@ -4356,21 +4360,85 @@ def scanner_candidate_heading(player, market, side, line, score, action, context
     )
 
 
-def render_recent_performance(values, line, side, dates=None, key=None):
+def render_recent_performance(values, line, side, dates=None, key=None,
+                              opponents=None, minutes=None, stat_label="", date_timezone=None):
     """Historical context only; this chart does not feed any model calculation."""
-    values = pd.to_numeric(pd.Series(values).reset_index(drop=True), errors="coerce").head(10)
+    from html import escape
+    import math
+
+    line = float(line)
+    if not math.isfinite(line) or side not in ("Over", "Under"):
+        return
+    values = pd.to_numeric(pd.Series(values, dtype=object).reset_index(drop=True), errors="coerce").head(10)
     frame = pd.DataFrame({"value": values})
-    frame["label"] = pd.to_datetime(pd.Series(dates).reset_index(drop=True).head(10), utc=True, errors="coerce").dt.strftime("%b %d") if dates is not None else [f"Game {i + 1}" for i in range(len(values))]
-    frame = frame.dropna(subset=["value"]).iloc[::-1]
+    frame["label"] = [f"Game {len(values) - i}" for i in range(len(values))]
+    frame["date"] = frame["label"]
+    if dates is not None:
+        parsed = pd.to_datetime(pd.Series(dates, dtype=object).reset_index(drop=True).head(10), utc=True, errors="coerce")
+        if date_timezone:
+            parsed = parsed.dt.tz_convert(date_timezone)
+        frame["label"] = parsed.dt.strftime("%b %d").reindex(frame.index).fillna(frame["label"])
+        frame["date"] = parsed.dt.strftime("%b %d, %Y").reindex(frame.index).fillna(frame["date"])
+    frame["opponent"] = "Opponent unavailable"
+    if opponents is not None:
+        labels = pd.Series(opponents, dtype=object).reset_index(drop=True).head(10).reindex(frame.index)
+        frame["opponent"] = labels.map(lambda v: escape(str(v)) if pd.notna(v) and str(v).strip() else "Opponent unavailable")
+    frame["minutes"] = "Minutes unavailable"
+    if minutes is not None:
+        mins = pd.to_numeric(pd.Series(minutes, dtype=object).reset_index(drop=True).head(10), errors="coerce").reindex(frame.index)
+        frame["minutes"] = mins.map(lambda v: f"{v:g} min" if pd.notna(v) and math.isfinite(v) and v >= 0 else "Minutes unavailable")
+    # Keep metadata on its original row when an unavailable performance is omitted.
+    frame = frame.loc[frame.value.map(lambda v: pd.notna(v) and math.isfinite(v))].iloc[::-1].copy()
     if frame.empty:
         return
     hits = frame.value.gt(line) if side == "Over" else frame.value.lt(line)
-    colors = ["#79b8ff" if hit else "#556170" for hit in hits]
-    st.markdown(f"<div class='recent-chart-header'><strong>Recent performance</strong><span>{int(hits.sum())}/{len(frame)} {side.lower()} {line:g}</span></div>", unsafe_allow_html=True)
-    chart = go.Figure(go.Bar(x=list(range(len(frame))), y=frame.value, marker_color=colors, customdata=frame.label, hovertemplate="%{customdata}: %{y}<extra></extra>"))
-    chart.add_hline(y=line, line_dash="dash", line_color="#d8e0e9", annotation_text=f"Line {line:g}", annotation_position="top left")
-    chart.update_layout(height=220, margin=dict(l=0,r=0,t=24,b=0), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", font=dict(family="IBM Plex Sans, sans-serif",color="#b0b6be",size=12), showlegend=False, bargap=.32, xaxis=dict(tickmode="array",tickvals=list(range(len(frame)))[::2],ticktext=frame.label.iloc[::2],showgrid=False,fixedrange=True), yaxis=dict(gridcolor="#33373d",zeroline=False,rangemode="tozero",fixedrange=True))
-    st.plotly_chart(chart, config={"displayModeBar":False}, use_container_width=True, key=key)
+    pushes = frame.value.eq(line)
+    frame["outcome"] = ["Push" if push else "Hit" if hit else "Miss" for hit, push in zip(hits, pushes)]
+    colors = ["#d8e0e9" if push else "#79b8ff" if hit else "#738194" for hit, push in zip(hits, pushes)]
+    n_hits, n_pushes = int(hits.sum()), int(pushes.sum())
+    n_misses = len(frame) - n_hits - n_pushes
+    push_legend = f"<span><i class='push'></i>{n_pushes} push{'es' if n_pushes != 1 else ''}</span>" if n_pushes else ""
+    st.markdown(
+        f"<div class='recent-chart-header'><strong>Last {len(frame)} game{'s' if len(frame) != 1 else ''}</strong>"
+        f"<span>{frame.value.mean():.1f} average{(' · ' + escape(stat_label)) if stat_label else ''}</span></div>"
+        f"<div class='recent-chart-legend'><span><i></i>{n_hits} hit{'s' if n_hits != 1 else ''}</span>"
+        f"<span><i class='miss'></i>{n_misses} miss{'es' if n_misses != 1 else ''}</span>{push_legend}</div>",
+        unsafe_allow_html=True)
+    positions = list(range(len(frame)))
+    chart = go.Figure()
+    chart.add_trace(go.Scatter(
+        x=[x for i in positions for x in (i, i, None)],
+        y=[y for value in frame.value for y in (0, value, None)],
+        mode="lines", line=dict(color="#3f5366", width=2), hoverinfo="skip"))
+    hover = "<b>%{customdata[0]}</b><br>" + ("%{customdata[1]}<br>" if opponents is not None else "")
+    hover += (escape(stat_label) + ": " if stat_label else "Value: ") + "%{text}"
+    hover += (" · %{customdata[2]}" if minutes is not None else "")
+    hover += f"<br>%{{customdata[3]}} · {side} {line:g}<extra></extra>"
+    chart.add_trace(go.Scatter(
+        x=positions, y=frame.value, mode="markers+text", text=[f"{v:g}" for v in frame.value],
+        textposition="top center", textfont=dict(size=12, color="#d8e0e9"), cliponaxis=False,
+        marker=dict(size=11, color=colors, symbol=["diamond" if p else "circle" for p in pushes],
+                    line=dict(width=2, color="#14181f")),
+        customdata=frame[["date", "opponent", "minutes", "outcome"]].values.tolist(), hovertemplate=hover))
+    chart.add_hline(y=line, line_dash="dash", line_width=1, line_color="#b0becd")
+    chart.add_annotation(x=1, y=1, xref="paper", yref="paper", text=f"Line: {side} {line:g}",
+                         showarrow=False, xanchor="right", yanchor="bottom", font=dict(size=12, color="#d8e0e9"))
+    low, high = min(0, float(frame.value.min()), line), max(0, float(frame.value.max()), line)
+    span = max(high - low, 1)
+    ticks = sorted(set([*positions[::3], positions[-1]]))
+    chart.update_layout(
+        height=250, margin=dict(l=8, r=12, t=28, b=20),
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="IBM Plex Sans, sans-serif", color="#aebac8", size=12),
+        showlegend=False, dragmode=False, hovermode="closest",
+        hoverlabel=dict(bgcolor="#202832", bordercolor="#52677f", font=dict(size=14, color="#f0f4f8")),
+        xaxis=dict(tickmode="array", tickvals=ticks, ticktext=[frame.label.iloc[i] for i in ticks],
+                   showgrid=False, zeroline=False, fixedrange=True, range=[-.55, len(frame) - .45],
+                   automargin=True, tickfont=dict(size=12)),
+        yaxis=dict(gridcolor="rgba(148,163,184,0.12)", zeroline=False, fixedrange=True,
+                   nticks=4, range=[low - (.08 * span if low < 0 else 0), high + .23 * span], automargin=True))
+    st.plotly_chart(chart, config={"displayModeBar":False, "scrollZoom":False, "doubleClick":False},
+                    use_container_width=True, theme=None, key=key)
 
 
 def research_quote_identity(row, sport):
@@ -5101,7 +5169,9 @@ def nfl_render_result(player, result, key):
     st.caption(f"Kickoff {pd.Timestamp(ctx['kickoff']).tz_convert('America/New_York').strftime('%a %b %d, %I:%M %p ET')} · {ctx.get('stadium', '')}")
     if result["push"] > 0.001:
         st.caption(f"Estimated push probability: {result['push']:.1%}")
-    render_recent_performance(result["logs"][NFL_MARKETS[result["market"]]], result["line"], result["side"], result["logs"].kickoff, key=f"{key}_trend")
+    render_recent_performance(result["logs"][NFL_MARKETS[result["market"]]], result["line"], result["side"], result["logs"].kickoff,
+                              key=f"{key}_trend", opponents=result["logs"].opponent_team,
+                              stat_label=result["market"], date_timezone="America/New_York")
     with st.expander("Game logs"):
         st.dataframe(result["logs"][["kickoff", "team", "opponent_team", "attempts", "completions", "passing_yards"]], hide_index=True, use_container_width=True)
     with st.expander("Model debugger"):
@@ -5993,6 +6063,12 @@ def render_cfb_scanner():
 NBA_POINTS_MODEL_VERSION = "nba-points-v2.1-evidence-audit-beta"
 NBAP_ESPN = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba"
 NBAP_LOG_COLUMNS = ["event_id", "date", "season", "phase", "team_id", "opponent_id", "venue", "MIN", "PTS", "FGM", "FGA", "FG3M", "FG3A", "FTM", "FTA", "REB", "AST"]
+# Display-only ESPN team labels; never used to match a forecast or roster.
+NBAP_TEAM_LABELS = {"1":"ATL", "2":"BOS", "3":"NOP", "4":"CHI", "5":"CLE", "6":"DAL",
+                    "7":"DEN", "8":"DET", "9":"GSW", "10":"HOU", "11":"IND", "12":"LAC",
+                    "13":"LAL", "14":"MIA", "15":"MIL", "16":"MIN", "17":"BKN", "18":"NYK",
+                    "19":"ORL", "20":"PHI", "21":"PHX", "22":"POR", "23":"SAC", "24":"SAS",
+                    "25":"OKC", "26":"UTA", "27":"WAS", "28":"TOR", "29":"MEM", "30":"CHA"}
 
 
 def nbap_season(value):
@@ -6620,6 +6696,147 @@ def nbap_debug(result):
     return "\n".join(lines)
 
 
+def nbap_replay_package(result):
+    """Freeze the selected model inputs, not entire provider responses or credentials."""
+    import hashlib
+    import json
+    import math
+
+    def clean(value):
+        if value is None or value is pd.NA or value is pd.NaT:
+            return None
+        if isinstance(value, dict):
+            return {str(k): clean(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [clean(v) for v in value]
+        if isinstance(value, (str, bool, int)):
+            return value
+        if isinstance(value, float):
+            return value if math.isfinite(value) else None
+        if hasattr(value, "isoformat"):
+            return value.isoformat()
+        if hasattr(value, "item"):
+            return clean(value.item())
+        raise ValueError(f"Unsupported NBA replay input: {type(value).__name__}")
+
+    source = result["snapshot"]
+    player_keys = ("name", "label", "espn_id", "team_id", "team", "roster_status")
+    game_keys = ("game_id", "kickoff", "phase", "season", "team_id", "team", "opponent_id", "opponent", "venue", "game_name", "spread", "stadium")
+    inputs = {"version": result["version"], "captured_at": source["captured_at"],
+              "player": {k: source["player"][k] for k in player_keys if k in source["player"]},
+              "game": {k: source["game"][k] for k in game_keys if k in source["game"]},
+              "logs": result["logs"][NBAP_LOG_COLUMNS].to_dict("records"),
+              "role_rows": [{k: row[k] for k in ("event_id", "date", "season", "phase", "team_id", "player_id", "name", "MIN", "PTS", "started") if k in row}
+                            for row in source.get("role_rows", [])],
+              "matchup": {k: source.get("matchup", {})[k] for k in ("factor", "pace_factor", "defense_factor", "own_pace", "opponent_pace", "opponent_def_rating", "current_games", "games", "effective_games", "league_verified", "league_pace", "league_def_rating", "source") if k in source.get("matchup", {})},
+              "availability": {k: source.get("availability", {})[k] for k in ("status", "note", "verified", "fetched_at") if k in source.get("availability", {})},
+              "warnings": source.get("warnings", [])}
+    package = clean({"schema": "nba-pregame-input-v1", "model_version": result["version"], "snapshot": inputs,
+                     "request": {"market": "Points", "line": result["line"], "side": result["side"],
+                                 "line_type": result["line_type"], "line_verified": result["line_verified"]}})
+    digest = hashlib.sha256(json.dumps(package, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+    return {**package, "input_hash": digest}
+
+
+def nbap_replay_archive(result):
+    """Compress repetitive box-score inputs before storing them in the shared ledger."""
+    import base64
+    import json
+    import zlib
+    package = nbap_replay_package(result)
+    raw = json.dumps(package, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    return {"schema": "nba-pregame-archive-v1", "codec": "zlib-base64", "model_version": result["version"],
+            "input_hash": package["input_hash"], "payload": base64.b64encode(zlib.compress(raw)).decode("ascii")}
+
+
+def nbap_replay_prediction(package):
+    """Offline exact-version replay; never refresh data or capture a second prediction."""
+    import hashlib
+    import json
+    if not isinstance(package, dict):
+        raise ValueError("NBA replay package must be a JSON object")
+    if package.get("schema") == "nba-pregame-archive-v1":
+        import base64
+        import zlib
+        if package.get("codec") != "zlib-base64" or not isinstance(package.get("payload"), str) or len(package["payload"]) > 1_000_000:
+            raise ValueError("Unsupported or oversized NBA replay archive")
+        try:
+            decoder = zlib.decompressobj()
+            raw = decoder.decompress(base64.b64decode(package["payload"], validate=True), 512_000)
+            if not decoder.eof or decoder.unused_data:
+                raise ValueError("Oversized or malformed NBA replay archive")
+            expanded = json.loads(raw)
+            if not isinstance(expanded, dict):
+                raise ValueError("NBA replay archive must contain a JSON object")
+            if expanded.get("input_hash") != package.get("input_hash") or expanded.get("model_version") != package.get("model_version"):
+                raise ValueError("NBA replay archive metadata mismatch")
+            package = expanded
+        except (KeyError, TypeError, zlib.error, ValueError) as err:
+            raise ValueError("NBA replay archive could not be verified") from err
+    if package.get("schema") != "nba-pregame-input-v1" or package.get("model_version") != NBA_POINTS_MODEL_VERSION:
+        raise ValueError("Replay needs its original NBA model version and supported snapshot schema")
+    data = {k: v for k, v in package.items() if k != "input_hash"}
+    digest = hashlib.sha256(json.dumps(data, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+    if digest != package.get("input_hash"):
+        raise ValueError("NBA replay snapshot integrity check failed")
+    snapshot = {**package["snapshot"]}
+    snapshot["logs"] = pd.DataFrame(snapshot["logs"], columns=NBAP_LOG_COLUMNS)
+    snapshot["logs"]["date"] = pd.to_datetime(snapshot["logs"]["date"], utc=True, errors="coerce")
+    for column in ("MIN", "PTS", "FGM", "FGA", "FG3M", "FG3A", "FTM", "FTA", "REB", "AST"):
+        snapshot["logs"][column] = pd.to_numeric(snapshot["logs"][column], errors="coerce")
+    snapshot["role_rows"] = [{**row, "date": pd.to_datetime(row["date"], utc=True, errors="coerce")} for row in snapshot["role_rows"]]
+    if not isinstance(package["request"].get("line_verified"), bool):
+        raise ValueError("NBA replay line-verification state is invalid")
+    return nbap_model(snapshot, **package["request"])
+
+
+def nbap_model_interval(result):
+    """Central 80% integer model-outcome interval, not a validated confidence band."""
+    def cdf(k):
+        law = nbap_points_distribution(result["projection"], result["sigma"], k)
+        return law["under"] + law["push"]
+    bounds = []
+    for target in (.10, .90):
+        if cdf(100) < target:
+            bounds.append(None)
+            continue
+        low, high = 0, 100
+        while low < high:
+            mid = (low + high) // 2
+            if cdf(mid) >= target:
+                high = mid
+            else:
+                low = mid + 1
+        bounds.append(low)
+    return bounds
+
+
+def nbap_decision_brief(result):
+    """Explain existing outputs; do not introduce bonuses or a second recommendation."""
+    dimensions = scanner_decision_dimensions(result)
+    cushion = (result["projection"] - result["line"]) * (1 if result["side"] == "Over" else -1)
+    supports = []
+    if cushion > 0:
+        supports.append(f"Projected {result['projection']:.1f} points is {abs(cushion):.1f} points {'above' if result['side'] == 'Over' else 'below'} the {result['line']:g} line.")
+    if result["raw"] >= .5:
+        supports.append(f"{result['hits']}/{result['sample']} retained appearances cleared this side; weighted historical rate {result['raw']:.0%}.")
+    if not supports:
+        supports.append("Projection and historical results do not clearly support the selected side.")
+    risks = list(dict.fromkeys(result["gates"] + result["flags"]))
+    if not risks:
+        risks = ["No additional data gates flagged; game-to-game scoring risk remains."]
+    if not result["line_verified"]:
+        risks = ["Verify the exact full-game line and payout."] + [v for v in risks if "exact full-game line" not in v.lower()]
+    elif dimensions["entry_eligibility"] == "AWAITING PAYOUT":
+        risks = ["Exact entry return is not evaluated; reduced lines are not entry-approved."] + [v for v in risks if "reduced line" not in v.lower() and "exact entry return" not in v.lower()]
+    if len(risks) < 2:
+        risks.append("Model probabilities are not yet prospectively calibrated.")
+    low, high = nbap_model_interval(result)
+    return {**dimensions, "supports": supports[:2], "risks": risks[:2], "cushion": cushion,
+            "interval": f"{low if low is not None else '>100'} - {high if high is not None else '>100'}",
+            "quote_status": "Exact quote verified at snapshot" if result["line_verified"] else "Exact quote unverified"}
+
+
 def nbap_prediction_result(result):
     """Map a shared result to the existing prediction ledger schema."""
     game = result["snapshot"]["game"]
@@ -6638,6 +6855,7 @@ def nbap_prediction_result(result):
             "role_anchor_sd": result.get("role_anchor_sd"),
             "sample_credit": result.get("sample_credit"), "latest_game_weight": result.get("latest_game_weight"),
             "latest_game_sensitivity": result.get("latest_game_sensitivity"),
+            "nba_replay_input": nbap_replay_archive(result),
             "game_id": game["game_id"], "game_date": pd.Timestamp(game["kickoff"]).tz_convert("America/New_York").date().isoformat(),
             "game_datetime": game["kickoff"], "slate_source": "live" if result["line_verified"] else "manual_or_cached",
             "line_verification_required": not result["line_verified"], "odds_type": "goblin" if "reduced" in result["line_type"].lower() else "standard"}
@@ -6679,16 +6897,24 @@ def nbap_save_pick(result):
     if pd.Timestamp(game["kickoff"]) <= pd.Timestamp.now(tz="UTC"):
         st.session_state.parlay_notice = "This game has started. Refresh the NBA board."
         return
+    dimensions = scanner_decision_dimensions(result)
     leg = {"sport": "NBA", "player": result["player"], "player_label": result["label"], "player_id": player["espn_id"],
            "prop": f"Points {result['side']}", "line": result["line"], "side": result["side"], "verdict": result["action"],
            "adj": round(result["probability"] * 100, 1), "confidence": result["confidence"], "line_type": result["line_type"],
-           "game_id": game["game_id"], "game_date": game["kickoff"][:10], "added": datetime.now().strftime("%I:%M %p")}
+           "game_id": game["game_id"], "game_date": pd.Timestamp(game["kickoff"]).tz_convert("America/New_York").date().isoformat(), "added": datetime.now().strftime("%I:%M %p"),
+           "entry_score": result["score"], "entry_action": result["action"], "model_entry_score": result["base_score"],
+           "model_entry_action": result["model_action"], "entry_eligibility": dimensions["entry_eligibility"],
+           "entry_decision_reasons": list(result["gates"]), "eligibility_note": dimensions["eligibility_note"],
+           "line_verified": result["line_verified"], "model_version": result["version"], "snapshot_at": result["snapshot_at"]}
     entry = {"Player": result["player"], "Sport": "NBA", "Prop": "Points", "Matchup": "Points", "Line": f"{result['line']:g} {result['side']}",
              "Opponent": game["opponent"], "Team": game["team"], "Venue": game["venue"], "Avg PTS": round(result["historical_avg"], 1),
              "Hit Rate": f"{result['raw']:.0%}", "Adjusted": f"{result['probability']:.0%}", "Consistency": f"{result['stability']:.0%}",
              "Verdict": result["action"], "Result": "Pending", "Player ID": player["espn_id"], "Event ID": game["game_id"],
              "Game Date": pd.Timestamp(game["kickoff"]).tz_convert("America/New_York").date().isoformat(), "Game Datetime": game["kickoff"],
-             "player_id": player["espn_id"], "event_id": game["game_id"], "market": "Points", "game_datetime": game["kickoff"], "Line Type": result["line_type"]}
+             "player_id": player["espn_id"], "event_id": game["game_id"], "market": "Points", "game_datetime": game["kickoff"], "Line Type": result["line_type"],
+             "Entry Score": str(result["score"]), "Model Score": str(result["base_score"]), "Model Action": result["model_action"],
+             "Entry Eligibility": dimensions["entry_eligibility"], "Line Verified": "yes" if result["line_verified"] else "no",
+             "Model Version": result["version"], "Analysis Snapshot": result["snapshot_at"]}
     add_to_pick_list_and_tracker(leg, entry)
 
 
@@ -6699,37 +6925,57 @@ def nbap_open_result(result):
 
 
 def nbap_render_result(result, key):
+    import html
+    import json
     game = result["snapshot"]["game"]
-    note = " | ".join(result["gates"]) or " | ".join(result["flags"][:2]) or "Current role and matchup evidence loaded."
+    brief = nbap_decision_brief(result)
+    note = brief["risks"][0]
+    st.markdown("""<style>
+    .nba-brief-columns{display:grid;grid-template-columns:1fr 1fr;gap:24px;border-block:1px solid var(--border);padding:18px 0;margin:14px 0}
+    .nba-brief-columns h3{font-size:16px!important;letter-spacing:0!important;margin:0 0 10px!important}
+    .nba-brief-columns p{font-size:14px!important;line-height:1.6;margin:8px 0;overflow-wrap:anywhere;color:var(--text2)}
+    .nba-brief-facts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;padding:12px 0}
+    .nba-brief-facts span{display:block;font-size:14px;color:var(--text2)}
+    .nba-brief-facts strong{display:block;font-size:22px;letter-spacing:0;overflow-wrap:anywhere;color:var(--text)}
+    .nba-brief-quote{font-size:14px;line-height:1.6;padding:8px 0;overflow-wrap:anywhere;color:var(--text2)}
+    @media(max-width:600px){.nba-brief-columns{grid-template-columns:1fr;gap:12px}.nba-brief-facts{grid-template-columns:repeat(2,minmax(0,1fr))}}
+    </style>""", unsafe_allow_html=True)
     render_entry_decision(result["score"], result["action"], f"Points · {result['side']} {result['line']:g}",
                           result["probability"], result["confidence"], result["stability"], note,
                           f"70% model chance + 30% evidence = {result['base_score']}. Model action: {result['model_action']}. Entry gates: {'; '.join(result['gates']) or 'None'}.",
                           history_label=f"Last {result['sample']} regular appearances", history_value=f"{result['hits']}/{result['sample']} hit; weighted {result['raw']:.0%}",
-                          evidence_label="Evidence quality", line_type_label=result["line_type"])
+                          evidence_label="Evidence quality", line_type_label=f"{result['line_type']} · Calibration pending",
+                          decision_context=brief if brief["entry_eligibility"] != "BLOCKED" else None)
+    st.markdown(f"<div class='nba-brief-quote'>{html.escape(brief['quote_status'])} · Model {html.escape(result['model_action'])} · Entry {html.escape(brief['entry_eligibility'].lower())}<br>{html.escape(game['game_name'])} · {html.escape(hub_timestamp(game['kickoff']))}</div>", unsafe_allow_html=True)
+    rows = lambda values: "".join(f"<p>{html.escape(value)}</p>" for value in values)
+    st.markdown(f"<div class='nba-brief-columns'><section><h3>Supporting this direction</h3>{rows(brief['supports'])}</section><section><h3>Risks &amp; checks</h3>{rows(brief['risks'])}</section></div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='nba-brief-facts'><div><span>Projected points</span><strong>{result['projection']:.1f}</strong></div><div><span>Projected minutes</span><strong>{result['projected_minutes']:.1f}</strong></div><div><span>Selected-side cushion</span><strong>{brief['cushion']:+.1f} pts</strong></div></div>", unsafe_allow_html=True)
+    st.caption(f"80% model outcome range: {brief['interval']} points · Coverage not yet validated. Positive cushion favors the selected side; it is not a payout edge.")
+    st.caption(f"Minutes basis: {result['role_source']} · {result['current_games']} current-team regular appearances. Analysis snapshot: {hub_timestamp(result['snapshot_at'])}.")
+    st.caption("NBA model calibration pending · Entry Score is a decision index, not a win probability.")
     left, right = st.columns(2)
-    left.button("Add & Track", icon=":material/bookmark_add:", key=f"{key}_save", on_click=nbap_save_pick, args=(result,), use_container_width=True,
+    left.button("Save candidate & track" if brief["entry_eligibility"] != "ELIGIBLE" else "Add & Track", icon=":material/bookmark_add:", key=f"{key}_save", on_click=nbap_save_pick, args=(result,), use_container_width=True,
                 disabled=any("Availability:" in g or "workload unverified" in g for g in result["gates"]))
     with right.expander("Share pick"):
         st.code(f"{result['player']} · Points {result['side']} {result['line']:g}\n{result['action']} · Entry {result['score']} · Model {result['probability']:.0%} · Evidence {result['confidence']}/100\n{game['game_name']} · {hub_timestamp(game['kickoff'])}\n{result['line_type']}", language=None)
-    a, b, c = st.columns(3)
-    a.metric("Projected points", f"{result['projection']:.1f}")
-    b.metric("Projected minutes", f"{result['projected_minutes']:.1f}")
-    c.metric("Projected edge", f"{result['projection'] - result['line']:+.1f}")
-    st.caption(f"{game['game_name']} · {hub_timestamp(game['kickoff'])} · {game['season'] - 1}-{str(game['season'])[-2:]} regular season")
-    st.caption(f"Analysis snapshot: {hub_timestamp(result['snapshot_at'])} · " + ("Live quote verified" if result["line_verified"] else "Line and payout require verification"))
     with st.expander("Matchup and role"):
         st.write(result["role_source"])
         st.write(f"Availability: {result['snapshot']['availability'].get('status', 'Unknown')} · {result['snapshot']['availability'].get('note', '')}")
         st.write(f"Defense: {result['snapshot']['matchup'].get('games', 0)} game profiles, {result['snapshot']['matchup'].get('current_games', 0)} this season. " + result["snapshot"]["matchup"].get("source", "Unavailable"))
         for flag in result["flags"]:
             st.caption(flag)
-    render_recent_performance(result["logs"].PTS, result["line"], result["side"], result["logs"].date, key=f"{key}_trend")
+    render_recent_performance(
+        result["logs"].PTS, result["line"], result["side"], result["logs"].date, key=f"{key}_trend",
+        opponents=[("vs " if r.venue == "home" else "@ " if r.venue == "away" else "")
+                   + NBAP_TEAM_LABELS.get(str(r.opponent_id), "Opponent unavailable") for r in result["logs"].itertuples()],
+        minutes=result["logs"].MIN, stat_label="Points", date_timezone="America/New_York")
     with st.expander("Game logs"):
         st.dataframe(result["logs"][["date", "season", "team_id", "opponent_id", "MIN", "PTS", "FGA", "FG3A", "FTA"]], use_container_width=True, hide_index=True)
     with st.expander("Model debugger - copy report"):
         report = nbap_debug(result)
         st.code(report, language=None)
         st.download_button("Download debugger", report, "nba-points-debug.txt", key=f"{key}_debug")
+        st.download_button("Download pregame inputs", json.dumps(nbap_replay_package(result), indent=2, allow_nan=False), "nba-pregame-inputs.json", key=f"{key}_inputs", mime="application/json")
 
 
 def render_nbap_analyzer():
@@ -7926,6 +8172,7 @@ def build_model_prediction_rows(results: list, scan_id: str,
             "projected_minutes", "role_source", "current_games", "prior_games",
             "distribution_family", "predictive_sd", "historical_minutes_anchor", "role_weight", "role_anchor_sd",
             "sample_credit", "latest_game_weight", "latest_game_sensitivity",
+            "nba_replay_input",
         )
         signal_snapshot = {
             key: _learning_json_safe(result.get(key))
@@ -9847,6 +10094,7 @@ def render_pick_list_page() -> None:
 
     for i, leg in enumerate(list(legs)):
         verdict = str(leg.get("verdict", "Unrated"))
+        saved_score = ""
         verdict_color = (
             "#36d399" if "Strong" in verdict else
             "#f4c95d" if "Lean" in verdict or "Watch" in verdict else "#aeb9c7"
@@ -9855,6 +10103,9 @@ def render_pick_list_page() -> None:
             verdict = f"Model {leg.get('model_entry_action', 'UNAVAILABLE')} · {str(leg['entry_eligibility']).lower()}"
             if leg["entry_eligibility"] != "ELIGIBLE":
                 verdict_color = "var(--yellow)"
+            if leg.get("entry_score") is not None:
+                score_label = "Pre-payout model score" if leg["entry_eligibility"] == "AWAITING PAYOUT" else "Saved entry score"
+                saved_score = f"<div style='font-size:0.75rem;margin-top:6px;'>{score_label}: {_html.escape(str(leg['entry_score']))} / 100 · {_html.escape(str(leg.get('entry_action', leg.get('verdict', ''))))}</div>"
         player = _html.escape(str(leg.get("player", "Unknown player")))
         prop = _html.escape(str(leg.get("prop", "Prop")))
         sport = _html.escape(str(leg.get("sport", "")))
@@ -9873,6 +10124,7 @@ def render_pick_list_page() -> None:
             f"<div style='color:{verdict_color};font-size:0.64rem;font-weight:800;'>{_html.escape(verdict)}</div>"
             f"<div style='color:var(--text3);font-size:0.54rem;margin-top:4px;'>"
             f"Hit {leg.get('adj', '—')}% · Evidence {leg.get('confidence', '—')}</div>"
+            f"{saved_score}"
             f"</div></div></div>",
             unsafe_allow_html=True,
         )
@@ -12050,6 +12302,9 @@ def _tracker_metadata_value(entry: dict, field: str) -> str:
     token = {
         "Sport": "sport", "Game Date": "date", "Event ID": "event",
         "Player ID": "player_id", "Team": "team", "Game Datetime": "kickoff",
+        "Entry Score": "nba_entry_score", "Model Score": "nba_model_score", "Model Action": "nba_model_action",
+        "Entry Eligibility": "nba_eligibility", "Line Verified": "nba_line_verified", "Line Type": "nba_line_type",
+        "Model Version": "nba_model_version", "Analysis Snapshot": "nba_snapshot",
     }.get(field)
     if not token:
         return ""
@@ -12058,6 +12313,9 @@ def _tracker_metadata_value(entry: dict, field: str) -> str:
         str(entry.get("Venue", entry.get("venue", "")) or ""),
         flags=re.IGNORECASE,
     )
+    if match and token.startswith("nba_"):
+        from urllib.parse import unquote
+        return unquote(match.group(1).strip())
     return match.group(1).strip() if match else ""
 
 
@@ -12078,12 +12336,20 @@ def _tracker_durable_venue(entry: dict) -> str:
         ("Sport", "sport"), ("Game Date", "date"), ("Event ID", "event"),
         ("Player ID", "player_id"), ("Team", "team"),
         ("Game Datetime", "kickoff"),
+        ("Entry Score", "nba_entry_score"), ("Model Score", "nba_model_score"), ("Model Action", "nba_model_action"),
+        ("Entry Eligibility", "nba_eligibility"), ("Line Verified", "nba_line_verified"), ("Line Type", "nba_line_type"),
+        ("Model Version", "nba_model_version"), ("Analysis Snapshot", "nba_snapshot"),
     ):
+        if token.startswith("nba_") and str(entry.get("Sport", "")).upper() != "NBA":
+            continue
         value = str(entry.get(field, "") or "").strip()
         if value and not re.search(
             rf"(?:^|[·|])\s*{re.escape(token)}\s*:", venue,
             flags=re.IGNORECASE,
         ):
+            if token.startswith("nba_"):
+                from urllib.parse import quote
+                value = quote(value, safe="")
             metadata.append(f"{token}:{value}")
     return " · ".join(metadata + ([venue] if venue else []))
 
@@ -12115,7 +12381,8 @@ def load_tracker_from_supabase(session_id: str) -> list:
                 "Result":      r.get("result", "Pending"),
             }
             persisted["Sport"] = _tracker_sport(persisted)
-            for field in ("Game Date", "Event ID", "Player ID", "Team", "Game Datetime"):
+            for field in ("Game Date", "Event ID", "Player ID", "Team", "Game Datetime", "Entry Score", "Model Score", "Model Action",
+                          "Entry Eligibility", "Line Verified", "Line Type", "Model Version", "Analysis Snapshot"):
                 value = _tracker_metadata_value(persisted, field)
                 if value:
                     persisted[field] = value
@@ -22195,7 +22462,8 @@ if st.session_state.active_sport == "mlb":
                                 f"{_prev_starts} from prior season (marked ✦) — early season, small sample</div>")
             # ── Minimized game log — collapsed by default ─────────────
             st.markdown("<div id='mlb-recent' class='mlb-section-anchor'></div>", unsafe_allow_html=True)
-            render_recent_performance(mlb_logs[_stat], mlb_line, mlb_side, mlb_logs["DATE"], key="mlb_pitcher_trend")
+            render_recent_performance(mlb_logs[_stat], mlb_line, mlb_side, mlb_logs["DATE"],
+                                      key="mlb_pitcher_trend", stat_label=_stat)
             _hit_count  = _d["HIT"].eq("✅").sum() if "HIT" in _d.columns else 0
             _push_count = _d["HIT"].eq("↔").sum() if "HIT" in _d.columns else 0
             _total_g    = len(_d)
