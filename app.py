@@ -4137,6 +4137,16 @@ input::placeholder,textarea::placeholder,[data-baseweb="select"] [aria-hidden="t
 .recent-chart-legend span {display:inline-flex;align-items:center;gap:6px;}
 .recent-chart-legend i {display:inline-block;width:7px;height:7px;border-radius:50%;background:#79b8ff;}
 .recent-chart-legend .miss {background:#738194;}.recent-chart-legend .push {background:#d8e0e9;border-radius:0;transform:rotate(45deg);}
+.nba-input-status {margin:16px 0;border-block:1px solid var(--border);padding:16px 0;}
+.nba-input-title {display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;font-size:14px;color:var(--text2);}
+.nba-input-title strong {color:var(--text);font-size:16px;}
+.nba-input-progress {height:3px;background:var(--bg3);margin:12px 0;overflow:hidden;}
+.nba-input-progress div {height:100%;background:var(--accent);}
+.nba-input-row {display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 12px;padding:10px 0;border-bottom:1px solid var(--border);font-size:14px;}
+.nba-input-row:last-child {border-bottom:0;}.nba-input-row strong {font-weight:500;overflow-wrap:anywhere;color:var(--text);}
+.nba-input-row small {grid-column:1/-1;color:var(--text2);font-size:13px;line-height:1.5;overflow-wrap:anywhere;}
+.nba-input-state {color:var(--text2);font-size:13px;}.nba-input-state.ready {color:#36d399;}
+.nba-input-state.loading {color:var(--accent);}.nba-input-state.attention {color:#ff9b9b;}
 .scan-empty-state {padding:32px 0;border-top:1px solid var(--border);color:var(--text2);font-size:14px;line-height:1.7;}
 .scan-empty-state strong {display:block;color:var(--text);font-size:18px;font-weight:600;}
 .edge-card-v55 {background:var(--bg2) !important;border:1px solid var(--border) !important;box-shadow:none !important;border-radius:8px !important;}
@@ -6060,7 +6070,7 @@ def render_cfb_scanner():
         st.download_button("Download debugger", report, "cfb-scanner-debug.txt", key="cfb_debug_download")
 
 
-NBA_POINTS_MODEL_VERSION = "nba-points-v2.1-evidence-audit-beta"
+NBA_POINTS_MODEL_VERSION = "nba-points-v2.2-source-audit-beta"
 NBAP_ESPN = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba"
 NBAP_LOG_COLUMNS = ["event_id", "date", "season", "phase", "team_id", "opponent_id", "venue", "MIN", "PTS", "FGM", "FGA", "FG3M", "FG3A", "FTM", "FTA", "REB", "AST"]
 # Display-only ESPN team labels; never used to match a forecast or roster.
@@ -6228,9 +6238,64 @@ def nbap_parse_logs(payload, season, phases=(2,)):
 @st.cache_data(ttl=900, show_spinner=False)
 def nbap_player_logs(player_id, season, date_key):
     payload = nbap_json(f"https://site.web.api.espn.com/apis/common/v3/sports/basketball/nba/athletes/{player_id}/gamelog?season={season}")
-    if "seasonTypes" not in payload:
-        raise ValueError("Player game-log response incomplete")
-    return nbap_parse_logs(payload, season)
+    if isinstance(payload.get("seasonTypes"), list):
+        parsed = nbap_parse_logs(payload, season)
+        if not parsed.empty:
+            return parsed
+    # A filters-only response can be an absent season, not a transport failure.
+    career = nbap_career_history(player_id, date_key)
+    reason = nbap_empty_season_reason(career, season)
+    if reason:
+        frame = pd.DataFrame(columns=NBAP_LOG_COLUMNS)
+        frame.attrs["empty_season_reason"] = reason
+        return frame
+    err = ValueError("Player game-log response incomplete")
+    err.source_detail = f"{season - 1}-{str(season)[-2:]} game logs unavailable; no independently supported empty-season record"
+    raise err
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def nbap_career_history(player_id, date_key):
+    return nbap_json(f"https://site.web.api.espn.com/apis/common/v3/sports/basketball/nba/athletes/{player_id}/stats?seasontype=2")
+
+
+def nbap_empty_season_reason(payload, season):
+    """Only a structured regular-season career table can explain a missing season."""
+    import math
+    if not isinstance(payload, dict):
+        return None
+    filters = payload.get("filters", [])
+    categories = payload.get("categories", [])
+    if not isinstance(filters, list) or not isinstance(categories, list):
+        return None
+    if not any(isinstance(f, dict) and f.get("name") == "seasontype" and str(f.get("value")) == "2" for f in filters):
+        return None
+    table = next((c for c in categories if isinstance(c, dict) and c.get("name") == "averages" and isinstance(c.get("names"), list) and "gamesPlayed" in c["names"]), None)
+    if not table or not isinstance(table.get("statistics"), list) or not table["statistics"]:
+        return None
+    seasons = {}
+    for row in table["statistics"]:
+        if not isinstance(row, dict) or not isinstance(row.get("season"), dict) or not isinstance(row.get("stats"), list):
+            return None
+        year = nfl_number(row.get("season", {}).get("year"))
+        values = dict(zip(table["names"], row.get("stats", [])))
+        games = nfl_number(values.get("gamesPlayed"))
+        if year is None or games is None or not math.isfinite(year) or not math.isfinite(games) or year != int(year) or games < 0 or games != int(games):
+            return None
+        seasons.setdefault(int(year), []).append(int(games))
+    if not isinstance(table.get("totals"), list):
+        return None
+    totals = dict(zip(table["names"], table.get("totals", [])))
+    total_games = nfl_number(totals.get("gamesPlayed"))
+    if total_games is None or total_games != sum(sum(v) for v in seasons.values()):
+        return None
+    if season in seasons:
+        if all(g == 0 for g in seasons[season]):
+            return f"ESPN regular-season career table explicitly records 0 appearances in {season - 1}-{str(season)[-2:]}"
+        return None
+    if season < max(seasons):
+        return f"No recorded {season - 1}-{str(season)[-2:]} appearances in ESPN's regular-season career table; later seasons present"
+    return None
 
 
 def nbap_parse_box(payload):
@@ -6340,23 +6405,90 @@ def nbap_availability(player, date_key):
 
 @st.cache_data(ttl=600, show_spinner=False)
 def nbap_league_context(season, date_key):
+    import math
+    errors = []
     try:
         response = requests.get("https://stats.nba.com/stats/leaguedashteamstats",
                                 params={"Season": f"{season - 1}-{str(season)[-2:]}", "SeasonType": "Regular Season", "MeasureType": "Advanced", "PerMode": "PerGame", "LeagueID": "00"},
-                                headers={"User-Agent": "Mozilla/5.0", "Referer": "https://www.nba.com/", "Accept": "application/json", "x-nba-stats-origin": "stats", "x-nba-stats-token": "true"}, timeout=8)
+                                headers={"User-Agent": "Mozilla/5.0", "Referer": "https://www.nba.com/", "Accept": "application/json", "x-nba-stats-origin": "stats", "x-nba-stats-token": "true"}, timeout=(2, 4))
         response.raise_for_status()
-        result = response.json().get("resultSets", [{}])[0]
+        payload = response.json()
+        result = payload.get("resultSets", [{}])[0]
         rows = [dict(zip(result.get("headers", []), r)) for r in result.get("rowSet", [])]
-        rows = [r for r in rows if nfl_number(r.get("GP"), 0) > 0 and nfl_number(r.get("PACE")) and nfl_number(r.get("DEF_RATING"))]
-        if len(rows) >= 20:
+        params = payload.get("parameters", {})
+        if params.get("Season", f"{season - 1}-{str(season)[-2:]}") != f"{season - 1}-{str(season)[-2:]}" or params.get("SeasonType", "Regular Season") != "Regular Season":
+            raise ValueError("NBA Stats season mismatch")
+        rows = [r for r in rows if all(nfl_number(r.get(k)) is not None and math.isfinite(float(r[k])) and float(r[k]) > 0 for k in ("GP", "PACE", "DEF_RATING"))
+                and 60 <= float(r["PACE"]) <= 160 and 50 <= float(r["DEF_RATING"]) <= 200]
+        if len(rows) == 30 and len({r.get("TEAM_ID") for r in rows}) == 30:
             games = sum(float(r["GP"]) for r in rows)
             return {"pace": sum(float(r["PACE"]) * float(r["GP"]) for r in rows) / games,
                     "def_rating": sum(float(r["DEF_RATING"]) * float(r["GP"]) for r in rows) / games,
-                    "verified": True, "teams": len(rows), "source": "NBA Stats current-season Advanced team aggregates; GP-weighted league reference"}
-    except Exception:
-        pass
-    return {"pace": 100.0, "def_rating": 114.0, "verified": False, "teams": 0,
-            "source": "League aggregates unavailable: weak heuristic references 100 pace / 114 defensive rating"}
+                    "verified": True, "usable": True, "method":"nba_advanced", "teams": len(rows), "checked_at":pd.Timestamp.now(tz="UTC").isoformat(),
+                    "source": "NBA Stats current-season Advanced team aggregates; 30 teams; GP-weighted league reference"}
+        errors.append("NBA Stats: incomplete or invalid 30-team reference")
+    except Exception as err:
+        errors.append(f"NBA Stats: {type(err).__name__}")
+    return {**nbap_espn_league_context(season, date_key), "primary_errors":errors}
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def nbap_team_totals(team_id, season, date_key):
+    payload = nbap_json(f"{NBAP_ESPN}/teams/{team_id}/statistics?season={season}&seasontype=2")
+    return nbap_parse_team_totals(payload, team_id, season)
+
+
+def nbap_parse_team_totals(payload, team_id, season):
+    import math
+    if str(payload.get("team", {}).get("id")) != str(team_id) or payload.get("status") != "success":
+        raise ValueError("League backup team identity unavailable")
+    for key in ("season", "requestedSeason"):
+        meta = payload.get(key, {})
+        if meta.get("year") != season or meta.get("type") != 2:
+            raise ValueError("League backup season or phase mismatch")
+    categories = payload.get("results", {}).get("stats", {}).get("categories", [])
+    stats = {s.get("name"):s.get("value") for c in categories for s in c.get("stats", [])}
+    keys = ("gamesPlayed", "fieldGoalsAttempted", "freeThrowsAttempted", "offensiveRebounds", "turnovers", "points")
+    vals = {k:nfl_number(stats.get(k)) for k in keys}
+    if any(v is None or not math.isfinite(v) or v < 0 or v != int(v) for v in vals.values()) or vals["gamesPlayed"] <= 0:
+        raise ValueError("League backup totals incomplete")
+    possessions = vals["fieldGoalsAttempted"] + .44 * vals["freeThrowsAttempted"] - vals["offensiveRebounds"] + vals["turnovers"]
+    if not 60 <= possessions / vals["gamesPlayed"] <= 160 or vals["points"] <= 0:
+        raise ValueError("League backup possessions outside validation range")
+    return {"team_id":str(team_id), "games":int(vals["gamesPlayed"]), "possessions":possessions, "points":vals["points"]}
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def nbap_espn_league_context(season, date_key):
+    import concurrent.futures
+    import threading
+    stopped = threading.Event()
+    def fetch(tid):
+        if stopped.is_set():
+            return None, f"ESPN team {tid}: not requested after access/rate limit", str(tid)
+        try:
+            return nbap_team_totals(str(tid), season, date_key), "", str(tid)
+        except Exception as err:
+            if getattr(getattr(err, "response", None), "status_code", None) in (403, 429):
+                stopped.set()
+            return None, f"ESPN team {tid}: {type(err).__name__}", str(tid)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
+        batches = list(pool.map(fetch, range(1, 31)))
+    rows = [r for r, _, _ in batches if r is not None]
+    errors = [err for _, err, _ in batches if err]
+    failed = [tid for row, _, tid in batches if row is None]
+    games = sum(r["games"] for r in rows)
+    usable = len(rows) == 30 and len({r["team_id"] for r in rows}) == 30 and games % 2 == 0
+    if not usable and not errors:
+        errors.append("ESPN league totals incomplete or unbalanced; no directional reference")
+    possessions = sum(r["possessions"] for r in rows)
+    return {"pace":possessions / games if usable else 100.0,
+            "def_rating":100 * sum(r["points"] for r in rows) / possessions if usable else 114.0,
+            "verified":False, "usable":usable, "teams":len(rows), "team_games":games,
+            "method":"espn_season_estimate" if usable else "unavailable", "failed_team_ids":failed,
+            "checked_at":pd.Timestamp.now(tz="UTC").isoformat(), "backup_errors":errors,
+            "source": "ESPN 30-team current-season totals; estimated possessions/game (FGA + 0.44 FTA - ORB + TO); not overtime-normalized or NBA Advanced pace"
+                      if usable else f"League reference unavailable ({len(rows)}/30 teams); neutral matchup multiplier"}
 
 
 def nbap_matchup(own_history, opponent_history, season, cutoff, league=None):
@@ -6377,30 +6509,178 @@ def nbap_matchup(own_history, opponent_history, season, cutoff, league=None):
     pace_reliability = min(1, (own[2] + opp[2] + .25 * (own[3] + opp[3] - own[2] - opp[2])) / 12)
     pace_factor = 1 + (pace_factor - 1) * pace_reliability
     factor = float(np.clip(pace_factor * defense_factor, .94, 1.06))
+    usable = bool(league.get("usable", league.get("verified", False)))
+    if not usable:
+        factor = pace_factor = defense_factor = 1.0
     return {"factor": factor, "pace_factor": pace_factor, "defense_factor": defense_factor, "own_pace": own[0], "opponent_pace": opp[0],
             "opponent_def_rating": opp[1], "current_games": opp[2], "games": opp[3], "effective_games": opp[2] + .25 * (opp[3] - opp[2]),
             "league_verified": league["verified"], "league_pace": league["pace"], "league_def_rating": league["def_rating"],
+            "league_usable":usable, "league_method":league.get("method", "nba_advanced" if league["verified"] else "unavailable"),
+            "league_teams":league.get("teams", 0), "reference_policy":"data_reference" if usable else "neutral_without_reference",
             "source": "ESPN final box scores; estimated possessions. " + league["source"]}
 
 
-@st.cache_data(ttl=600, show_spinner=False)
-def nbap_prepare(player, game, date_key):
+NBAP_SOURCE_LABELS = {"current":"Current-season game logs", "prior":"Prior-season game logs",
+                      "own":"Team role and scoring context", "opp":"Opponent defense and pace",
+                      "availability":"Player availability", "league":"League reference"}
+NBAP_LOAD_MAX_AGE_SECONDS = 600
+
+
+def nbap_source_jobs(player, game, date_key):
+    return {"current": (nbap_player_logs, (player["espn_id"], game["season"], date_key)),
+            "prior": (nbap_player_logs, (player["espn_id"], game["season"] - 1, date_key)),
+            "own": (nbap_team_history, (game["team_id"], game["season"], date_key)),
+            "opp": (nbap_team_history, (game["opponent_id"], game["season"], date_key)),
+            "availability": (nbap_availability, (player, date_key)),
+            "league": (nbap_league_context, (game["season"], date_key))}
+
+
+def nbap_source_identity(player, game, date_key):
+    import hashlib
+    import json
+    return hashlib.sha256(json.dumps([NBA_POINTS_MODEL_VERSION, player, game, date_key],
+                                    sort_keys=True, default=str).encode()).hexdigest()
+
+
+def nbap_load_is_current(bundle, player, game, date_key):
+    if not bundle or bundle.get("identity") != nbap_source_identity(player, game, date_key):
+        return False
+    created = pd.to_datetime(bundle.get("created_at"), utc=True, errors="coerce")
+    return pd.notna(created) and 0 <= (pd.Timestamp.now(tz="UTC") - created).total_seconds() < NBAP_LOAD_MAX_AGE_SECONDS
+
+
+def nbap_source_status(key, value):
+    """A returned fallback is not equivalent to verified source coverage."""
+    if key in ("current", "prior"):
+        if not isinstance(value, pd.DataFrame) or not set(NBAP_LOG_COLUMNS).issubset(value.columns):
+            raise ValueError("Invalid game-log response")
+        return {"state": "ready" if len(value) else "empty", "detail": value.attrs.get("empty_season_reason", f"{len(value)} regular-season appearances"), "retryable": False}
+    if not isinstance(value, dict):
+        raise ValueError("Invalid source response")
+    if key in ("own", "opp"):
+        if not isinstance(value.get("players"), list) or not isinstance(value.get("teams"), list) or not isinstance(value.get("warnings", []), list):
+            raise ValueError("Invalid team-context response")
+        warnings = value.get("warnings", [])
+        count = len({r.get("event_id") for r in value["teams"]})
+        state = "partial" if warnings else "ready" if value["teams"] or value["players"] else "empty"
+        detail = f"{count} team game profiles · {len(value['players'])} player role rows"
+        if warnings:
+            detail += f" · {len(warnings)} source warning(s)"
+        return {"state": state, "detail": detail, "retryable": bool(warnings)}
+    if key == "availability":
+        if not value.get("status"):
+            raise ValueError("Invalid availability response")
+        ready = value.get("verified") is True and value["status"] != "Unknown"
+        return {"state": "ready" if ready else "unavailable", "detail": str(value.get("note") or value["status"]), "retryable": not ready}
+    if key == "league":
+        if not all(nfl_number(value.get(k), 0) > 0 for k in ("pace", "def_rating")):
+            raise ValueError("Invalid league reference")
+        ready = value.get("verified") is True
+        return {"state": "ready" if ready else "partial" if value.get("usable") else "fallback", "detail": str(value.get("source") or "League reference"), "retryable": not ready}
+    raise ValueError("Unknown NBA input source")
+
+
+def nbap_clear_source(key, player, game, date_key, previous=None):
+    """Invalidate only this input and its failed upstream responses, never all caches."""
+    import re
+    jobs = nbap_source_jobs(player, game, date_key)
+    if key not in jobs:
+        raise ValueError("Unknown NBA input source")
+    def clear(fn, *args):
+        if callable(getattr(fn, "clear", None)):
+            fn.clear(*args)
+    fn, args = jobs[key]
+    clear(fn, *args)
+    if key in ("current", "prior"):
+        clear(nbap_json, f"https://site.web.api.espn.com/apis/common/v3/sports/basketball/nba/athletes/{args[0]}/gamelog?season={args[1]}")
+        clear(nbap_career_history, args[0], date_key)
+        clear(nbap_json, f"https://site.web.api.espn.com/apis/common/v3/sports/basketball/nba/athletes/{args[0]}/stats?seasontype=2")
+    elif key == "availability":
+        clear(nbap_json, f"{NBAP_ESPN}/injuries")
+    elif key in ("own", "opp"):
+        for year, phase in ((game["season"], 2), (game["season"] - 1, 2), (game["season"], 1)):
+            clear(nbap_json, f"{NBAP_ESPN}/teams/{args[0]}/schedule?season={year}&seasontype={phase}")
+        for warning in (previous or {}).get("warnings", []):
+            match = re.fullmatch(r"Box (\d+): \w+", str(warning))
+            if match:
+                clear(nbap_box, match[1])
+                clear(nbap_json, f"{NBAP_ESPN}/summary?event={match[1]}")
+    elif key == "league":
+        clear(nbap_espn_league_context, game["season"], date_key)
+        for tid in (previous or {}).get("failed_team_ids", []):
+            if str(tid) in NBAP_TEAM_LABELS:
+                clear(nbap_team_totals, str(tid), game["season"], date_key)
+                clear(nbap_json, f"{NBAP_ESPN}/teams/{tid}/statistics?season={game['season']}&seasontype=2")
+    clear(nbap_prepare, player, game, date_key)
+
+
+def nbap_load_sources(player, game, date_key, previous=None, retry_keys=None, on_update=None):
+    """Concurrent source checks; only the calling thread reports progress or owns state."""
     import concurrent.futures
+    import copy
+    import time
     if player["team_id"] != game["team_id"]:
         raise ValueError("Player roster and scheduled team disagree")
+    jobs = nbap_source_jobs(player, game, date_key)
+    if previous is not None:
+        if not nbap_load_is_current(previous, player, game, date_key):
+            raise ValueError("Source session expired or selection changed. Analyze again to recheck all inputs.")
+        bundle = copy.deepcopy(previous)
+        keys = list(dict.fromkeys(retry_keys if retry_keys is not None else [k for k, row in bundle["sources"].items() if row["retryable"]]))
+        if any(k not in jobs or not bundle["sources"][k]["retryable"] for k in keys):
+            raise ValueError("Only missing or partial sources can be retried")
+    else:
+        if retry_keys is not None:
+            raise ValueError("A previous source session is required for retry")
+        bundle = {"identity": nbap_source_identity(player, game, date_key), "created_at": pd.Timestamp.now(tz="UTC").isoformat(),
+                  "request": {"player":player.get("name", player["espn_id"]), "player_id":player["espn_id"],
+                              "game_id":game["game_id"], "team_id":game["team_id"], "opponent_id":game["opponent_id"],
+                              "kickoff":game["kickoff"], "season":game["season"], "date_key":date_key},
+                  "loaded": {}, "sources": {k: {"state":"queued", "detail":"Waiting", "retryable":True, "attempts":0} for k in jobs}}
+        keys = list(jobs)
+    def notify():
+        if on_update:
+            on_update(copy.deepcopy(bundle))
+    notify()
+    started = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
-        jobs = {"current": pool.submit(nbap_player_logs, player["espn_id"], game["season"], date_key),
-                "prior": pool.submit(nbap_player_logs, player["espn_id"], game["season"] - 1, date_key),
-                "own": pool.submit(nbap_team_history, game["team_id"], game["season"], date_key),
-                "opp": pool.submit(nbap_team_history, game["opponent_id"], game["season"], date_key),
-                "availability": pool.submit(nbap_availability, player, date_key),
-                "league": pool.submit(nbap_league_context, game["season"], date_key)}
-        loaded, warnings = {}, []
-        for key, future in jobs.items():
+        futures = {}
+        for key in keys:
+            row = bundle["sources"][key]
+            row.update(state="loading", detail="Checking source", attempts=row["attempts"] + 1)
+            started[key] = time.monotonic()
+            fn, args = jobs[key]
+            def fetch(k=key, source=fn, arguments=args):
+                if previous is not None:
+                    nbap_clear_source(k, player, game, date_key, bundle["loaded"].get(k))
+                return source(*arguments)
+            futures[pool.submit(fetch)] = key
+        notify()
+        for future in concurrent.futures.as_completed(futures):
+            key = futures[future]
+            row = bundle["sources"][key]
             try:
-                loaded[key] = future.result()
+                value = future.result()
+                status = nbap_source_status(key, value)
+                bundle["loaded"][key] = value
+                row.update(status)
+                row.pop("error", None)
+                row.pop("error_detail", None)
             except Exception as err:
-                warnings.append(f"{key}: {type(err).__name__}")
+                retained = key in bundle["loaded"]
+                detail = str(getattr(err, "source_detail", ""))
+                row.update(state="partial" if retained else "failed", retryable=True, error=type(err).__name__,
+                           detail=(detail or f"Source request failed ({type(err).__name__})") + (" · earlier response retained" if retained else ""))
+                if detail:
+                    row["error_detail"] = detail
+            row.update(checked_at=pd.Timestamp.now(tz="UTC").isoformat(), elapsed=round(time.monotonic() - started[key], 2))
+            notify()
+    return bundle
+
+
+def nbap_snapshot_from_sources(player, game, bundle):
+    loaded = bundle["loaded"]
+    warnings = [f"{key}: {row.get('error_detail', row['error'])}" for key, row in bundle["sources"].items() if row.get("error")]
     frames = [loaded[k] for k in ("current", "prior") if k in loaded and not loaded[k].empty]
     logs = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=NBAP_LOG_COLUMNS)
     cutoff = pd.Timestamp(game["kickoff"])
@@ -6408,9 +6688,84 @@ def nbap_prepare(player, game, date_key):
     opp = {**loaded.get("opp", {}), "team_id": game["opponent_id"]}
     role_rows = [r for r in own.get("players", []) if r["player_id"] == player["espn_id"] and r["team_id"] == player["team_id"] and r["season"] == game["season"] and r["date"] < cutoff]
     warnings += own.get("warnings", []) + opp.get("warnings", [])
+    source_audit = {k:{field:row[field] for field in ("state", "detail", "checked_at", "attempts") if field in row} for k, row in bundle["sources"].items()}
+    source_audit["league_reference"] = {k:loaded.get("league", {})[k] for k in ("method", "usable", "verified", "teams", "team_games", "checked_at", "primary_errors", "backup_errors") if k in loaded.get("league", {})}
     return {"version": NBA_POINTS_MODEL_VERSION, "captured_at": pd.Timestamp.now(tz="UTC").isoformat(), "player": player, "game": game,
             "logs": logs, "role_rows": role_rows, "availability": loaded.get("availability", {"status": "Unknown", "verified": False, "note": "Feed unavailable"}),
-            "matchup": nbap_matchup(own, opp, game["season"], cutoff, loaded.get("league")), "warnings": warnings}
+            "matchup": nbap_matchup(own, opp, game["season"], cutoff, loaded.get("league")), "warnings": warnings, "source_audit":source_audit}
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def nbap_prepare(player, game, date_key):
+    return nbap_snapshot_from_sources(player, game, nbap_load_sources(player, game, date_key))
+
+
+def nbap_loading_html(bundle):
+    from html import escape
+    labels = {"queued":"Queued", "loading":"Loading", "ready":"Ready", "empty":"No games", "partial":"Partial",
+              "fallback":"Fallback", "unavailable":"Unavailable", "failed":"Failed", "interrupted":"Interrupted"}
+    rows = bundle["sources"]
+    checked = sum(r["state"] not in ("queued", "loading") for r in rows.values())
+    issues = sum(r["retryable"] and r["state"] not in ("queued", "loading") for r in rows.values())
+    header = f"{checked}/{len(rows)} checked" + (f" · {issues} need attention" if issues else "")
+    parts = [f"<div class='nba-input-status'><div class='nba-input-title'><strong>Analysis inputs</strong><span>{header}</span></div>"
+             f"<div class='nba-input-progress' role='progressbar' aria-label='NBA source checks' aria-valuemin='0' aria-valuemax='{len(rows)}' aria-valuenow='{checked}'>"
+             f"<div style='width:{100 * checked / max(1, len(rows)):.0f}%'></div></div>"]
+    for key, row in rows.items():
+        state = row["state"]
+        tone = "ready" if state == "ready" else "loading" if state in ("queued", "loading") else "attention" if row["retryable"] else ""
+        stamp = pd.to_datetime(row.get("checked_at"), utc=True, errors="coerce")
+        timing = f" · {row['elapsed']:g}s · checked {stamp.strftime('%H:%M UTC')}" if pd.notna(stamp) else ""
+        attempt = f" · attempt {row['attempts']}" if row["attempts"] > 1 else ""
+        parts.append(f"<div class='nba-input-row'><strong>{escape(NBAP_SOURCE_LABELS[key])}</strong>"
+                     f"<span class='nba-input-state {tone}'>{labels[state]}</span>"
+                     f"<small>{escape(row['detail'] + timing + attempt)}</small></div>")
+    return "".join(parts) + "</div>"
+
+
+def nbap_loading_debug(bundle):
+    lines = ["PROPIQ NBA INPUT LOADING REPORT", NBA_POINTS_MODEL_VERSION,
+             f"Session started UTC: {bundle['created_at']}"]
+    lines += [f"{key}: {value}" for key, value in bundle.get("request", {}).items()]
+    lines += ["Times include cache hits; Ready means response coverage, not a calibrated prediction.",
+              "Source | Status | Attempts | Seconds | Checked UTC | Detail"]
+    for key, row in bundle["sources"].items():
+        lines.append(f"{NBAP_SOURCE_LABELS[key]} | {row['state']} | {row['attempts']} | {row.get('elapsed', '-')} | {row.get('checked_at', '-')} | {row['detail']}")
+    warnings = [f"{NBAP_SOURCE_LABELS[key]}: {warning}" for key in ("own", "opp")
+                for warning in bundle["loaded"].get(key, {}).get("warnings", [])]
+    if warnings:
+        lines += ["", "UPSTREAM COVERAGE WARNINGS", *warnings]
+    league = bundle["loaded"].get("league", {})
+    lines += [f"League source: {warning}" for warning in league.get("primary_errors", []) + league.get("backup_errors", [])]
+    return "\n".join(lines)
+
+
+def nbap_recover_sources(bundle):
+    import copy
+    recovered = copy.deepcopy(bundle)
+    for row in recovered["sources"].values():
+        if row["state"] in ("queued", "loading"):
+            row.update(state="interrupted", detail="Previous check interrupted", retryable=True)
+    return recovered
+
+
+def nbap_render_loading(bundle, key="nbap_inputs"):
+    retryable = [k for k, row in bundle["sources"].items() if row["retryable"]]
+    retry_keys = []
+    label = f"Input checks · {len(bundle['sources']) - len(retryable)}/{len(bundle['sources'])} without source errors"
+    with st.expander(label, expanded=bool(retryable)):
+        st.markdown(nbap_loading_html(bundle), unsafe_allow_html=True)
+        st.caption("Response times include cache hits. Source coverage is separate from model probability and evidence quality.")
+        if retryable:
+            choice = st.selectbox("Retry source", ["all", *retryable], key=f"{key}_choice_{bundle['identity'][:12]}",
+                                  format_func=lambda value: "All missing / partial sources" if value == "all" else NBAP_SOURCE_LABELS[value])
+            if st.button("Retry", icon=":material/refresh:", key=f"{key}_retry"):
+                retry_keys = retryable if choice == "all" else [choice]
+    with st.expander("Input loading report · copy"):
+        report = nbap_loading_debug(bundle)
+        st.code(report, language=None)
+        st.download_button("Download loading report", report, "nba-input-loading.txt", key=f"{key}_download", mime="text/plain")
+    return retry_keys
 
 
 def nbap_points_distribution(mean, sigma, line):
@@ -6587,7 +6942,9 @@ def nbap_model(snapshot, market, line, side, line_type="Manual line - verify mar
     factor = float(np.clip(matchup.get("factor", 1), .94, 1.06))
     projection = max(0, base_projection * factor)
     if not matchup.get("league_verified"):
-        flags.append("Current league reference unavailable; weak matchup priors used")
+        flags.append("ESPN season-total league estimate used; not NBA Advanced pace" if matchup.get("league_usable")
+                     else "League reference unavailable; matchup adjustment held neutral" if matchup.get("reference_policy") == "neutral_without_reference"
+                     else "Current league reference unavailable; weak matchup priors used")
     if matchup.get("current_games", 0) < 3:
         flags.append("Opponent current-season defense sample is thin")
     trace.append({"signal": "Defense + pace", "value": f"{matchup.get('games', 0)} games / {matchup.get('current_games', 0)} current; {matchup.get('source', 'Unavailable')}", "effect": f"Shared scoring multiplier x{factor:.3f}; projection {projection:.1f}; prior-season team games receive 25% weight"})
@@ -6617,7 +6974,8 @@ def nbap_model(snapshot, market, line, side, line_type="Manual line - verify mar
                       "Matchup coverage": 20 * min(1, matchup.get("effective_games", 0) / 8) * (1 if matchup.get("league_verified") else .65),
                       "Availability": 0 if unavailable else 5 if uncertain else 12,
                       "Data completeness": 10 + 5 * min(1, len(complete) / len(logs))}
-    confidence = int(round(max(0, min(100, sum(evidence_parts.values()) - min(8, len(snapshot.get("warnings", [])) * 2)))))
+    warning_penalty = min(8, len(snapshot.get("warnings", [])) * 2)
+    confidence = int(round(max(0, min(100, sum(evidence_parts.values()) - warning_penalty))))
     score = int(round(.7 * probability * 100 + .3 * confidence))
     model_action = "PLAY" if probability >= .70 and confidence >= 75 and score >= 80 else "WATCH" if probability >= .55 and confidence >= 50 and score >= 65 else "PASS"
     if uncertain or len(current) < 5 or role_points < 12:
@@ -6654,8 +7012,10 @@ def nbap_model(snapshot, market, line, side, line_type="Manual line - verify mar
             "distribution_family": distribution["family"], "role_anchor_sd": role_anchor_sd,
             "historical_minutes_anchor": baseline_minutes, "role_weight": role_weight if len(current) or len(preseason) else 0.0,
             "sample_credit": sample_credit, "latest_game_weight": float(weights[0])}
+    result["evidence_warning_penalty"] = warning_penalty
     if include_sensitivity:
         result["latest_game_sensitivity"] = nbap_latest_game_sensitivity(result)
+        result["uncertainty_audit"] = nbap_uncertainty_audit(result)
     return result
 
 
@@ -6670,6 +7030,8 @@ def nbap_debug(result):
              "", "EXECUTED SIGNALS", "Signal | Value | Effect"]
     lines += [f"{r['signal']} | {r['value']} | {r['effect']}" for r in result["trace"]]
     lines += ["", "EVIDENCE QUALITY (coverage, independent of the line)"] + [f"{k}: {v:.1f}" for k, v in result["confidence_parts"].items()]
+    lines += [f"Coverage subtotal: {sum(result['confidence_parts'].values()):.1f}",
+              f"Source-warning deduction: -{result.get('evidence_warning_penalty', 0)} (2 per source warning, capped at 8; heuristic)"]
     if result.get("sample_credit") is not None:
         lines += [f"Sample credit: {result['sample_credit']:.3f} / 12 weighted appearances; season x1 / x0.25, other team x0.5; recency effective sample reported separately"]
     lines += ["", "FINAL", f"Projection: {result['projection']:.2f} points at {result['projected_minutes']:.1f} minutes | edge {result['projection'] - result['line']:+.2f}",
@@ -6693,6 +7055,21 @@ def nbap_debug(result):
             lines += ["Unavailable: " + sensitivity.get("reason", "Insufficient evidence")]
     lines += ["", "REGULAR-SEASON GAME LOGS", "Event | Date | Season | Team ID | Opponent ID | MIN | PTS | FGA | FTA"]
     lines += [f"{r.event_id} | {r.date.isoformat()} | {r.season} | {r.team_id} | {r.opponent_id} | {r.MIN:g} | {r.PTS:g} | {r.FGA} | {r.FTA}" for r in result["logs"].itertuples()]
+    audit = result.get("uncertainty_audit")
+    if audit:
+        lines += ["", "UNCERTAINTY SHADOW TESTS (diagnostic only; no score or action adjustment)",
+                  audit["version"], audit["policy"], f"Generated UTC: {audit['generated_at']}",
+                  "Scenario | Point mean | SD | Selected-side chance | Push | Central 80% model range"]
+        for row in [audit["active"], *audit["variants"]]:
+            interval = row["interval"]
+            bounds = f"{interval[0] if interval[0] is not None else '>100'} - {interval[1] if interval[1] is not None else '>100'}"
+            lines.append(f"{row['name']} | {row['projection']:.2f} | {row['sigma']:.2f} | {row['probability']:.1%} | {row['push']:.1%} | {bounds}")
+        lines.append("These are predefined dispersion scenarios, not confidence bounds on the true hit chance. No scenario is promoted automatically.")
+    if snapshot.get("source_audit"):
+        lines += ["", "SOURCE COVERAGE AUDIT"]
+        for key, row in snapshot["source_audit"].items():
+            if key in NBAP_SOURCE_LABELS:
+                lines.append(f"{NBAP_SOURCE_LABELS[key]}: {row.get('state', 'unknown')} | {row.get('detail', '')}")
     return "\n".join(lines)
 
 
@@ -6728,9 +7105,14 @@ def nbap_replay_package(result):
               "logs": result["logs"][NBAP_LOG_COLUMNS].to_dict("records"),
               "role_rows": [{k: row[k] for k in ("event_id", "date", "season", "phase", "team_id", "player_id", "name", "MIN", "PTS", "started") if k in row}
                             for row in source.get("role_rows", [])],
-              "matchup": {k: source.get("matchup", {})[k] for k in ("factor", "pace_factor", "defense_factor", "own_pace", "opponent_pace", "opponent_def_rating", "current_games", "games", "effective_games", "league_verified", "league_pace", "league_def_rating", "source") if k in source.get("matchup", {})},
+              "matchup": {k: source.get("matchup", {})[k] for k in ("factor", "pace_factor", "defense_factor", "own_pace", "opponent_pace", "opponent_def_rating", "current_games", "games", "effective_games", "league_verified", "league_pace", "league_def_rating", "league_usable", "league_method", "league_teams", "reference_policy", "source") if k in source.get("matchup", {})},
               "availability": {k: source.get("availability", {})[k] for k in ("status", "note", "verified", "fetched_at") if k in source.get("availability", {})},
               "warnings": source.get("warnings", [])}
+    audit = source.get("source_audit", {})
+    inputs["source_audit"] = {k:{f:row[f] for f in ("state", "detail", "checked_at", "attempts") if f in row}
+                              for k, row in audit.items() if k in NBAP_SOURCE_LABELS and isinstance(row, dict)}
+    if isinstance(audit.get("league_reference"), dict):
+        inputs["source_audit"]["league_reference"] = {k:audit["league_reference"][k] for k in ("method", "usable", "verified", "teams", "team_games", "checked_at", "primary_errors", "backup_errors") if k in audit["league_reference"]}
     package = clean({"schema": "nba-pregame-input-v1", "model_version": result["version"], "snapshot": inputs,
                      "request": {"market": "Points", "line": result["line"], "side": result["side"],
                                  "line_type": result["line_type"], "line_verified": result["line_verified"]}})
@@ -6811,6 +7193,25 @@ def nbap_model_interval(result):
     return bounds
 
 
+def nbap_uncertainty_audit(result):
+    """Frozen pregame stress scenarios; never fitted, captured separately, or promoted."""
+    import math
+    def scenario(name, scale):
+        law = nbap_points_distribution(result["projection"], result["sigma"] * scale, result["line"])
+        item = {"name":name, "projection":result["projection"], "sigma":law["sigma"],
+                "over":law["over"], "under":law["under"], "push":law["push"],
+                "probability":law["over"] if result["side"] == "Over" else law["under"]}
+        item["interval"] = nbap_model_interval(item)
+        return item
+    return {"version":"nba-uncertainty-shadow-v1", "generated_at":pd.Timestamp.now(tz="UTC").isoformat(),
+            "policy":"Same point mean and exact quote; finite-sample SD x sqrt(1 + 1/effective N), and SD x1.20 stress. Both are heuristic research scenarios; active forecast and entry gates unchanged.",
+            "request":{"model_version":result["version"], "player_id":str(result["snapshot"]["player"]["espn_id"]),
+                       "event_id":str(result["snapshot"]["game"]["game_id"]), "line":result["line"], "side":result["side"]},
+            "reference_method":result["snapshot"].get("matchup", {}).get("league_method", "legacy_or_fixture"),
+            "active":scenario("active", 1),
+            "variants":[scenario("finite_sample_sd", math.sqrt(1 + 1 / max(1, result["effective_sample"]))), scenario("sd_plus_20pct", 1.20)]}
+
+
 def nbap_decision_brief(result):
     """Explain existing outputs; do not introduce bonuses or a second recommendation."""
     dimensions = scanner_decision_dimensions(result)
@@ -6855,6 +7256,8 @@ def nbap_prediction_result(result):
             "role_anchor_sd": result.get("role_anchor_sd"),
             "sample_credit": result.get("sample_credit"), "latest_game_weight": result.get("latest_game_weight"),
             "latest_game_sensitivity": result.get("latest_game_sensitivity"),
+            "nba_uncertainty_audit":result.get("uncertainty_audit"), "nba_source_audit":result["snapshot"].get("source_audit", {}),
+            "evidence_warning_penalty":result.get("evidence_warning_penalty"),
             "nba_replay_input": nbap_replay_archive(result),
             "game_id": game["game_id"], "game_date": pd.Timestamp(game["kickoff"]).tz_convert("America/New_York").date().isoformat(),
             "game_datetime": game["kickoff"], "slate_source": "live" if result["line_verified"] else "manual_or_cached",
@@ -7034,20 +7437,54 @@ def render_nbap_analyzer():
         st.session_state.nbap_result = (request, handoff)
     with st.container(key="nbap_analyze_action"):
         analyze = st.button("Analyze points", icon=":material/query_stats:", type="primary", key="nbap_analyze", use_container_width=True, disabled=game is None)
-    if analyze:
+    saved_inputs = st.session_state.get("nbap_input_load")
+    previous = None
+    retry_keys = []
+    input_controls = st.empty()
+    load_revision = int(st.session_state.get("nbap_input_revision", 0))
+    if saved_inputs and saved_inputs[0] == request and game:
+        if nbap_load_is_current(saved_inputs[1], player, game, _cache_date()):
+            previous = nbap_recover_sources(saved_inputs[1])
+            st.session_state.nbap_input_load = (request, previous)
+            if not analyze:
+                with input_controls.container():
+                    retry_keys = nbap_render_loading(previous, key=f"nbap_inputs_{load_revision}")
+        else:
+            st.caption("Input check session expired. Analyze again to recheck all sources.")
+    if analyze or retry_keys:
         st.session_state.pop("nbap_result", None)
+        st.session_state.pop("nbap_input_error", None)
+        input_controls.empty()
+        live_inputs = st.empty()
         try:
             with st.status("Building points analysis", expanded=False) as loading:
-                loading.write("Loading game logs, scoring opportunity, role and matchup")
-                snapshot = nbap_prepare(player, game, _cache_date())
+                def show_inputs(bundle):
+                    st.session_state.nbap_input_load = (request, bundle)
+                    live_inputs.markdown(nbap_loading_html(bundle), unsafe_allow_html=True)
+                    checked = sum(row["state"] not in ("queued", "loading") for row in bundle["sources"].values())
+                    loading.update(label=f"Checking analysis inputs · {checked}/{len(bundle['sources'])}")
+                bundle = nbap_load_sources(player, game, _cache_date(), previous=previous if retry_keys else None,
+                                           retry_keys=retry_keys if retry_keys else None, on_update=show_inputs)
+                snapshot = nbap_snapshot_from_sources(player, game, bundle)
                 if pd.Timestamp(game["kickoff"]) <= pd.Timestamp.now(tz="UTC"):
                     raise ValueError("Game already started")
+                loading.update(label="Applying the points model and evidence gates")
                 result = nbap_model(snapshot, "Points", line, side, handoff.get("line_type", "Manual line - verify market and payout") if same else "Manual line - verify market and payout", handoff.get("line_verified", False) if same else False)
                 st.session_state.nbap_result = (request, result)
                 nbap_capture([result], "individual_analyzer")
                 loading.update(label="Points analysis ready", state="complete")
         except Exception as err:
-            st.error(f"NBA analysis unavailable: {err}")
+            st.session_state.nbap_input_error = (request, f"NBA analysis unavailable: {err}")
+        live_inputs.empty()
+        updated = st.session_state.get("nbap_input_load")
+        if updated and updated[0] == request and nbap_load_is_current(updated[1], player, game, _cache_date()):
+            load_revision += 1
+            st.session_state.nbap_input_revision = load_revision
+            with input_controls.container():
+                nbap_render_loading(updated[1], key=f"nbap_inputs_{load_revision}")
+    saved_error = st.session_state.get("nbap_input_error")
+    if saved_error and saved_error[0] == request:
+        st.error(saved_error[1])
     saved = st.session_state.get("nbap_result")
     if saved and saved[0] == request:
         nbap_render_result(saved[1], "nbap_individual")
@@ -8173,6 +8610,7 @@ def build_model_prediction_rows(results: list, scan_id: str,
             "distribution_family", "predictive_sd", "historical_minutes_anchor", "role_weight", "role_anchor_sd",
             "sample_credit", "latest_game_weight", "latest_game_sensitivity",
             "nba_replay_input",
+            "nba_uncertainty_audit", "nba_source_audit", "evidence_warning_penalty",
         )
         signal_snapshot = {
             key: _learning_json_safe(result.get(key))
@@ -8939,6 +9377,90 @@ def _learning_group_summary(rows: list, label: str) -> Optional[dict]:
     }
 
 
+def _learning_nba_uncertainty_rows(predictions: list) -> list:
+    """Paired pregame-only shadow scores, equally weighted per player/game."""
+    import math
+    grouped = {}
+    for item in _learning_unique_prediction_rows(predictions):
+        if item.get("sport") != "NBA" or item.get("market") != "Points" or item.get("result") not in ("Hit", "Miss"):
+            continue
+        signals = item.get("signal_snapshot") or {}
+        if not isinstance(signals, dict):
+            continue
+        audit = signals.get("nba_uncertainty_audit", {})
+        if not isinstance(audit, dict) or audit.get("version") != "nba-uncertainty-shadow-v1":
+            continue
+        created = pd.to_datetime(item.get("created_at"), utc=True, errors="coerce")
+        generated = pd.to_datetime(audit.get("generated_at"), utc=True, errors="coerce")
+        kickoff = pd.to_datetime(item.get("game_datetime"), utc=True, errors="coerce")
+        if any(pd.isna(t) for t in (created, generated, kickoff)) or not generated <= created < kickoff:
+            continue
+        request = audit.get("request", {})
+        variants = audit.get("variants", [])
+        if not isinstance(request, dict) or not isinstance(variants, list) or len(variants) != 2 or any(not isinstance(v, dict) for v in variants):
+            continue
+        if any(not isinstance(v.get("name"), str) for v in variants) or {v["name"] for v in variants} != {"finite_sample_sd", "sd_plus_20pct"}:
+            continue
+        side = item.get("side")
+        line = _parse_numeric_value(item.get("line"), None)
+        actual = _parse_numeric_value(item.get("actual_value"), None)
+        if line is None or not math.isfinite(line) or line < 0 or actual is None or not math.isfinite(actual) or actual < 0 or actual != int(actual) or side not in ("Over", "Under"):
+            continue
+        if any(str(request.get(k)) != str(item.get(k)) for k in ("model_version", "player_id", "event_id", "side")) or request.get("line") != line:
+            continue
+        if actual == line:
+            continue
+        hit = actual > line if side == "Over" else actual < line
+        if (item["result"] == "Hit") != hit:
+            continue
+        active = audit.get("active", {})
+        def valid(row):
+            if not isinstance(row, dict):
+                return False
+            keys = ("over", "under", "push", "projection", "sigma")
+            if any(not isinstance(row.get(k), (float, int)) or isinstance(row.get(k), bool) for k in keys):
+                return False
+            vals = [float(row[k]) for k in keys]
+            return all(v is not None and math.isfinite(v) and v >= 0 for v in vals) and all(v <= 1 for v in vals[:3]) and abs(sum(vals[:3]) - 1) < 1e-8 and vals[2] < 1
+        if not valid(active):
+            continue
+        primary = _parse_numeric_value(item.get("probability"), None)
+        projection = _parse_numeric_value(item.get("projected_value"), None)
+        raw_active = active["over"] if side == "Over" else active["under"]
+        # The durable ledger rounds percentage points to two decimals.
+        if primary is None or projection is None or not math.isfinite(primary) or not math.isfinite(projection) or abs(raw_active - primary / 100) > .000051 or abs(active["projection"] - projection) > 1e-6:
+            continue
+        active_p = raw_active / (1 - active["push"])
+        line_type = "Manual / unverified" if not item.get("line_verified") else "Reduced payout" if item.get("is_reduced") else "Standard payout"
+        for variant in variants:
+            if not valid(variant) or variant.get("name") not in ("finite_sample_sd", "sd_plus_20pct"):
+                continue
+            if abs(variant["projection"] - active["projection"]) > 1e-9 or variant["sigma"] < active["sigma"]:
+                continue
+            probability = (variant["over"] if side == "Over" else variant["under"]) / (1 - variant["push"])
+            key = (str(item["model_version"]), line_type, str(audit.get("reference_method", "Unknown")), variant["name"])
+            cluster = (str(item["event_id"]), str(item["player_id"]))
+            def covered(row):
+                bounds = row.get("interval", [])
+                if not isinstance(bounds, (list, tuple)) or len(bounds) != 2 or any(v is None or not isinstance(v, (int, float)) or not math.isfinite(v) for v in bounds) or bounds[0] > bounds[1]:
+                    return None
+                return float(bounds[0] <= actual <= bounds[1])
+            grouped.setdefault(key, {}).setdefault(cluster, []).append(
+                ((active_p - hit) ** 2, (probability - hit) ** 2, covered(active), covered(variant)))
+    rows = []
+    for (model, line_type, reference, scenario), clusters in sorted(grouped.items()):
+        def average(index):
+            values = [sum(v[index] for v in group if v[index] is not None) / sum(v[index] is not None for v in group)
+                      for group in clusters.values() if any(v[index] is not None for v in group)]
+            return sum(values) / len(values) if values else None
+        active_brier, shadow_brier = average(0), average(1)
+        rows.append({"Model":model, "Line type":line_type, "Reference":reference, "Scenario":scenario,
+                     "Quotes":sum(len(v) for v in clusters.values()), "Player-games":len(clusters),
+                     "Active Brier":active_brier, "Shadow Brier":shadow_brier, "Improvement":active_brier - shadow_brier,
+                     "Active 80% coverage":average(2), "Shadow 80% coverage":average(3)})
+    return rows
+
+
 LEARNING_SHADOW_CALIBRATOR_VERSION = "rolling-beta-v1"
 
 
@@ -9255,6 +9777,14 @@ def render_model_learning_dashboard(predictions: list) -> None:
         )
     ]
     unique_filtered = _learning_unique_prediction_rows(filtered)
+    nba_uncertainty = _learning_nba_uncertainty_rows(unique_filtered)
+    nba_uncertainty_columns = ["Scenario", "Improvement", "Player-games", "Quotes", "Active Brier", "Shadow Brier",
+                               "Active 80% coverage", "Shadow 80% coverage", "Line type", "Reference", "Model"]
+    nba_uncertainty_display = [
+        {**row, "Scenario":{"finite_sample_sd":"Finite-sample SD", "sd_plus_20pct":"SD +20%"}[row["Scenario"]],
+         **{k:f"{row[k]:.4f}" for k in ("Active Brier", "Shadow Brier")}, "Improvement":f"{row['Improvement']:+.4f}",
+         **{k:f"{row[k]:.1%}" if row[k] is not None else "N/A" for k in ("Active 80% coverage", "Shadow 80% coverage")}}
+        for row in nba_uncertainty]
     snapshot_graded = _learning_evaluation_rows(filtered)
     graded = _learning_evaluation_rows(unique_filtered)
     repeated_snapshots = max(0, len(filtered) - len(unique_filtered))
@@ -9324,6 +9854,13 @@ def render_model_learning_dashboard(predictions: list) -> None:
         f"{eligibility_counts['AWAITING PAYOUT']} awaiting payout · {eligibility_counts['BLOCKED']} blocked · "
         f"{eligibility_counts['UNVERIFIED LEGACY']} unverified legacy. Model strength is not entry approval."
     )
+    if any(str(row.get("sport", "")).upper() == "NBA" for row in filtered):
+        with st.expander("NBA uncertainty shadow tests"):
+            if nba_uncertainty:
+                st.dataframe(pd.DataFrame(nba_uncertainty_display)[nba_uncertainty_columns], hide_index=True, use_container_width=True)
+            else:
+                st.caption("No settled, valid pregame uncertainty pairs yet. New snapshots are captured prospectively; old decisions are not reconstructed into this test.")
+            st.caption("Positive improvement favors the shadow. Paired conditional Brier: pushes excluded and hit chance renormalized. Alternative lines share equal-weight player/game groups. Range coverage is descriptive; small cohorts are provisional. No automatic model promotion.")
 
     if not graded:
         st.info(
@@ -9625,6 +10162,9 @@ def render_model_learning_dashboard(predictions: list) -> None:
         "",
     ]
     report_lines.extend(report_table("CALIBRATION BY HIT CHANCE", calibration_rows))
+    report_lines.append("")
+    report_lines.extend(report_table("NBA PROSPECTIVE UNCERTAINTY SHADOW TESTS", nba_uncertainty_display, nba_uncertainty_columns))
+    report_lines.append("Paired conditional Brier; equal-weight player/game clusters; no retrospective filling or automatic promotion. Coverage excludes pushes and unavailable ranges.")
     report_lines.append("")
     report_lines.extend(report_table("LIKE-FOR-LIKE RETROSPECTIVE BENCHMARKS", line_benchmark_rows,
                                      ["Segment", "N", "Model Brier", "Retrospective baseline", "Skill vs own baseline"]))
