@@ -3981,15 +3981,15 @@ div[data-testid="stHorizontalBlock"]:has(.stat-card) > div[data-testid="stColumn
 
 /* PropIQ Workspace: shared theme and responsive app shell. */
 :root {
-  --bg:#111214; --bg2:#1a1c1f; --bg3:#24272b; --bg4:#2b3036;
-  --surface:#1a1c1f; --surface2:#24272b; --surface-0:#111214;
-  --surface-1:#1a1c1f; --surface-2:#24272b; --surface-3:#2b3036;
-  --text:#f4f6f8; --text2:#b0b6be; --text3:#8e98a3;
-  --accent:#79b8ff; --accent2:#579de9; --accent3:#a0ceff;
-  --green:#79b8ff; --yellow:#f2a19a; --red:#f2a19a; --orange:#f2a19a;
-  --border:#33373d; --border2:#4b535f; --line-soft:#33373d; --line-strong:#4b535f;
+  --bg:#101113; --bg2:#191b1f; --bg3:#24272c; --bg4:#30343a;
+  --surface:#191b1f; --surface2:#24272c; --surface-0:#101113;
+  --surface-1:#191b1f; --surface-2:#24272c; --surface-3:#30343a;
+  --text:#f4f5f7; --text2:#bec2ca; --text3:#9299a6;
+  --accent:#8bc1ff; --accent2:#65a8f5; --accent3:#bbdaff; --football:#73d5bc;
+  --green:#8bc1ff; --yellow:#edaba7; --red:#edaba7; --orange:#edaba7;
+  --border:#2c3036; --border2:#4a515d; --line-soft:#2c3036; --line-strong:#4a515d;
   --accent-glow:transparent; --r-xs:4px; --r-sm:6px; --r-md:8px; --r-lg:8px; --r-xl:8px;
-  --font-display:'Barlow Condensed',sans-serif; --font-body:'IBM Plex Sans',sans-serif;
+  --font-display:'Plus Jakarta Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; --font-body:'DM Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
   --font-mono:'IBM Plex Mono',monospace; --shadow-sm:none; --shadow-md:0 8px 24px #0003;
   --shadow-lg:0 12px 36px #0004; --shadow-teal:none; --shadow-green:none; --shadow-red:none;
   --nav-height:68px; --v8-nav-height:68px;
@@ -3998,12 +3998,13 @@ div[data-testid="stHorizontalBlock"]:has(.stat-card) > div[data-testid="stColumn
 }
 html,body,.stApp,[data-testid="stAppViewContainer"] {background:var(--bg) !important;color:var(--text) !important;font-family:var(--font-body) !important;}
 [data-testid="stMain"] {height:100dvh !important;overflow-y:auto !important;overflow-x:clip !important;overscroll-behavior-y:auto !important;-webkit-overflow-scrolling:touch !important;}
+[data-testid="stElementContainer"]:has(> iframe[srcdoc*="__propiqScroll"]) {display:none !important;}
 * {letter-spacing:0 !important;box-sizing:border-box;}
 #MainMenu,header,footer,[data-testid="stDecoration"],.stDeployButton {display:none !important;}
 [data-testid="stSidebar"],[data-testid="stSidebarCollapsedControl"] {display:none !important;}
 [data-testid="stAppViewBlockContainer"],.block-container {max-width:1360px !important;width:100% !important;margin:0 auto !important;padding:20px 28px 100px !important;}
 [data-testid="stVerticalBlock"] {gap:16px;}
-.stMarkdown p,.stMarkdown li,[data-testid="stCaptionContainer"], [data-testid="stWidgetLabel"] p {color:var(--text2) !important;font-family:var(--font-body) !important;font-size:14px !important;line-height:1.55 !important;}
+.stMarkdown p,.stMarkdown li,[data-testid="stCaptionContainer"], [data-testid="stWidgetLabel"] p {color:var(--text2) !important;font-family:var(--font-body) !important;font-size:15px !important;line-height:1.6 !important;}
 [data-testid="stWidgetLabel"] p {color:var(--text) !important;}
 h1,h2,h3,h4 {color:var(--text) !important;font-family:var(--font-display) !important;}
 h1 {font-size:28px !important;} h2,h3 {font-size:22px !important;}
@@ -4019,6 +4020,8 @@ input:focus-visible {outline:none !important;}
 [data-baseweb="select"]>div:focus-within,[data-testid="stNumberInputContainer"]:focus-within {border-color:var(--accent) !important;}
 [data-baseweb="select"] span,[data-baseweb="select"] div,[data-baseweb="select"] input,[data-testid="stNumberInput"] input,[data-testid="stTextInput"] input,textarea {color:var(--text) !important;-webkit-text-fill-color:var(--text) !important;font-family:var(--font-body) !important;font-size:16px !important;}
 [data-baseweb="select"] input,[data-testid="stNumberInput"] input {background:transparent !important;}
+div[data-testid="stNumberInput"] input[type="number"] {font-size:16px !important;padding-left:4px !important;padding-right:4px !important;min-width:0 !important;appearance:textfield;}
+div[data-testid="stNumberInput"] input::-webkit-inner-spin-button,div[data-testid="stNumberInput"] input::-webkit-outer-spin-button {appearance:none !important;margin:0;}
 input::placeholder,textarea::placeholder,[data-baseweb="select"] [aria-hidden="true"] {color:var(--text3) !important;-webkit-text-fill-color:var(--text3) !important;opacity:1 !important;}
 [data-baseweb="select"] svg {fill:var(--text2) !important;}
 [data-testid="stNumberInputContainer"] {min-height:48px !important;}
@@ -4060,17 +4063,34 @@ input::placeholder,textarea::placeholder,[data-baseweb="select"] [aria-hidden="t
 .pl-header-actions {display:flex;align-items:center;gap:10px;margin-right:48px;}
 .pl-header-sport {color:var(--text) !important;font-size:12px !important;font-weight:700;padding:5px 8px;border:1px solid var(--border);border-radius:4px;background:var(--bg2);}
 .pl-live-status {color:var(--text3) !important;font-size:12px !important;background:none !important;border:0 !important;padding:0 !important;}
-.st-key-workspace_header {position:relative !important;}
+.st-key-workspace_header {position:relative !important;border-bottom:1px solid var(--border);padding:0 0 16px !important;}
+.st-key-workspace_header>[data-testid="stLayoutWrapper"]>[data-testid="stHorizontalBlock"] {display:grid !important;grid-template-columns:150px minmax(0,1fr) 44px !important;gap:20px !important;align-items:center;}
+.st-key-workspace_header [data-testid="stColumn"] {width:100% !important;min-width:0 !important;}
+.st-key-brand_home button {border:0 !important;padding:0 !important;min-height:44px !important;background:none !important;justify-content:flex-start !important;}
+.st-key-brand_home button p {font:800 28px/1 var(--font-display) !important;color:var(--text) !important;}
+.shell-context {display:flex;align-items:center;gap:14px;min-height:44px;}
+.shell-context span {font:600 11px var(--font-body);color:var(--accent);border-right:1px solid var(--border2);padding-right:14px;white-space:nowrap;}
+.shell-context strong {font:500 14px var(--font-body);color:var(--text2);}
+.st-key-workspace_header [data-testid="stPopoverButton"] {padding:8px !important;min-width:44px;background:var(--bg2) !important;border:1px solid var(--border) !important;color:var(--text2) !important;border-radius:6px;}
+.st-key-workspace_header [data-testid="stPopoverButton"]>div {display:none !important;}
 .st-key-workspace_tools {position:absolute !important;right:0;top:12px;width:40px !important;z-index:20;}
 .st-key-workspace_tools button>svg {display:none !important;}
 [data-testid="stPopoverBody"] {background:var(--bg2) !important;color:var(--text) !important;border:1px solid var(--border2) !important;border-radius:8px !important;}
 .st-key-workspace_tools button {width:40px !important;min-height:40px !important;padding:8px !important;background:transparent !important;border-color:transparent !important;}
 .st-key-workspace_navigation {position:sticky !important;top:0 !important;z-index:999 !important;padding:4px 0 !important;margin:0 !important;background:var(--bg) !important;border:0 !important;border-bottom:1px solid var(--border) !important;border-radius:0 !important;box-shadow:none !important;}
-.st-key-workspace_navigation [data-testid="stHorizontalBlock"] {display:grid !important;grid-template-columns:repeat(4,minmax(0,1fr)) !important;gap:4px !important;}
+.st-key-workspace_navigation [data-testid="stHorizontalBlock"] {display:grid !important;grid-template-columns:repeat(5,minmax(0,1fr)) !important;gap:4px !important;}
 .st-key-workspace_navigation [data-testid="stColumn"] {width:100% !important;min-width:0 !important;}
 .st-key-workspace_navigation button {width:100% !important;min-height:46px !important;border:0 !important;color:var(--text2) !important;background:transparent !important;padding:8px !important;}
-.st-key-workspace_navigation button[kind="primary"] {color:var(--accent) !important;background:#202d3d !important;box-shadow:none !important;}
+.st-key-workspace_navigation button[kind="primary"] {color:var(--accent) !important;background:#8bc1ff12 !important;box-shadow:inset 3px 0 var(--accent) !important;}
 .st-key-workspace_navigation button[kind="primary"] p {color:var(--accent) !important;}
+.st-key-workspace_sport_switcher {padding:4px 0 16px !important;border-bottom:1px solid var(--border);}
+.st-key-workspace_sport_switcher [data-testid="stHorizontalBlock"] {display:grid !important;grid-template-columns:100px 100px 100px 64px !important;gap:6px !important;}
+.st-key-workspace_sport_switcher [data-testid="stColumn"] {width:100% !important;min-width:0 !important;}
+.st-key-workspace_sport_switcher button {background:transparent !important;border-color:transparent !important;min-height:44px !important;}
+.st-key-workspace_sport_switcher button[kind="primary"] {background:#8bc1ff12 !important;border-color:#8bc1ff65 !important;}
+.st-key-workspace_sport_switcher button[kind="primary"] p {color:var(--accent) !important;}
+.st-key-workspace_sport_switcher [data-testid="stPopoverButton"] {min-height:44px;background:var(--bg2) !important;border:1px solid var(--border) !important;color:var(--text2) !important;border-radius:6px;}
+.st-key-workspace_sport_switcher [data-testid="stPopoverButton"]>div {display:none !important;}
 .st-key-analyzer_sport_navigation {width:100% !important;margin:0 0 4px !important;padding:0 !important;border:0 !important;background:none !important;box-shadow:none !important;}
 .st-key-analyzer_sport_navigation [data-testid="stHorizontalBlock"] {display:grid !important;grid-template-columns:repeat(4,minmax(0,1fr)) !important;gap:8px !important;}
 .st-key-analyzer_sport_navigation [data-testid="stColumn"] {width:100% !important;min-width:0 !important;}
@@ -4196,10 +4216,10 @@ div[class*="st-key-scan_candidate_"] .unified-decision-card {border:0 !important
 .edge-score-item-v55 {background:none !important;border:0 !important;}
 .analyzer-scroll-anchor,[id$="-analyzer-controls"],#workspace-top {scroll-margin-top:18px !important;}
 @media(min-width:1100px) {
-  [data-testid="stAppViewBlockContainer"],.block-container {width:calc(100% - 120px) !important;margin-left:max(120px,calc((100% - 1360px)/2 + 45px)) !important;max-width:1360px !important;padding:20px 28px 80px !important;}
-  .st-key-workspace_navigation {position:fixed !important;top:100px !important;left:16px !important;width:100px !important;border:0 !important;padding:0 !important;}
+  [data-testid="stAppViewBlockContainer"],.block-container {width:calc(100% - 176px) !important;margin-left:max(176px,calc((100% - 1440px)/2 + 130px)) !important;max-width:1264px !important;padding:24px 32px 80px !important;}
+  .st-key-workspace_navigation {position:fixed !important;top:96px !important;left:16px !important;width:144px !important;border:0 !important;padding:8px 0 !important;}
   .st-key-workspace_navigation [data-testid="stHorizontalBlock"] {grid-template-columns:1fr !important;gap:8px !important;}
-  .st-key-workspace_navigation button {justify-content:flex-start !important;min-height:48px !important;}
+  .st-key-workspace_navigation button {justify-content:flex-start !important;min-height:50px !important;padding-left:14px !important;}
 }
 @media(max-width:768px) {
   [data-testid="stAppViewBlockContainer"],.block-container {padding:8px 16px var(--safe-bottom) !important;width:100% !important;max-width:100% !important;margin:0 !important;}
@@ -4207,7 +4227,15 @@ div[class*="st-key-scan_candidate_"] .unified-decision-card {border:0 !important
   .pl-header {min-height:56px !important;margin-bottom:4px !important;padding:8px 0 !important;}
   .pl-icon,.pl-sub,.pl-live-status {display:none !important;}.pl-logo {font-size:32px !important;}
   .pl-header-actions {margin-right:44px;}.st-key-workspace_tools {top:8px;right:0;}
-  .st-key-workspace_navigation {position:fixed !important;top:auto !important;bottom:0 !important;left:0 !important;right:0 !important;width:100% !important;padding:6px 8px calc(6px + env(safe-area-inset-bottom)) !important;border-top:1px solid var(--border) !important;border-bottom:0 !important;background:#1a1c1ff5 !important;border-radius:0 !important;}
+  .st-key-workspace_header {padding:4px 0 12px !important;}
+  .st-key-workspace_header>[data-testid="stLayoutWrapper"]>[data-testid="stHorizontalBlock"] {grid-template-columns:112px minmax(0,1fr) 44px !important;gap:8px !important;}
+  .st-key-brand_home button p {font-size:25px !important;}
+  .shell-context {gap:3px;flex-direction:column;align-items:flex-start;justify-content:center;}
+  .shell-context span {border:0;padding:0;font-size:10px;white-space:normal;}
+  .shell-context strong {font-size:12px;}
+  .st-key-workspace_sport_switcher [data-testid="stHorizontalBlock"] {grid-template-columns:1fr 1fr 1fr 54px !important;}
+  .st-key-workspace_navigation {position:fixed !important;top:auto !important;bottom:0 !important;left:0 !important;right:0 !important;width:100% !important;padding:6px 8px calc(6px + env(safe-area-inset-bottom)) !important;border-top:1px solid var(--border2) !important;border-bottom:0 !important;background:#191b1ff7 !important;border-radius:0 !important;}
+  .st-key-workspace_navigation button[kind="primary"] {box-shadow:inset 0 2px var(--accent) !important;}
   .st-key-workspace_navigation button {min-height:52px !important;padding:5px 2px !important;flex-direction:column !important;gap:3px !important;}
   .st-key-workspace_navigation button>div {flex-direction:column !important;gap:3px !important;}
   .st-key-workspace_navigation button p {font-size:11px !important;white-space:nowrap;}
@@ -4237,9 +4265,93 @@ div[class*="st-key-scan_candidate_"] .unified-decision-card {border:0 !important
   .candidate-call>strong {font-size:18px;}.candidate-call>span {font-size:13px;}.candidate-call>b {margin:0 0 0 auto;font-size:12px;}
   .st-key-nbap_market_controls [data-testid="stHorizontalBlock"] {display:grid !important;grid-template-columns:1fr 1fr !important;}
   .st-key-nbap_market_controls [data-testid="stColumn"] {width:100% !important;min-width:0 !important;}
-  .st-key-nbap_market_controls [data-testid="stColumn"]:first-child {grid-column:1/-1;}
   .st-key-nbap_analyze_action,.st-key-mlb_analyze {bottom:calc(var(--nav-height) + env(safe-area-inset-bottom) + 4px) !important;}
   body:has(input[type="number"]:focus,input[role="combobox"][aria-expanded="true"]) .st-key-nbap_analyze_action,body:has(input[type="number"]:focus,input[role="combobox"][aria-expanded="true"]) .st-key-mlb_analyze {position:static !important;}
+}
+
+/* Daily desk: NBA leads the page; football remains a first-class workspace. */
+.desk-masthead {display:flex;justify-content:space-between;align-items:center;gap:24px;padding:16px 0 22px;border-bottom:1px solid var(--border);}
+.desk-eyebrow {display:block;color:var(--accent);font:600 11px/1.5 var(--font-body);margin-bottom:8px;}
+.desk-masthead h1 {font:700 34px/1.2 var(--font-display) !important;margin:0;padding:0;color:var(--text) !important;}
+.desk-date {color:var(--text2);font:14px/1.6 var(--font-body);text-align:right;flex-shrink:0;}
+.desk-date small {display:block;color:var(--text3);font-size:12px;}
+.desk-section-title {display:flex;justify-content:space-between;align-items:center;gap:16px;padding:8px 0;margin:10px 0 0;}
+.desk-section-title h2 {font:650 20px/1.4 var(--font-display) !important;margin:0;padding:0;}
+.desk-section-title>span {font:13px/1.5 var(--font-body);color:var(--text3);}
+.football-title {border-top:2px solid var(--football);padding-top:16px;}
+.football-title>span {color:var(--football);}
+.st-key-hub_workspace [data-testid="stVerticalBlock"] {gap:12px !important;}
+.st-key-hub_workspace .st-key-hub_actions button {height:54px !important;min-height:54px !important;background:var(--bg2) !important;border-color:var(--border2) !important;}
+.st-key-hub_workspace .st-key-hub_actions button[kind="primary"] {background:var(--accent) !important;border-color:var(--accent) !important;}
+.st-key-hub_workspace .st-key-hub_actions button[kind="primary"] p {color:#132236 !important;font-weight:700 !important;}
+.st-key-hub_actions [data-testid="stHorizontalBlock"] {gap:12px !important;}
+.st-key-home_football_shortcuts [data-testid="stHorizontalBlock"] {display:grid !important;grid-template-columns:1fr 1fr;gap:12px !important;}
+.st-key-home_football_shortcuts [data-testid="stColumn"] {width:100% !important;min-width:0 !important;}
+.st-key-hub_workspace .st-key-home_football_shortcuts button {background:transparent !important;border-color:transparent !important;min-height:40px !important;justify-content:flex-start !important;padding:6px 0 !important;}
+.st-key-home_football_shortcuts button p,.st-key-home_football_shortcuts [data-testid="stIconMaterial"] {color:var(--football) !important;}
+.st-key-hub_workspace [data-testid="stCaptionContainer"] p {font-size:12px !important;}
+.st-key-hub_schedule_controls [data-testid="stHorizontalBlock"] {display:grid !important;grid-template-columns:minmax(200px,1.4fr) minmax(180px,1fr) 44px !important;align-items:center;gap:12px !important;}
+.st-key-hub_schedule_controls [data-testid="stColumn"] {width:100% !important;min-width:0 !important;}
+.st-key-hub_schedule_controls [data-baseweb="button-group"] {display:flex !important;width:100%;border:0 !important;background:var(--bg2) !important;border-radius:6px;padding:3px;}
+.st-key-hub_schedule_controls [data-baseweb="button-group"] button {flex:1;min-height:40px !important;background:transparent !important;color:var(--text2) !important;border:0 !important;border-radius:4px !important;}
+.st-key-hub_schedule_controls button[kind="segmented_controlActive"],.st-key-hub_schedule_controls button[aria-pressed="true"] {background:var(--bg4) !important;color:var(--text) !important;}
+.st-key-hub_schedule_controls [role="radiogroup"] {display:flex;flex-wrap:nowrap;gap:4px;background:var(--bg2);padding:4px;border-radius:6px;width:100%;}
+.st-key-hub_schedule_controls [data-baseweb="radio"] {flex:1;justify-content:center;align-items:center;min-height:40px;padding:6px 10px;margin:0;border-radius:4px;}
+.st-key-hub_schedule_controls [data-baseweb="radio"]>div:first-child {display:none;}
+.st-key-hub_schedule_controls [data-baseweb="radio"]:has(input:checked) {background:var(--bg4);}
+.st-key-hub_schedule_controls [data-baseweb="radio"]:has(input:focus-visible) {outline:2px solid var(--accent);outline-offset:1px;}
+.st-key-hub_schedule_controls [data-baseweb="radio"]>div:last-child {padding-left:0;white-space:nowrap;}
+.st-key-hub_schedule_controls [data-baseweb="radio"] p {font-size:14px !important;white-space:nowrap;}
+.st-key-hub_workspace .hub-scores {gap:10px;padding:2px 1px 8px;}
+.st-key-hub_workspace .hub-game {flex-basis:166px;background:var(--bg2);border:1px solid var(--border);padding:12px;border-radius:6px;}
+.st-key-hub_workspace .hub-game:hover {border-color:var(--accent);}
+.hub-game-status {color:var(--text3);font-size:12px;min-height:24px;}
+.hub-game-status.is-live {color:var(--football);}
+.hub-team {font:600 15px/1.5 var(--font-body);min-height:32px;}
+.hub-team b {font-size:17px;}
+.hub-team img {width:24px;height:24px;}
+.st-key-home_news_columns>[data-testid="stLayoutWrapper"]>[data-testid="stHorizontalBlock"] {gap:32px !important;align-items:start;}
+.desk-story {border-bottom:1px solid var(--border);padding:16px 0;min-width:0;}
+.desk-story a {display:flex;gap:16px;color:var(--text) !important;text-decoration:none !important;}
+.desk-story a:hover h3 {color:var(--accent) !important;}
+.desk-story-media {flex:0 0 100px;aspect-ratio:4/3;overflow:hidden;border-radius:6px;background:var(--bg2);align-self:start;}
+.desk-story-media img {display:block;width:100%;height:100%;object-fit:cover;}
+.desk-story-copy {min-width:0;}
+.desk-story-copy>span {color:var(--text3);font:12px/1.5 var(--font-body);}
+.desk-story h3 {font:600 17px/1.5 var(--font-body) !important;margin:6px 0 0;padding:0;overflow-wrap:anywhere;}
+.desk-story.is-lead {padding-top:6px;}
+.desk-story.is-lead a {display:block;}
+.desk-story.is-lead .desk-story-media {aspect-ratio:2.25;width:100%;margin-bottom:14px;}
+.desk-story.is-lead h3 {font:700 25px/1.35 var(--font-display) !important;margin-top:7px;}
+.st-key-home_football_actions [data-testid="stHorizontalBlock"] {display:grid !important;grid-template-columns:1fr 1fr;gap:8px !important;}
+.st-key-home_football_actions [data-testid="stColumn"] {width:100% !important;min-width:0 !important;}
+.st-key-hub_workspace .st-key-home_football_actions button {background:transparent !important;border-color:#73d5bc55 !important;}
+.st-key-home_football_actions button p {font-size:13px !important;}
+.hub-pick {border-color:var(--border);}
+.hub-mention {border-color:var(--accent);}
+.hub-muted {font:15px/1.6 var(--font-body);color:var(--text3);}
+@media(max-width:999px) {
+  .desk-masthead {gap:18px;align-items:start;}
+  .desk-date {font-size:12px;}
+  .st-key-home_news_columns>[data-testid="stLayoutWrapper"]>[data-testid="stHorizontalBlock"] {flex-direction:column;}
+  .st-key-home_news_columns>[data-testid="stLayoutWrapper"]>[data-testid="stHorizontalBlock"]>[data-testid="stColumn"] {width:100%;flex:1 1 100%;}
+  .desk-story.is-lead .desk-story-media {aspect-ratio:2.25;}
+}
+@media(max-width:768px) {
+  .desk-masthead {padding:12px 0 18px;display:block;}
+  .desk-masthead h1 {font-size:27px !important;}
+  .desk-date {display:block;text-align:left;margin-top:10px;}
+  .desk-date small {display:inline;margin-left:10px;}
+  .desk-section-title {gap:10px;margin-top:4px;}
+  .desk-section-title h2 {font-size:18px !important;}
+  .desk-section-title>span {font-size:12px;}
+  .st-key-hub_schedule_controls [data-testid="stHorizontalBlock"] {grid-template-columns:minmax(0,1fr) 44px !important;gap:8px !important;}
+  .st-key-hub_schedule_controls [data-testid="stColumn"]:first-child {grid-column:1/-1;}
+  .st-key-hub_workspace .hub-game {flex-basis:150px;}
+  .st-key-hub_workspace .st-key-hub_actions button p {font-size:14px !important;}
+  .desk-story.is-lead h3 {font-size:22px !important;}
+  .desk-story-media {flex-basis:88px;}
+  .desk-story h3 {font-size:16px !important;}
 }
 
 /* Research Desk: rows and inspection are native widgets backed by saved model output. */
@@ -4315,6 +4427,9 @@ div[class*="st-key-research_inspector_"] [data-testid="stExpander"] {border-left
 }
 
 @media(prefers-reduced-motion:reduce) {* {animation:none !important;scroll-behavior:auto !important;transition:none !important;}}
+@media(max-width:360px) {
+  .st-key-nbap_market_controls [data-testid="stNumberInput"] button {width:32px !important;min-width:32px !important;padding:0 !important;}
+}
 
 </style>
 """, unsafe_allow_html=True)
@@ -7676,8 +7791,7 @@ def render_nbap_analyzer():
     if "nbap_line" not in st.session_state:
         st.session_state.nbap_line = 24.5
     with st.container(key="nbap_market_controls"):
-        market_col, a, b = st.columns([1.35, 1, 1])
-        market_col.selectbox("Market", ["Points"], disabled=True, key="nbap_market")
+        a, b = st.columns(2)
         line = a.number_input("Points line", value=None, min_value=0.0, max_value=100.0, step=.5, key="nbap_line")
         side = b.selectbox("Direction", ["Over", "Under"], key="nbap_side")
     games = [g for g in directory["games"] if g["team_id"] == player["team_id"] and pd.Timestamp(g["kickoff"]) > pd.Timestamp.now(tz="UTC")]
@@ -7870,7 +7984,7 @@ def render_nbap_scanner():
         st.download_button("Download scanner debugger", report, "nba-scanner-debug.txt", key="nbap_scan_debug_download")
 
 
-HUB_SPORTS = {"mlb": "baseball/mlb", "nfl": "football/nfl", "cfb": "football/college-football", "nba": "basketball/nba"}
+HUB_SPORTS = {"nba": "basketball/nba", "nfl": "football/nfl", "cfb": "football/college-football", "mlb": "baseball/mlb"}
 
 
 def hub_url(value, media=False):
@@ -7915,7 +8029,9 @@ def hub_parse_news(payload):
             continue
         seen.add(url)
         photo = next((p for p in item.get("images", []) if hub_url(p.get("url"), media=True)), {})
-        articles.append({"title": title, "url": url, "published": item.get("published", ""), "image": hub_url(photo.get("url"), media=True), "credit": str(photo.get("credit", "ESPN")), "athletes": [str(c.get("description", "")) for c in item.get("categories", []) if c.get("type") == "athlete"]})
+        articles.append({"title": title, "url": url, "published": item.get("published", ""), "image": hub_url(photo.get("url"), media=True),
+                         "image_width":photo.get("width"), "image_height":photo.get("height"),
+                         "credit": str(photo.get("credit", "ESPN")), "athletes": [str(c.get("description", "")) for c in item.get("categories", []) if c.get("type") == "athlete"]})
     return sorted(articles, key=lambda a: str(a["published"]), reverse=True)[:12]
 
 
@@ -7956,10 +8072,8 @@ def hub_pick_mentions(articles, picks):
 
 
 def hub_set_sport(sport):
-    if sport in HUB_SPORTS:
+    if sport in ("nba", "nfl", "cfb"):
         st.session_state.hub_sport = sport
-        st.session_state.active_sport = sport
-        sync_navigation_query()
 
 
 def hub_open_workspace(sport, view):
@@ -7977,80 +8091,142 @@ def hub_timestamp(value):
     return timestamp.tz_convert("America/New_York").strftime("%b %d, %I:%M %p ET") if pd.notna(timestamp) else "Time unavailable"
 
 
-def render_sports_hub():
+def hub_home_feeds(day):
+    """Load the two in-season desks concurrently; preserve each feed's error state."""
+    import concurrent.futures
+    def load(sport):
+        try:
+            return hub_feed(sport, day)
+        except Exception:
+            return {"games":[], "news":[], "errors":["ESPN feed unavailable"], "fetched":pd.Timestamp.now(tz="UTC").isoformat()}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        feeds = list(pool.map(load, ("nba", "nfl")))
+    return dict(zip(("nba", "nfl"), feeds))
+
+
+def hub_refresh_home(day, sport):
+    for key in {"nba", "nfl", sport}:
+        hub_feed.clear(key, day)
+
+
+def hub_games_html(games):
     import html
-    esc = lambda value: html.escape(str(value), quote=True)
-    sport = st.session_state.get("hub_sport", st.session_state.get("active_sport", "mlb"))
-    if sport not in HUB_SPORTS:
-        sport = st.session_state.get("last_analyzer_sport", "mlb")
-    st.session_state.hub_sport = sport
-    today = pd.Timestamp.now(tz="America/New_York").normalize()
-    st.markdown(f"<div id='workspace-top' class='hub-heading'><div><span class='hub-kicker'>THE DAILY BRIEF</span><h1>Your sports desk</h1></div><span>{today.strftime('%A, %B %d')}</span></div>", unsafe_allow_html=True)
-    with st.container(key="hub_sports"):
-        for col, key in zip(st.columns(len(HUB_SPORTS)), HUB_SPORTS):
-            col.button(key.upper(), key=f"hub_sport_{key}", type="primary" if sport == key else "secondary", use_container_width=True, on_click=hub_set_sport, args=(key,))
-    with st.container(key="hub_actions"):
-        left, right = st.columns(2)
-        left.button(f"Analyze {sport.upper()}", icon=":material/search:", use_container_width=True, key="hub_analyze", on_click=hub_open_workspace, args=(sport, "analyze"))
-        right.button("NBA Edge", icon=":material/bolt:", use_container_width=True, key="hub_edge", help="Open the NBA Edge scanner", on_click=hub_open_workspace, args=("nba", "edge"))
-    st.markdown("<h2 class='hub-section'>Around the league</h2>", unsafe_allow_html=True)
-    chosen = st.radio("Schedule date", ["Today", "Tomorrow"], horizontal=True, key="hub_schedule_day", label_visibility="collapsed")
-    day = (today + pd.Timedelta(days=int(chosen == "Tomorrow"))).date().isoformat()
-    with st.spinner("Updating the sports desk..."):
-        feed = hub_feed(sport, day)
-    for error in feed["errors"]:
-        st.warning(error + ". Use Refresh to try again; analysis tools remain available.")
+    esc = lambda value:html.escape(str(value), quote=True)
     cards = []
-    for game in feed["games"]:
+    for game in games:
         status = hub_timestamp(game["start"]).split(", ")[-1] if game["state"] == "pre" and game["status"].lower() not in ("postponed", "canceled", "cancelled", "delayed") else game["status"]
-        rows = []
+        teams = []
         for side in ("away", "home"):
             team = game[side]
             logo = f"<img src='{esc(team['logo'])}' alt='' loading='lazy'>" if team["logo"] else ""
             score = team["score"] if game["state"] in ("in", "post") else ""
-            rows.append(f"<div class='hub-team'>{logo}<span title='{esc(team['full_name'])}'>{esc(team['name'])}</span><b>{esc(score)}</b></div>")
-        matchup = " · ".join(game[s]["starter"] or "TBD" for s in ("away", "home")) if sport == "mlb" else game["venue"]
-        extra = ("Probable: " if sport == "mlb" else "") + matchup
-        if game.get("weather"):
-            extra += " · Reported weather: " + game["weather"]
-        body = f"<span class='hub-game-status {'is-live' if game['state'] == 'in' else ''}'>{esc(status)}</span>{''.join(rows)}<span class='hub-game-note'>{esc(extra)}</span>"
+            teams.append(f"<div class='hub-team'>{logo}<span title='{esc(team['full_name'])}'>{esc(team['name'])}</span><b>{esc(score)}</b></div>")
+        body = f"<span class='hub-game-status {'is-live' if game['state'] == 'in' else ''}'>{esc(status)}</span>{''.join(teams)}"
         tag = f"a href='{esc(game['url'])}' target='_blank' rel='noopener noreferrer' aria-label='{esc(game['away']['full_name'] + ' at ' + game['home']['full_name'] + ' on ESPN')}'" if game["url"] else "div"
         cards.append(f"<{tag} class='hub-game'>{body}</{'a' if game['url'] else 'div'}>")
-    if cards:
-        st.markdown("<div class='hub-scores'>" + "".join(cards) + "</div>", unsafe_allow_html=True)
-    elif not any("schedule" in e for e in feed["errors"]):
-        st.info(f"No {sport.upper()} games scheduled for {chosen.lower()} in the ESPN feed.")
-    refresh, stamp = st.columns([1, 3])
-    refresh.button("", icon=":material/refresh:", help="Refresh news and schedule", key="hub_refresh", on_click=hub_feed.clear, args=(sport, day))
-    stamp.caption("ESPN · Updated " + hub_timestamp(feed["fetched"]) + " · Times ET")
+    return "<div class='hub-scores'>" + "".join(cards) + "</div>"
 
-    picks = [p for p in st.session_state.get("parlay_legs", []) if str(p.get("sport", "")).lower() == sport]
-    st.markdown(f"<h2 class='hub-section'>Your shortlist <span>{len(picks)}</span></h2>", unsafe_allow_html=True)
+
+def hub_news_html(articles, featured=False):
+    import html
+    esc = lambda value:html.escape(str(value), quote=True)
+    stories = []
+    articles = list(articles)
+    if featured:
+        landscape = next((a for a in articles if isinstance(a.get("image_width"), (int, float)) and isinstance(a.get("image_height"), (int, float))
+                          and a["image_height"] > 0 and a["image_width"] / a["image_height"] >= 1.4), None)
+        if landscape:
+            articles = [landscape] + [a for a in articles if a is not landscape]
+    for index, article in enumerate(articles):
+        photo = f"<img src='{esc(article['image'])}' alt='' loading='lazy'>" if article.get("image") else ""
+        media = f"<div class='desk-story-media'>{photo}</div>" if photo else ""
+        lead = featured and index == 0
+        stories.append(f"<article class='desk-story {'is-lead' if lead else ''}'><a href='{esc(article['url'])}' target='_blank' rel='noopener noreferrer'>"
+                       f"{media}<div class='desk-story-copy'><span>ESPN · {esc(hub_timestamp(article['published']))}</span>"
+                       f"<h3>{esc(article['title'])}</h3></div></a></article>")
+    return "<div class='desk-stories'>" + "".join(stories) + "</div>"
+
+
+def render_sports_hub():
+    import html
+    esc = lambda value: html.escape(str(value), quote=True)
+    sport = st.session_state.get("hub_sport", "nba")
+    if sport not in ("nba", "nfl", "cfb"):
+        sport = "nba"
+    st.session_state.hub_sport = sport
+    today = pd.Timestamp.now(tz="America/New_York").normalize()
+    st.markdown(f"<div class='desk-masthead'><div><span class='desk-eyebrow'>THE DAILY DESK</span><h1>Basketball &amp; football</h1></div>"
+                f"<span class='desk-date'>{today.strftime('%A, %B %d')}<small>All game times Eastern</small></span></div>", unsafe_allow_html=True)
+    st.markdown("<div class='desk-section-title'><h2>NBA workspace</h2><span>Full-game points</span></div>", unsafe_allow_html=True)
+    with st.container(key="hub_actions"):
+        left, right = st.columns([1, 1])
+        left.button("NBA Edge", icon=":material/bolt:", type="primary", use_container_width=True, key="hub_edge", help="Open the NBA Edge scanner", on_click=hub_open_workspace, args=("nba", "edge"))
+        right.button("Analyze player", icon=":material/person_search:", use_container_width=True, key="hub_analyze", on_click=hub_open_workspace, args=("nba", "analyze"))
+    with st.container(key="home_football_shortcuts"):
+        a, b = st.columns(2)
+        a.button("NFL workspace", icon=":material/sports_football:", key="hub_nfl_analyze", use_container_width=True, on_click=hub_open_workspace, args=("nfl", "analyze"))
+        b.button("College QBs", icon=":material/school:", key="hub_cfb_analyze", use_container_width=True, on_click=hub_open_workspace, args=("cfb", "analyze"))
+    with st.container(key="hub_schedule_controls"):
+        league_col, day_col, refresh_col = st.columns([2, 2, .5])
+        with league_col:
+            st.radio("Game board", ["nba", "nfl", "cfb"], key="hub_sport", format_func=str.upper,
+                     index=None, horizontal=True, label_visibility="collapsed", width="stretch")
+        with day_col:
+            if st.session_state.get("hub_schedule_day") not in ("Today", "Tomorrow"):
+                st.session_state.hub_schedule_day = "Today"
+            chosen = st.radio("Schedule date", ["Today", "Tomorrow"], index=None, key="hub_schedule_day",
+                              horizontal=True, label_visibility="collapsed", width="stretch") or "Today"
+        sport = st.session_state.get("hub_sport") or "nba"
+        day = (today + pd.Timedelta(days=int(chosen == "Tomorrow"))).date().isoformat()
+        refresh_col.button("", icon=":material/refresh:", help="Refresh news and game board", key="hub_refresh", on_click=hub_refresh_home, args=(day, sport), use_container_width=True)
+    with st.spinner("Updating the sports desk..."):
+        feeds = hub_home_feeds(day)
+        feed = feeds[sport] if sport in feeds else hub_feed(sport, day)
+    if feed["games"]:
+        st.markdown(hub_games_html(feed["games"]), unsafe_allow_html=True)
+    elif not any("schedule" in error.lower() for error in feed["errors"]):
+        st.info(f"No {sport.upper()} games scheduled for {chosen.lower()} in the ESPN feed.")
+    st.caption(f"{sport.upper()} · ESPN · Updated {hub_timestamp(feed['fetched'])}")
+    errors = [f"{key.upper()}: {error}" for key, data in {**feeds, sport:feed}.items() for error in data["errors"]]
+    if errors:
+        st.warning(" · ".join(errors) + ". Research workspaces remain available.")
+
+    with st.container(key="home_news_columns"):
+        basketball, football = st.columns([1.8, 1], gap="large")
+        with basketball:
+            st.markdown("<div class='desk-section-title'><h2>Around the NBA</h2><span>Latest from ESPN</span></div>", unsafe_allow_html=True)
+            if feeds["nba"]["news"]:
+                st.markdown(hub_news_html(feeds["nba"]["news"][:4], featured=True), unsafe_allow_html=True)
+            else:
+                st.info("NBA headlines are unavailable. The NBA analyzer and scanner are still accessible above.")
+        with football:
+            st.markdown("<div class='desk-section-title football-title'><h2>Football desk</h2><span>NFL + College</span></div>", unsafe_allow_html=True)
+            with st.container(key="home_football_actions"):
+                st.button("NFL Edge", icon=":material/bolt:", key="hub_nfl_edge", use_container_width=True, on_click=hub_open_workspace, args=("nfl", "edge"))
+            if feeds["nfl"]["news"]:
+                st.markdown(hub_news_html(feeds["nfl"]["news"][:3]), unsafe_allow_html=True)
+            else:
+                st.info("NFL headlines are unavailable from ESPN right now.")
+
+    picks = [p for p in st.session_state.get("parlay_legs", []) if str(p.get("sport", "")).lower() in ("nba", "nfl", "cfb")]
+    st.markdown(f"<div class='desk-section-title'><h2>NBA + football picks</h2><span>{len(picks)} saved · Not refreshed</span></div>", unsafe_allow_html=True)
     if not picks:
-        st.markdown("<p class='hub-muted'>No saved picks for this sport.</p>", unsafe_allow_html=True)
+        st.markdown("<p class='hub-muted'>No basketball or football picks saved yet.</p>", unsafe_allow_html=True)
     else:
         for i, pick in enumerate(picks[:6]):
             with st.container(key=f"hub_pick_{i}"):
                 main, action = st.columns([3, 1])
                 main.markdown(f"<div class='hub-pick'><strong>{esc(pick.get('player', ''))}</strong><span>{esc(pick.get('prop', ''))} · {esc(pick.get('line', ''))}</span><small>Saved verdict: {esc(pick.get('verdict', 'Unrated'))} · Not refreshed</small></div>", unsafe_allow_html=True)
                 action.button("Review", key=f"hub_review_{i}", icon=":material/arrow_forward:", use_container_width=True, on_click=open_pick_list_analyzer, args=(dict(pick),))
-        mentions = hub_pick_mentions(feed["news"], picks)
+        mentions = hub_pick_mentions(feeds["nba"]["news"] + feeds["nfl"]["news"], picks)
         if mentions:
             st.markdown("<h3 class='hub-section'>In the news: your players</h3>", unsafe_allow_html=True)
             st.caption("Headline mentions, not a verified availability report. Saved scores are unchanged.")
             for article in mentions:
                 st.markdown(f"<div class='hub-mention'><span>{esc(', '.join(article['players']))}</span><a href='{esc(article['url'])}' target='_blank' rel='noopener noreferrer'>{esc(article['title'])}</a><small>ESPN · {esc(hub_timestamp(article['published']))}</small></div>", unsafe_allow_html=True)
-        elif not any("headlines" in e for e in feed["errors"]):
+        elif not errors:
             st.caption("No saved-player mentions in the latest headlines. This does not confirm availability.")
-
-    st.markdown(f"<h2 class='hub-section'>Latest in {sport.upper()}</h2>", unsafe_allow_html=True)
-    if not feed["news"] and not any("headlines" in e for e in feed["errors"]):
-        st.info("No headlines available in this feed.")
-    articles = []
-    for article in feed["news"][:5]:
-        photo = f"<img src='{esc(article['image'])}' alt='' loading='lazy'><small class='hub-credit'>{esc(article['credit'])}</small>" if article["image"] else ""
-        articles.append(f"<article class='hub-story'><a href='{esc(article['url'])}' target='_blank' rel='noopener noreferrer'><div class='hub-photo'>{photo}</div><div class='hub-story-copy'><span>ESPN · {esc(hub_timestamp(article['published']))}</span><h3>{esc(article['title'])}</h3><small>Read story <span aria-hidden='true'>↗</span></small></div></a></article>")
-    st.markdown("<div class='hub-news'>" + "".join(articles) + "</div>", unsafe_allow_html=True)
+    st.button("Open pick list", key="hub_picks", icon=":material/bookmarks:", on_click=navigate_to_view, args=("picks",))
     st.caption("News and schedules are informational. No model probabilities or picks are changed by this feed.")
 
 
@@ -8079,7 +8255,7 @@ def remember_edge_league():
         st.session_state._last_edge_league = selected
         st.session_state.last_analyzer_sport = selected.lower()
     else:
-        st.session_state.edge_league_select = st.session_state.get("_last_edge_league", "MLB")
+        st.session_state.edge_league_select = st.session_state.get("_last_edge_league", "NBA")
 
 
 preserve_workspace_inputs()
@@ -8115,7 +8291,7 @@ try:
     _url_sport = str(_url_sport).strip().lower()
 except Exception:
     _url_sport = ""
-_default_active_sport = _url_sport if _url_sport in _VALID_SPORTS else "mlb"
+_default_active_sport = _url_sport if _url_sport in _VALID_SPORTS else "nba"
 try:
     _url_view = st.query_params.get("view", "")
     if isinstance(_url_view, list):
@@ -8128,7 +8304,7 @@ _default_active_view = (
     "edge" if _default_active_sport == "edge" else "analyze" if _url_sport in _ANALYZER_SPORTS else "home"
 )
 _default_analyzer_sport = (
-    _default_active_sport if _default_active_sport in _ANALYZER_SPORTS else "mlb"
+    _default_active_sport if _default_active_sport in _ANALYZER_SPORTS else "nba"
 )
 
 for key, default in [
@@ -8144,6 +8320,7 @@ for key, default in [
     ("entry_ledger", []), ("entry_ledger_loaded", False),
     ("active_view", _default_active_view),
     ("last_analyzer_sport", _default_analyzer_sport),
+    ("edge_league_select", _default_analyzer_sport.upper()),
     ("edge_return_available", False), ("edge_viewed", []),
     ("mlb_analysis_request", None), ("mlb_analysis_editing", True),
 ]:
@@ -8153,9 +8330,9 @@ for key, default in [
 # WNBA is retired from the product surface. Keep its durable Supabase history
 # intact, but never restore a stale WNBA route or session shortlist.
 if str(st.session_state.get("active_sport", "")).lower() == "wnba":
-    st.session_state.active_sport = "mlb"
+    st.session_state.active_sport = "nba"
 if str(st.session_state.get("last_analyzer_sport", "")).lower() == "wnba":
-    st.session_state.last_analyzer_sport = "mlb"
+    st.session_state.last_analyzer_sport = "nba"
 if "parlay_legs" in st.session_state:
     st.session_state.parlay_legs = [
         leg for leg in (st.session_state.get("parlay_legs", []) or [])
@@ -8182,7 +8359,7 @@ def persist_active_view(view: str) -> None:
 def sync_navigation_query() -> None:
     """Persist the completed route in one URL update after navigation."""
     try:
-        sport = str(st.session_state.get("active_sport", "mlb")).lower()
+        sport = workspace_sport()
         view = str(st.session_state.get("active_view", "analyze")).lower()
         if sport not in _VALID_SPORTS or view not in _VALID_VIEWS:
             return
@@ -8406,12 +8583,13 @@ def render_workspace_scroll_memory():
     import json
     import streamlit.components.v1 as components
     view = st.session_state.get("active_view", "home")
-    sport = st.session_state.get("edge_league_select", "MLB") if view == "edge" else st.session_state.get("active_sport", "mlb")
+    sport = workspace_sport()
     route = json.dumps(f"{view}:{sport}")
     prefix = json.dumps("propiq-scroll:" + st.session_state.session_id + ":")
+    restore = json.dumps(view == "edge" and st.session_state.get("_navigation_scroll_target") == "edge-scanner-controls")
     components.html("""<script>
     (() => {
-      const w=window.parent,d=w.document,route=ROUTE,prefix=PREFIX;
+      const w=window.parent,d=w.document,route=ROUTE,prefix=PREFIX,restore=RESTORE;
       const root=()=>d.querySelector('[data-testid="stMain"]') || d.querySelector('[data-testid="stAppViewContainer"]');
       if(!w.__propiqScroll) {
         const state=w.__propiqScroll={route:null,prefix,freeze:false,until:0};
@@ -8424,7 +8602,7 @@ def render_workspace_scroll_memory():
         d.addEventListener('pointerdown',e=>{
           state.until=0;
           const button=e.target.closest('button');
-          if(button && (button.closest('.st-key-workspace_navigation') || /Open analyzer|Back to Edge|Analyze$/.test(button.innerText))) {
+          if(button && (button.closest('.st-key-workspace_navigation,.st-key-workspace_sport_switcher') || /Open analyzer|Back to Edge|Analyze$/.test(button.innerText))) {
             try {w.sessionStorage.setItem(state.prefix+state.route,String(position()));} catch(e) {}
             state.freeze=true;
           }
@@ -8441,9 +8619,77 @@ def render_workspace_scroll_memory():
         w.requestAnimationFrame(apply);w.setTimeout(()=>observer.disconnect(),1250);
         return true;
       };
-      if(state.route!==route) {state.route=route;state.prefix=prefix;state.freeze=false;state.restore();}
+      if(state.route!==route) {state.route=route;state.prefix=prefix;state.freeze=false;if(restore)state.restore();}
     })();
-    </script>""".replace("ROUTE", route).replace("PREFIX", prefix), height=0, width=0)
+    </script>""".replace("ROUTE", route).replace("PREFIX", prefix).replace("RESTORE", restore), height=0, width=0)
+
+
+def workspace_sport():
+    """Resolve the visible league without exposing the legacy Edge route sentinel."""
+    sport = str(st.session_state.get("active_sport", "nba")).lower()
+    if sport == "edge":
+        sport = str(st.session_state.get("edge_league_select", "NBA")).lower()
+    if sport not in _ANALYZER_SPORTS:
+        sport = str(st.session_state.get("last_analyzer_sport", "nba")).lower()
+    return sport if sport in _ANALYZER_SPORTS else "nba"
+
+
+def workspace_select_sport(sport):
+    """Switch leagues in place; keep the destination and all per-sport inputs."""
+    if sport not in _ANALYZER_SPORTS:
+        return
+    if st.session_state.get("active_view") == "edge":
+        st.session_state.active_sport = "edge"
+        st.session_state.last_analyzer_sport = sport
+        st.session_state.edge_league_select = sport.upper()
+        st.session_state._last_edge_league = sport.upper()
+        set_navigation_scroll_target("workspace-top")
+        sync_navigation_query()
+    else:
+        navigate_to_sport(sport, "workspace-top")
+
+
+def render_workspace_shell():
+    view = str(st.session_state.get("active_view", "home"))
+    sport = workspace_sport()
+    titles = {"home":"Daily desk", "analyze":"Player research", "edge":"Edge scanner", "picks":"Pick list", "results":"Results"}
+    context_label = "BASKETBALL + FOOTBALL" if view == "home" else sport.upper() if view in ("analyze", "edge") else "ALL SPORTS"
+    with st.container(key="workspace_header"):
+        brand, context, tools = st.columns([2, 5, 1])
+        with brand:
+            with st.container(key="brand_home"):
+                st.button("PropIQ", key="brand_home_button", help="Go to Home", on_click=navigate_to_view, args=("home",), use_container_width=True)
+        with context:
+            st.markdown(f"<div class='shell-context'><span>{context_label}</span>"
+                        f"<strong>{titles.get(view, 'Daily desk')}</strong></div>", unsafe_allow_html=True)
+        with tools:
+            with st.popover("", icon=":material/settings:", help="Settings and help"):
+                st.subheader("Workspace settings")
+                st.button("Refresh cached data", key="workspace_refresh_cache", icon=":material/refresh:", on_click=st.cache_data.clear, use_container_width=True)
+                st.button("MLB workspace · Offseason", key="settings_mlb", icon=":material/sports_baseball:", on_click=navigate_to_sport, args=("mlb", "workspace-top"), use_container_width=True)
+                with st.expander("Score guide"):
+                    render_v8_help_content()
+                with st.expander("Runtime diagnostics"):
+                    render_runtime_diagnostics()
+    with st.container(key="workspace_navigation"):
+        destinations = [("home", "Home", "home"), ("analyze", "Analyze", "person_search"), ("edge", "Edge", "bolt"),
+                        ("picks", "Picks", "bookmarks"), ("results", "Results", "query_stats")]
+        count = len(st.session_state.get("parlay_legs", []) or [])
+        for col, (key, label, icon) in zip(st.columns(5), destinations):
+            col.button(f"{label} {count}" if key == "picks" and count else label, key=f"view_{key}",
+                       icon=f":material/{icon}:", type="primary" if view == key else "secondary", use_container_width=True,
+                       on_click=navigate_to_view, args=(key,))
+    if view in ("analyze", "edge"):
+        with st.container(key="workspace_sport_switcher"):
+            cols = st.columns([1, 1, 1, .7])
+            for col, key in zip(cols[:3], ("nba", "nfl", "cfb")):
+                col.button(key.upper(), key=f"sport_{key}", type="primary" if sport == key else "secondary", use_container_width=True,
+                           on_click=workspace_select_sport, args=(key,))
+            with cols[3]:
+                with st.popover("MLB" if sport == "mlb" else "", icon=":material/more_horiz:", help="More sports", use_container_width=True):
+                    st.caption("More sports")
+                    st.button("MLB · Offseason", key="sport_mlb", icon=":material/sports_baseball:", use_container_width=True,
+                              on_click=workspace_select_sport, args=("mlb",))
 
 
 def navigate_to_view(view: str, target: str = "workspace-top") -> None:
@@ -8451,26 +8697,21 @@ def navigate_to_view(view: str, target: str = "workspace-top") -> None:
     view = str(view or "").strip().lower()
     if view not in _VALID_VIEWS:
         return
-    current_sport = str(st.session_state.get("active_sport", "mlb")).lower()
+    current_sport = workspace_sport()
     if view == "home":
-        hub_sport = current_sport if current_sport in _ANALYZER_SPORTS else str(st.session_state.get("last_analyzer_sport", "mlb"))
-        st.session_state.hub_sport = hub_sport
-        st.session_state.active_sport = hub_sport
+        st.session_state.last_analyzer_sport = current_sport
+        st.session_state.active_sport = current_sport
     if view == "analyze":
-        analyzer_sport = str(st.session_state.get("last_analyzer_sport", "mlb")).lower()
+        analyzer_sport = str(st.session_state.get("last_analyzer_sport", "nba")).lower()
         if analyzer_sport not in _ANALYZER_SPORTS:
-            analyzer_sport = "mlb"
+            analyzer_sport = "nba"
         st.session_state.active_sport = analyzer_sport
-        if target == "workspace-top":
-            target = f"{analyzer_sport}-analyzer-controls"
     elif view == "edge":
         if current_sport in _ANALYZER_SPORTS:
             st.session_state.last_analyzer_sport = current_sport
         if current_sport in ("mlb", "nfl", "cfb", "nba"):
             st.session_state.edge_league_select = current_sport.upper()
         st.session_state.active_sport = "edge"
-        if target == "workspace-top":
-            target = "edge-scanner-controls"
     st.session_state.active_view = view
     set_navigation_scroll_target(target)
     sync_navigation_query()
@@ -8480,8 +8721,8 @@ def navigate_to_sport(sport: str, target: str) -> None:
     """Single-pass navigation callback used by tabs and analyzer links."""
     sport = str(sport or "").strip().lower()
     if sport not in _ANALYZER_SPORTS:
-        sport = "mlb"
-        target = "mlb-analyzer-controls"
+        sport = "nba"
+        target = "workspace-top"
     st.session_state.last_analyzer_sport = sport
     st.session_state.active_view = "analyze"
     st.session_state.active_sport = sport
@@ -11106,7 +11347,7 @@ def render_pick_list_page() -> None:
     )
 
     st.markdown(
-        "<div id='workspace-top' class='workspace-page-head'><div>"
+        "<div class='workspace-page-head'><div>"
         "<h1>Pick List</h1>"
         "<p>Your saved candidates, ready for review.</p>"
         "</div></div>",
@@ -11320,7 +11561,7 @@ def render_results_page() -> None:
     import html as _html
 
     st.markdown(
-        "<div id='workspace-top' class='workspace-page-head'><div>"
+        "<div class='workspace-page-head'><div>"
         "<h1>Results</h1>"
         "<p>Measure every scanner decision against official outcomes, then inspect your manually tracked picks.</p>"
         "</div></div>",
@@ -16811,35 +17052,8 @@ def render_runtime_diagnostics() -> None:
         )
 
 
-_header_view = str(st.session_state.get("active_view", "analyze")).lower()
-_header_sport = str(st.session_state.get("active_sport", "mlb")).upper()
-_header_context = str(st.session_state.get("edge_league_select", st.session_state.get("last_analyzer_sport", "mlb"))).upper() if _header_sport == "EDGE" else _header_sport
-
-with st.container(key="workspace_header"):
-    st.markdown(f"""
-    <div class="pl-header">
-        <div class="pl-logo-wrap">
-            <div>
-                <div class="pl-logo">Prop<span>IQ</span><small>V8</small></div>
-                <div class="pl-sub">Research desk</div>
-            </div>
-        </div>
-        <div class="pl-header-actions">
-            <span class="pl-header-sport">{_header_context}</span>
-            <span class="pl-live-status">Sports intelligence</span>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    with st.container(key="workspace_tools"):
-        with st.popover("", icon=":material/settings:", help="Settings and help"):
-            st.subheader("Settings")
-            st.button("Sports desk", key="workspace_sports_desk", icon=":material/newspaper:", on_click=navigate_to_view, args=("home",), use_container_width=True)
-            st.button("Refresh cached data", key="workspace_refresh_cache", icon=":material/refresh:", on_click=st.cache_data.clear, use_container_width=True)
-            with st.expander("Score guide"):
-                render_v8_help_content()
-            with st.expander("Runtime diagnostics"):
-                render_runtime_diagnostics()
+st.markdown("<div id='workspace-top'></div>", unsafe_allow_html=True)
+render_workspace_shell()
 
 @st.cache_data(ttl=60, show_spinner=False)
 def fetch_live_data() -> dict:
@@ -17057,42 +17271,11 @@ _active_view = str(st.session_state.get("active_view", "analyze")).lower()
 if _active_view == "edge" and st.session_state.active_sport != "edge":
     persist_active_sport("edge")
 elif _active_view == "analyze" and st.session_state.active_sport == "edge":
-    _restore_sport = str(st.session_state.get("last_analyzer_sport", "mlb")).lower()
-    persist_active_sport(_restore_sport if _restore_sport in _ANALYZER_SPORTS else "mlb")
-
-with st.container(key="workspace_navigation"):
-    _nav1, _nav2, _nav3, _nav4 = st.columns(4)
-    with _nav1:
-        st.button(
-            "Analyze", key="view_analyze", use_container_width=True,
-            icon=":material/search:",
-            type="primary" if _active_view == "analyze" else "secondary",
-            on_click=navigate_to_view, args=("analyze",),
-        )
-    with _nav2:
-        st.button(
-            "Edge", key="view_edge", use_container_width=True,
-            icon=":material/bolt:",
-            type="primary" if _active_view == "edge" else "secondary",
-            on_click=navigate_to_view, args=("edge",),
-        )
-    with _nav3:
-        _pick_count = len(st.session_state.get("parlay_legs", []) or [])
-        st.button(
-            "Picks", key="view_picks", use_container_width=True, help=f"{_pick_count} saved picks",
-            icon=":material/bookmarks:",
-            type="primary" if _active_view == "picks" else "secondary",
-            on_click=navigate_to_view, args=("picks",),
-        )
-    with _nav4:
-        st.button(
-            "Results", key="view_results", use_container_width=True,
-            icon=":material/query_stats:",
-            type="primary" if _active_view == "results" else "secondary",
-            on_click=navigate_to_view, args=("results",),
-        )
+    _restore_sport = str(st.session_state.get("last_analyzer_sport", "nba")).lower()
+    persist_active_sport(_restore_sport if _restore_sport in _ANALYZER_SPORTS else "nba")
 
 render_workspace_scroll_memory()
+render_navigation_scroll_target("workspace-top")
 
 if _active_view == "home":
     with st.container(key="hub_workspace"):
@@ -17111,45 +17294,12 @@ if _active_view == "results":
     st.stop()
 
 if _active_view == "analyze":
-    with st.container(key="analyzer_sport_navigation"):
-        _sp1, _sp2, _sp3, _sp4 = st.columns(4)
-        with _sp1:
-            st.button(
-                "NBA", key="sport_nba", use_container_width=True,
-                icon=":material/sports_basketball:",
-                type="primary" if st.session_state.active_sport == "nba" else "secondary",
-                on_click=navigate_to_sport, args=("nba", "nba-analyzer-controls"),
-            )
-        with _sp2:
-            st.button(
-                "MLB", key="sport_mlb", use_container_width=True,
-                icon=":material/sports_baseball:",
-                type="primary" if st.session_state.active_sport == "mlb" else "secondary",
-                on_click=navigate_to_sport, args=("mlb", "mlb-analyzer-controls"),
-            )
-        with _sp3:
-            st.button(
-                "NFL", key="sport_nfl", use_container_width=True,
-                icon=":material/sports_football:",
-                type="primary" if st.session_state.active_sport == "nfl" else "secondary",
-                on_click=navigate_to_sport, args=("nfl", "nfl-analyzer-controls"),
-            )
-        with _sp4:
-            st.button("CFB", key="sport_cfb", use_container_width=True,
-                      icon=":material/school:",
-                      type="primary" if st.session_state.active_sport == "cfb" else "secondary",
-                      on_click=navigate_to_sport, args=("cfb", "cfb-analyzer-controls"))
-
     if st.session_state.get("edge_return_available"):
         with st.container(key="return_to_edge_navigation"):
             st.button(
                 "← Back to Edge results", key="return_to_edge", use_container_width=True,
                 on_click=navigate_to_view, args=("edge", "edge-scanner-controls"),
             )
-
-render_sticky_pick_tray()
-
-
 
 # ─────────────────────────────────────────────
 # Sidebar
@@ -27444,8 +27594,8 @@ if st.session_state.active_sport == "nfl":
 
 if st.session_state.active_sport == "edge":
     if "edge_league_select" not in st.session_state:
-        st.session_state.edge_league_select = "MLB"
-    _edge_league = st.segmented_control("Sport", ["MLB", "NBA", "NFL", "CFB"], selection_mode="single", key="edge_league_select", on_change=remember_edge_league, width="stretch", label_visibility="collapsed")
+        st.session_state.edge_league_select = "NBA"
+    _edge_league = st.session_state.edge_league_select
     if _edge_league == "NBA":
         with st.container(key="nfl_workspace"):
             render_nbap_scanner()
