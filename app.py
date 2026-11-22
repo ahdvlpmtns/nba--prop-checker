@@ -4473,6 +4473,17 @@ def research_board_item(row, sport, score=None, action=None):
     display_action = row.get("action") if action is None else action
     if dimensions["entry_eligibility"] == "AWAITING PAYOUT":
         display_action = "PAYOUT CHECK"
+    health_label = ""
+    if str(sport).upper() == "NBA":
+        availability = row.get("snapshot", {}).get("availability", {})
+        health = row.get("health_context", {})
+        health_label = "Health: " + str(availability.get("status", "Unknown"))
+        if availability.get("injury"):
+            health_label += " · " + str(availability["injury"])
+        if health.get("restriction"):
+            health_label += " · Minutes restriction"
+        if health.get("return_label") and health["return_label"] != "Return from injury not verified":
+            health_label += " · " + health["return_label"]
     return {"id": research_quote_identity(row, sport), "player": str(row.get("player", "")),
             "market": row.get("stat") or row.get("market") or "Points",
             "line": row["line"], "side": row.get("side", "Over"),
@@ -4482,6 +4493,7 @@ def research_board_item(row, sport, score=None, action=None):
             "score_label": "Model score" if dimensions["entry_eligibility"] == "AWAITING PAYOUT" else "Entry score",
             "context": game.get("game_name") or f"vs {row.get('opp') or 'TBD'} · {row.get('game_date') or 'Date TBD'}",
             "payout": row.get("line_type") or ("Reduced payout - check return" if is_reduced_payout_line(row) else "Standard payout"),
+            "health_label":health_label,
             "image": research_player_photo(row, sport)}
 
 
@@ -4556,6 +4568,8 @@ def render_research_board(items, key):
                                           use_container_width=True, on_click=select_research_candidate, args=(key, item["id"]))
                                 st.caption(item["context"])
                                 st.caption(f"Model: {item['model_assessment']} · Entry: {item['entry_eligibility'].lower()}")
+                                if item.get("health_label"):
+                                    st.caption(item["health_label"])
                     with line:
                         st.markdown(f"<div class='research-row-line'><strong>{html.escape(str(item['side']))} {float(item['line']):g}</strong><span>{html.escape(str(item['market']))}</span><span>{html.escape(str(item['payout']))}</span></div>", unsafe_allow_html=True)
                     with score:
@@ -6070,7 +6084,7 @@ def render_cfb_scanner():
         st.download_button("Download debugger", report, "cfb-scanner-debug.txt", key="cfb_debug_download")
 
 
-NBA_POINTS_MODEL_VERSION = "nba-points-v2.2-source-audit-beta"
+NBA_POINTS_MODEL_VERSION = "nba-points-v2.3-injury-context-beta"
 NBAP_ESPN = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba"
 NBAP_LOG_COLUMNS = ["event_id", "date", "season", "phase", "team_id", "opponent_id", "venue", "MIN", "PTS", "FGM", "FGA", "FG3M", "FG3A", "FTM", "FTA", "REB", "AST"]
 # Display-only ESPN team labels; never used to match a forecast or roster.
@@ -6379,28 +6393,159 @@ def nbap_team_history(team_id, season, date_key):
             "warnings": warnings + [w for _, w in batches if w]}
 
 
+def nbap_injury_player_id(athlete):
+    from urllib.parse import urlsplit
+    if not isinstance(athlete, dict):
+        return ""
+    direct = str(athlete.get("id") or "")
+    ids = set()
+    for link in athlete.get("links", []) or []:
+        try:
+            url = urlsplit(str(link.get("href", "")))
+            match = re.search(r"/nba/player(?:/[^/]+)?/_/id/(\d+)(?:/|$)", url.path)
+            if url.scheme == "https" and url.hostname in ("espn.com", "www.espn.com") and not url.username and match:
+                ids.add(match[1])
+        except (ValueError, AttributeError):
+            continue
+    if direct:
+        return direct if not ids or ids == {direct} else ""
+    return next(iter(ids)) if len(ids) == 1 else ""
+
+
+def nbap_injury_report(item, source, player):
+    """Normalize an identified provider report, retaining its original designation."""
+    raw = str(item.get("status") or "Unknown")
+    aliases = {"day-to-day":"Day-To-Day", "day to day":"Day-To-Day", "questionable":"Questionable", "probable":"Probable",
+               "doubtful":"Doubtful", "out":"Out", "suspended":"Suspended", "inactive":"Inactive", "active":"Available", "available":"Available"}
+    status = aliases.get(raw.lower(), "Unknown")
+    short, long = str(item.get("shortComment") or ""), str(item.get("longComment") or "")
+    # Only the player-specific headline can refine a generic designation; not teammate commentary.
+    if status == "Day-To-Day":
+        matches = re.findall(r"\b(?:listed|designated|upgraded|downgraded|remains|is|now)\s+(?:(?:as|to)\s+)?(questionable|probable|doubtful|available|out)\b", short, re.I)
+        if matches:
+            status = aliases[matches[-1].lower()]
+        elif re.search(r"\b(?:won't|will not) (?:play|suit up)\b", short, re.I):
+            status = "Out"
+    details = item.get("details") if isinstance(item.get("details"), dict) else {}
+    injury = " · ".join(str(details[k]) for k in ("side", "type", "detail") if details.get(k))
+    reported = pd.to_datetime(item.get("date"), utc=True, errors="coerce")
+    return {"status":status, "raw_status":raw, "note":short or long or "No detailed injury report supplied",
+            "detail":long, "injury":injury, "reported_at":reported.isoformat() if pd.notna(reported) else None,
+            "expected_return":str(details.get("returnDate") or ""), "source":source,
+            "source_url":f"https://www.espn.com/nba/player/_/id/{player['espn_id']}" if str(player["espn_id"]).isdigit() else ""}
+
+
 @st.cache_data(ttl=300, show_spinner=False)
 def nbap_availability(player, date_key):
-    status, note, verified = "Unknown", "Current injury feed unavailable", False
+    now = pd.Timestamp.now(tz="UTC")
+    reports, warnings, live = [], [], []
+    feed_ok, feed_fresh, feed_time = False, False, None
+    identity_conflict = False
     try:
         payload = nbap_json(f"{NBAP_ESPN}/injuries")
-        if not isinstance(payload.get("injuries"), list):
+        if not isinstance(payload.get("injuries"), list) or payload.get("status", "success") != "success":
             raise ValueError("Incomplete injury feed")
-        status, note, verified = "Active/Unlisted", "No active ESPN injury designation; unlisted is not a medical clearance", True
+        feed_ok = True
+        stamp = pd.to_datetime(payload.get("timestamp"), utc=True, errors="coerce")
+        feed_fresh = pd.notna(stamp) and -300 <= (now - stamp).total_seconds() <= 21600
+        feed_time = stamp.isoformat() if pd.notna(stamp) else None
         for group in payload["injuries"]:
             for item in group.get("injuries", []):
-                if str(item.get("athlete", {}).get("id", "")) == player["espn_id"]:
-                    status = item.get("status", "Unknown")
-                    note = item.get("shortComment") or item.get("longComment") or "ESPN injury designation"
-    except Exception:
-        pass
-    for injury in player.get("injuries", []):
-        value = str(injury.get("status", "Unknown"))
-        if value.lower() not in ("active", "probable", ""):
-            status, note, verified = value, str(injury.get("shortComment") or "Roster injury designation"), True
+                athlete = item.get("athlete", {})
+                tid = str(athlete.get("team", {}).get("id") or group.get("id") or "")
+                if nbap_injury_player_id(athlete) == str(player["espn_id"]):
+                    if tid and tid != str(player["team_id"]):
+                        identity_conflict = True
+                    else:
+                        live.append(nbap_injury_report(item, "ESPN injury feed", player))
+        if not feed_fresh:
+            warnings.append("Injury-feed timestamp is stale or unavailable; participation is not independently cleared")
+    except Exception as err:
+        feed_ok = feed_fresh = False
+        live = []
+        warnings.append(f"Current injury feed unavailable ({type(err).__name__})")
+    roster = [nbap_injury_report(item, "ESPN roster fallback", player) for item in player.get("injuries", []) if isinstance(item, dict)]
+    def rank(report):
+        stamp = pd.to_datetime(report.get("reported_at"), utc=True, errors="coerce")
+        return stamp.value if pd.notna(stamp) and stamp <= now else -1
+    live.sort(key=rank, reverse=True)
+    roster.sort(key=rank, reverse=True)
+    reports = live + roster
+    selected = live[0] if live else roster[0] if roster else None
+    if selected:
+        chosen = dict(selected)
+        verified = bool(live and feed_fresh)
+        if not live:
+            warnings.append("Roster fallback only; a current player-specific injury designation was not verified")
+        conflicts = [r for r in reports if r["status"] not in (chosen["status"], "Unknown") and not (r["status"] == "Day-To-Day" and chosen["status"] in ("Questionable", "Probable"))]
+        if conflicts:
+            warnings.append("Sources disagree; live player-specific report takes priority over roster fallback")
+            # A newer adverse report cannot be silently cleared by an older positive report.
+            if chosen["status"] in ("Available", "Probable") and any(rank(r) >= rank(chosen) or rank(r) == -1 for r in conflicts):
+                chosen["status"], verified = "Unknown", False
+    else:
+        chosen = {"status":"Active/Unlisted" if feed_ok else "Unknown", "raw_status":"", "note":"No ESPN injury listing; absence from the feed is not medical clearance",
+                  "detail":"", "injury":"", "reported_at":None, "expected_return":"", "source":"ESPN injury feed" if feed_ok else "Unavailable", "source_url":""}
+        verified = feed_fresh
+    reported = pd.to_datetime(chosen.get("reported_at"), utc=True, errors="coerce")
+    if identity_conflict:
+        verified = False
+        if chosen["status"] not in ("Out", "Doubtful", "Suspended", "Inactive"):
+            chosen["status"] = "Unknown"
+        warnings.append("Injury feed and current roster disagree on the player's team")
+    if pd.notna(reported) and reported > now + pd.Timedelta(minutes=5):
+        chosen["status"], verified = "Unknown", False
+        warnings.append("Player injury report is future-dated")
     if player.get("roster_status") != "active":
-        status, note = "Unknown", "Current active-roster status unverified"
-    return {"status": status, "note": note, "verified": verified, "fetched_at": pd.Timestamp.now(tz="UTC").isoformat()}
+        chosen["status"], verified = "Unknown", False
+        warnings.append("Current active-roster status unverified")
+    return {**chosen, "verified":bool(verified), "fetched_at":now.isoformat(), "feed_timestamp":feed_time,
+            "reports":reports, "warnings":warnings}
+
+
+def nbap_health_context(snapshot, logs):
+    """Source-backed return evidence and explicitly unverified recent-absence context."""
+    availability = snapshot.get("availability", {})
+    captured = pd.Timestamp(snapshot["captured_at"])
+    game, player = snapshot["game"], snapshot["player"]
+    current = logs.loc[(logs.season == game["season"]) & (logs.team_id == player["team_id"]) & (logs.date < captured)].sort_values("date", ascending=False)
+    reports = [r for r in availability.get("reports", []) if isinstance(r, dict)]
+    result = {"status":availability.get("status", "Unknown"), "return_label":"Return from injury not verified", "return_detail":"No dated return-to-play evidence loaded",
+              "return_watch":False, "restriction":False, "reported_minutes_limit":None, "absence_games":0, "post_return_games":0}
+    report_time = pd.to_datetime(availability.get("reported_at"), utc=True, errors="coerce")
+    recent_report = pd.notna(report_time) and pd.Timedelta(0) <= captured - report_time <= pd.Timedelta(days=7)
+    short = str(availability.get("note") or "")
+    # A restriction is surfaced only when explicitly stated, never inferred from a low-minute game.
+    if recent_report and re.search(r"\b(?:minutes? (?:restriction|limit)|limited to \d+ minutes|\d+-minute (?:limit|restriction))\b", short, re.I) and not re.search(r"\b(?:no|without|no longer on|not (?:on|under|expected to have|face)) (?:a |any |formal )?minutes? (?:restriction|limit)\b", short, re.I):
+        result["restriction"] = result["return_watch"] = True
+        match = re.search(r"(?:limited to |(?:limit|restriction) (?:of|at) )(\d+) minutes|\b(\d+)-minute (?:limit|restriction)", short, re.I)
+        if match:
+            minutes = int(next(v for v in match.groups() if v))
+            if 0 < minutes <= 48:
+                result["reported_minutes_limit"] = minutes
+    for report in reports:
+        date = pd.to_datetime(report.get("reported_at"), utc=True, errors="coerce")
+        if pd.isna(date) or date >= captured or captured - date > pd.Timedelta(days=45) or report.get("status") not in ("Out", "Doubtful", "Questionable", "Day-To-Day"):
+            continue
+        after = current.loc[current.date > date]
+        if 0 < len(after) <= 3:
+            result.update(return_label="Played since a dated injury report", return_detail=f"{len(after)} appearance(s) after {report['status']} report ({date.date()}); this does not confirm unrestricted minutes",
+                          post_return_games=len(after))
+            break
+    team_games = {str(r["event_id"]):r for r in snapshot.get("health_games", []) if r.get("phase") == 2 and r.get("season") == game["season"] and r.get("team_id") == player["team_id"] and r["date"] < captured}
+    for index in range(min(3, max(0, len(current) - 1))):
+        latest, prior = current.iloc[index], current.iloc[index + 1]
+        missing = [r for eid, r in team_games.items() if prior.date < r["date"] < latest.date and eid not in set(current.event_id.astype(str))]
+        if len(missing) >= 2:
+            result["absence_games"] = len(missing)
+            if not result["post_return_games"]:
+                result.update(return_label="Recent absence; reason unverified", return_detail=f"{len(missing)} loaded team games without a recorded appearance before {latest.date.date()}; {index + 1} appearance(s) since. A gap alone is not an injury diagnosis")
+            break
+    surname = re.escape(str(player.get("name", "")).split()[-1]) if player.get("name") else r"(?!)"
+    first = str(availability.get("detail") or "").split(". ", 1)[0]
+    if result["post_return_games"] == 0 and recent_report and result["status"] in ("Available", "Probable") and re.match(rf"^(?:{surname}|He)\b", first, re.I) and re.search(r"\b(?:expected to return|will return|returning|returned)\b", first, re.I):
+        result.update(return_label="Return mentioned in player report", return_detail=first)
+    return result
 
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -6691,7 +6836,9 @@ def nbap_snapshot_from_sources(player, game, bundle):
     source_audit = {k:{field:row[field] for field in ("state", "detail", "checked_at", "attempts") if field in row} for k, row in bundle["sources"].items()}
     source_audit["league_reference"] = {k:loaded.get("league", {})[k] for k in ("method", "usable", "verified", "teams", "team_games", "checked_at", "primary_errors", "backup_errors") if k in loaded.get("league", {})}
     return {"version": NBA_POINTS_MODEL_VERSION, "captured_at": pd.Timestamp.now(tz="UTC").isoformat(), "player": player, "game": game,
-            "logs": logs, "role_rows": role_rows, "availability": loaded.get("availability", {"status": "Unknown", "verified": False, "note": "Feed unavailable"}),
+            "logs": logs, "role_rows": role_rows,
+            "health_games": [{k:r[k] for k in ("event_id", "date", "season", "phase", "team_id") if k in r} for r in own.get("teams", []) if r["date"] < cutoff],
+            "availability": loaded.get("availability", {"status": "Unknown", "verified": False, "note": "Feed unavailable"}),
             "matchup": nbap_matchup(own, opp, game["season"], cutoff, loaded.get("league")), "warnings": warnings, "source_audit":source_audit}
 
 
@@ -6840,6 +6987,7 @@ def nbap_model(snapshot, market, line, side, line_type="Manual line - verify mar
     logs = logs.loc[(logs.MIN > 0) & (logs.PTS >= 0)].head(40)
     if len(logs) < 5:
         raise ValueError(f"Insufficient regular-season evidence ({len(logs)} appearances; need 5). Missing statistics and DNPs are not zero-point performances.")
+    health = nbap_health_context(snapshot, logs)
     current = logs.loc[(logs.season == game["season"]) & (logs.team_id == game["team_id"])]
     old_team = logs.loc[(logs.season == game["season"]) & (logs.team_id != game["team_id"])]
     previous = logs.loc[logs.season != game["season"]]
@@ -6916,6 +7064,12 @@ def nbap_model(snapshot, market, line, side, line_type="Manual line - verify mar
         if rest_gap == 1:
             projected_minutes *= .97
             trace.append({"signal": "Back-to-back", "value": "0 full rest days", "effect": "Minutes x0.97, applied once to the shared projection"})
+    limit = health.get("reported_minutes_limit")
+    if limit is not None and projected_minutes > limit:
+        before_minutes = projected_minutes
+        projected_minutes = float(limit)
+        trace.append({"signal":"Reported minutes restriction", "value":f"{limit} minutes in player-specific report",
+                      "effect":f"Projected minutes {before_minutes:.1f} -> {projected_minutes:.1f}; source report is not a guarantee of actual workload"})
     complete = logs.dropna(subset=["FGM", "FGA", "FG3M", "FG3A", "FTM", "FTA"])
     complete = complete.loc[(complete.FGM >= complete.FG3M) & (complete.FGA >= complete.FG3A) & (complete.FGA >= complete.FGM) & (complete.FG3A >= complete.FG3M) & (complete.FTA >= complete.FTM)]
     if len(complete) >= 5:
@@ -6957,6 +7111,9 @@ def nbap_model(snapshot, market, line, side, line_type="Manual line - verify mar
         gates.append(f"Availability: {status}")
     elif uncertain:
         flags.append(f"Availability unresolved: {status}")
+    flags += [str(w) for w in availability.get("warnings", [])]
+    if health["return_label"] != "Return from injury not verified":
+        flags.append(health["return_label"] + ": " + health["return_detail"])
     trace.append({"signal": "Availability", "value": status, "effect": availability.get("note", "No verified report") + "; entry gate / evidence only"})
     flags += snapshot.get("warnings", [])
     values = logs.PTS.to_numpy(dtype=float)
@@ -6978,18 +7135,27 @@ def nbap_model(snapshot, market, line, side, line_type="Manual line - verify mar
     confidence = int(round(max(0, min(100, sum(evidence_parts.values()) - warning_penalty))))
     score = int(round(.7 * probability * 100 + .3 * confidence))
     model_action = "PLAY" if probability >= .70 and confidence >= 75 and score >= 80 else "WATCH" if probability >= .55 and confidence >= 50 and score >= 65 else "PASS"
-    if uncertain or len(current) < 5 or role_points < 12:
+    if uncertain or len(current) < 5 or role_points < 12 or health["return_watch"]:
         gates.append("Action ceiling WATCH: current regular-season role or availability not established")
         if model_action == "PLAY":
             model_action = "WATCH"
     if unavailable or any(v in gates for v in ("Active roster unverified", "New-team workload unverified", "No recent current-role evidence", "Very limited projected workload")):
         model_action = "PASS"
+    if health["restriction"]:
+        gates.append("Reported minutes restriction: workload requires confirmation")
+    entry_blockers = ([f"Participation unresolved: {status}"] if uncertain or unavailable else [])
+    if health["restriction"]:
+        entry_blockers.append("Reported minutes restriction: workload confirmation required")
+    if model_action == "PASS":
+        score = min(score, 64)
+    elif model_action == "WATCH":
+        score = min(score, 79)
     action = model_action
     if not line_verified:
         gates.append("Verify the exact full-game line and payout")
     reduced = "reduced" in line_type.lower()
     if reduced and model_action in ("PLAY", "WATCH"):
-        action = "PAYOUT CHECK"
+        action = model_action if entry_blockers else "PAYOUT CHECK"
         gates.append("Reduced line: exact entry return required")
     elif not line_verified and model_action == "PLAY":
         action = "WATCH"
@@ -7012,6 +7178,9 @@ def nbap_model(snapshot, market, line, side, line_type="Manual line - verify mar
             "distribution_family": distribution["family"], "role_anchor_sd": role_anchor_sd,
             "historical_minutes_anchor": baseline_minutes, "role_weight": role_weight if len(current) or len(preseason) else 0.0,
             "sample_credit": sample_credit, "latest_game_weight": float(weights[0])}
+    result["health_context"] = health
+    result["minutes_sensitivity"] = nbap_minutes_sensitivity(result)
+    result["entry_blockers"] = entry_blockers
     result["evidence_warning_penalty"] = warning_penalty
     if include_sensitivity:
         result["latest_game_sensitivity"] = nbap_latest_game_sensitivity(result)
@@ -7038,8 +7207,24 @@ def nbap_debug(result):
               f"Model chance: {result['probability']:.1%} | evidence {result['confidence']}/100 | output stability {result['stability']:.1%}",
               f"Entry arithmetic: 70% x {result['probability'] * 100:.2f} + 30% x {result['confidence']} = {result['base_score']}; final {result['score']} {result['action']}",
               f"Model-only action: {result['model_action']}; payout/verification action: {result['action']}", "Gates: " + (" | ".join(result["gates"]) or "None"),
+              "Participation/workload entry blockers: " + (" | ".join(result.get("entry_blockers", [])) or "None"),
               "Flags: " + (" | ".join(result["flags"]) or "None"), f"Snapshot UTC: {result['snapshot_at']}",
               "Unavailable advanced inputs: confirmed gameday rotations, player-specific defensive assignments, potential assists/rebound chances, coaching and teammate usage redistribution. No fabricated bonuses."]
+    availability = snapshot.get("availability", {})
+    health = result.get("health_context", {})
+    lines += ["", "INJURY / RETURN CONTEXT", f"Status: {availability.get('status', 'Unknown')} | provider designation: {availability.get('raw_status', 'Unavailable')}",
+              f"Injury: {availability.get('injury') or 'Not specified'}", f"Report: {availability.get('note', 'Unavailable')}",
+              f"Source: {availability.get('source', 'Unavailable')} | reported UTC: {availability.get('reported_at') or 'Unknown'} | checked UTC: {availability.get('fetched_at') or 'Unknown'}",
+              f"Feed timestamp UTC: {availability.get('feed_timestamp') or 'Unknown'}",
+              f"ESPN estimated return date: {availability.get('expected_return') or 'Not supplied'} (not clearance)",
+              f"Return context: {health.get('return_label', 'Unverified')} | {health.get('return_detail', '')}",
+              f"Explicit minutes restriction: {health.get('restriction', False)} | reported limit: {health.get('reported_minutes_limit')}"]
+    lines += [f"Source warning: {w}" for w in availability.get("warnings", [])]
+    for report in availability.get("reports", []):
+        lines.append(f"Report evidence: {report.get('source')} | {report.get('status')} | {report.get('reported_at') or 'Undated'} | {report.get('note')}")
+    lines += ["", "MINUTES DOWNSIDE SCENARIOS (diagnostic only; not alternative recommendations)",
+              "Same scoring rate and SD; minutes reduced by 2/4. No probability or recommendation is changed by this table."]
+    lines += [f"{row['scenario']} | {row['minutes']:.1f} minutes | {row['projection']:.2f} points | selected side {row['probability']:.1%}" for row in result.get("minutes_sensitivity", [])]
     sensitivity = result.get("latest_game_sensitivity") or {}
     if sensitivity:
         lines += ["", "LATEST-GAME SENSITIVITY (diagnostic only; no score or action adjustment)",
@@ -7105,10 +7290,13 @@ def nbap_replay_package(result):
               "logs": result["logs"][NBAP_LOG_COLUMNS].to_dict("records"),
               "role_rows": [{k: row[k] for k in ("event_id", "date", "season", "phase", "team_id", "player_id", "name", "MIN", "PTS", "started") if k in row}
                             for row in source.get("role_rows", [])],
+              "health_games": [{k:row[k] for k in ("event_id", "date", "season", "phase", "team_id") if k in row} for row in source.get("health_games", [])],
               "matchup": {k: source.get("matchup", {})[k] for k in ("factor", "pace_factor", "defense_factor", "own_pace", "opponent_pace", "opponent_def_rating", "current_games", "games", "effective_games", "league_verified", "league_pace", "league_def_rating", "league_usable", "league_method", "league_teams", "reference_policy", "source") if k in source.get("matchup", {})},
-              "availability": {k: source.get("availability", {})[k] for k in ("status", "note", "verified", "fetched_at") if k in source.get("availability", {})},
+              "availability": {k: source.get("availability", {})[k] for k in ("status", "raw_status", "note", "detail", "injury", "reported_at", "expected_return", "source", "source_url", "verified", "fetched_at", "feed_timestamp", "warnings") if k in source.get("availability", {})},
               "warnings": source.get("warnings", [])}
     audit = source.get("source_audit", {})
+    inputs["availability"]["reports"] = [{k:r[k] for k in ("status", "raw_status", "note", "detail", "injury", "reported_at", "expected_return", "source", "source_url") if k in r}
+                                          for r in source.get("availability", {}).get("reports", []) if isinstance(r, dict)]
     inputs["source_audit"] = {k:{f:row[f] for f in ("state", "detail", "checked_at", "attempts") if f in row}
                               for k, row in audit.items() if k in NBAP_SOURCE_LABELS and isinstance(row, dict)}
     if isinstance(audit.get("league_reference"), dict):
@@ -7167,6 +7355,7 @@ def nbap_replay_prediction(package):
     for column in ("MIN", "PTS", "FGM", "FGA", "FG3M", "FG3A", "FTM", "FTA", "REB", "AST"):
         snapshot["logs"][column] = pd.to_numeric(snapshot["logs"][column], errors="coerce")
     snapshot["role_rows"] = [{**row, "date": pd.to_datetime(row["date"], utc=True, errors="coerce")} for row in snapshot["role_rows"]]
+    snapshot["health_games"] = [{**row, "date": pd.to_datetime(row["date"], utc=True, errors="coerce")} for row in snapshot.get("health_games", [])]
     if not isinstance(package["request"].get("line_verified"), bool):
         raise ValueError("NBA replay line-verification state is invalid")
     return nbap_model(snapshot, **package["request"])
@@ -7191,6 +7380,44 @@ def nbap_model_interval(result):
                 low = mid + 1
         bounds.append(low)
     return bounds
+
+
+def nbap_minutes_sensitivity(result):
+    """Workload stress only, not a fitted injury penalty or a new forecast."""
+    rows = []
+    for loss in (0, 2, 4):
+        minutes = max(0, result["projected_minutes"] - loss)
+        mean = result["projection"] * minutes / max(1e-9, result["projected_minutes"])
+        law = nbap_points_distribution(mean, result["sigma"], result["line"])
+        rows.append({"scenario":"Active assumption" if loss == 0 else f"Minus {loss} minutes", "minutes":minutes,
+                     "projection":mean, "probability":law["over"] if result["side"] == "Over" else law["under"]})
+    return rows
+
+
+def nbap_health_html(result):
+    from html import escape
+    availability, health = result["snapshot"].get("availability", {}), result.get("health_context", {})
+    status = str(availability.get("status", "Unknown"))
+    attention = status not in ("Available", "Active/Unlisted") or not availability.get("verified") or health.get("restriction")
+    def date(value):
+        stamp = pd.to_datetime(value, utc=True, errors="coerce")
+        return stamp.tz_convert("America/New_York").strftime("%b %d, %I:%M %p ET") if pd.notna(stamp) else "Time not supplied"
+    title = status + (" · Minutes restriction reported" if health.get("restriction") else "")
+    body = [f"<strong>{escape(title)}</strong>"]
+    if availability.get("injury"):
+        body.append(f"<p>{escape(str(availability['injury']))}</p>")
+    body += [f"<p>{escape(str(availability.get('note') or 'Current participation not verified'))}</p>",
+             f"<small>{escape(str(availability.get('source') or 'Source unavailable'))} · Reported {date(availability.get('reported_at'))} · Checked {date(availability.get('fetched_at'))}</small>"]
+    source_url = str(availability.get("source_url") or "")
+    if re.fullmatch(r"https://www\.espn\.com/nba/player/_/id/\d+", source_url):
+        body.append(f"<small><a href='{source_url}' target='_blank' rel='noopener noreferrer'>ESPN player report</a></small>")
+    if health.get("return_label") != "Return from injury not verified":
+        body.append(f"<p><b>{escape(str(health.get('return_label', 'Return unverified')))}</b><br>{escape(str(health.get('return_detail', '')))}</p>")
+    for warning in availability.get("warnings", []):
+        body.append(f"<p>{escape(str(warning))}</p>")
+    if attention:
+        body.append("<small>Participation or workload is not confirmed. Model chance assumes the projected minutes.</small>")
+    return f"<section class='nba-health {'attention' if attention else ''}' aria-label='Player injury and availability'>{''.join(body)}</section>"
 
 
 def nbap_uncertainty_audit(result):
@@ -7230,6 +7457,9 @@ def nbap_decision_brief(result):
         risks = ["Verify the exact full-game line and payout."] + [v for v in risks if "exact full-game line" not in v.lower()]
     elif dimensions["entry_eligibility"] == "AWAITING PAYOUT":
         risks = ["Exact entry return is not evaluated; reduced lines are not entry-approved."] + [v for v in risks if "reduced line" not in v.lower() and "exact entry return" not in v.lower()]
+    blockers = list(result.get("entry_blockers", []))
+    if blockers:
+        risks = blockers + [v for v in risks if v not in blockers]
     if len(risks) < 2:
         risks.append("Model probabilities are not yet prospectively calibrated.")
     low, high = nbap_model_interval(result)
@@ -7249,6 +7479,7 @@ def nbap_prediction_result(result):
             "entry_score": result["score"], "entry_action": result["action"], "tier": result["model_action"],
             "model_entry_score": result["base_score"], "model_entry_action": result["model_action"], "model_entry_reasons": result["gates"],
             "entry_decision_reasons": result["gates"], "model_flags": result["flags"], "confidence_parts": result["confidence_parts"],
+            "entry_blockers":result.get("entry_blockers", []),
             "push_probability": result["push"], "current_games": result["current_games"], "prior_games": result["prior_games"],
             "projected_minutes": result["projected_minutes"], "role_source": result["role_source"],
             "distribution_family": result.get("distribution_family"), "predictive_sd": result["sigma"],
@@ -7256,6 +7487,8 @@ def nbap_prediction_result(result):
             "role_anchor_sd": result.get("role_anchor_sd"),
             "sample_credit": result.get("sample_credit"), "latest_game_weight": result.get("latest_game_weight"),
             "latest_game_sensitivity": result.get("latest_game_sensitivity"),
+            "nba_health_context":result.get("health_context"), "nba_availability_report":nbap_replay_package(result)["snapshot"]["availability"],
+            "nba_minutes_sensitivity":result.get("minutes_sensitivity"),
             "nba_uncertainty_audit":result.get("uncertainty_audit"), "nba_source_audit":result["snapshot"].get("source_audit", {}),
             "evidence_warning_penalty":result.get("evidence_warning_penalty"),
             "nba_replay_input": nbap_replay_archive(result),
@@ -7334,6 +7567,9 @@ def nbap_render_result(result, key):
     brief = nbap_decision_brief(result)
     note = brief["risks"][0]
     st.markdown("""<style>
+    .nba-health{border-left:3px solid #79b8ff;background:var(--bg2);padding:14px 16px;margin:12px 0 18px;overflow-wrap:anywhere}
+    .nba-health.attention{border-left-color:#ff9b9b}.nba-health strong{font-size:17px;color:var(--text)}
+    .nba-health p{font-size:14px;line-height:1.6;margin:8px 0;color:var(--text2)}.nba-health small{display:block;font-size:12px;line-height:1.6;color:var(--text3)}
     .nba-brief-columns{display:grid;grid-template-columns:1fr 1fr;gap:24px;border-block:1px solid var(--border);padding:18px 0;margin:14px 0}
     .nba-brief-columns h3{font-size:16px!important;letter-spacing:0!important;margin:0 0 10px!important}
     .nba-brief-columns p{font-size:14px!important;line-height:1.6;margin:8px 0;overflow-wrap:anywhere;color:var(--text2)}
@@ -7343,6 +7579,7 @@ def nbap_render_result(result, key):
     .nba-brief-quote{font-size:14px;line-height:1.6;padding:8px 0;overflow-wrap:anywhere;color:var(--text2)}
     @media(max-width:600px){.nba-brief-columns{grid-template-columns:1fr;gap:12px}.nba-brief-facts{grid-template-columns:repeat(2,minmax(0,1fr))}}
     </style>""", unsafe_allow_html=True)
+    st.markdown(nbap_health_html(result), unsafe_allow_html=True)
     render_entry_decision(result["score"], result["action"], f"Points · {result['side']} {result['line']:g}",
                           result["probability"], result["confidence"], result["stability"], note,
                           f"70% model chance + 30% evidence = {result['base_score']}. Model action: {result['model_action']}. Entry gates: {'; '.join(result['gates']) or 'None'}.",
@@ -7367,6 +7604,15 @@ def nbap_render_result(result, key):
         st.write(f"Defense: {result['snapshot']['matchup'].get('games', 0)} game profiles, {result['snapshot']['matchup'].get('current_games', 0)} this season. " + result["snapshot"]["matchup"].get("source", "Unavailable"))
         for flag in result["flags"]:
             st.caption(flag)
+    with st.expander("Injury detail and minutes sensitivity"):
+        availability = result["snapshot"].get("availability", {})
+        if availability.get("detail"):
+            st.write(availability["detail"])
+        st.caption("Return history is incomplete. No current listing is not medical clearance; a gap in games alone does not establish an injury.")
+        if availability.get("expected_return"):
+            st.caption(f"ESPN estimated return date: {availability['expected_return']} · Not a confirmed return or minutes clearance.")
+        st.dataframe(pd.DataFrame([{"Scenario":r["scenario"], "Minutes":round(r["minutes"], 1), "Projected points":round(r["projection"], 1), "Selected-side chance":f"{r['probability']:.1%}"} for r in result.get("minutes_sensitivity", [])]), hide_index=True, use_container_width=True)
+        st.caption("Diagnostic scenarios hold scoring rate and SD constant. They do not change the active forecast or recommendation.")
     render_recent_performance(
         result["logs"].PTS, result["line"], result["side"], result["logs"].date, key=f"{key}_trend",
         opponents=[("vs " if r.venue == "home" else "@ " if r.venue == "away" else "")
@@ -8515,6 +8761,8 @@ def _learning_decision_dimensions(item: dict) -> dict:
     line_failed = item.get("line_verified") is False or snapshot.get("line_verification_required") is True
     if model_read == "PASS":
         eligibility, note = "BLOCKED", "Saved model assessment is PASS"
+    elif isinstance(snapshot.get("entry_blockers"), list) and snapshot["entry_blockers"]:
+        eligibility, note = "BLOCKED", "; ".join(str(v) for v in snapshot["entry_blockers"])
     elif line_failed:
         eligibility, note = "BLOCKED", "Exact line requires verification"
     elif reduced and (model_read in ("PLAY", "WATCH") or recorded in ("PLAY", "WATCH", "PAYOUT CHECK") or payout_reason):
@@ -8542,6 +8790,7 @@ def scanner_decision_dimensions(result: dict) -> dict:
             "model_entry_action": result.get("model_entry_action") or result.get("model_action"),
             "entry_decision_reasons": result.get("entry_decision_reasons"),
             "line_verification_required": result.get("line_verification_required"),
+            "entry_blockers":result.get("entry_blockers", []),
         },
     })
 
@@ -8612,6 +8861,8 @@ def build_model_prediction_rows(results: list, scan_id: str,
             "sample_credit", "latest_game_weight", "latest_game_sensitivity",
             "nba_replay_input",
             "nba_uncertainty_audit", "nba_source_audit", "evidence_warning_penalty",
+            "nba_health_context", "nba_availability_report", "nba_minutes_sensitivity",
+            "entry_blockers",
         )
         signal_snapshot = {
             key: _learning_json_safe(result.get(key))
