@@ -7706,6 +7706,7 @@ def hub_set_sport(sport):
 
 def hub_open_workspace(sport, view):
     if view == "edge" and sport in ("mlb", "nfl", "cfb", "nba"):
+        st.session_state.active_sport = sport
         st.session_state.edge_league_select = sport.upper()
         st.session_state.last_analyzer_sport = sport
         navigate_to_view("edge")
@@ -7733,7 +7734,7 @@ def render_sports_hub():
     with st.container(key="hub_actions"):
         left, right = st.columns(2)
         left.button(f"Analyze {sport.upper()}", icon=":material/search:", use_container_width=True, key="hub_analyze", on_click=hub_open_workspace, args=(sport, "analyze"))
-        right.button(f"{sport.upper()} Edge", icon=":material/bolt:", use_container_width=True, key="hub_edge", help="Open scanner results", on_click=hub_open_workspace, args=(sport, "edge"))
+        right.button("NBA Edge", icon=":material/bolt:", use_container_width=True, key="hub_edge", help="Open the NBA Edge scanner", on_click=hub_open_workspace, args=("nba", "edge"))
     st.markdown("<h2 class='hub-section'>Around the league</h2>", unsafe_allow_html=True)
     chosen = st.radio("Schedule date", ["Today", "Tomorrow"], horizontal=True, key="hub_schedule_day", label_visibility="collapsed")
     day = (today + pd.Timedelta(days=int(chosen == "Tomorrow"))).date().isoformat()
