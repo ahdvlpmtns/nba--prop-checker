@@ -7505,6 +7505,7 @@ def nbap_capture(results, source):
 
 
 def nbap_settlement(row):
+    import math
     event = str(row.get("event_id") or _tracker_metadata_value(row, "Event ID") or "")
     player = str(row.get("player_id") or _tracker_metadata_value(row, "Player ID") or "")
     if not event or not player or nbap_market(row.get("market") or row.get("Matchup")) is None:
@@ -7519,11 +7520,22 @@ def nbap_settlement(row):
         if len(matches) != 1:
             return {"actual": None, "void": False}
         a = matches[0]
+        audit = {"version":"nba-final-box-v1", "source":"ESPN final box score",
+                 "source_url":f"{NBAP_ESPN}/summary?event={event}", "event_id":event, "player_id":player,
+                 "market":"Points", "phase":2, "completed":True, "game_datetime":comp.get("date"),
+                 "checked_at":pd.Timestamp.now(tz="UTC").isoformat()}
         if a.get("didNotPlay") is True:
-            return {"actual": None, "void": True}
+            return {"actual": None, "void": True, "audit":{**audit, "played":False, "actual":None}}
         records = nbap_parse_box(payload)["players"]
         found = [r for r in records if r["player_id"] == player]
-        return {"actual": found[0]["PTS"] if len(found) == 1 else None, "void": False}
+        if len(found) != 1:
+            return {"actual": None, "void": False}
+        actual = found[0]["PTS"]
+        if (not math.isfinite(actual) or actual < 0 or actual != int(actual)
+                or not math.isfinite(found[0]["MIN"]) or found[0]["MIN"] < 0):
+            return {"actual": None, "void": False}
+        return {"actual":actual, "void":False,
+                "audit":{**audit, "played":True, "actual":actual, "minutes":found[0]["MIN"], "team_id":found[0]["team_id"]}}
     except Exception:
         return {"actual": None, "void": False}
 
@@ -9343,7 +9355,7 @@ def settle_model_predictions(predictions: list, max_events: int = 40) -> dict:
         game_day = stamp.date() if pd.notna(stamp) else today
         return (
             0 if game_day < today else 1,
-            0 if str(sample.get("model_version", "")) == MODEL_LEARNING_VERSION else 1,
+            0 if str(sample.get("model_version", "")) in (MODEL_LEARNING_VERSION, NBA_POINTS_MODEL_VERSION) else 1,
             float(attempts.get(_settlement_attempt_key(group_key), 0.0) or 0.0),
             game_day,
             str(group_key),
@@ -9358,7 +9370,7 @@ def settle_model_predictions(predictions: list, max_events: int = 40) -> dict:
         sample = rows[0]
         attempts[_settlement_attempt_key(group_key)] = time.time()
         is_current_model = (
-            str(sample.get("model_version", "")) == MODEL_LEARNING_VERSION
+            str(sample.get("model_version", "")) in (MODEL_LEARNING_VERSION, NBA_POINTS_MODEL_VERSION)
         )
         if is_current_model:
             checked_current += 1
@@ -9381,8 +9393,13 @@ def settle_model_predictions(predictions: list, max_events: int = 40) -> dict:
             settled = nbap_settlement(sample)
             if settled["void"]:
                 for row in rows:
-                    update_model_prediction_row(row, {"status": "Settled", "result": "Void", "settled_at": datetime.utcnow().isoformat() + "Z"})
+                    signals = {**(row.get("signal_snapshot") or {}), "nba_settlement_audit":settled.get("audit")}
+                    update_model_prediction_row(row, {"status": "Settled", "result": "Void", "actual_value":None,
+                                                      "brier_score":None, "signal_snapshot":signals,
+                                                      "settled_at": datetime.utcnow().isoformat() + "Z"})
                     updated += 1
+                    if is_current_model:
+                        updated_current += 1
                 continue
             actual = settled["actual"]
         else:
@@ -9409,6 +9426,8 @@ def settle_model_predictions(predictions: list, max_events: int = 40) -> dict:
                 "closing_line_source": closing_source,
                 "closing_line_captured_at": closing_at,
             }
+            if sport == "NBA":
+                updates["signal_snapshot"] = {**(row.get("signal_snapshot") or {}), "nba_settlement_audit":settled.get("audit")}
             update_model_prediction_row(row, updates)
             updated += 1
             if is_current_model:
@@ -9967,6 +9986,233 @@ def _learning_line_type_gate_rows(rows: list) -> list:
     return sorted(summaries, key=lambda row: (-int(row["N"]), row["Segment"]))
 
 
+def _learning_nba_validation(predictions: list, version: str, source: str = "All sources") -> dict:
+    """Score frozen pregame quotes only, with exact-event final-box provenance."""
+    import math
+    from collections import Counter
+
+    def number(value):
+        try:
+            parsed = float(value)
+            return parsed if math.isfinite(parsed) and not isinstance(value, bool) else None
+        except (TypeError, ValueError):
+            return None
+
+    captured = [r for r in predictions if str(r.get("sport", "")).upper() == "NBA"
+                and r.get("market") == "Points" and r.get("model_version") == version
+                and (source == "All sources" or r.get("source") == source)]
+    excluded, grouped = Counter(), {}
+    for row in captured:
+        created_raw = str(row.get("created_at") or "")
+        created = pd.to_datetime(created_raw, utc=True, errors="coerce")
+        kickoff_raw = str(row.get("game_datetime") or "")
+        kickoff = pd.to_datetime(kickoff_raw, utc=True, errors="coerce")
+        if (pd.isna(created) or pd.isna(kickoff)
+                or not all(re.search(r"T\d{1,2}:\d{2}|\s\d{1,2}:\d{2}", stamp) for stamp in (created_raw, kickoff_raw))):
+            excluded["Missing forecast/kickoff timestamp"] += 1
+            continue
+        if created >= kickoff:
+            excluded["At/after-start snapshot"] += 1
+            continue
+        line, probability = number(row.get("line")), number(row.get("probability"))
+        signals = row.get("signal_snapshot") or {}
+        push = number(signals.get("push_probability", 0)) if isinstance(signals, dict) else None
+        if (not str(row.get("event_id") or "").strip() or not str(row.get("player_id") or "").strip()
+                or row.get("side") not in ("Over", "Under") or line is None or line < 0
+                or probability is None or not 0 <= probability <= 100 or push is None or not 0 <= push < 1
+                or probability / 100 + push > 1.0001):
+            excluded["Invalid identity/quote/probability"] += 1
+            continue
+        grouped.setdefault(_learning_decision_key(row), []).append(row)
+
+    rows, pending, pushes, voids, legacy, invalid = [], 0, 0, 0, 0, Counter()
+    for members in grouped.values():
+        selected = max(members, key=lambda r: pd.Timestamp(r["created_at"]).value)
+        signals = selected.get("signal_snapshot") or {}
+        finals = [r for r in members if r.get("result") in ("Hit", "Miss", "Push", "Void")]
+        if not finals:
+            if selected.get("status", "Pending") == "Pending":
+                pending += 1
+            else:
+                invalid["Unrecognized settlement status"] += 1
+            continue
+        # Only outcome fields are inherited. The selected forecast and its injury context stay frozen.
+        checked = []
+        for final in finals:
+            audit = (final.get("signal_snapshot") or {}).get("nba_settlement_audit") or {}
+            if not isinstance(audit, dict) or final.get("status") != "Settled":
+                continue
+            checked_at = pd.to_datetime(audit.get("checked_at"), utc=True, errors="coerce")
+            if (audit.get("version") != "nba-final-box-v1" or audit.get("source") != "ESPN final box score"
+                    or str(audit.get("event_id")) != str(selected["event_id"])
+                    or str(audit.get("player_id")) != str(selected["player_id"])
+                    or audit.get("market") != "Points" or audit.get("phase") != 2 or audit.get("completed") is not True
+                    or pd.isna(checked_at) or checked_at <= pd.to_datetime(selected["game_datetime"], utc=True)):
+                continue
+            actual = number(final.get("actual_value"))
+            if final["result"] == "Void":
+                if audit.get("played") is False and final.get("actual_value") is None and audit.get("actual") is None:
+                    checked.append((final, None))
+            elif (audit.get("played") is True and actual is not None and actual >= 0 and actual == int(actual)
+                  and number(audit.get("actual")) == actual):
+                expected = "Push" if actual == float(selected["line"]) else (
+                    "Hit" if (actual > float(selected["line"])) == (selected["side"] == "Over") else "Miss")
+                if final["result"] == expected:
+                    checked.append((final, actual))
+        if not checked:
+            if any((r.get("signal_snapshot") or {}).get("nba_settlement_audit") for r in finals):
+                invalid["Final-box identity/outcome mismatch"] += 1
+            else:
+                legacy += 1
+            continue
+        if len({(r["result"], actual) for r, actual in checked}) != 1:
+            invalid["Conflicting final outcomes"] += 1
+            continue
+        final, actual = max(checked, key=lambda pair: pd.Timestamp(pair[0]["signal_snapshot"]["nba_settlement_audit"]["checked_at"]).value)
+        if final["result"] == "Void":
+            voids += 1
+            continue
+        if final["result"] == "Push":
+            pushes += 1
+            continue
+
+        availability = signals.get("nba_availability_report") or {}
+        health = signals.get("nba_health_context") or {}
+        availability = availability if isinstance(availability, dict) else {}
+        health = health if isinstance(health, dict) else {}
+        status = str(availability.get("status") or "Unknown")
+        if availability.get("verified") is not True:
+            status += " (unverified)" if status != "Unknown" else " / unverified"
+        line_type = "Manual / unverified" if selected.get("line_verified") is not True else (
+            "Reduced payout" if is_reduced_payout_line(selected) else "Standard payout")
+        prob = min(1., float(selected["probability"]) / 100 / (1 - float(signals.get("push_probability", 0))))
+        outcome = float(final["result"] == "Hit")
+        dimensions = _learning_decision_dimensions(selected)
+        rows.append({"player_game":(str(selected["event_id"]), str(selected["player_id"])), "event":str(selected["event_id"]),
+                     "prob":prob, "actual":outcome, "brier":(prob - outcome) ** 2,
+                     "status":status, "line_type":line_type, "source":str(selected.get("source") or "Unknown"),
+                     "return_context":str(health.get("return_label") or "Return context unavailable"),
+                     "restriction":"Reported restriction" if health.get("restriction") is True else (
+                         "No reported restriction" if health.get("restriction") is False else "Restriction context unavailable"),
+                     "assessment":dimensions["model_assessment"], "eligibility":dimensions["entry_eligibility"]})
+    valid = sum(len(members) for members in grouped.values())
+    return {"version":version, "source":source, "captured":len(captured), "unique":len(grouped),
+            "repeats":valid - len(grouped), "excluded":dict(excluded), "pending":pending, "pushes":pushes,
+            "voids":voids, "legacy":legacy, "invalid":dict(invalid), "rows":rows}
+
+
+def _learning_nba_validation_summary(rows: list, label: str) -> Optional[dict]:
+    """Equal weight per player/game within a cohort, not per alternative line."""
+    if not rows:
+        return None
+    clusters = {}
+    for row in rows:
+        clusters.setdefault(row["player_game"], []).append(row)
+    means = {key:sum(sum(r[key] for r in group) / len(group) for group in clusters.values()) / len(clusters)
+             for key in ("prob", "actual", "brier")}
+    return {"Segment":label, "Quotes":len(rows), "Player-games":len(clusters), "Games":len({r["event"] for r in rows}),
+            "Predicted":f"{means['prob']:.1%}", "Actual":f"{means['actual']:.1%}",
+            "Gap":f"{means['actual'] - means['prob']:+.1%}", "Brier":f"{means['brier']:.3f}"}
+
+
+def _learning_nba_validation_report(audit: dict) -> tuple:
+    rows = audit["rows"]
+    overall = _learning_nba_validation_summary(rows, "All source-verified outcomes")
+    table = [overall] if overall else []
+    for field, prefix in (("line_type", "Line"), ("source", "Source"), ("status", "Pregame status"),
+                          ("restriction", "Minutes"), ("return_context", "Return evidence"),
+                          ("assessment", "Model read"), ("eligibility", "Entry gate")):
+        for value in sorted({r[field] for r in rows}):
+            table.append(_learning_nba_validation_summary([r for r in rows if r[field] == value], f"{prefix}: {value}"))
+    for label, lower, upper in (("Below 60%", 0, .6), ("60-69%", .6, .7), ("70-79%", .7, .8), ("80-89%", .8, .9), ("90%+", .9, 1.001)):
+        summary = _learning_nba_validation_summary([r for r in rows if lower <= r["prob"] < upper], f"Chance: {label}")
+        if summary:
+            table.append(summary)
+    lines = ["PROPIQ NBA VALIDATION REPORT", "Report: nba-validation-v1 (report-only; no automatic model promotion)",
+             f"Model: {audit['version']}", f"Source filter: {audit['source']}",
+             "Scope: loaded ledger window only; not the entire Supabase history", "", "COVERAGE",
+             f"Captured snapshots: {audit['captured']}", f"Unique pregame quotes: {audit['unique']}",
+             f"Repeated snapshots excluded: {audit['repeats']}", f"Invalid/late snapshots excluded: {sum(audit['excluded'].values())}",
+             f"Pending unique quotes: {audit['pending']}", f"Source-verified Hit/Miss quotes: {len(rows)}",
+             f"Source-verified pushes: {audit['pushes']}", f"Source-verified DNP voids: {audit['voids']}",
+             f"Legacy outcomes without final-box provenance (not scored): {audit['legacy']}",
+             f"Invalid/conflicting final outcomes (not scored): {sum(audit['invalid'].values())}"]
+    for reason, count in sorted(audit["excluded"].items()):
+        lines.append(f"Excluded snapshot: {reason}: {count}")
+    for reason, count in sorted(audit["invalid"].items()):
+        lines.append(f"Excluded outcome: {reason}: {count}")
+    lines += ["", "PERFORMANCE (PLAYER-GAME BALANCED)"]
+    if table:
+        columns = list(table[0])
+        lines.append(" | ".join(columns))
+        lines += [" | ".join(str(row[column]) for column in columns) for row in table]
+    else:
+        lines.append("No source-verified completed outcomes yet; accuracy is not established.")
+    lines += ["", "POLICY",
+              "Latest strictly pregame snapshot per exact prop; no postgame reconstruction or probability changes.",
+              "Injury and return cohorts use saved pregame context, not today's injury feed. Unlisted is not medical clearance.",
+              "Each player/game has equal weight inside each cohort; alternative lines are averaged within it.",
+              "Cohorts overlap. Players in the same game remain correlated; no independent-sample confidence intervals are claimed.",
+              "Only exact-player/event completed regular-season ESPN box scores with saved provenance are scored. DNP is void, not a loss.",
+              "Brier and hit rates condition on no push; pushes and voids are counted separately. Lower Brier is better.",
+              "Standard, reduced-payout and manual/unverified quotes are separate. Hit rate is not entry profitability.",
+              "This report alone does not establish calibrated accuracy or justify moving the model out of beta."]
+    return table, "\n".join(lines)
+
+
+def render_nba_validation_dashboard(predictions: list) -> None:
+    with st.expander("NBA validation", expanded=False):
+        st.caption(f"{NBA_POINTS_MODEL_VERSION} · Saved pregame forecasts vs final box scores")
+        source = st.selectbox("NBA decision source", ["All sources", "edge_scanner", "individual_analyzer"],
+                              format_func=lambda value:value.replace("_", " ").title(), key="nba_validation_source")
+        selected = [r for r in predictions if str(r.get("sport", "")).upper() == "NBA"
+                    and r.get("model_version") == NBA_POINTS_MODEL_VERSION and r.get("market") == "Points"
+                    and (source == "All sources" or r.get("source") == source)]
+        if st.button("Refresh NBA outcomes", icon=":material/sync:", key="nba_validation_refresh", use_container_width=True):
+            with st.spinner("Checking completed NBA games..."):
+                outcome = settle_model_predictions(selected, max_events=40)
+            st.toast(f"NBA: {outcome['updated']} rows settled · {outcome['unresolved']} still pending")
+            st.rerun()
+        audit = _learning_nba_validation(selected, NBA_POINTS_MODEL_VERSION, source)
+        table, report = _learning_nba_validation_report(audit)
+        st.markdown(
+            "<div class='workspace-summary-grid'>"
+            f"<div class='workspace-summary-item'><span>Pregame quotes</span><strong>{audit['unique']}</strong></div>"
+            f"<div class='workspace-summary-item'><span>Pending</span><strong>{audit['pending']}</strong></div>"
+            f"<div class='workspace-summary-item'><span>Scored player-games</span><strong>{len({r['player_game'] for r in audit['rows']})}</strong></div>"
+            f"<div class='workspace-summary-item'><span>Push / DNP void</span><strong>{audit['pushes']} / {audit['voids']}</strong></div></div>",
+            unsafe_allow_html=True)
+        if table:
+            st.markdown(f"**Model {table[0]['Predicted']}** · **Actual {table[0]['Actual']}** · Brier **{table[0]['Brier']}**")
+            st.dataframe(pd.DataFrame(table), use_container_width=True, hide_index=True)
+            st.caption("Player-game balanced, descriptive results. Alternative lines do not count as independent games. Cohorts overlap.")
+        else:
+            st.info("No source-verified completed NBA outcomes to score yet. Pending forecasts need final results; legacy and invalid outcomes are excluded.")
+        if audit["legacy"] or audit["invalid"] or audit["excluded"]:
+            st.warning(f"Not scored: {audit['legacy']} legacy outcomes without provenance, {sum(audit['invalid'].values())} invalid outcomes, "
+                       f"{sum(audit['excluded'].values())} invalid/late snapshots. Details are in the report.")
+        st.caption("Loaded ledger window only. No automatic model tuning or beta graduation; win rate alone does not establish payout value.")
+        with st.expander("Copy NBA validation report", expanded=False):
+            st.markdown("""<style>
+                details:has(.st-key-nba_validation_copy) > summary {
+                    background:var(--bg3, #20252c) !important; color:var(--text, #f0f4f8) !important;
+                }
+                .st-key-nba_validation_copy [data-testid="stCode"] pre,
+                .st-key-nba_validation_copy [data-testid="stCode"] code {
+                    background:var(--bg2, #181c22) !important; color:var(--text, #f0f4f8) !important;
+                }
+                .st-key-nba_validation_copy [data-testid="stCode"] pre {padding-top:52px;}
+                .st-key-nba_validation_copy [data-testid="stCodeCopyButton"] {
+                    transform:none !important; opacity:1 !important; min-width:44px; min-height:44px;
+                    background:var(--bg3, #20252c); color:var(--text, #f0f4f8); border-radius:6px;
+                }
+                </style>""", unsafe_allow_html=True)
+            with st.container(key="nba_validation_copy"):
+                st.code(report, language=None, height=320)
+                st.download_button("Download NBA report", data=report, file_name=f"propiq-nba-validation-{_cache_date()}.txt",
+                                   mime="text/plain", key="nba_validation_download", use_container_width=True)
+
+
 def render_model_learning_dashboard(predictions: list) -> None:
     """Show selection coverage, calibration, CLV, and segment performance."""
     predictions = [
@@ -9977,6 +10223,7 @@ def render_model_learning_dashboard(predictions: list) -> None:
         "<div class='section-header'>Model Learning Loop</div>",
         unsafe_allow_html=True,
     )
+    render_nba_validation_dashboard(predictions)
     if not predictions:
         st.markdown(
             "<div class='pick-list-empty'><strong style='color:var(--text);'>"
@@ -11118,7 +11365,7 @@ def render_results_page() -> None:
             "Refresh outcomes", key="learning_refresh_outcomes", icon=":material/sync:", type="primary",
             use_container_width=True,
         ):
-            with st.spinner("Checking the oldest unresolved MLB decisions..."):
+            with st.spinner("Checking unresolved sports decisions..."):
                 outcome_stats = settle_model_predictions(predictions, max_events=40)
                 entry_stats = settle_entry_ledger(entered_slips, predictions)
             st.toast(
